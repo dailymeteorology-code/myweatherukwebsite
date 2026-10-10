@@ -224,25 +224,16 @@ const THEME_STYLES = `
 
   /* ── the ground the panes float on ─────────────────────────────────────── */
   .lg-ambient { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
-  .lg-ambient i {
-    position: absolute; display: block; border-radius: 50%;
-    filter: blur(90px); will-change: transform;
-  }
-  .lg-orb-a { width: 46vw; height: 46vw; top: -12vw; left: -8vw;  background: var(--ambient-a);
-              animation: lg-drift-a 34s ease-in-out infinite; }
-  .lg-orb-b { width: 40vw; height: 40vw; top: 24vh;  right: -10vw; background: var(--ambient-b);
-              animation: lg-drift-b 42s ease-in-out infinite; }
-  .lg-orb-c { width: 38vw; height: 38vw; bottom: -10vw; left: 22vw; background: var(--ambient-c);
-              animation: lg-drift-a 50s ease-in-out infinite reverse; }
-
-  @keyframes lg-drift-a {
-    0%, 100% { transform: translate3d(0,0,0) scale(1); }
-    50%      { transform: translate3d(6vw, 4vh, 0) scale(1.12); }
-  }
-  @keyframes lg-drift-b {
-    0%, 100% { transform: translate3d(0,0,0) scale(1.08); }
-    50%      { transform: translate3d(-5vw, -5vh, 0) scale(1); }
-  }
+  /* PERFORMANCE: the orbs used to be three ~450px elements with filter:blur(90px)
+     drifting forever. Because they never stopped moving, every frosted-glass
+     pane in front of them had to re-blur its backdrop on EVERY frame — the
+     main source of lag across the site. They are now plain radial gradients
+     that do not move: same glow, no per-frame work. */
+  .lg-ambient i { position: absolute; display: block; border-radius: 50%; }
+  .lg-orb-a { width: 70vw; height: 70vw; top: -24vw; left: -20vw;  background: radial-gradient(circle, var(--ambient-a) 0%, transparent 62%); }
+  .lg-orb-b { width: 62vw; height: 62vw; top: 12vh;  right: -22vw; background: radial-gradient(circle, var(--ambient-b) 0%, transparent 62%); }
+  .lg-orb-c { width: 60vw; height: 60vw; bottom: -22vw; left: 12vw; background: radial-gradient(circle, var(--ambient-c) 0%, transparent 62%); }
+}
 
   /* ── type ──────────────────────────────────────────────────────────────── */
   /* Fluid rather than stepped: the page has to hold at 360px and at 2560px,

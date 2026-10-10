@@ -124,12 +124,19 @@ export function speakWarning(text, ttsEnabled, riskLevel = 'yellow') {
   });
 }
 
+/* PERFORMANCE: at most 8 flashes animate at once, at 20 fps instead of 40, and
+   none while the tab is hidden. In a big storm the old version ran dozens of
+   40 fps timers, each forcing a canvas repaint of the strike layer. */
+let activeFlashes = 0;
 export function renderGlowFlash(lat, lon, flashLayerRef) {
   const L = window.L;
   if (!L || !flashLayerRef.current) return;
+  if (document.visibilityState !== 'visible' || activeFlashes >= 8) return;
+  activeFlashes += 1;
+  setTimeout(() => { activeFlashes -= 1; }, 1500);
   const ring = L.circleMarker([lat,lon],{radius:6,color:'#ffffff',fillColor:'transparent',fillOpacity:0,weight:2,opacity:0.95}).addTo(flashLayerRef.current);
   const core = L.circleMarker([lat,lon],{radius:2,color:'#facc15',fillColor:'#facc15',fillOpacity:0.9,weight:1,opacity:0.9}).addTo(flashLayerRef.current);
-  const DURATION_MS=1500,FPS=40,STEPS=Math.round((DURATION_MS/1000)*FPS);
+  const DURATION_MS=1500,FPS=20,STEPS=Math.round((DURATION_MS/1000)*FPS);
   let step=0;
   const iv=setInterval(()=>{
     step++;
