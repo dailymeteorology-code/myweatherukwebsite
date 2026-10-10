@@ -1,0 +1,75 @@
+{
+  "name": "LocationSearchHistory",
+  "type": "object",
+  "description": "One record per signed-in user holding their recent Location Weather searches, so the page can offer them again next visit. Held as a single capped list rather than a row per search: it is read on every page load and only the most recent handful are ever shown.",
+  "properties": {
+    "user_email": {
+      "type": "string",
+      "description": "Email of the user these searches belong to"
+    },
+    "recent": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Most recent first, capped client-side. Each entry is {name, region, lat, lon, at} \u2014 coordinates are stored so a repeat search resolves to exactly the same point rather than being re-geocoded from the name."
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "ISO datetime of the last search"
+    }
+  },
+  "required": [
+    "user_email"
+  ],
+  "rls": {
+    "create": {
+      "$or": [
+        {
+          "data.user_email": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "read": {
+      "$or": [
+        {
+          "data.user_email": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "data.user_email": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "data.user_email": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

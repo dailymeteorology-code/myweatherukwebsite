@@ -1,0 +1,82 @@
+{
+  "name": "SubscriptionPlan",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Plan display name"
+    },
+    "tier": {
+      "type": "string",
+      "enum": [
+        "free",
+        "lite",
+        "pro",
+        "developer"
+      ],
+      "description": "Plan tier"
+    },
+    "price_monthly": {
+      "type": "number",
+      "description": "Monthly price in GBP"
+    },
+    "yearly_discount_percent": {
+      "type": "number",
+      "default": 20,
+      "description": "Yearly discount percentage"
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of features for this plan"
+    },
+    "stripe_payment_link_monthly": {
+      "type": "string",
+      "description": "Stripe payment link for monthly billing"
+    },
+    "stripe_payment_link_yearly": {
+      "type": "string",
+      "description": "Stripe payment link for yearly billing"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true
+    },
+    "color": {
+      "type": "string",
+      "description": "Theme color: slate, sky, purple, amber"
+    },
+    "badge_text": {
+      "type": "string",
+      "description": "Badge label e.g. Popular"
+    },
+    "sort_order": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "name",
+    "tier"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

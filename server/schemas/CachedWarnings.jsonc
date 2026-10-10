@@ -1,0 +1,38 @@
+{
+  "name": "CachedWarnings",
+  "type": "object",
+  "properties": {
+    "all_warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "All warnings fetched from Met Office"
+    },
+    "fetched_at": {
+      "type": "string",
+      "description": "ISO timestamp of when the data was fetched"
+    }
+  },
+  "required": [
+    "fetched_at"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

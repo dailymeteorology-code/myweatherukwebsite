@@ -1,0 +1,67 @@
+{
+  "name": "NewsletterSubscriber",
+  "type": "object",
+  "properties": {
+    "email": {
+      "type": "string",
+      "description": "Subscriber email address"
+    },
+    "name": {
+      "type": "string",
+      "description": "Subscriber name (optional)"
+    },
+    "verified": {
+      "type": "boolean",
+      "default": false,
+      "description": "Email has been verified"
+    },
+    "verification_token": {
+      "type": "string",
+      "description": "Token sent in verification email"
+    },
+    "subscribed_at": {
+      "type": "string",
+      "description": "ISO datetime of signup"
+    },
+    "verified_at": {
+      "type": "string",
+      "description": "ISO datetime of verification"
+    },
+    "weekly_summary": {
+      "type": "boolean",
+      "default": true,
+      "description": "Receive weekly model run summaries"
+    },
+    "storm_alerts": {
+      "type": "boolean",
+      "default": true,
+      "description": "Receive storm outlook alerts"
+    },
+    "unsubscribed": {
+      "type": "boolean",
+      "default": false,
+      "description": "Has unsubscribed"
+    }
+  },
+  "required": [
+    "email"
+  ],
+  "rls": {
+    "create": null,
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

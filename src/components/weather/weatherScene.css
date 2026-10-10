@@ -1,0 +1,229 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   Weather scene motion.
+
+   Unlike the forecast icons — which animate a few times and stop — a background
+   keeps moving: clouds drift, the sun breathes, lightning strikes at intervals.
+   These loop forever, so they are all cheap transforms and opacity changes that
+   stay on the compositor and never trigger layout.
+
+   EVERYTHING IS TRANSFORM OR OPACITY. Sixty-six of these tiles render at once
+   in the library; animating anything that touches layout would lock the page.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* `container-type: size` turns the scene into a query container, which is what
+   lets the sun and moon below be sized in cqmin — a percentage of the SHORT
+   side of whatever box the scene lands in. Percent widths made the disc track
+   the long side, so the same sun was a circle on a square card and a stretched
+   blob on a wide banner. */
+.ws-root { position: absolute; inset: 0; overflow: hidden; container-type: size; }
+.ws-layer { position: absolute; inset: 0; pointer-events: none; }
+
+/* ── Cloud drift ──────────────────────────────────────────────────────────
+   Two speeds, opposite offsets, so near and far banks separate into depth
+   instead of sliding as one sheet. The translate range is wide enough that a
+   bank leaves frame before it wraps, hiding the reset. */
+@keyframes ws-drift-near { from { transform: translate3d(-18%, 0, 0); } to { transform: translate3d(18%, 0, 0); } }
+@keyframes ws-drift-far  { from { transform: translate3d(12%, 0, 0); }  to { transform: translate3d(-12%, 0, 0); } }
+.ws-near { animation: ws-drift-near 46s ease-in-out infinite alternate; will-change: transform; }
+.ws-far  { animation: ws-drift-far 78s ease-in-out infinite alternate; will-change: transform; }
+
+/* ── Sky bodies ───────────────────────────────────────────────────────────
+   The sun and the moon are divs, not SVG. They used to be circles inside a
+   `preserveAspectRatio="none"` viewBox, which is fine on a square tile and
+   turns the sun into a lens on a wide one. A div sized in cqmin stays round
+   everywhere, and a border-radius circle with a radial-gradient fill costs the
+   compositor nothing.
+
+   THE DISC IS SMALL AND THE LIGHT AROUND IT IS LARGE. The old moon was a wide,
+   pale, evenly lit circle — at card size that is a grey sticker, and with most
+   of the world in darkness at any given moment it made every card look alike.
+   A tight bright disc inside a broad halo reads as a light source instead. */
+.ws-body {
+  position: absolute;
+  width: 34cqmin; height: 34cqmin;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.ws-halo { position: absolute; inset: 0; border-radius: 50%; }
+.ws-disc {
+  position: absolute; left: 50%; top: 50%;
+  width: 41%; height: 41%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+}
+/* A real sun does not pulse; the bloom around it shimmers as the air moves.
+   So the disc is static and only the halo breathes, very slightly. */
+@keyframes ws-bloom { 0%, 100% { opacity: 0.72; transform: scale(1); } 50% { opacity: 1; transform: scale(1.06); } }
+.ws-bloom { animation: ws-bloom 7s ease-in-out infinite; transform-origin: center; will-change: opacity, transform; }
+
+/* God rays as one masked conic gradient rather than twelve rects: the mask
+   fades them in away from the disc and out again before the edge, so they end
+   in air instead of stopping dead. */
+@keyframes ws-rays { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.ws-rays {
+  position: absolute; inset: 0;
+  animation: ws-rays 120s linear infinite;
+  transform-origin: center;
+  background: repeating-conic-gradient(from 0deg, currentColor 0deg 2.4deg, transparent 2.4deg 30deg);
+  -webkit-mask-image: radial-gradient(circle, transparent 19%, #000 44%, transparent 82%);
+  mask-image: radial-gradient(circle, transparent 19%, #000 44%, transparent 82%);
+}
+
+/* Moon. The ring is the edge of the halo you get through thin cloud, and the
+   craters stop the disc being a featureless dot at the size it renders. */
+.ws-moon {
+  overflow: hidden;
+  background: radial-gradient(circle at 36% 31%, #FFFFFF 0%, #F0F6FF 44%, #B6C8E0 100%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22), 0 0 20px rgba(168, 204, 255, 0.55);
+}
+.ws-ring {
+  position: absolute; left: 50%; top: 50%;
+  width: 63%; height: 63%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid rgba(196, 220, 255, 0.17);
+}
+.ws-crater {
+  position: absolute; aspect-ratio: 1;
+  border-radius: 50%;
+  background: rgba(146, 168, 198, 0.5);
+}
+
+/* ── Falling curtains ─────────────────────────────────────────────────────
+   Duration is set inline per condition — drizzle drifts, torrential rain is a
+   blur — so these are longhands: an `animation` shorthand here would reset the
+   duration the component just set. */
+@keyframes ws-shaft-fall { from { transform: translateY(0); } to { transform: translateY(50px); } }
+.ws-shaft-run {
+  animation-name: ws-shaft-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+/* ── Stars ────────────────────────────────────────────────────────────────
+   Staggered by inline delay so the field does not blink in unison, which is
+   the tell that gives away a fake starfield immediately. */
+@keyframes ws-twinkle { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+.ws-star { animation: ws-twinkle 4s ease-in-out infinite; }
+
+/* ── Lightning ────────────────────────────────────────────────────────────
+   Real lightning is a fast double or triple strike inside ~200ms, then a long
+   wait. A single symmetric fade reads as a lamp being turned up. The flash and
+   the bolt share one timeline so the bolt is only visible while the sky is lit. */
+@keyframes ws-flash {
+  0%, 100%      { opacity: 0; }
+  1.2%          { opacity: 0.85; }
+  2.0%          { opacity: 0.12; }
+  2.6%          { opacity: 0.7; }
+  3.4%          { opacity: 0.05; }
+  4.2%          { opacity: 0.45; }
+  6%            { opacity: 0; }
+}
+.ws-flash { animation: ws-flash 9s linear infinite; }
+.ws-flash-b { animation: ws-flash 9s linear infinite; animation-delay: 4.5s; }
+
+@keyframes ws-bolt {
+  0%, 100%  { opacity: 0; }
+  1.2%      { opacity: 1; }
+  3.4%      { opacity: 0.35; }
+  4.2%      { opacity: 0.9; }
+  5.6%      { opacity: 0; }
+}
+.ws-bolt { animation: ws-bolt 9s linear infinite; }
+.ws-bolt-b { animation: ws-bolt 9s linear infinite; animation-delay: 4.5s; }
+
+/* ── Fog ──────────────────────────────────────────────────────────────────
+   Slow, wide, and at different rates per band so the layers shear against each
+   other. Fog that moves as one block looks like a sliding curtain. */
+@keyframes ws-fog-a { from { transform: translate3d(-25%, 0, 0); } to { transform: translate3d(25%, 0, 0); } }
+@keyframes ws-fog-b { from { transform: translate3d(20%, 0, 0); }  to { transform: translate3d(-20%, 0, 0); } }
+.ws-fog-a { animation: ws-fog-a 34s ease-in-out infinite alternate; }
+.ws-fog-b { animation: ws-fog-b 52s ease-in-out infinite alternate; }
+
+/* ── Wind streaks ─────────────────────────────────────────────────────────
+   Cross the frame and repeat, rather than easing back and forth: wind has a
+   direction, and an alternating streak reads as a pendulum. */
+@keyframes ws-gust {
+  0%   { transform: translate3d(-120%, 0, 0); opacity: 0; }
+  12%  { opacity: 0.85; }
+  80%  { opacity: 0.6; }
+  100% { transform: translate3d(120%, 0, 0); opacity: 0; }
+}
+.ws-gust { animation: ws-gust 4.5s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-near, .ws-far, .ws-bloom, .ws-rays, .ws-star,
+  .ws-flash, .ws-flash-b, .ws-bolt, .ws-bolt-b,
+  .ws-fog-a, .ws-fog-b, .ws-gust, .ws-shaft-run { animation: none !important; }
+  /* Bolts are hidden by their 0% frame, so without motion they must be pinned
+     visible or the storm scenes lose their subject entirely. */
+  .ws-bolt, .ws-bolt-b { opacity: 0.9 !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   LOCATION WEATHER — GLASS OVER THE SKY
+   ────────────────────────────────────────────────────────────────────────────
+   The page draws a real sky behind itself — four phases per condition, its own
+   particle canvas — and then covered it with opaque-reading slabs. The panels
+   were bg-black/20 with a 4px blur, which over a near-black overcast night sky
+   is simply a black box: the sky was being rendered and then hidden.
+
+   These are the home page's panes, tuned for sitting on a photograph rather
+   than on a flat ground:
+
+     · a stronger blur, because there is real detail behind these, and a
+       saturation lift so the sky's colour carries through the glass instead of
+       going grey;
+     · a fill that leans light rather than dark, so the pane brightens the sky
+       behind it and separates from it, whatever the weather is doing;
+     · a top-edge highlight, same as everywhere else, which is what stops a
+       translucent rectangle reading as a hole.
+   ════════════════════════════════════════════════════════════════════════════ */
+.wx-glass {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), 0 18px 44px -14px rgba(0, 0, 0, 0.55),
+              inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+/* The inner chips — day tiles, stat blocks — sit ON a pane, so they are a
+   lighter touch: no blur of their own (blurring a blur costs a lot and gains
+   nothing) and no shadow, just a tint and an edge. */
+.wx-chip {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.wx-chip[data-selected="true"], .wx-chip.is-selected {
+  background: rgba(255, 255, 255, 0.24) !important;
+  border-color: rgba(255, 255, 255, 0.34);
+}
+
+/* ── Symbols ─────────────────────────────────────────────────────────────────
+   The icons are drawn well and were being thrown away at the size they render:
+   flat shapes on a dark panel, with nothing separating them from it. A soft
+   dark halo does the separating — it reads as the symbol sitting in front of
+   the sky rather than being printed on it, and it works on a white overcast
+   sky and a black night one alike, which a light halo does not. */
+.wx-symbol, .wx-symbol svg {
+  filter: drop-shadow(0 1px 1px rgba(2, 6, 23, 0.45))
+          drop-shadow(0 4px 10px rgba(2, 6, 23, 0.32));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wx-glass { transition: none !important; }
+}
+
+/* ── Atmosphere ────────────────────────────────────────────────────────────
+   The horizon glow that used to live here is now <SkyGlow>, drawn in the
+   component so it can take its colour from the time of day: warm at dawn and
+   dusk, cool at night, near-white at noon. One fixed warm wash could not do
+   that, and at the strength it ran at it was invisible anyway. */
+.ws-vignette {
+  position: absolute; inset: 0; pointer-events: none; z-index: 0;
+  background: radial-gradient(120% 90% at 50% 38%,
+              rgba(0, 0, 0, 0) 42%, rgba(0, 0, 0, 0.30) 100%);
+}

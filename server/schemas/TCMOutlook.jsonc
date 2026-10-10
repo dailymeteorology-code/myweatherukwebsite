@@ -1,0 +1,82 @@
+{
+  "name": "TCMOutlook",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Outlook title"
+    },
+    "image_url": {
+      "type": "string",
+      "description": "Outlook graphic image URL"
+    },
+    "outlook_date": {
+      "type": "string",
+      "description": "Date this outlook is for (YYYY-MM-DD)"
+    },
+    "is_today": {
+      "type": "boolean",
+      "default": false
+    },
+    "is_tomorrow": {
+      "type": "boolean",
+      "default": false
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "Very Low",
+        "Low",
+        "Marginal",
+        "Moderate",
+        "High"
+      ],
+      "description": "Overall risk level (legacy single)"
+    },
+    "risk_levels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Multiple selected risk levels for a range display"
+    },
+    "summary": {
+      "type": "string",
+      "description": "Brief summary text"
+    },
+    "is_published": {
+      "type": "boolean",
+      "default": true
+    },
+    "update_reason": {
+      "type": "string",
+      "description": "Reason for the latest update"
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "ISO datetime of last update"
+    }
+  },
+  "required": [
+    "title",
+    "outlook_date"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "name": "Announcement",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Announcement title"
+    },
+    "message": {
+      "type": "string",
+      "description": "Announcement content"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true,
+      "description": "Show this announcement"
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "urgent"
+      ],
+      "default": "info"
+    },
+    "show_when_disabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Show to restricted/disabled-site users"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "general",
+        "new_feature",
+        "coming_soon"
+      ],
+      "default": "general"
+    },
+    "target_page": {
+      "type": "string",
+      "description": "Show only on this page (e.g. Home, Graphics). Leave empty for all pages."
+    },
+    "link_url": {
+      "type": "string",
+      "description": "Optional link for Check it out button"
+    },
+    "link_label": {
+      "type": "string",
+      "description": "Label for the link button (default: Check it out)"
+    }
+  },
+  "required": [
+    "title",
+    "message"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

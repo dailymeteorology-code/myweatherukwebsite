@@ -1,0 +1,42 @@
+{
+  "name": "ModelRunCache",
+  "type": "object",
+  "description": "One saved model run per variable. The map loads from here whenever the run has not changed, so Open-Meteo is only called when genuinely new data exists. The grid values themselves are stored as an uploaded JSON file, which is far too large for an entity field.",
+  "properties": {
+    "variable_key": {
+      "type": "string",
+      "description": "Open-Meteo hourly variable, e.g. temperature_2m"
+    },
+    "run_key": {
+      "type": "string",
+      "description": "Model cycle this data belongs to, e.g. 2026-08-11T12Z"
+    },
+    "model": {
+      "type": "string",
+      "description": "Open-Meteo model id"
+    },
+    "days": {
+      "type": "number",
+      "description": "Forecast days requested"
+    },
+    "times": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Hourly timestamps for the run"
+    },
+    "data_url": {
+      "type": "string",
+      "description": "URL of the uploaded JSON file holding values[pointIndex][hourIndex], aligned to the map grid"
+    },
+    "fetched_at": {
+      "type": "string",
+      "description": "ISO timestamp of when this run was pulled from Open-Meteo"
+    }
+  },
+  "required": [
+    "variable_key",
+    "run_key"
+  ]
+}

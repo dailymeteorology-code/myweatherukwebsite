@@ -1,0 +1,86 @@
+{
+  "name": "ForecastVerification",
+  "type": "object",
+  "properties": {
+    "date": {
+      "type": "string",
+      "description": "Verification date (YYYY-MM-DD UTC) - the day that just finished"
+    },
+    "region": {
+      "type": "string",
+      "enum": [
+        "uk",
+        "eu",
+        "global"
+      ],
+      "default": "uk"
+    },
+    "forecast_run": {
+      "type": "string",
+      "description": "ISO timestamp of the run being verified"
+    },
+    "forecast_level": {
+      "type": "string",
+      "description": "Highest risk level forecast for the day (e.g. Marginal, Slight, Moderate)"
+    },
+    "forecast_score": {
+      "type": "number",
+      "description": "Peak thunderstorm score forecast (0-100)"
+    },
+    "forecast_coverage_pct": {
+      "type": "number",
+      "description": "% of grid cells with thunderstorm activity forecast"
+    },
+    "observed_strike_count": {
+      "type": "number",
+      "description": "Actual lightning strikes recorded in region that day"
+    },
+    "observed_active_cells": {
+      "type": "number",
+      "description": "How many grid cells had >= 1 strike"
+    },
+    "hit_rate": {
+      "type": "number",
+      "description": "POD (probability of detection) 0-1"
+    },
+    "false_alarm_rate": {
+      "type": "number",
+      "description": "FAR 0-1"
+    },
+    "bias_score": {
+      "type": "number",
+      "description": "Forecast bias: >1 means over-forecast, <1 means under-forecast"
+    },
+    "calibration_offset": {
+      "type": "number",
+      "description": "Recommended score offset to apply to future forecasts (-20 to +20)",
+      "default": 0
+    },
+    "notes": {
+      "type": "string",
+      "description": "AI-generated summary of the day's verification"
+    }
+  },
+  "required": [
+    "date",
+    "region"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

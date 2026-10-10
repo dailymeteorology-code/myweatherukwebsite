@@ -1,0 +1,2458 @@
+<!-- Ported from ukv-platform/frontend by scripts/import-tcmv5.
+     Two edits only: /api/ now points at the V5 service directly, and /assets/
+     points at the copy alongside this file. Nothing else is changed. -->
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCM V5 — Storm Outlook Graphic</title>
+<!--
+  Storm outlook graphic studio.
+
+  A port of MyWeatherUK's StormOutlookGraphicTool (AdminSettings > Storm
+  Outlook Graphic). The vendored source it was transcribed from lives in
+  ../vendor/myweatheruk/. Constants, palette, projection, smoothing and
+  layout are taken from that file verbatim; see the notes on each below.
+
+  ONE DELIBERATE DIFFERENCE FROM THE ORIGINAL — map registration.
+  In the original the layers disagree about how the map box is filled:
+
+      coastline / cities / strikes   viewBox 302x458  preserveAspectRatio="xMidYMid meet"
+      drawn + imported risk areas    viewBox 0 0 1000 1000  preserveAspectRatio="none"
+
+  The map box is 400x570, so "meet" letterboxes the coastline to 375.8x570
+  centred (12.1px bars each side) while the shapes layer stretches edge to
+  edge. Freehand drawing is unaffected -- you draw where you look, so it
+  lands where you drew. But anything placed from geography through
+  latLonToNorm() -- the TCM auto-import at lines 1624/1659, and the region
+  zoom rects at 1815/1816 -- goes into the STRETCHED space while the
+  coastline sits in the LETTERBOXED one. The result is a horizontal
+  displacement of +12.1px at the west edge through 0 at lon -4.15 to
+  -12.1px at the east edge: about 27 km, enough to walk an imported area
+  off the coast it belongs to.
+
+  Here every layer shares one space. The map rect is aspect-correct
+  (375.8x570 at x=252.1) -- pixel-identical to where the original's
+  coastline actually lands -- and drawn, imported, observed and
+  geographic layers all project through it. Hand-drawn areas look the
+  same; imported ones now register.
+
+  Rendering is Canvas 2D rather than DOM + html2canvas. Export is then the
+  same pixels you were shown, page fonts and all, with no rasteriser to
+  disagree with the preview -- which is why the original needs its
+  `exportMode` solid-glass swap (html2canvas cannot rasterise
+  backdrop-filter). Here preview and export are one code path.
+
+  Data is this platform's own: /api/outlook/polygons (categorical outlook),
+  /api/observations/strikes (Blitzortung), /api/coastline (fallback), and
+  /api/risk-days + /api/risk/{hour} for the timeline.
+-->
+<style>
+  :root { --bg:#10131a; --panel:#171b24; --panel2:#1b2029; --line:#262c38;
+          --text:#e6e9ef; --muted:#97a0b0; --accent:#6ea8fe; --warn:#f0b429; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  #app { display:grid; grid-template-columns:400px 1fr; height:100%; }
+  #side { background:var(--panel); border-right:1px solid var(--line);
+    overflow-y:auto; padding:16px 18px 40px; }
+  #stage { display:flex; align-items:flex-start; justify-content:center;
+    padding:22px; overflow:auto; background:#0b0e13; }
+  #stagewrap { position:relative; flex:0 0 auto; }
+  canvas#c { display:block; border-radius:10px;
+    box-shadow:0 10px 40px rgba(0,0,0,.65); }
+  #surface { position:absolute; border-radius:12px; touch-action:none; }
+  #surface.draw   { cursor:crosshair; }
+  #surface.text   { cursor:text; }
+  #surface.arrow  { cursor:crosshair; }
+  #surface.cond   { cursor:pointer; }
+  #surface.off    { cursor:default; }
+
+  .brand { display:flex; align-items:center; gap:10px; padding-bottom:14px;
+    margin-bottom:6px; border-bottom:1px solid var(--line); }
+  .brand img { width:50px; height:auto; }
+  h1 { font-size:16px; margin:0; font-weight:700; }
+  h1 .ver { color:var(--accent); }
+  .sub { color:var(--muted); font-size:12px; }
+  h2 { font-size:10.5px; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--muted); margin:18px 0 8px; font-weight:600;
+    display:flex; align-items:center; gap:9px; }
+  h2::after { content:""; flex:1 1 auto; height:1px; background:var(--line); }
+  .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+    margin-bottom:6px; }
+  .row.tight { gap:4px; }
+  button { background:#1d2636; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:6px 11px; cursor:pointer; font-size:12px;
+    white-space:nowrap; font-family:inherit; }
+  button:hover:not(:disabled) { border-color:#3a465c; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.on { background:var(--accent); border-color:var(--accent);
+    color:#0c1220; font-weight:600; }
+  button.primary { background:var(--accent); border-color:var(--accent);
+    color:#0c1220; font-weight:600; }
+  button.danger { border-color:#5c2b2b; color:#ffb4b4; }
+  button.sm { padding:3px 8px; font-size:11px; }
+  select, input[type=text], input[type=date], input[type=time],
+  input[type=number], input[type=datetime-local], textarea {
+    background:#131824; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:5px 8px; font-size:12px; width:100%;
+    font-family:inherit; }
+  textarea { resize:vertical; min-height:56px; }
+  .grid2 { display:grid; grid-template-columns:auto 1fr; gap:6px 10px;
+    align-items:center; font-size:11.5px; color:var(--muted); }
+  input[type=color] { width:100%; height:24px; padding:0; cursor:pointer;
+    border:1px solid var(--line); border-radius:4px; background:none; }
+  input[type=range] { width:100%; }
+  .meta { color:var(--muted); font-size:11.5px; line-height:1.5; }
+  .meta b { color:var(--text); font-weight:600; }
+  .warnbox { border:1px solid #4a3a12; background:#241d0d; color:#f0d9a0;
+    border-radius:6px; padding:7px 9px; font-size:11.5px; margin:8px 0; }
+  .swatch { width:13px; height:13px; border-radius:3px; flex:0 0 auto;
+    border:1px solid rgba(255,255,255,.35); display:inline-block; }
+  .lvlbtn { display:flex; align-items:center; gap:6px; padding:5px 8px;
+    font-size:11.5px; }
+  .chips { display:flex; flex-wrap:wrap; gap:5px; }
+  .chip { display:flex; align-items:center; gap:5px; background:#1d2636;
+    border:1px solid var(--line); border-radius:20px; padding:3px 5px 3px 8px;
+    font-size:11px; }
+  .chip button { padding:0 4px; border:none; background:none; color:var(--muted);
+    font-size:13px; line-height:1; }
+  .chip button:hover { color:#ff9d9d; }
+  .seg { display:flex; border:1px solid var(--line); border-radius:6px;
+    overflow:hidden; }
+  .seg button { border:none; border-radius:0; flex:1 1 auto; }
+  .seg button + button { border-left:1px solid var(--line); }
+  .hint { color:#6f7a8b; font-size:10.5px; line-height:1.45; margin:4px 0 0; }
+  .status { font-size:11px; color:var(--muted); margin-top:4px; }
+  .status.err { color:#ff9d9d; }
+  .status.ok  { color:#8fd98f; }
+  details > summary { cursor:pointer; font-size:11px; color:var(--muted);
+    margin:6px 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <div class="brand">
+      <img src="/tcm-v5-app/assets/tcm-logo.png" alt="TCM">
+      <div>
+        <h1>Storm Outlook <span class="ver">Studio</span></h1>
+        <div class="sub">TCM V5 · graphic maker</div>
+      </div>
+    </div>
+    <div class="row" style="margin:8px 0 0">
+      <a href="/" style="color:var(--accent);font-size:11.5px">&larr; Model</a>
+      <a href="/overlay" style="color:var(--accent);font-size:11.5px">Overlay studio</a>
+    </div>
+    <div id="controls"></div>
+  </div>
+  <div id="stage">
+    <div id="stagewrap">
+      <canvas id="c"></canvas>
+      <div id="surface" class="draw"></div>
+    </div>
+  </div>
+</div>
+<script>
+"use strict";
+/* ==========================================================================
+   CONSTANTS - transcribed from vendor/myweatheruk/components/
+   StormOutlookGraphicTool.jsx and components/tcm/riskConfig.jsx.
+   Keep these in step with those files.
+   ========================================================================== */
+
+/* riskConfig.jsx: RISK_META + LEVEL_RANGE. Bands are 0-100 hazard score. */
+const RISK_META = [
+  { level:'No Risk',  min:0  }, { level:'Very Low', min:5  },
+  { level:'Low',      min:12 }, { level:'Marginal', min:22 },
+  { level:'Slight',   min:35 }, { level:'Moderate', min:50 },
+  { level:'High',     min:65 }, { level:'Severe',   min:80 },
+];
+const LEVEL_RANGE = {};
+for (let i = 1; i < RISK_META.length; i++) {
+  const next = RISK_META[i + 1];
+  LEVEL_RANGE[RISK_META[i].level] = [RISK_META[i].min, next ? next.min - 1 : 100];
+}
+/* Palette. The published graphic does NOT use riskConfig's dark site palette
+   (#22884f / #a3760a / #c2410c ...) - it uses the SPC convective-outlook
+   ramp: blue, green, yellow, orange, red, violet. Keyed by the canonical band
+   id so the model import still resolves. */
+const THUNDER_PAL = {
+  'Very Low': { fill:'rgba(96,165,250,0.55)',  border:'#3b82f6', color:'#60a5fa' },
+  'Low':      { fill:'rgba(134,239,172,0.55)', border:'#4ade80', color:'#86efac' },
+  'Marginal': { fill:'rgba(252,211,77,0.58)',  border:'#fbbf24', color:'#fcd34d' },
+  'Slight':   { fill:'rgba(251,146,60,0.60)',  border:'#f97316', color:'#fb923c' },
+  'Moderate': { fill:'rgba(248,113,113,0.62)', border:'#ef4444', color:'#f87171' },
+  'High':     { fill:'rgba(167,139,250,0.64)', border:'#8b5cf6', color:'#a78bfa' },
+  'Severe':   { fill:'rgba(0,0,0,0.62)',       border:'#312e81', color:'#312e81' },
+};
+
+/* Conditional Severe - a graphic-only tier between High and Severe. Flags the
+   POTENTIAL for severe storms but conditional on uncertain ingredients coming
+   together: dashed black outline, plain translucent grey fill, and NO hatching
+   (Severe keeps the hatch). */
+const COND_SEVERE_ID = 'Conditional Severe';
+const COND_SEVERE = { id:COND_SEVERE_ID, short:'COND SVRE', range:'COND SVR',
+  color:'#0b0f1a', fill:'rgba(200,205,215,0.18)', border:'#0b0f1a' };
+
+/* The graphic labels the ladder with SPC band names, which are SHIFTED against
+   the internal TCM names: the band TCM calls "Marginal" (22-34%) publishes as
+   SLGT, and TCM's "Slight" (35-49%) publishes as ENH. The percentages are what
+   line up, not the words, so read this table by the range and never assume
+   `Slight` on the wire means SLGT on the graphic. Ids stay canonical so
+   /api/outlook/polygons keeps resolving. */
+const SHORT = { 'Very Low':'TSTM', 'Low':'MRGL', 'Marginal':'SLGT',
+                'Slight':'ENH', 'Moderate':'MDT', 'High':'HIGH', 'Severe':'SVRE' };
+
+const GRAPHIC_LEVELS = (function () {
+  const base = RISK_META.filter(r => r.level !== 'No Risk').map(function (r) {
+    let lo = LEVEL_RANGE[r.level][0], hi = LEVEL_RANGE[r.level][1];
+    if (r.level === 'High') hi = 100;              // High runs up to 100%
+    const pal = THUNDER_PAL[r.level];
+    return { id:r.level, short:SHORT[r.level],
+      // Severe is not a % band - it flags a risk of Severe Thunderstorms
+      range: r.level === 'Severe' ? 'SVR TSTMS' : lo + '-' + hi + '%',
+      color:pal.color, fill:pal.fill, border:pal.border };
+  });
+  const out = []; let inserted = false;
+  for (const l of base) {
+    if (l.id === 'Severe' && !inserted) { out.push(COND_SEVERE); inserted = true; }
+    out.push(l);
+  }
+  if (!inserted) out.push(COND_SEVERE);
+  return out;
+})();
+const RISK_BY_ID     = Object.fromEntries(GRAPHIC_LEVELS.map(l => [l.id, l]));
+const RISK_SEVERITY  = Object.fromEntries(GRAPHIC_LEVELS.map((l, i) => [l.id, i]));
+const isSevereId     = id => id === 'Severe';
+const isCondSevereId = id => id === COND_SEVERE_ID;
+
+/* Radar mode rain-rate levels. */
+const RADAR_LEVELS = [
+  { id:'LightRain',   short:'LIGHT', range:'<0.5 mm/h',  color:'#7dd3fc' },
+  { id:'ModRain',     short:'MOD',   range:'0.5-2 mm/h', color:'#3b82f6' },
+  { id:'HeavyRain',   short:'HEAVY', range:'2-8 mm/h',   color:'#22c55e' },
+  { id:'VHeavyRain',  short:'V.HVY', range:'8-16 mm/h',  color:'#facc15' },
+  { id:'IntenseRain', short:'INTNS', range:'16-32 mm/h', color:'#f97316' },
+  { id:'TorrRain',    short:'TORR',  range:'32+ mm/h',   color:'#ef4444' },
+].map(l => Object.assign({}, l, { fill:l.color + '66', border:l.color }));
+const RADAR_BY_ID  = Object.fromEntries(RADAR_LEVELS.map(l => [l.id, l]));
+const LEVEL_LOOKUP = Object.assign({}, RADAR_BY_ID, RISK_BY_ID);
+
+const HAZARDS = [
+  { id:'lightning', label:'High Lightning', color:'#ec4899', glyph:'bolt',    hatched:false },
+  { id:'hail',      label:'Large Hail',     color:'#22d3ee', glyph:'hail',    hatched:false },
+  { id:'flood',     label:'Flash Flooding', color:'#3b82f6', glyph:'flood',   hatched:false },
+  { id:'tornado',   label:'Tornado',        color:'#f97316', glyph:'tornado', hatched:false },
+  { id:'severe',    label:'Severe',         color:'#a5b4fc', glyph:'warn',    hatched:true  },
+];
+const RADAR_HAZARDS = [
+  { id:'heavyrain',    label:'Heavy Rain',    color:'#3b82f6', glyph:'rain',  hatched:false },
+  { id:'showers',      label:'Showers',       color:'#7dd3fc', glyph:'driz',  hatched:false },
+  { id:'thunder',      label:'Thunderstorms', color:'#facc15', glyph:'bolt',  hatched:false },
+  { id:'heavyshowers', label:'Heavy Showers', color:'#22d3ee', glyph:'rainw', hatched:false },
+];
+
+/* Timeline granularity. The pill runs 3-hourly (the classic 06>06 band),
+   2-hourly, or hourly for fast-evolving convective days. */
+const TIMELINE_PRESETS = {
+  '3h': ['06','09','12','15','18','21','00','03','06'],
+  '2h': ['06','08','10','12','14','16','18','20','22','00','02','04','06'],
+  '1h': ['06','07','08','09','10','11','12','13','14','15','16','17','18',
+         '19','20','21','22','23','00','01','02','03','04','05','06'],
+};
+const buildStamps = g => (TIMELINE_PRESETS[g] || TIMELINE_PRESETS['3h']).map(label => ({ label:label }));
+
+const CONFIDENCE_LEVELS = [
+  { id:'low',    label:'Low',    color:'#fb923c' },
+  { id:'medium', label:'Medium', color:'#facc15' },
+  { id:'high',   label:'High',   color:'#4ade80' },
+];
+const CONFIDENCE_BY_ID = Object.fromEntries(CONFIDENCE_LEVELS.map(c => [c.id, c]));
+
+const ANNOTATION_COLORS = ['#ffffff','#fde047','#f87171','#38bdf8','#a78bfa','#4ade80','#fb923c','#111827'];
+const ANNOTATION_SIZES  = [{ id:'sm', label:'S', px:13 }, { id:'md', label:'M', px:17 }, { id:'lg', label:'L', px:22 }];
+const ANN_PX = Object.fromEntries(ANNOTATION_SIZES.map(s => [s.id, s.px]));
+const LIGHTNING_SWATCHES = ['#facc15','#ffffff','#f87171','#ec4899','#22d3ee','#a78bfa'];
+
+/* ---- Geometry -----------------------------------------------------------
+   MAP_BBOX is byte-for-byte the TCM page's GEO_BOUNDS_UK. It drives BOTH the
+   projection AND the strike-inclusion test, so the strike count here matches
+   the TCM page's "UK today". A previous tighter box (latMin 49.7 /
+   lon -11.0..2.2) silently dropped 1000+ strikes in the Channel and the East
+   Anglia / North Sea margins. If the TCM bounds change, change these. */
+const MAP_BBOX = { lonMin:-10.8, lonMax:2.5, latMin:49.5, latMax:61.0 };
+const VIEW_W = 302, VIEW_H = 458;
+const mercY = lat => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 180) / 2));
+const Y_TOP = mercY(MAP_BBOX.latMax), Y_BOT = mercY(MAP_BBOX.latMin);
+function projectPt(lon, lat) {
+  return [ ((lon - MAP_BBOX.lonMin) / (MAP_BBOX.lonMax - MAP_BBOX.lonMin)) * VIEW_W,
+           ((Y_TOP - mercY(lat)) / (Y_TOP - Y_BOT)) * VIEW_H ];
+}
+/* Geographic -> normalised 0..1 drawing space, through the SAME projection the
+   coastline uses, so imported areas register exactly. */
+function latLonToNorm(lat, lon) {
+  const p = projectPt(lon, lat);
+  return [p[0] / VIEW_W, p[1] / VIEW_H];
+}
+function normToLatLon(nx, ny) {
+  const lon = MAP_BBOX.lonMin + nx * (MAP_BBOX.lonMax - MAP_BBOX.lonMin);
+  const my  = Y_TOP - ny * (Y_TOP - Y_BOT);
+  const lat = (2 * Math.atan(Math.exp(my)) - Math.PI / 2) * 180 / Math.PI;
+  return [lat, lon];
+}
+
+const UK_REGIONS = [
+  { id:'uk',       label:'UK Wide',        bbox:{ lonMin:-10.8, lonMax:2.5,  latMin:49.5, latMax:61.0 } },
+  { id:'south',    label:'South England',  bbox:{ lonMin:-5.8,  lonMax:1.8,  latMin:50.0, latMax:52.5 } },
+  { id:'midlands', label:'Midlands',       bbox:{ lonMin:-4.0,  lonMax:0.5,  latMin:51.8, latMax:54.0 } },
+  { id:'north',    label:'North England',  bbox:{ lonMin:-4.5,  lonMax:0.2,  latMin:53.5, latMax:56.0 } },
+  { id:'scotland', label:'Scotland',       bbox:{ lonMin:-8.0,  lonMax:-1.5, latMin:54.5, latMax:61.0 } },
+  { id:'ireland',  label:'Ireland',        bbox:{ lonMin:-11.0, lonMax:-5.0, latMin:51.3, latMax:55.5 } },
+  { id:'wales',    label:'Wales',          bbox:{ lonMin:-5.5,  lonMax:-2.5, latMin:51.3, latMax:53.5 } },
+];
+
+/* Graphic geometry, matched to the published 736x977 graphic. The map is
+   aspect-correct (MAP_W/MAP_H == VIEW_W/VIEW_H) and flush to the right edge;
+   the header cards overlay its left side. Fitted against known city positions
+   in the reference: Wick, Plymouth, Cork, London and Norwich all land within a
+   few pixels. EVERY layer shares this one rect, so drawn, imported and
+   observed geometry register together (see the header note). */
+const GRAPHIC_W = 736, GRAPHIC_H = 977;
+const MAP_H = 760, MAP_Y = 25, MAP_X = 235;
+const MAP_W = VIEW_W * (MAP_H / VIEW_H);            // 501.1, right edge ~736
+const nx2px = nx => MAP_X + nx * MAP_W;
+const ny2px = ny => MAP_Y + ny * MAP_H;
+
+/* City markers - the UK-wide set plus region-only towns revealed when a region
+   is selected, so the wide view stays uncluttered. */
+const CITY_MARKERS = [
+  { name:'London', lon:-0.13, lat:51.51 },
+  { name:'Luton', lon:-0.42, lat:51.88, flip:true },
+  { name:'Birmingham', lon:-1.90, lat:52.48 },
+  { name:'Manchester', lon:-2.24, lat:53.48 },
+  { name:'Leeds', lon:-1.55, lat:53.80 },
+  { name:'Newcastle', lon:-1.61, lat:54.98 },
+  { name:'Norwich', lon:1.30, lat:52.63, up:true },
+  { name:'Bristol', lon:-2.59, lat:51.45 },
+  { name:'Plymouth', lon:-4.14, lat:50.37 },
+  { name:'Cardiff', lon:-3.18, lat:51.48, up:true },
+  { name:'Aberystwyth', lon:-4.08, lat:52.41, flip:true },
+  { name:'Wrexham', lon:-2.99, lat:53.05, flip:true },
+  { name:'Glasgow', lon:-4.25, lat:55.86, flip:true },
+  { name:'Edinburgh', lon:-3.19, lat:55.95 },
+  { name:'Dundee', lon:-2.97, lat:56.46 },
+  { name:'Aberdeen', lon:-2.10, lat:57.15 },
+  { name:'Inverness', lon:-4.22, lat:57.48 },
+  { name:'Fort William', lon:-5.11, lat:56.82, flip:true },
+  { name:'Wick', lon:-3.09, lat:58.44 },
+  { name:'Belfast', lon:-5.93, lat:54.60 },
+  { name:'Derry', lon:-7.32, lat:54.99, flip:true },
+  { name:'Dublin', lon:-6.26, lat:53.35 },
+  { name:'Galway', lon:-9.05, lat:53.27, flip:true },
+  { name:'Limerick', lon:-8.62, lat:52.66, flip:true },
+  { name:'Cork', lon:-8.47, lat:51.90, flip:true },
+  { name:'Liverpool', lon:-2.99, lat:53.41, flip:true, regionOnly:true },
+  { name:'Sheffield', lon:-1.47, lat:53.38, regionOnly:true },
+  { name:'Nottingham', lon:-1.15, lat:52.95, regionOnly:true },
+  { name:'Leicester', lon:-1.13, lat:52.64, regionOnly:true },
+  { name:'Hull', lon:-0.34, lat:53.74, regionOnly:true },
+  { name:'Southampton', lon:-1.40, lat:50.90, regionOnly:true },
+  { name:'Portsmouth', lon:-1.09, lat:50.80, up:true, regionOnly:true },
+  { name:'Brighton', lon:-0.14, lat:50.82, regionOnly:true },
+  { name:'Exeter', lon:-3.53, lat:50.72, flip:true, regionOnly:true },
+  { name:'Carlisle', lon:-2.94, lat:54.89, flip:true, regionOnly:true },
+  { name:'Middlesbrough', lon:-1.23, lat:54.57, regionOnly:true },
+  { name:'Stoke', lon:-2.18, lat:53.00, flip:true, regionOnly:true },
+  { name:'Peterborough', lon:-0.24, lat:52.57, regionOnly:true },
+  { name:'Cambridge', lon:0.12, lat:52.20, regionOnly:true },
+  { name:'Swansea', lon:-3.94, lat:51.62, flip:true, regionOnly:true },
+  { name:'Bangor', lon:-4.13, lat:53.23, flip:true, regionOnly:true },
+  { name:'Perth', lon:-3.44, lat:56.40, regionOnly:true },
+  { name:'Stirling', lon:-3.94, lat:56.12, flip:true, regionOnly:true },
+  { name:'Oban', lon:-5.47, lat:56.42, flip:true, regionOnly:true },
+  { name:'Stornoway', lon:-6.39, lat:58.21, flip:true, regionOnly:true },
+  { name:'Waterford', lon:-7.11, lat:52.26, regionOnly:true },
+  { name:'Sligo', lon:-8.48, lat:54.27, flip:true, regionOnly:true },
+  { name:'Killarney', lon:-9.52, lat:52.06, flip:true, regionOnly:true },
+];
+
+/* ==========================================================================
+   GEOMETRY HELPERS - transcribed from StormOutlookGraphicTool.jsx
+   ========================================================================== */
+
+/* Darken a colour towards black. A drawn area's conditional outline is just a
+   darker shade of that area's own colour. Accepts #rgb, #rrggbb, rgb(), rgba(). */
+function darkenColor(input, amount) {
+  if (amount === undefined) amount = 0.45;
+  if (!input) return '#000000';
+  let r, g, b;
+  const s = String(input).trim();
+  if (s[0] === '#') {
+    let hex = s.slice(1);
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    r = parseInt(hex.slice(0, 2), 16);
+    g = parseInt(hex.slice(2, 4), 16);
+    b = parseInt(hex.slice(4, 6), 16);
+  } else {
+    const m = s.match(/rgba?\(([^)]+)\)/);
+    if (!m) return '#000000';
+    const parts = m[1].split(',').map(p => parseFloat(p));
+    r = parts[0]; g = parts[1]; b = parts[2];
+  }
+  if (![r, g, b].every(Number.isFinite)) return '#000000';
+  const k = 1 - Math.max(0, Math.min(1, amount));
+  const d = v => Math.max(0, Math.min(255, Math.round(v * k)));
+  return '#' + [d(r), d(g), d(b)].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+/* Ray-casting point-in-polygon. Points are [x,y] in normalised 0..1 space.
+   Used to find which drawn area a click landed in. */
+function pointInPolygon(pt, poly) {
+  if (!poly || poly.length < 3) return false;
+  const x = pt[0], y = pt[1];
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+    const intersect = ((yi > y) !== (yj > y)) &&
+      (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-9) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/* Drawn-area smoothing. Two stages, then a Catmull-Rom spline when stroking:
+     1. Distance-decimate to drop the dense jitter the pointer emits.
+     2. Closed Chaikin corner-cutting (3 iterations) to round every corner
+        evenly. Chaikin on a CLOSED ring (wrapping first<->last) gives a far
+        smoother, more natural blob than a single 3-point average. */
+function decimatePoints(pts, minDist) {
+  if (minDist === undefined) minDist = 0.010;
+  if (!pts || pts.length < 2) return pts || [];
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const p = out[out.length - 1];
+    if (Math.hypot(pts[i][0] - p[0], pts[i][1] - p[1]) >= minDist) out.push(pts[i]);
+  }
+  return out;
+}
+/* One pass of Chaikin on a closed ring: each edge contributes points at 1/4 and
+   3/4, cutting the corner. Repeating converges to a smooth curve. */
+function chaikinClosed(pts, iterations) {
+  if (iterations === undefined) iterations = 3;
+  let ring = pts;
+  for (let it = 0; it < iterations; it++) {
+    const n = ring.length;
+    if (n < 3) return ring;
+    const next = [];
+    for (let i = 0; i < n; i++) {
+      const a = ring[i], b = ring[(i + 1) % n];
+      next.push([a[0] + (b[0] - a[0]) * 0.25, a[1] + (b[1] - a[1]) * 0.25]);
+      next.push([a[0] + (b[0] - a[0]) * 0.75, a[1] + (b[1] - a[1]) * 0.75]);
+    }
+    ring = next;
+  }
+  return ring;
+}
+function smoothPoints(pts) {
+  if (!pts || pts.length < 4) return pts || [];
+  const dec = decimatePoints(pts, 0.010);
+  if (dec.length < 4) return dec;
+  return chaikinClosed(dec, 3);
+}
+
+/* Trace a smoothed ring onto a 2D context as a closed Catmull-Rom spline,
+   in graphic pixel space. Mirrors pointsToPath() in the source. */
+function traceShape(ctx, pts) {
+  const s = smoothPoints(pts);
+  if (!s || s.length < 2) return false;
+  const X = i => nx2px(s[i][0]), Y = i => ny2px(s[i][1]);
+  ctx.beginPath();
+  if (s.length < 4) {
+    ctx.moveTo(X(0), Y(0));
+    for (let i = 1; i < s.length; i++) ctx.lineTo(X(i), Y(i));
+    ctx.closePath();
+    return true;
+  }
+  const n = s.length;
+  const at = i => s[((i % n) + n) % n];
+  ctx.moveTo(nx2px(at(0)[0]), ny2px(at(0)[1]));
+  for (let i = 0; i < n; i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    ctx.bezierCurveTo(
+      nx2px(p1[0] + (p2[0] - p0[0]) / 6), ny2px(p1[1] + (p2[1] - p0[1]) / 6),
+      nx2px(p2[0] - (p3[0] - p1[0]) / 6), ny2px(p2[1] - (p3[1] - p1[1]) / 6),
+      nx2px(p2[0]), ny2px(p2[1]));
+  }
+  ctx.closePath();
+  return true;
+}
+
+/* Rounded rectangle path helper (canvas has roundRect only in newer engines). */
+function rr(ctx, x, y, w, h, r) {
+  const k = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + k, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, k);
+  ctx.arcTo(x + w, y + h, x,     y + h, k);
+  ctx.arcTo(x,     y + h, x,     y,     k);
+  ctx.arcTo(x,     y,     x + w, y,     k);
+  ctx.closePath();
+}
+
+/* ==========================================================================
+   COASTLINE
+   The original pulls the high-detail georgique GeoJSON from GitHub and caches
+   it, rejecting any source below MIN_DETAIL_VERTICES so the ~56-vertex crude
+   blob can never silently replace the detailed coastline. Same policy here,
+   with one addition: if every mirror is unreachable (offline, blocked), fall
+   back to this platform's own /api/coastline rather than showing nothing.
+   That endpoint is the TCM land mask outline - coarser, and explicitly not a
+   survey coastline - so it is a last resort, never a preference.
+   ========================================================================== */
+const GEO_SOURCES = [
+  ['https://raw.githubusercontent.com/georgique/world-geojson/develop/countries/united_kingdom.json',
+   'https://raw.githubusercontent.com/georgique/world-geojson/develop/countries/ireland.json'],
+  ['https://raw.githubusercontent.com/georgique/world-geojson/master/countries/united_kingdom.json',
+   'https://raw.githubusercontent.com/georgique/world-geojson/master/countries/ireland.json'],
+];
+const MIN_DETAIL_VERTICES = 800;
+const GEO_CACHE_KEY = 'tcm_sotg_uk_rings_v1';
+
+/* GeoJSON geometry -> array of projected rings (arrays of [x,y] in VIEW space). */
+function geoToRings(geometry) {
+  const polys = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  const out = [];
+  for (const poly of polys) {
+    for (const ring of poly) out.push(ring.map(c => projectPt(c[0], c[1])));
+  }
+  return out;
+}
+function ringVertexCount(rings) { return rings.reduce((n, r) => n + r.length, 0); }
+
+/* ---- County / local-authority boundaries -------------------------------
+   Thin grey lines over the white landmass, so the map reads like a broadcast
+   county map rather than a blank silhouette. Coverage spans Great Britain,
+   Northern Ireland AND the Republic - there is no single file with all three.
+   GB and NI are TopoJSON (delta-encoded arcs); Ireland is plain GeoJSON.
+   ------------------------------------------------------------------------ */
+const COUNTY_GB_SOURCES = [
+  'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/gb/topo_lad.json',
+  'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/eng/topo_lad.json',
+];
+const COUNTY_NI_SOURCE = 'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/ni/topo_lgd.json';
+const COUNTY_IE_SOURCE = 'https://raw.githubusercontent.com/codeforgermany/click_that_hood/main/public/data/ireland-counties.geojson';
+const COUNTY_CACHE_KEY = 'tcm_sotg_county_rings_v1';
+/* Minimum projected gap between kept vertices. At this scale anything finer is
+   sub-pixel, so dropping it cuts the vertex count ~30x with no visible change. */
+const COUNTY_MIN_GAP = 1.2;
+const COUNTY_MIN_VERTICES = 2000;
+
+function decimateRing(proj) {
+  if (proj.length < 4) return null;
+  const gap2 = COUNTY_MIN_GAP * COUNTY_MIN_GAP;
+  const kept = [proj[0]];
+  let last = proj[0];
+  for (let i = 1; i < proj.length - 1; i++) {
+    const dx = proj[i][0] - last[0], dy = proj[i][1] - last[1];
+    if (dx * dx + dy * dy >= gap2) { kept.push(proj[i]); last = proj[i]; }
+  }
+  kept.push(proj[proj.length - 1]);
+  return kept.length >= 4 ? kept : null;
+}
+
+function decodeCountyTopo(topo) {
+  try {
+    const t = topo && topo.transform;
+    const obj = topo && topo.objects && Object.values(topo.objects)[0];
+    if (!t || !obj || !Array.isArray(topo.arcs)) return [];
+    const sx = t.scale[0], sy = t.scale[1], tx = t.translate[0], ty = t.translate[1];
+    // Pre-decode every arc into absolute (delta-summed) lon/lat.
+    const arcs = topo.arcs.map(function (arc) {
+      let x = 0, y = 0; const out = [];
+      for (const d of arc) { x += d[0]; y += d[1]; out.push([x * sx + tx, y * sy + ty]); }
+      return out;
+    });
+    const arcCoords = i => (i >= 0 ? arcs[i] : arcs[~i].slice().reverse());
+    const out = [];
+    for (const geom of (obj.geometries || [])) {
+      const polys = geom.type === 'Polygon' ? [geom.arcs]
+        : geom.type === 'MultiPolygon' ? geom.arcs : null;
+      if (!polys) continue;
+      for (const poly of polys) {
+        for (const ring of poly) {
+          const raw = [];
+          ring.forEach(function (ai, k) {
+            const c = arcCoords(ai);
+            // Drop each arc's shared first point when stitching.
+            for (let i = k > 0 ? 1 : 0; i < c.length; i++) raw.push(projectPt(c[i][0], c[i][1]));
+          });
+          const seg = decimateRing(raw);
+          if (seg) out.push(seg);
+        }
+      }
+    }
+    return out;
+  } catch (e) { return []; }
+}
+
+function decodeCountyGeoJSON(gj) {
+  try {
+    const feats = (gj && gj.features) || (gj && gj.geometry ? [gj] : []);
+    const out = [];
+    for (const ftr of feats) {
+      const geom = ftr && ftr.geometry;
+      if (!geom) continue;
+      const polys = geom.type === 'Polygon' ? [geom.coordinates]
+        : geom.type === 'MultiPolygon' ? geom.coordinates : null;
+      if (!polys) continue;
+      for (const poly of polys) {
+        for (const ring of poly) {
+          const seg = decimateRing(ring.map(c => projectPt(c[0], c[1])));
+          if (seg) out.push(seg);
+        }
+      }
+    }
+    return out;
+  } catch (e) { return []; }
+}
+
+const fetchJSON = u => fetch(u).then(r => { if (!r.ok) throw new Error('http ' + r.status); return r.json(); });
+
+async function loadCounties() {
+  try {
+    const cached = localStorage.getItem(COUNTY_CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (ringVertexCount(parsed) >= COUNTY_MIN_VERTICES) return parsed;
+    }
+  } catch (e) {}
+  // GB tries its mirrors in order; NI and IE are independent and optional, so
+  // one failing source costs its own region rather than the whole layer.
+  const gbP = (async function () {
+    for (const url of COUNTY_GB_SOURCES) {
+      try {
+        const ds = decodeCountyTopo(await fetchJSON(url));
+        if (ds.length) return ds;
+      } catch (e) {}
+    }
+    return [];
+  })();
+  const niP = fetchJSON(COUNTY_NI_SOURCE).then(decodeCountyTopo).catch(() => []);
+  const ieP = fetchJSON(COUNTY_IE_SOURCE).then(decodeCountyGeoJSON).catch(() => []);
+  const parts = await Promise.all([gbP, niP, ieP]);
+  const rings = parts[0].concat(parts[1], parts[2]);
+  if (ringVertexCount(rings) < COUNTY_MIN_VERTICES) return null;
+  try { localStorage.setItem(COUNTY_CACHE_KEY, JSON.stringify(rings)); } catch (e) {}
+  return rings;
+}
+
+async function loadCoastline() {
+  try {
+    const cached = localStorage.getItem(GEO_CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (ringVertexCount(parsed) >= MIN_DETAIL_VERTICES) return { rings:parsed, source:'cache' };
+    }
+  } catch (e) { /* storage unavailable or corrupt - refetch */ }
+
+  for (const pair of GEO_SOURCES) {
+    try {
+      const res = await Promise.all(pair.map(u => fetch(u).then(r => {
+        if (!r.ok) throw new Error('http ' + r.status); return r.json();
+      })));
+      let rings = [];
+      for (const gj of res) {
+        const feats = gj.features || (gj.geometry ? [gj] : []);
+        for (const f of feats) rings = rings.concat(geoToRings(f.geometry));
+        if (!feats.length && gj.type && gj.coordinates) rings = rings.concat(geoToRings(gj));
+      }
+      // Reject anything that is not a real coastline - see MIN_DETAIL_VERTICES.
+      if (ringVertexCount(rings) < MIN_DETAIL_VERTICES) continue;
+      try { localStorage.setItem(GEO_CACHE_KEY, JSON.stringify(rings)); } catch (e) {}
+      return { rings:rings, source:'georgique' };
+    } catch (e) { /* try next mirror */ }
+  }
+
+  // Every detailed mirror failed. Fall back to the platform's own outline.
+  try {
+    const r = await fetch('http://127.0.0.1:8000/api/coastline');
+    if (r.ok) {
+      const gj = await r.json();
+      const rings = geoToRings({ type:'MultiLineString', coordinates:gj.geometry.coordinates })
+        .length ? gj.geometry.coordinates.map(ring => ring.map(c => projectPt(c[0], c[1]))) : [];
+      if (rings.length) return { rings:rings, source:'tcm-landmask' };
+    }
+  } catch (e) {}
+  return { rings:null, source:'none' };
+}
+
+/* ==========================================================================
+   STATE - the source's useState set, as one object.
+   ========================================================================== */
+const S = {
+  graphicMode: 'outlook',            // 'outlook' | 'radar'
+  validDate:  new Date().toISOString().slice(0, 10),
+  validDate2: '',                    // optional second outlook day
+  activeRisk: 'Slight',
+  hazards: ['lightning', 'hail', 'flood'],
+  timelineGran: '3h',
+  stampRisks:    buildStamps('3h').map(() => null),
+  stampOverlays: buildStamps('3h').map(() => null),
+  timelineRangeMode: false,
+  rangeAnchor: null,
+  footerText: 'Risk of Thunderstorms in a 15 mile radius',
+  handle: '@MyWeatherUK',
+  version: 'v6.00',
+  disclaimer: 'NOT OFFICIAL · USE FOR GUIDANCE ONLY · REFER TO MET OFFICE WARNINGS',
+  forecastType: 'initial',           // 'initial' | 'update'
+  updateNumber: 1,
+  overnightEnabled: false,
+  overnightStart: '21:00',
+  overnightEnd: '09:00',
+  drawMode: true,
+  drawOpacity: 0.7,
+  shapes: [],                        // { riskLevel, points:[[x,y] 0..1], cond }
+  currentPath: [],
+  showShapes: true,
+  showCities: true,
+  showCounties: true,
+  counties: null,
+  showLightning: false,
+  lightningColor: '#ffffff',
+  lightningOutline: false,
+  lightningOutlineColor: '#000000',
+  strikes: null,
+  strikeWindow: 1440,
+  liveStrikes: true,
+  lastStrikePoll: null,
+  newSinceLastPoll: 0,
+  confidence: null,
+  validUntil: '',
+  discussionEnabled: false,
+  discussionText: '',
+  outlookRegion: 'uk',
+  annotations: [],
+  annDraft: '',
+  annColor: '#fde047',
+  annSize: 'md',
+  annPill: true,
+  annLeader: false,
+  arrows: [],
+  arrowColor: '#ffffff',
+  arrowDraft: null,
+  mapTool: 'draw',                   // 'draw' | 'text' | 'arrow' | 'cond'
+  coast: null,
+  coastSource: '',
+  exportScale: 2,
+};
+
+let stamps = buildStamps(S.timelineGran);
+
+const cvs = document.getElementById('c');
+const surface = document.getElementById('surface');
+const FONT = "'Archivo','DM Sans',system-ui,-apple-system,Segoe UI,sans-serif";
+const f = (w, s) => w + ' ' + s + 'px ' + FONT;
+
+/* The renderer draws in graphic units (640x760) and the target context carries
+   the scale. Preview and export therefore run the SAME code: export just
+   rebinds to a larger offscreen context and calls draw() again, which is why
+   the saved file cannot drift from the preview. */
+let ctx = cvs.getContext('2d');
+let renderScale = 1;
+function rebind(newCtx, scale) { ctx = newCtx; renderScale = scale; }
+
+/* Fit the graphic to the stage, at device pixel ratio, so the preview is sharp
+   and the exported pixels are the ones drawn. */
+let viewScale = 1;
+function sizeCanvas() {
+  const stage = document.getElementById('stage');
+  const availH = stage.clientHeight - 44, availW = stage.clientWidth - 44;
+  viewScale = Math.max(0.4, Math.min(1.25, availH / GRAPHIC_H, availW / GRAPHIC_W));
+  const dpr = window.devicePixelRatio || 1;
+  cvs.width  = Math.round(GRAPHIC_W * viewScale * dpr);
+  cvs.height = Math.round(GRAPHIC_H * viewScale * dpr);
+  cvs.style.width  = (GRAPHIC_W * viewScale) + 'px';
+  cvs.style.height = (GRAPHIC_H * viewScale) + 'px';
+  rebind(cvs.getContext('2d'), viewScale * dpr);
+  // The interaction surface covers only the map rect.
+  surface.style.left   = (MAP_X * viewScale) + 'px';
+  surface.style.top    = (MAP_Y * viewScale) + 'px';
+  surface.style.width  = (MAP_W * viewScale) + 'px';
+  surface.style.height = (MAP_H * viewScale) + 'px';
+}
+
+/* ==========================================================================
+   CANVAS PRIMITIVES - the source's glass() / GlassSheen() in 2D.
+   The original swaps to a solid fill for export because html2canvas cannot
+   rasterise backdrop-filter. Drawing straight to canvas has no such split:
+   one appearance, preview and export alike.
+   ========================================================================== */
+function glassPanel(x, y, w, h, r) {
+  if (r === undefined) r = 14;
+  const g = ctx.createLinearGradient(x, y, x + w * 0.42, y + h);
+  g.addColorStop(0,    'rgba(52,66,98,0.90)');
+  g.addColorStop(0.45, 'rgba(32,44,72,0.91)');
+  g.addColorStop(1,    'rgba(20,29,50,0.93)');
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.46)'; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
+  rr(ctx, x, y, w, h, r); ctx.fillStyle = g; ctx.fill();
+  ctx.restore();
+  // specular sheen across the top + a bright hairline just inside the border
+  ctx.save();
+  rr(ctx, x, y, w, h, r); ctx.clip();
+  const sh = ctx.createLinearGradient(x, y, x + w * 0.5, y + h * 0.58);
+  sh.addColorStop(0,    'rgba(255,255,255,0.22)');
+  sh.addColorStop(0.38, 'rgba(255,255,255,0.07)');
+  sh.addColorStop(0.72, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sh; ctx.fillRect(x, y, w, h * 0.58);
+  const hl = ctx.createLinearGradient(x, 0, x + w, 0);
+  hl.addColorStop(0,   'rgba(255,255,255,0)');
+  hl.addColorStop(0.5, 'rgba(255,255,255,0.55)');
+  hl.addColorStop(1,   'rgba(255,255,255,0)');
+  ctx.fillStyle = hl; ctx.fillRect(x + w * 0.08, y + 1, w * 0.84, 1);
+  ctx.restore();
+  rr(ctx, x, y, w, h, r);
+  ctx.strokeStyle = 'rgba(255,255,255,0.26)'; ctx.lineWidth = 1; ctx.stroke();
+}
+
+function pill(x, y, w, h, bg, border) {
+  rr(ctx, x, y, w, h, h / 2);
+  if (bg) { ctx.fillStyle = bg; ctx.fill(); }
+  if (border) { ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke(); }
+}
+
+function tag(x, y, text, fg, bg, border, size) {
+  size = size || 9;
+  ctx.font = f(800, size);
+  const tw = ctx.measureText(text).width;
+  const w = tw + 18, h = size + 8;
+  rr(ctx, x, y, w, h, 5);
+  ctx.fillStyle = bg; ctx.fill();
+  ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = fg; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + 9, y + h / 2 + 0.5);
+  return w;
+}
+
+/* Letter-spaced small caps, used throughout the source's chrome. */
+function tracked(text, x, y, spacing, align) {
+  const chars = String(text).split('');
+  let total = 0;
+  for (const c of chars) total += ctx.measureText(c).width + spacing;
+  total -= spacing;
+  let cx = align === 'right' ? x - total : align === 'center' ? x - total / 2 : x;
+  ctx.textAlign = 'left';
+  for (const c of chars) { ctx.fillText(c, cx, y); cx += ctx.measureText(c).width + spacing; }
+  return total;
+}
+function trackedWidth(text, spacing) {
+  let total = 0;
+  for (const c of String(text)) total += ctx.measureText(c).width + spacing;
+  return total - spacing;
+}
+
+function wrapLines(text, maxW) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const lines = []; let line = '';
+  for (const w of words) {
+    const t = line ? line + ' ' + w : w;
+    if (ctx.measureText(t).width > maxW && line) { lines.push(line); line = w; }
+    else line = t;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/* Hazard / marker glyphs, drawn rather than fetched so export never waits on
+   an icon font or a remote asset. */
+function glyph(kind, cx, cy, size, color) {
+  const s = size / 2;
+  ctx.save();
+  ctx.strokeStyle = color; ctx.fillStyle = color;
+  ctx.lineWidth = Math.max(1.2, size / 9);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  if (kind === 'bolt') {
+    ctx.beginPath();
+    ctx.moveTo(cx + s * 0.30, cy - s); ctx.lineTo(cx - s * 0.45, cy + s * 0.12);
+    ctx.lineTo(cx + s * 0.05, cy + s * 0.12); ctx.lineTo(cx - s * 0.25, cy + s);
+    ctx.lineTo(cx + s * 0.55, cy - s * 0.18); ctx.lineTo(cx + s * 0.02, cy - s * 0.18);
+    ctx.closePath(); ctx.fill();
+  } else if (kind === 'hail') {
+    ctx.beginPath(); ctx.arc(cx, cy - s * 0.25, s * 0.62, Math.PI, 0); ctx.stroke();
+    for (const dx of [-0.42, 0, 0.42]) {
+      ctx.beginPath(); ctx.arc(cx + dx * s, cy + s * 0.55, s * 0.24, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (kind === 'flood') {
+    ctx.beginPath();                                   // house
+    ctx.moveTo(cx, cy - s); ctx.lineTo(cx + s * 0.78, cy - s * 0.15);
+    ctx.lineTo(cx + s * 0.5, cy - s * 0.15); ctx.lineTo(cx + s * 0.5, cy + s * 0.4);
+    ctx.lineTo(cx - s * 0.5, cy + s * 0.4); ctx.lineTo(cx - s * 0.5, cy - s * 0.15);
+    ctx.lineTo(cx - s * 0.78, cy - s * 0.15); ctx.closePath(); ctx.stroke();
+    ctx.beginPath();                                   // water
+    ctx.moveTo(cx - s, cy + s * 0.62);
+    ctx.quadraticCurveTo(cx - s * 0.5, cy + s * 0.3, cx, cy + s * 0.62);
+    ctx.quadraticCurveTo(cx + s * 0.5, cy + s * 0.95, cx + s, cy + s * 0.62);
+    ctx.stroke();
+  } else if (kind === 'tornado') {
+    ctx.beginPath();
+    ctx.moveTo(cx - s, cy - s * 0.8); ctx.lineTo(cx + s, cy - s * 0.8);
+    ctx.moveTo(cx - s * 0.72, cy - s * 0.3); ctx.lineTo(cx + s * 0.72, cy - s * 0.3);
+    ctx.moveTo(cx - s * 0.42, cy + s * 0.2); ctx.lineTo(cx + s * 0.42, cy + s * 0.2);
+    ctx.moveTo(cx - s * 0.16, cy + s * 0.7); ctx.lineTo(cx + s * 0.16, cy + s * 0.7);
+    ctx.stroke();
+  } else if (kind === 'warn') {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - s); ctx.lineTo(cx + s, cy + s * 0.78); ctx.lineTo(cx - s, cy + s * 0.78);
+    ctx.closePath(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.32); ctx.lineTo(cx, cy + s * 0.18); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy + s * 0.46, size / 14, 0, Math.PI * 2); ctx.fill();
+  } else if (kind === 'rain' || kind === 'driz' || kind === 'rainw') {
+    ctx.beginPath(); ctx.arc(cx - s * 0.2, cy - s * 0.2, s * 0.5, Math.PI * 0.9, Math.PI * 2.05); ctx.stroke();
+    const drops = kind === 'driz' ? [-0.3, 0.3] : [-0.45, 0, 0.45];
+    for (const dx of drops) {
+      ctx.beginPath();
+      ctx.moveTo(cx + dx * s, cy + s * 0.35);
+      ctx.lineTo(cx + dx * s - (kind === 'rainw' ? s * 0.3 : 0), cy + s * 0.9);
+      ctx.stroke();
+    }
+  } else if (kind === 'radar') {
+    for (const r of [0.35, 0.68, 1]) {
+      ctx.beginPath(); ctx.arc(cx, cy, s * r, -Math.PI * 0.9, -Math.PI * 0.1); ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(cx, cy, size / 12, 0, Math.PI * 2); ctx.fill();
+  } else if (kind === 'clock') {
+    ctx.beginPath(); ctx.arc(cx, cy, s * 0.92, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.5); ctx.lineTo(cx, cy);
+    ctx.lineTo(cx + s * 0.42, cy + s * 0.2); ctx.stroke();
+  } else if (kind === 'moon') {
+    ctx.beginPath(); ctx.arc(cx, cy, s * 0.92, 0, Math.PI * 2); ctx.fill();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath(); ctx.arc(cx + s * 0.42, cy - s * 0.34, s * 0.82, 0, Math.PI * 2); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.restore();
+}
+
+/* ==========================================================================
+   TIMELINE RUNS - transcribed from timelineRuns() in the source.
+   A run of equal stamps is drawn as one pill; a weaker run extends its drawn
+   span under adjacent stronger runs so the colours read as continuous, and
+   runs are painted weakest-first so the stronger sits on top.
+   ========================================================================== */
+function timelineRuns(arr) {
+  const N = arr.length, runs = [];
+  let i = 0;
+  while (i < N) {
+    const r = arr[i];
+    if (!r) { i++; continue; }
+    let j = i;
+    while (j + 1 < N && arr[j + 1] === r) j++;
+    runs.push({ risk:r, start:i, end:j });
+    i = j + 1;
+  }
+  for (const run of runs) {
+    const sev = RISK_SEVERITY[run.risk];
+    let s = run.start;
+    while (s - 1 >= 0 && arr[s - 1] && RISK_SEVERITY[arr[s - 1]] > sev) s--;
+    let e = run.end;
+    while (e + 1 < N && arr[e + 1] && RISK_SEVERITY[arr[e + 1]] > sev) e++;
+    run.drawStart = s; run.drawEnd = e;
+  }
+  runs.sort((a, b) => RISK_SEVERITY[a.risk] - RISK_SEVERITY[b.risk]);
+  return runs;
+}
+
+/* Geometry of the timeline pill, shared by the renderer and the click handler
+   so a stamp is always clicked where it is drawn. */
+function timelineGeom() {
+  const N = stamps.length;
+  const CELL_H = 30;
+  const CELL_W = N <= 9 ? 34 : N <= 13 ? 30 : Math.max(17, Math.floor(560 / N));
+  const stampFont = CELL_W >= 30 ? 18 : CELL_W >= 24 ? 14 : 11;
+  const lead = 44;                                  // clock glyph + chevron
+  const w = lead + CELL_W * N + 14 + 14;
+  return { N:N, CELL_W:CELL_W, CELL_H:CELL_H, stampFont:stampFont, lead:lead,
+           x:22, y:TIMELINE_Y, w:w, h:CELL_H + 14, cellsX:22 + 14 + lead };
+}
+const TIMELINE_Y = 100;
+
+const isRadar = () => S.graphicMode === 'radar';
+const activeLevels = () => (isRadar() ? RADAR_LEVELS : GRAPHIC_LEVELS);
+const activeHazards = () => (isRadar() ? RADAR_HAZARDS : HAZARDS);
+const regionBox = () => {
+  const r = UK_REGIONS.find(r => r.id === S.outlookRegion);
+  return r && r.id !== 'uk' ? r.bbox : null;
+};
+
+/* ==========================================================================
+   RENDER
+   ========================================================================== */
+function draw() {
+  ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+  ctx.clearRect(0, 0, GRAPHIC_W, GRAPHIC_H);
+  ctx.textBaseline = 'alphabetic';
+
+  drawBackdrop();
+  drawMap();
+  drawHeader();
+  drawFooter();
+
+  // Outer frame - blue in radar mode, indigo in outlook mode.
+  ctx.strokeStyle = isRadar() ? 'rgba(56,189,248,0.55)' : 'rgba(125,140,232,0.55)';
+  ctx.lineWidth = 3;
+  rr(ctx, 1.5, 1.5, GRAPHIC_W - 3, GRAPHIC_H - 3, 24);
+  ctx.stroke();
+}
+
+/* Storm sky. The published graphic uses a real photograph, so this loads the
+   same one. It is served with CORS, verified: drawing it does NOT taint the
+   export canvas, so toBlob() still works. If it fails to load - offline, or
+   the asset moves - the procedural sky underneath stands in rather than
+   leaving the graphic blank. */
+const STORM_BG_URL = 'https://media.base44.com/images/public/69945c97e07811f2b5427aa6/fd5fe1cb8_generated_image.png';
+let stormBg = null;
+(function loadStormBg() {
+  const im = new Image();
+  im.crossOrigin = 'anonymous';
+  im.onload = () => { stormBg = im; render(); };
+  im.src = STORM_BG_URL;
+})();
+
+/* Footer mark. Served from this origin, so it can never taint the export.
+   The .svg in assets/ is a PLACEHOLDER, not the brand asset - drop the real
+   mark in as myweatheruk-logo.png and it is preferred automatically. */
+let siteLogo = null, siteLogoIsPlaceholder = true;
+(function loadSiteLogo() {
+  const png = new Image();
+  png.onload = () => { siteLogo = png; siteLogoIsPlaceholder = false; buildControls(); render(); };
+  png.onerror = () => {
+    const svg = new Image();
+    svg.onload = () => { siteLogo = svg; render(); };
+    svg.src = '/tcm-v5-app/assets/myweatheruk-logo.svg';
+  };
+  png.src = '/tcm-v5-app/assets/myweatheruk-logo.png';
+})();
+
+function drawBackdrop() {
+  ctx.save();
+  rr(ctx, 0, 0, GRAPHIC_W, GRAPHIC_H, 24); ctx.clip();
+
+  const base = ctx.createLinearGradient(0, 0, GRAPHIC_W * 0.35, GRAPHIC_H);
+  if (isRadar()) {
+    base.addColorStop(0, '#071426'); base.addColorStop(0.45, '#0a1b30');
+    base.addColorStop(1, '#04101f');
+  } else {
+    base.addColorStop(0, '#0b1024'); base.addColorStop(0.42, '#141a34');
+    base.addColorStop(1, '#06040f');
+  }
+  ctx.fillStyle = base; ctx.fillRect(0, 0, GRAPHIC_W, GRAPHIC_H);
+
+  // The photograph, cover-fitted, softened and darkened to the same degree the
+  // original applies in CSS (blur 1.4px, brightness 0.58).
+  if (stormBg && !isRadar()) {
+    const sc = Math.max(GRAPHIC_W / stormBg.width, GRAPHIC_H / stormBg.height);
+    const w = stormBg.width * sc, h = stormBg.height * sc;
+    ctx.save();
+    ctx.filter = 'blur(1.4px) brightness(0.58)';
+    ctx.drawImage(stormBg, (GRAPHIC_W - w) / 2, (GRAPHIC_H - h) / 2, w, h);
+    ctx.restore();
+  }
+
+  // Anvil glows.
+  const glows = isRadar()
+    ? [[150, 170, 300, 'rgba(56,189,248,0.16)'], [520, 430, 300, 'rgba(14,116,190,0.14)']]
+    : [[140, 150, 320, 'rgba(120,110,235,0.20)'], [540, 250, 300, 'rgba(214,110,190,0.13)'],
+       [330, 640, 340, 'rgba(70,90,190,0.14)']];
+  for (const g of glows) {
+    const rg = ctx.createRadialGradient(g[0], g[1], 0, g[0], g[1], g[2]);
+    rg.addColorStop(0, g[3]); rg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = rg; ctx.fillRect(0, 0, GRAPHIC_W, GRAPHIC_H);
+  }
+
+  if (!isRadar()) {
+    // Distant bolts, fixed positions so the graphic is reproducible.
+    ctx.save();
+    ctx.strokeStyle = 'rgba(190,205,255,0.16)'; ctx.lineWidth = 1.4; ctx.lineJoin = 'round';
+    const bolts = [[70, 120, 1], [600, 200, -1], [40, 520, 1], [610, 600, -1]];
+    for (const b of bolts) {
+      ctx.beginPath();
+      ctx.moveTo(b[0], b[1]);
+      ctx.lineTo(b[0] + 12 * b[2], b[1] + 34);
+      ctx.lineTo(b[0] + 2 * b[2],  b[1] + 34);
+      ctx.lineTo(b[0] + 15 * b[2], b[1] + 74);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Tonal wash top and bottom so header and footer text keeps contrast.
+  const wash = ctx.createLinearGradient(0, 0, 0, GRAPHIC_H);
+  wash.addColorStop(0,    'rgba(8,11,22,0.56)');
+  wash.addColorStop(0.38, 'rgba(8,11,22,0.35)');
+  wash.addColorStop(0.70, 'rgba(8,11,22,0.38)');
+  wash.addColorStop(1,    'rgba(8,11,22,0.62)');
+  ctx.fillStyle = wash; ctx.fillRect(0, 0, GRAPHIC_W, GRAPHIC_H);
+
+  // Fine dot grid at 4% - the source's radial-gradient texture.
+  ctx.globalAlpha = 0.04; ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  for (let y = 0; y < GRAPHIC_H; y += 22)
+    for (let x = 0; x < GRAPHIC_W; x += 22) ctx.fillRect(x, y, 1, 1);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+/* ---- Map ---------------------------------------------------------------- */
+function drawMap() {
+  ctx.save();
+  rr(ctx, MAP_X, MAP_Y, MAP_W, MAP_H, 12);
+  ctx.clip();
+
+  const reg = regionBox();
+  if (reg) {
+    // Zoom the whole map layer to the selected region, exactly as the source's
+    // CSS transform does - but here every layer shares one space, so landmass,
+    // cities, strikes and drawn areas all zoom together and stay registered.
+    const tl = latLonToNorm(reg.latMax, reg.lonMin), br = latLonToNorm(reg.latMin, reg.lonMax);
+    const k = Math.min(1 / Math.max(1e-6, br[0] - tl[0]), 1 / Math.max(1e-6, br[1] - tl[1]));
+    // Clamp the centre so the view cannot run off the edge of the projection.
+    // A region whose aspect differs from the map box - South England is much
+    // wider than it is tall - otherwise leaves a band of empty black where
+    // there is simply no map left to show.
+    const half = 0.5 / k;
+    const clamp = v => half >= 0.5 ? 0.5 : Math.max(half, Math.min(1 - half, v));
+    const cx = clamp((tl[0] + br[0]) / 2), cy = clamp((tl[1] + br[1]) / 2);
+    ctx.translate(MAP_X + MAP_W / 2, MAP_Y + MAP_H / 2);
+    ctx.scale(k, k);
+    ctx.translate(-nx2px(cx), -ny2px(cy));
+    S._zoom = { k:k, cx:cx, cy:cy };
+  } else {
+    S._zoom = null;
+  }
+
+  drawLandmass();
+  if (S.showCounties) drawCounties();
+  if (S.showShapes) drawShapes();
+  if (S.showLightning && S.strikes) drawStrikes();
+  if (S.showShapes) drawShapeOutlines();
+  if (S.showCities) drawCities();
+  drawArrows();
+  drawAnnotations();
+
+  ctx.restore();
+}
+
+function drawLandmass() {
+  if (!S.coast) {
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.font = f(400, 13); ctx.textAlign = 'center';
+    ctx.fillText('loading map...', MAP_X + MAP_W / 2, MAP_Y + MAP_H / 2);
+    return;
+  }
+  const sx = MAP_W / VIEW_W, sy = MAP_H / VIEW_H;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 9; ctx.shadowOffsetY = 5;
+  const grad = ctx.createLinearGradient(0, MAP_Y, 0, MAP_Y + MAP_H);
+  grad.addColorStop(0, '#ffffff'); grad.addColorStop(1, '#eef2f7');
+  ctx.beginPath();
+  for (const ring of S.coast) {
+    ring.forEach((p, i) => {
+      const X = MAP_X + p[0] * sx, Y = MAP_Y + p[1] * sy;
+      if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    });
+    ctx.closePath();
+  }
+  ctx.fillStyle = grad; ctx.fill('evenodd');
+  ctx.restore();
+  ctx.lineWidth = 1.5 / (S._zoom ? S._zoom.k : 1);
+  ctx.strokeStyle = '#000'; ctx.stroke();
+}
+
+function drawCounties() {
+  if (!S.counties) return;
+  const sx = MAP_W / VIEW_W, sy = MAP_H / VIEW_H;
+  const kz = S._zoom ? S._zoom.k : 1;
+  ctx.save();
+  ctx.beginPath();
+  for (const ring of S.counties) {
+    ring.forEach(function (p, i) {
+      const X = MAP_X + p[0] * sx, Y = MAP_Y + p[1] * sy;
+      if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    });
+  }
+  ctx.strokeStyle = 'rgba(90,105,130,0.55)';
+  ctx.lineWidth = 0.7 / kz;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* Risk areas. Fill and outline are drawn in one pass here; the outlines are
+   redrawn on top of the strikes afterwards (drawShapeOutlines) so a dense
+   strike field never buries the area boundary - the source does the same. */
+function drawShapes() {
+  const list = S.shapes.slice();
+  if (S.currentPath.length > 1) list.push({ riskLevel:S.activeRisk, points:S.currentPath, live:true });
+  for (const sh of list) {
+    const meta = LEVEL_LOOKUP[sh.riskLevel];
+    if (!meta) continue;
+    if (!traceShape(ctx, sh.points)) continue;
+    const severe = isSevereId(sh.riskLevel), cond = isCondSevereId(sh.riskLevel);
+    ctx.save();
+    ctx.globalAlpha = sh.live ? S.drawOpacity * 0.65 : S.drawOpacity;
+    if (severe) {
+      // Hatch lines only, no opaque base, so the map underneath stays readable.
+      ctx.save(); ctx.clip();
+      ctx.strokeStyle = 'rgba(49,46,129,0.85)'; ctx.lineWidth = 4;
+      const d = Math.max(MAP_W, MAP_H) * 2;
+      for (let i = -d; i < d; i += 10) {
+        ctx.beginPath();
+        ctx.moveTo(MAP_X + i, MAP_Y - d); ctx.lineTo(MAP_X + i + d, MAP_Y - d + d);
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else if (cond) {
+      // Light halo behind the black dashes so they read on dark ground.
+      ctx.fillStyle = COND_SEVERE.fill; ctx.fill();
+    } else {
+      ctx.fillStyle = meta.fill; ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+function drawShapeOutlines() {
+  const list = S.shapes.slice();
+  if (S.currentPath.length > 1) list.push({ riskLevel:S.activeRisk, points:S.currentPath, live:true });
+  const kz = S._zoom ? S._zoom.k : 1;
+  for (const sh of list) {
+    const meta = LEVEL_LOOKUP[sh.riskLevel];
+    if (!meta) continue;
+    if (!traceShape(ctx, sh.points)) continue;
+    const severe = isSevereId(sh.riskLevel), cond = isCondSevereId(sh.riskLevel);
+    ctx.save();
+    ctx.lineJoin = 'round';
+    if (severe) {
+      ctx.strokeStyle = meta.border; ctx.lineWidth = 3 / kz; ctx.stroke();
+    } else if (cond) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = 4 / kz; ctx.stroke();
+      ctx.setLineDash([7 / kz, 5 / kz]);
+      ctx.strokeStyle = COND_SEVERE.color; ctx.lineWidth = 2.4 / kz; ctx.stroke();
+    } else if (sh.cond) {
+      // Per-area conditional flag: the area's own colour, darkened, dashed.
+      ctx.setLineDash([6 / kz, 4 / kz]);
+      ctx.strokeStyle = darkenColor(meta.border, 0.45); ctx.lineWidth = 2.4 / kz; ctx.stroke();
+    } else {
+      ctx.strokeStyle = meta.border; ctx.lineWidth = 2 / kz;
+      if (sh.live) ctx.setLineDash([5 / kz, 4 / kz]);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function drawStrikes() {
+  const kz = S._zoom ? S._zoom.k : 1;
+  const sx = MAP_W / VIEW_W, sy = MAP_H / VIEW_H;
+  const r = 2.4 * (MAP_W / VIEW_W) / kz, ro = r + 1.1 / kz;
+  const pts = [];
+  for (const s of S.strikes) {
+    const lat = s.lat != null ? s.lat : s.la, lon = s.lon != null ? s.lon : s.lo;
+    if (lat == null || lon == null) continue;
+    const p = projectPt(lon, lat);
+    if (p[0] < -4 || p[0] > VIEW_W + 4 || p[1] < -4 || p[1] > VIEW_H + 4) continue;
+    pts.push([MAP_X + p[0] * sx, MAP_Y + p[1] * sy]);
+  }
+  if (S.lightningOutline) {
+    ctx.beginPath();
+    for (const p of pts) { ctx.moveTo(p[0] + ro, p[1]); ctx.arc(p[0], p[1], ro, 0, Math.PI * 2); }
+    ctx.strokeStyle = S.lightningOutlineColor; ctx.lineWidth = 1.3 / kz;
+    ctx.globalAlpha = 0.95; ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  ctx.beginPath();
+  for (const p of pts) { ctx.moveTo(p[0] + r, p[1]); ctx.arc(p[0], p[1], r, 0, Math.PI * 2); }
+  ctx.fillStyle = S.lightningColor; ctx.globalAlpha = 0.9; ctx.fill(); ctx.globalAlpha = 1;
+}
+
+/* City markers with the source's greedy de-clutter: earlier (more important)
+   cities win, later ones are dropped when their label box would overlap. */
+function drawCities() {
+  const reg = regionBox(), pad = 0.4;
+  const pool = reg
+    ? CITY_MARKERS.filter(c => c.lat >= reg.latMin - pad && c.lat <= reg.latMax + pad &&
+                               c.lon >= reg.lonMin - pad && c.lon <= reg.lonMax + pad)
+    : CITY_MARKERS.filter(c => !c.regionOnly);
+  const kz = S._zoom ? S._zoom.k : 1;
+  const s = 1 / kz;
+  const fs = 9 * s, off = 7 * s;
+  ctx.font = f(800, fs);
+  const boxes = [];
+  const hit = (a, b, m) => !(a.x2 + m < b.x1 || a.x1 - m > b.x2 || a.y2 + m < b.y1 || a.y1 - m > b.y2);
+  const sx = MAP_W / VIEW_W, sy = MAP_H / VIEW_H;
+  for (const c of pool) {
+    const p = projectPt(c.lon, c.lat);
+    const X = MAP_X + p[0] * sx, Y = MAP_Y + p[1] * sy;
+    const flip = c.flip != null ? c.flip : (p[0] > VIEW_W - 48);
+    const w = ctx.measureText(c.name).width, h = fs * 1.15;
+    let bx, by;
+    if (c.up)      { bx = X - w / 2;   by = Y - off - h; }
+    else if (flip) { bx = X - off - w; by = Y - h * 0.55; }
+    else           { bx = X + off;     by = Y - h * 0.55; }
+    const box = { x1:Math.min(bx, X - 4 * s), y1:Math.min(by, Y - 4 * s),
+                  x2:Math.max(bx + w, X + 4 * s), y2:Math.max(by + h, Y + 4 * s) };
+    if (boxes.some(b => hit(box, b, 1.4 * s))) continue;
+    boxes.push(box);
+
+    ctx.beginPath(); ctx.arc(X, Y, 3.5 * s, 0, Math.PI * 2);
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 1.1 * s; ctx.globalAlpha = 0.9; ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.arc(X, Y, 1.7 * s, 0, Math.PI * 2);
+    ctx.fillStyle = '#111827'; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.8 * s; ctx.stroke();
+
+    ctx.textAlign = c.up ? 'center' : (flip ? 'right' : 'left');
+    ctx.textBaseline = 'alphabetic';
+    const tx = c.up ? X : (flip ? X - off : X + off);
+    const ty = c.up ? Y - off : Y + 3 * s;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.6 * s; ctx.strokeText(c.name, tx, ty);
+    ctx.fillStyle = '#111827'; ctx.fillText(c.name, tx, ty);
+  }
+}
+
+function drawArrows() {
+  const kz = S._zoom ? S._zoom.k : 1;
+  const list = S.arrows.concat(S.arrowDraft ? [Object.assign({}, S.arrowDraft, { color:S.arrowColor })] : []);
+  for (const a of list) {
+    const x1 = nx2px(a.x1), y1 = ny2px(a.y1), x2 = nx2px(a.x2), y2 = ny2px(a.y2);
+    const ang = Math.atan2(y2 - y1, x2 - x1), head = 11 / kz;
+    ctx.save();
+    ctx.strokeStyle = a.color; ctx.fillStyle = a.color;
+    ctx.lineWidth = 3 / kz; ctx.lineCap = 'round';
+    ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 4;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2 - Math.cos(ang) * head * 0.7, y2 - Math.sin(ang) * head * 0.7); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2 - Math.cos(ang - 0.42) * head, y2 - Math.sin(ang - 0.42) * head);
+    ctx.lineTo(x2 - Math.cos(ang + 0.42) * head, y2 - Math.sin(ang + 0.42) * head);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawAnnotations() {
+  const kz = S._zoom ? S._zoom.k : 1;
+  // Leader lines first, under the labels.
+  for (const a of S.annotations) {
+    if (!a.leader) continue;
+    ctx.save();
+    ctx.strokeStyle = a.color; ctx.globalAlpha = 0.8; ctx.lineWidth = 1.6 / kz;
+    ctx.setLineDash([4 / kz, 3 / kz]);
+    ctx.beginPath(); ctx.moveTo(nx2px(a.x), ny2px(a.y)); ctx.lineTo(nx2px(a.lx), ny2px(a.ly));
+    ctx.stroke(); ctx.restore();
+  }
+  for (const a of S.annotations) {
+    const px = ANN_PX[a.size] / kz;
+    ctx.font = f(800, px);
+    const w = ctx.measureText(a.text).width;
+    const X = nx2px(a.x), Y = ny2px(a.y);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    if (a.pill) {
+      const padx = 8 / kz, pady = 4 / kz;
+      rr(ctx, X - w / 2 - padx, Y - px / 2 - pady, w + padx * 2, px + pady * 2, (px + pady * 2) / 2);
+      ctx.fillStyle = 'rgba(10,14,26,0.72)'; ctx.fill();
+      ctx.strokeStyle = a.color; ctx.lineWidth = 1.2 / kz; ctx.stroke();
+      ctx.fillStyle = a.color; ctx.fillText(a.text, X, Y + 0.5);
+    } else {
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)'; ctx.lineWidth = 3 / kz; ctx.strokeText(a.text, X, Y);
+      ctx.fillStyle = a.color; ctx.fillText(a.text, X, Y);
+    }
+  }
+}
+
+/* ---- Header -------------------------------------------------------------
+   Title block and date card on the top row, then the timeline pill, then the
+   stacked left-column cards. The source auto-scales the header down when the
+   stack would run past the footer; the same guard is applied here so every
+   overlay stays visible and is captured intact on export.
+   ------------------------------------------------------------------------- */
+function drawHeader() {
+  const measure = headerLayout();
+  const avail = GRAPHIC_H - 22 - 92;                 // top inset + footer reserve
+  const hs = measure.bottom > avail ? Math.max(0.62, avail / measure.bottom) : 1;
+  ctx.save();
+  if (hs < 1) { ctx.translate(22, 22); ctx.scale(hs, hs); ctx.translate(-22, -22); }
+  drawHeaderContent();
+  ctx.restore();
+}
+
+/* Predict the stacked height so the auto-fit scale can be chosen before
+   anything is painted. Mirrors the order in drawHeaderContent(). */
+function headerLayout() {
+  let y = TIMELINE_Y + timelineGeom().h + 10;
+  if (S.overnightEnabled && !isRadar()) y += 42;
+  y += riskKeyHeight() + 10;
+  if (!S.showLightning) y += hazardsHeight() + 10;
+  if (S.showLightning) y += 74 + 10;
+  if (S.discussionEnabled && S.discussionText.trim() && !isRadar())
+    y += discussionHeight() + 10;
+  return { bottom:y };
+}
+
+function drawHeaderContent() {
+  const radar = isRadar();
+
+  /* Title row: a plain white glyph inline with the wordmark - no tile. */
+  const bx = 22, by = 22;
+  const title = radar ? 'RADAR'
+    : (S.showLightning ? 'LIGHTNING VERIFICATION' : outlookTitle());
+  const tsize = S.showLightning ? 30 : (title.length > 22 ? 32 : 37);
+  glyph(radar ? 'radar' : 'bolt', bx + 13, by + 20, 30, '#ffffff');
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 2;
+  ctx.font = f(800, tsize); ctx.fillStyle = '#fff';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(title, bx + 34, by + 21);
+  ctx.restore();
+
+  /* Date pill, directly under the title. */
+  if (!radar) drawDatePill(bx, by + 42);
+  else {
+    let w = tag(bx, by + 42, 'LIVE', '#fff', 'rgba(239,68,68,0.85)', 'rgba(248,113,113,0.5)', 8);
+    ctx.font = f(700, 11); ctx.fillStyle = 'rgba(226,232,240,0.90)';
+    ctx.textBaseline = 'middle';
+    tracked(new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) + ' ' + tzAbbr(),
+      bx + w + 8, by + 51, 1.4, 'left');
+  }
+
+  /* Timeline pill */
+  if (!radar) drawTimelinePill();
+
+  let y = TIMELINE_Y + timelineGeom().h + 10;
+
+  if (S.overnightEnabled && !radar) { drawOvernight(22, y); y += 42; }
+  drawRiskKey(22, y); y += riskKeyHeight() + 10;
+  if (!S.showLightning) { drawHazardsCard(22, y); y += hazardsHeight() + 10; }
+  else { drawLightningStats(22, y); y += 74 + 10; }
+  if (S.discussionEnabled && S.discussionText.trim() && !radar) drawDiscussion(22, y);
+}
+
+function outlookTitle() {
+  const d = leadDays();
+  return d > 1 ? 'EXTENDED OUTLOOK' : 'THUNDERSTORM OUTLOOK';
+}
+function leadDays() {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const v = new Date(S.validDate + 'T00:00:00');
+  return Math.max(1, Math.round((v - today) / 86400000) + 1);
+}
+function tzAbbr() {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZoneName:'short' }).formatToParts(new Date());
+    const p = parts.find(p => p.type === 'timeZoneName');
+    return p ? p.value : '';
+  } catch (e) { return ''; }
+}
+
+/* Date pill: "SUN 30 AUG", or "SUN 30 - MON 31 AUG" for a two-day outlook. */
+function drawDatePill(x, y) {
+  const fmt = d => d.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' })
+    .replace(/,/g, '').toUpperCase();
+  const d1 = new Date(S.validDate + 'T12:00:00');
+  const d2 = S.validDate2 ? new Date(S.validDate2 + 'T12:00:00') : null;
+  const label = fmt(d1) + (d2 ? '  →  ' + fmt(d2) : '');
+  ctx.font = f(800, 11.5);
+  const w = trackedWidth(label, 1.1) + 24, h = 25;
+  rr(ctx, x, y, w, h, 7);
+  ctx.fillStyle = 'rgba(20,28,48,0.78)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = '#e8ecf5'; ctx.textBaseline = 'middle';
+  tracked(label, x + 12, y + h / 2 + 0.5, 1.1, 'left');
+  ctx.textBaseline = 'top';
+}
+
+/* Timeline pill: clock > 06 09 12 15 18 21 00 03 06, with the risk colour as a
+   pill BEHIND the numbers, continuous across consecutive same-risk stamps. */
+function drawTimelinePill() {
+  const G = timelineGeom();
+  glassPanel(G.x, G.y, G.w, G.h, G.h / 2);
+
+  const cy = G.y + G.h / 2;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(G.x + 14 + 12, cy, 12, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.restore();
+  glyph('clock', G.x + 14 + 12, cy, 14, '#fff');
+  ctx.font = f(700, 18); ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText('›', G.x + 14 + 28, cy);
+
+  const cellsX = G.cellsX, cellsY = G.y + 7;
+
+  for (const run of timelineRuns(S.stampRisks)) {
+    const meta = RISK_BY_ID[run.risk]; if (!meta) continue;
+    const x = cellsX + run.drawStart * G.CELL_W;
+    const w = (run.drawEnd - run.drawStart + 1) * G.CELL_W;
+    pill(x, cellsY, w, G.CELL_H, meta.color, null);
+  }
+  // Overlay tiers on top: Severe = hatch + outline, Conditional = dashed black.
+  for (const run of timelineRuns(S.stampOverlays)) {
+    const meta = RISK_BY_ID[run.risk]; if (!meta) continue;
+    const x = cellsX + run.drawStart * G.CELL_W;
+    const w = (run.drawEnd - run.drawStart + 1) * G.CELL_W;
+    ctx.save();
+    if (isSevereId(run.risk)) {
+      rr(ctx, x, cellsY, w, G.CELL_H, G.CELL_H / 2); ctx.save(); ctx.clip();
+      ctx.strokeStyle = 'rgba(49,46,129,0.9)'; ctx.lineWidth = 3;
+      for (let i = -G.CELL_H; i < w + G.CELL_H; i += 8) {
+        ctx.beginPath(); ctx.moveTo(x + i, cellsY + G.CELL_H); ctx.lineTo(x + i + G.CELL_H, cellsY);
+        ctx.stroke();
+      }
+      ctx.restore();
+      pill(x, cellsY, w, G.CELL_H, null, meta.color);
+      ctx.lineWidth = 2; ctx.stroke();
+    } else {
+      ctx.setLineDash([5, 4]);
+      rr(ctx, x, cellsY, w, G.CELL_H, G.CELL_H / 2);
+      ctx.strokeStyle = meta.color; ctx.lineWidth = 2; ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // Pending range anchor: dashed ring on the first-clicked cell.
+  if (S.rangeAnchor != null && S.rangeAnchor >= 0 && S.rangeAnchor < G.N) {
+    ctx.save(); ctx.setLineDash([4, 3]);
+    rr(ctx, cellsX + S.rangeAnchor * G.CELL_W, cellsY, G.CELL_W, G.CELL_H, 8);
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.font = f(800, G.stampFont);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  stamps.forEach((s, i) => {
+    const x = cellsX + i * G.CELL_W + G.CELL_W / 2;
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 1.2; ctx.strokeText(s.label, x, cellsY + G.CELL_H / 2);
+    ctx.fillStyle = '#fff'; ctx.fillText(s.label, x, cellsY + G.CELL_H / 2);
+  });
+}
+
+function drawOvernight(x, y) {
+  const w = 236, h = 34;
+  glassPanel(x, y, w, h, 12);
+  glyph('moon', x + 20, y + h / 2, 15, '#c7d2fe');
+  ctx.font = f(700, 8); ctx.fillStyle = 'rgba(199,210,254,0.9)';
+  ctx.textBaseline = 'top';
+  tracked('OVERNIGHT RISK PERIOD', x + 36, y + 7, 1.8, 'left');
+  ctx.font = f(800, 13); ctx.fillStyle = '#fff';
+  ctx.textAlign = 'left';
+  ctx.fillText(S.overnightStart + ' – ' + S.overnightEnd, x + 36, y + 18);
+}
+
+/* Risk key. The published card splits into the % ladder and an OTHER section
+   for the two overlay tiers, which are not percentage bands, with a footnote
+   expanding the abbreviations. */
+const RK_ROW = 24, RK_W = 198;
+const rkOverlayTiers = () => (isRadar() ? [] : [RISK_BY_ID[COND_SEVERE_ID], RISK_BY_ID['Severe']]);
+const rkLadder = () => (isRadar() ? RADAR_LEVELS
+  : GRAPHIC_LEVELS.filter(l => !isSevereId(l.id) && !isCondSevereId(l.id)));
+
+function riskKeyHeight() {
+  const tiers = rkOverlayTiers();
+  return 30 + rkLadder().length * RK_ROW
+       + (tiers.length ? 18 + tiers.length * 24 + 26 : 0)
+       + (S.confidence ? 24 : 0) + 10;
+}
+
+/* Diagonal hatch inside a swatch - the overlay tiers' signature. */
+function hatchSwatch(x, y, w, h, line, edge, dashed) {
+  ctx.save();
+  rr(ctx, x, y, w, h, 3); ctx.clip();
+  ctx.strokeStyle = line; ctx.lineWidth = 2.4;
+  for (let i = -h; i < w + h; i += 6) {
+    ctx.beginPath(); ctx.moveTo(x + i, y + h); ctx.lineTo(x + i + h, y); ctx.stroke();
+  }
+  ctx.restore();
+  rr(ctx, x, y, w, h, 3);
+  if (dashed) { ctx.save(); ctx.setLineDash([3.5, 2.5]); }
+  ctx.strokeStyle = edge; ctx.lineWidth = 1.4; ctx.stroke();
+  if (dashed) ctx.restore();
+}
+
+function drawRiskKey(x, y) {
+  const ladder = rkLadder(), tiers = rkOverlayTiers(), h = riskKeyHeight();
+  glassPanel(x, y, RK_W, h, 14);
+  ctx.font = f(700, 9); ctx.fillStyle = 'rgba(148,163,184,0.95)';
+  ctx.textBaseline = 'top';
+  tracked(isRadar() ? 'RAIN RATE' : 'RISK KEY', x + 14, y + 12, 2.4, 'left');
+
+  const SW = 30, SH = 15;
+  let ry = y + 32;
+  for (const l of ladder) {
+    rr(ctx, x + 14, ry + 1, SW, SH, 4);
+    ctx.fillStyle = l.color; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.30)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.font = f(800, 12); ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
+    tracked(l.short, x + 54, ry + 3, 0.8, 'left');
+    ctx.font = f(600, 10); ctx.fillStyle = 'rgba(203,213,225,0.80)';
+    ctx.textAlign = 'right';
+    ctx.fillText(l.range, x + RK_W - 14, ry + 4);
+    ctx.textAlign = 'left';
+    ry += RK_ROW;
+  }
+
+  if (tiers.length) {
+    ctx.font = f(700, 8.5); ctx.fillStyle = 'rgba(148,163,184,0.85)';
+    tracked('OTHER:', x + 14, ry + 2, 1.8, 'left');
+    ry += 18;
+    for (const t of tiers) {
+      const cond = isCondSevereId(t.id);
+      hatchSwatch(x + 14, ry + 1, SW, SH,
+        cond ? 'rgba(190,198,214,0.75)' : 'rgba(99,102,241,0.85)',
+        cond ? '#c3cad8' : '#818cf8', cond);
+      ctx.font = f(800, 11.5); ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
+      tracked(t.short, x + 54, ry + 3, 0.8, 'left');
+      ctx.font = f(600, 9.5); ctx.fillStyle = 'rgba(203,213,225,0.75)';
+      ctx.textAlign = 'right';
+      ctx.fillText(t.range, x + RK_W - 14, ry + 4);
+      ctx.textAlign = 'left';
+      ry += 24;
+    }
+    // Expand the abbreviations - "COND SVRE" is not self-explanatory on a
+    // graphic that will be read by people who do not follow the scale.
+    ctx.font = f(700, 8); ctx.fillStyle = 'rgba(129,145,178,0.95)';
+    tracked('SVRE = SEVERE TSTORM RISK ·', x + 14, ry + 3, 0.9, 'left');
+    tracked('COND = CONDITIONAL', x + 14, ry + 14, 0.9, 'left');
+    ry += 26;
+  }
+
+  if (S.confidence) {
+    const c = CONFIDENCE_BY_ID[S.confidence];
+    ctx.font = f(800, 8.5);
+    const label = 'CONFIDENCE: ' + c.label.toUpperCase();
+    pill(x + 14, ry + 2, trackedWidth(label, 1.6) + 20, 16, 'rgba(255,255,255,0.06)', c.color);
+    ctx.fillStyle = c.color; ctx.textBaseline = 'middle';
+    tracked(label, x + 24, ry + 10.5, 1.6, 'left');
+    ctx.textBaseline = 'top';
+  }
+}
+
+/* Hazards. The published card draws each hazard as its own tinted tile with a
+   coloured icon chip, not as a bulleted list - it is the loudest thing on the
+   graphic after the map, and it should be. */
+const HZ_ROW = 52, HZ_W = 198;
+function hazardsHeight() {
+  const list = activeHazards().filter(h => S.hazards.includes(h.id));
+  return list.length ? 30 + list.length * HZ_ROW - 6 + 10 : 0;
+}
+function drawHazardsCard(x, y) {
+  const list = activeHazards().filter(h => S.hazards.includes(h.id));
+  if (!list.length) return;
+  glassPanel(x, y, HZ_W, hazardsHeight(), 14);
+  ctx.font = f(700, 9); ctx.fillStyle = 'rgba(148,163,184,0.95)'; ctx.textBaseline = 'top';
+  tracked(isRadar() ? 'FEATURES' : 'HAZARDS', x + 14, y + 12, 2.4, 'left');
+
+  let ry = y + 32;
+  for (const hz of list) {
+    const tw = HZ_W - 28, th = 46;
+    const g = ctx.createLinearGradient(x + 14, ry, x + 14 + tw, ry + th);
+    g.addColorStop(0, hexA(hz.color, 0.30));
+    g.addColorStop(1, hexA(hz.color, 0.10));
+    rr(ctx, x + 14, ry, tw, th, 11);
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = hexA(hz.color, 0.55); ctx.lineWidth = 1; ctx.stroke();
+
+    rr(ctx, x + 22, ry + 8, 30, 30, 9);
+    ctx.fillStyle = hexA(hz.color, 0.85); ctx.fill();
+    glyph(hz.glyph, x + 37, ry + 23, 17, '#ffffff');
+
+    // Two short words stack, so "HIGH LIGHTNING" does not overrun the tile.
+    ctx.font = f(800, 11); ctx.fillStyle = '#ffffff'; ctx.textAlign = 'left';
+    const words = hz.label.toUpperCase().split(' ');
+    const oneLine = trackedWidth(hz.label.toUpperCase(), 0.8) <= tw - 56;
+    if (oneLine || words.length < 2) {
+      ctx.textBaseline = 'middle';
+      tracked(hz.label.toUpperCase(), x + 60, ry + th / 2, 0.8, 'left');
+      ctx.textBaseline = 'top';
+    } else {
+      tracked(words[0], x + 60, ry + 11, 0.8, 'left');
+      tracked(words.slice(1).join(' '), x + 60, ry + 25, 0.8, 'left');
+    }
+    ry += HZ_ROW;
+  }
+}
+/* #rrggbb -> rgba() at the given alpha. */
+function hexA(hex, a) {
+  const h = String(hex).replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+
+/* Lightning verification stats, shown on the graphic itself when the observed
+   strike overlay is on - so the published image carries its own evidence. */
+function drawLightningStats(x, y) {
+  const w = 214, h = 74;
+  glassPanel(x, y, w, h, 14);
+  ctx.font = f(700, 8.5); ctx.fillStyle = 'rgba(148,163,184,0.95)'; ctx.textBaseline = 'top';
+  tracked('OBSERVED STRIKES', x + 13, y + 10, 2.4, 'left');
+  const st = strikeStats();
+  ctx.font = f(800, 26); ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
+  ctx.fillText(String(st.count), x + 13, y + 26);
+  ctx.font = f(600, 9.5); ctx.fillStyle = 'rgba(203,213,225,0.8)';
+  ctx.fillText('UK & Ireland', x + 13, y + 56);
+  if (st.count) {
+    ctx.textAlign = 'right';
+    ctx.font = f(700, 10); ctx.fillStyle = 'rgba(226,232,240,0.9)';
+    ctx.fillText('Peak ' + String(st.peakHour).padStart(2, '0') + ':00', x + w - 13, y + 30);
+    ctx.font = f(600, 9.5); ctx.fillStyle = 'rgba(203,213,225,0.8)';
+    ctx.fillText(st.peakCount + ' in the hour', x + w - 13, y + 46);
+    ctx.textAlign = 'left';
+  }
+}
+function strikeStats() {
+  if (!S.strikes || !S.strikes.length) return { count:0, peakHour:0, peakCount:0 };
+  const buckets = new Array(24).fill(0);
+  for (const s of S.strikes) {
+    const t = s.time || s.t;
+    const d = t ? new Date(t) : null;
+    if (d && !isNaN(d)) buckets[d.getHours()]++;
+  }
+  let peakHour = 0, peakCount = -1;
+  buckets.forEach((c, h) => { if (c > peakCount) { peakCount = c; peakHour = h; } });
+  return { count:S.strikes.length, peakHour:peakHour, peakCount:peakCount };
+}
+
+const DISC_W = 214;
+function discussionLines() {
+  ctx.font = f(500, 9.5);
+  return wrapLines(S.discussionText.trim(), DISC_W - 26).slice(0, 12);
+}
+function discussionHeight() { return 26 + discussionLines().length * 12.5 + 8; }
+function drawDiscussion(x, y) {
+  const lines = discussionLines(), h = discussionHeight();
+  glassPanel(x, y, DISC_W, h, 14);
+  ctx.font = f(700, 8.5); ctx.fillStyle = 'rgba(148,163,184,0.95)'; ctx.textBaseline = 'top';
+  tracked('FORECAST DISCUSSION', x + 13, y + 10, 2.2, 'left');
+  ctx.font = f(500, 9.5); ctx.fillStyle = 'rgba(226,232,240,0.92)'; ctx.textAlign = 'left';
+  lines.forEach((ln, i) => ctx.fillText(ln, x + 13, y + 25 + i * 12.5));
+}
+
+/* ---- Footer -------------------------------------------------------------- */
+function drawFooter() {
+  const h = 92, y = GRAPHIC_H - h;
+  ctx.save();
+  rr(ctx, 0, 0, GRAPHIC_W, GRAPHIC_H, 24); ctx.clip();
+  const g = ctx.createLinearGradient(0, GRAPHIC_H, 0, y);
+  g.addColorStop(0,    'rgba(8,12,24,0.96)');
+  g.addColorStop(0.65, 'rgba(8,12,24,0.80)');
+  g.addColorStop(1,    'rgba(8,12,24,0.30)');
+  ctx.fillStyle = g; ctx.fillRect(0, y, GRAPHIC_W, h);
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(GRAPHIC_W, y + 0.5); ctx.stroke();
+  ctx.restore();
+
+  // Brand mark + handle. The site logo is used when it loads; the bolt disc is
+  // the stand-in, not the intended mark.
+  const cx = 22 + 19, cy = y + 34;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, 19, 0, Math.PI * 2); ctx.clip();
+  if (siteLogo) {
+    ctx.drawImage(siteLogo, cx - 19, cy - 19, 38, 38);
+  } else {
+    ctx.fillStyle = isRadar() ? '#0ea5e9' : '#5b6ee8';
+    ctx.fillRect(cx - 19, cy - 19, 38, 38);
+    glyph('bolt', cx, cy, 18, '#fff');
+  }
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(cx, cy, 19, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.20)'; ctx.lineWidth = 1; ctx.stroke();
+
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.font = f(800, 15); ctx.fillStyle = '#fff';
+  ctx.fillText(S.handle, 22 + 48, y + 22);
+  ctx.font = f(700, 8.5); ctx.fillStyle = 'rgba(148,163,184,0.85)';
+  tracked(S.version.toUpperCase(), 22 + 48, y + 42, 1.9, 'left');
+
+  // Strapline
+  ctx.textAlign = 'right';
+  ctx.font = f(600, 11); ctx.fillStyle = 'rgba(203,213,225,0.88)';
+  ctx.fillText(S.footerText, GRAPHIC_W - 22, y + 16);
+
+  // Status chips, right-aligned and laid out right to left.
+  const issued = new Date();
+  let chipX = GRAPHIC_W - 22;
+  const chipY = y + 36;
+  const chip = (text, fg, bg, bd) => {
+    ctx.font = f(800, 8.5);
+    const w = trackedWidth(text, 1.1) + 18;
+    chipX -= w;
+    rr(ctx, chipX, chipY, w, 19, 5);
+    ctx.fillStyle = bg; ctx.fill();
+    ctx.strokeStyle = bd; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    tracked(text, chipX + 9, chipY + 10, 1.1, 'left');
+    ctx.textBaseline = 'top'; ctx.textAlign = 'right';
+    chipX -= 6;
+  };
+  const fmtShort = d => d.toLocaleString('en-GB', { day:'numeric', month:'short',
+    hour:'2-digit', minute:'2-digit', hour12:false }).replace(/,/, ',');
+  chip('ISSUED ' + fmtShort(issued) + ' ' + tzAbbr(),
+    '#bfdbfe', 'rgba(59,130,246,0.20)', 'rgba(96,165,250,0.45)');
+  if (S.validUntil) {
+    const vu = new Date(S.validUntil);
+    if (!isNaN(vu)) {
+      const expired = vu < issued;
+      chip((expired ? 'EXPIRED ' : 'VALID UNTIL ') + fmtShort(vu),
+        expired ? '#fecaca' : '#fef08a',
+        expired ? 'rgba(248,113,113,0.18)' : 'rgba(250,204,21,0.16)',
+        expired ? 'rgba(248,113,113,0.45)' : 'rgba(250,204,21,0.4)');
+    }
+  } else {
+    const d1 = new Date(S.validDate + 'T12:00:00');
+    chip('VALID ' + d1.toLocaleDateString('en-GB', { day:'numeric', month:'short' }).toUpperCase(),
+      '#cbd5e1', 'rgba(148,163,184,0.16)', 'rgba(148,163,184,0.40)');
+  }
+  if (!isRadar()) {
+    const upd = S.forecastType === 'update';
+    chip(upd ? ('UPDATE ' + S.updateNumber) : 'INITIAL FORECAST',
+      upd ? '#7dd3fc' : '#86efac',
+      upd ? 'rgba(56,189,248,0.20)' : 'rgba(74,222,128,0.20)',
+      upd ? 'rgba(56,189,248,0.50)' : 'rgba(74,222,128,0.50)');
+  }
+
+  // The graphic is not a Met Office product and must not be mistaken for one.
+  ctx.textAlign = 'right';
+  ctx.font = f(700, 8.5); ctx.fillStyle = 'rgba(250,204,21,0.92)';
+  tracked(S.disclaimer, GRAPHIC_W - 22, y + 66, 1.0, 'right');
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+}
+
+/* ==========================================================================
+   INTERACTION - the source's handleDown/handleMove/handleUp.
+   ========================================================================== */
+let pointerDown = false;
+
+function eventToNorm(e) {
+  const rect = surface.getBoundingClientRect();
+  const src = e.touches && e.touches[0] ? e.touches[0] : e;
+  let x = (src.clientX - rect.left) / rect.width;
+  let y = (src.clientY - rect.top) / rect.height;
+  // Region zoom is a transform of the map layer, so invert it here: the shape
+  // must be stored in unzoomed normalised space or it lands double-transformed.
+  const z = S._zoom;
+  if (z) { x = z.cx + (x - 0.5) / z.k; y = z.cy + (y - 0.5) / z.k; }
+  return [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))];
+}
+
+function onDown(e) {
+  const pt = eventToNorm(e);
+
+  // AREA CONDITIONAL: click inside a drawn area to toggle a conditional flag on
+  // THAT area. Tests the smoothed outline so the hit region matches what is
+  // rendered; picks the topmost (last-drawn) match. Special tiers can't take one.
+  if (S.mapTool === 'cond') {
+    e.preventDefault();
+    for (let i = S.shapes.length - 1; i >= 0; i--) {
+      const s = S.shapes[i];
+      if (isSevereId(s.riskLevel) || isCondSevereId(s.riskLevel)) continue;
+      if (pointInPolygon(pt, smoothPoints(s.points))) {
+        s.cond = !s.cond; render(); return;
+      }
+    }
+    return;
+  }
+  if (S.mapTool === 'text') {
+    e.preventDefault();
+    const text = (S.annDraft || '').trim();
+    if (!text) { setStatus('annStatus', 'Type the label text first, then click the map.', 'err'); return; }
+    S.annotations.push({ id:'a-' + Date.now(), x:pt[0], y:pt[1], text:text,
+      color:S.annColor, size:S.annSize, pill:S.annPill, leader:S.annLeader,
+      lx:pt[0], ly:Math.min(1, pt[1] + 0.10) });
+    S.annDraft = '';
+    buildControls(); render(); return;
+  }
+  if (S.mapTool === 'arrow') {
+    e.preventDefault(); pointerDown = true;
+    S.arrowDraft = { x1:pt[0], y1:pt[1], x2:pt[0], y2:pt[1] };
+    return;
+  }
+  if (!S.drawMode) return;
+  e.preventDefault(); pointerDown = true;
+  S.currentPath = [pt];
+}
+
+function onMove(e) {
+  if (!pointerDown) return;
+  e.preventDefault();
+  const pt = eventToNorm(e);
+  if (S.mapTool === 'arrow') { if (S.arrowDraft) { S.arrowDraft.x2 = pt[0]; S.arrowDraft.y2 = pt[1]; } }
+  else if (S.mapTool === 'draw' && S.drawMode) S.currentPath.push(pt);
+  render();
+}
+
+function onUp() {
+  if (!pointerDown) return;
+  pointerDown = false;
+  if (S.mapTool === 'arrow') {
+    const d = S.arrowDraft;
+    if (d && Math.hypot(d.x2 - d.x1, d.y2 - d.y1) > 0.03)
+      S.arrows.push(Object.assign({ id:'ar-' + Date.now(), color:S.arrowColor }, d));
+    S.arrowDraft = null;
+  } else if (S.mapTool === 'draw') {
+    // Four points is the minimum a closed Catmull-Rom ring can be built from;
+    // anything shorter is a stray click, not an area.
+    if (S.currentPath.length >= 4)
+      S.shapes.push({ riskLevel:S.activeRisk, points:S.currentPath.slice(), cond:false });
+    S.currentPath = [];
+  }
+  buildControls(); render();
+}
+
+surface.addEventListener('mousedown', onDown);
+window.addEventListener('mousemove', e => { if (pointerDown) onMove(e); });
+window.addEventListener('mouseup', onUp);
+surface.addEventListener('touchstart', onDown, { passive:false });
+surface.addEventListener('touchmove', e => { if (pointerDown) onMove(e); }, { passive:false });
+window.addEventListener('touchend', onUp);
+
+/* Timeline stamps are painted onto the canvas, so clicks are hit-tested
+   against the same geometry the renderer used. */
+cvs.addEventListener('click', e => {
+  if (isRadar()) return;
+  const rect = cvs.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / viewScale, y = (e.clientY - rect.top) / viewScale;
+  const G = timelineGeom();
+  if (y < G.y || y > G.y + G.h) return;
+  const i = Math.floor((x - G.cellsX) / G.CELL_W);
+  if (i < 0 || i >= G.N) return;
+  cycleStamp(i);
+});
+
+/* Click a stamp to walk it up the ladder: null -> Very Low -> ... -> Severe ->
+   null. In range mode the first click anchors and the second fills the span. */
+function cycleStamp(i) {
+  const ids = GRAPHIC_LEVELS.map(l => l.id);
+  if (S.timelineRangeMode) {
+    if (S.rangeAnchor == null) { S.rangeAnchor = i; render(); return; }
+    const a = Math.min(S.rangeAnchor, i), b = Math.max(S.rangeAnchor, i);
+    for (let k = a; k <= b; k++) applyStamp(k, S.activeRisk);
+    S.rangeAnchor = null; render(); return;
+  }
+  const cur = S.stampRisks[i];
+  const at = cur == null ? -1 : ids.indexOf(cur);
+  const next = at + 1 >= ids.length ? null : ids[at + 1];
+  applyStamp(i, next, true);
+  render();
+}
+/* Severe and Conditional Severe are overlay tiers - they sit on top of the base
+   band rather than replacing it, so the base colour stays intact underneath. */
+function applyStamp(i, level, cycling) {
+  if (level && (isSevereId(level) || isCondSevereId(level))) {
+    S.stampOverlays[i] = S.stampOverlays[i] === level ? null : level;
+  } else {
+    S.stampRisks[i] = level;
+    if (cycling && level == null) S.stampOverlays[i] = null;
+  }
+}
+
+/* ==========================================================================
+   DATA
+   ========================================================================== */
+async function api(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(path + ' -> ' + r.status);
+  return r.json();
+}
+function setStatus(id, text, cls) {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = text; el.className = 'status' + (cls ? ' ' + cls : ''); }
+}
+
+/* Import the model's own categorical outlook as drawn areas, so the forecaster
+   starts from what TCM produced and edits it rather than tracing it by hand.
+   Rings arrive as GeoJSON lon/lat and go through latLonToNorm - the same
+   projection the coastline uses, so they land on the right coast. */
+/* The backend names bands snake_case ("very_low"); the graphic's palette is
+   keyed by the display name ("Very Low"). Features carry both - `category` is
+   the snake name, `label` the display one - so prefer `label` and fall back
+   through this map rather than silently dropping every imported area. */
+const SNAKE_TO_LEVEL = { very_low:'Very Low', low:'Low', marginal:'Marginal',
+  slight:'Slight', moderate:'Moderate', high:'High', severe:'Severe' };
+
+async function importOutlook(replace) {
+  setStatus('tcmStatus', 'Importing model outlook...', '');
+  try {
+    // The route takes a DATE, not a day index (day: str | None = "YYYY-MM-DD").
+    const gj = await api('http://127.0.0.1:8000/api/outlook/polygons?day=' + encodeURIComponent(S.validDate));
+    const feats = (gj.features || []).slice();
+    // Weakest first so stronger areas draw on top, matching the emitted order.
+    const imported = [];
+    for (const ftr of feats) {
+      const p = ftr.properties || {};
+      const level = RISK_BY_ID[p.label] ? p.label : SNAKE_TO_LEVEL[p.category];
+      if (!level || !RISK_BY_ID[level]) continue;
+      const geom = ftr.geometry;
+      const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+      for (const poly of polys) {
+        const ring = poly[0];
+        if (!ring || ring.length < 4) continue;
+        imported.push({ riskLevel:level, cond:false,
+          points:ring.map(c => latLonToNorm(Number(c[1]), Number(c[0]))) });
+      }
+    }
+    if (!imported.length) { setStatus('tcmStatus', 'No categorical areas for that day.', 'err'); return; }
+    S.shapes = replace ? imported : S.shapes.concat(imported);
+    // Rebuild BEFORE reporting: buildControls() replaces the panel's markup,
+    // which would otherwise discard the status line written into it.
+    buildControls(); render();
+    const cats = gj.properties && gj.properties.categories_too_small_to_draw;
+    setStatus('tcmStatus', 'Imported ' + imported.length + ' area' +
+      (imported.length === 1 ? '' : 's') + ' from the model.' +
+      (cats && cats.length ? ' ' + cats.join(', ') + ' reached but too small to draw.' : ''), 'ok');
+  } catch (err) {
+    setStatus('tcmStatus', 'Import failed: ' + err.message, 'err');
+  }
+}
+function addDays(iso, n) {
+  const d = new Date(iso + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/* Fill the timeline from the model's own hourly risk, so the pill cannot
+   disagree with the map above it. The trailing 00/03/06 stamps belong to the
+   NEXT day - reading them off the selected day would label tomorrow morning
+   with today's risk. */
+async function fillTimelineFromModel() {
+  setStatus('tcmStatus', 'Reading hourly risk...', '');
+  try {
+    const days = await api('http://127.0.0.1:8000/api/risk-days');     // a list, keyed by `date`
+    const byDate = {};
+    for (const d of (Array.isArray(days) ? days : days.days || [])) byDate[d.date] = d;
+
+    // The band runs past midnight: the trailing 00/03/06 stamps belong to the
+    // NEXT day. Reading them off the selected day would label tomorrow morning
+    // with today's risk, so roll the date forward when the hour goes backwards.
+    const labels = TIMELINE_PRESETS[S.timelineGran];
+    let date = S.validDate, prev = -1, matched = 0;
+    const risks = labels.map(function (lab) {
+      const hh = parseInt(lab, 10);
+      if (hh < prev) date = addDays(date, 1);
+      prev = hh;
+      const rec = byDate[date];
+      if (!rec || !rec.hours) return null;
+      // hour_label is "%H%MZ" - "1500Z" - so the stamp is its first two chars.
+      const h = rec.hours.find(x => (x.hour_label || '').slice(0, 2) === lab);
+      if (!h) return null;
+      const lvl = SNAKE_TO_LEVEL[h.level];
+      if (lvl) matched++;
+      return lvl || null;
+    });
+    if (!matched) {
+      setStatus('tcmStatus',
+        'No model hours line up with those stamps - the run may not cover this day, ' +
+        'or not at this granularity.', 'err');
+      return;
+    }
+    S.stampRisks = risks;
+    setStatus('tcmStatus', 'Timeline filled from the run: ' + matched + ' of ' +
+      labels.length + ' stamps matched a model hour.', 'ok');
+    render();
+  } catch (err) {
+    setStatus('tcmStatus', 'Timeline fill failed: ' + err.message, 'err');
+  }
+}
+
+async function loadStrikes(minutes, quiet) {
+  if (minutes) S.strikeWindow = minutes;
+  if (!quiet) setStatus('strikeStatus', 'Loading strikes...', '');
+  try {
+    const d = await api('http://127.0.0.1:8000/api/observations/strikes?minutes=' + S.strikeWindow);
+    const before = S.strikes ? S.strikes.length : 0;
+    S.strikes = d.strikes || [];
+    S.newSinceLastPoll = Math.max(0, S.strikes.length - before);
+    S.lastStrikePoll = new Date();
+    const cov = d.coverage_fraction != null ? Math.round(d.coverage_fraction * 100) : null;
+    // A partial window is a FLOOR, not a total. Saying "22 strikes" when only
+    // 46% of the period was actually recorded reads as a quiet day when it may
+    // simply be an unobserved one, so the coverage is always stated.
+    setStatus('strikeStatus', d.count + ' strike' + (d.count === 1 ? '' : 's') +
+      (cov != null && d.complete === false
+        ? ' - only ' + cov + '% of that window was recorded, so this is a floor, not a total.'
+        : ' - the whole window was observed.') +
+      (S.liveStrikes ? ' Live, checked ' + S.lastStrikePoll.toLocaleTimeString('en-GB') + '.' : ''),
+      d.complete === false ? '' : 'ok');
+    render();
+  } catch (err) {
+    if (!quiet) setStatus('strikeStatus', 'Strike load failed: ' + err.message, 'err');
+  }
+}
+
+/* Live plotting. The server samples Blitzortung every 60 s, so checking more
+   often than that only repeats work; this matches that cadence. New strikes
+   appear on the map without touching the controls. */
+const LIVE_POLL_MS = 60000;
+let livePollTimer = null;
+function setLivePolling(on) {
+  S.liveStrikes = on;
+  if (livePollTimer) { clearInterval(livePollTimer); livePollTimer = null; }
+  if (!on) return;
+  livePollTimer = setInterval(function () {
+    // Nothing to refresh while the tab is hidden; the next visible tick catches
+    // up, since the window is re-queried whole rather than appended to.
+    if (document.hidden) return;
+    loadStrikes(null, true);
+  }, LIVE_POLL_MS);
+}
+document.addEventListener('visibilitychange', function () {
+  if (!document.hidden && S.liveStrikes) loadStrikes(null, true);
+});
+
+/* ==========================================================================
+   EXPORT - straight off the canvas, so the file is the pixels you were shown.
+   ========================================================================== */
+function exportPNG() {
+  const k = S.exportScale;
+  const out = document.createElement('canvas');
+  out.width = GRAPHIC_W * k; out.height = GRAPHIC_H * k;
+  const octx = out.getContext('2d');
+  // Re-run the SAME renderer against the export context at the requested
+  // scale, then rebind to the preview. No second code path, so nothing can
+  // render differently in the file than it did on screen.
+  const realCtx = ctx, realScale = renderScale;
+  try { rebind(octx, k); draw(); }
+  finally { rebind(realCtx, realScale); }
+  out.toBlob(function (blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'tcm-outlook-' + S.validDate + '-' + (GRAPHIC_W * k) + 'px.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    setStatus('exportStatus', 'Saved at ' + (GRAPHIC_W * k) + ' x ' + (GRAPHIC_H * k) + '.', 'ok');
+  }, 'image/png');
+  render();
+}
+
+/* ==========================================================================
+   CONTROL PANEL - the same groups, in the same order, as the source's panel.
+   ========================================================================== */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+const box = document.getElementById('controls');
+
+function seg(name, opts, current) {
+  return '<div class="seg">' + opts.map(o =>
+    '<button data-act="' + name + '" data-val="' + o.v + '"' +
+    (o.v === current ? ' class="on"' : '') + '>' + esc(o.l) + '</button>').join('') + '</div>';
+}
+
+function buildControls() {
+  const radar = isRadar();
+  const levels = activeLevels();
+  let h = '';
+
+  h += '<h2>Mode</h2>' + seg('mode', [{ v:'outlook', l:'Outlook' }, { v:'radar', l:'Radar' }], S.graphicMode);
+
+  h += '<h2>Valid for</h2><div class="grid2">' +
+    '<label>Day</label><input type="date" data-act="validDate" value="' + S.validDate + '">' +
+    '<label>Through</label><input type="date" data-act="validDate2" value="' + S.validDate2 + '">' +
+    '</div><p class="hint">A second day turns the header card into a range and the title into an extended outlook.</p>';
+
+  if (!radar) {
+    h += '<h2>Issue</h2>' +
+      seg('forecastType', [{ v:'initial', l:'Initial' }, { v:'update', l:'Update' }], S.forecastType);
+    if (S.forecastType === 'update')
+      h += '<div class="row" style="margin-top:6px"><span class="meta">Update no.</span>' +
+        '<input type="number" min="1" max="20" data-act="updateNumber" value="' + S.updateNumber + '" style="width:70px"></div>';
+    h += '<div class="row" style="margin-top:8px">' +
+      '<button data-act="toggleOvernight"' + (S.overnightEnabled ? ' class="on"' : '') + '>Overnight period</button></div>';
+    if (S.overnightEnabled)
+      h += '<div class="grid2" style="margin-top:6px"><label>From</label>' +
+        '<input type="time" data-act="overnightStart" value="' + S.overnightStart + '">' +
+        '<label>To</label><input type="time" data-act="overnightEnd" value="' + S.overnightEnd + '"></div>';
+  }
+
+  /* ---- Map tool ---- */
+  h += '<h2>Map tool</h2>' + seg('mapTool', [
+    { v:'draw', l:'Draw area' }, { v:'text', l:'Text' },
+    { v:'arrow', l:'Arrow' }, { v:'cond', l:'Conditional' }], S.mapTool);
+
+  if (S.mapTool === 'cond')
+    h += '<p class="hint">Click inside a drawn area to flag it conditional - it keeps its colour and gains a darker dashed outline. Click again to clear. Severe and Conditional Severe areas cannot take the flag; they already carry one.</p>';
+
+  if (S.mapTool === 'text') {
+    h += '<input type="text" data-act="annDraft" placeholder="MAIN THREAT 14-18Z" value="' + esc(S.annDraft) + '">' +
+      '<p class="hint">Type the label, then click the map to drop it.</p>' +
+      '<div class="row tight" style="margin-top:6px">' +
+      ANNOTATION_COLORS.map(c => '<button data-act="annColor" data-val="' + c + '" title="' + c + '" style="width:22px;height:22px;padding:0;background:' + c + ';' +
+        (c === S.annColor ? 'outline:2px solid var(--accent);outline-offset:1px;' : '') + '"></button>').join('') + '</div>' +
+      '<div class="row" style="margin-top:6px">' +
+      seg('annSize', ANNOTATION_SIZES.map(s => ({ v:s.id, l:s.label })), S.annSize) +
+      '<button data-act="toggleAnnPill"' + (S.annPill ? ' class="on"' : '') + '>Pill</button>' +
+      '<button data-act="toggleAnnLeader"' + (S.annLeader ? ' class="on"' : '') + '>Leader</button></div>' +
+      '<div class="status" id="annStatus"></div>';
+    if (S.annotations.length)
+      h += '<div class="chips" style="margin-top:8px">' + S.annotations.map((a, i) =>
+        '<span class="chip"><span class="swatch" style="background:' + a.color + '"></span>' +
+        esc(a.text.slice(0, 18)) + '<button data-act="delAnn" data-val="' + i + '">&times;</button></span>').join('') + '</div>';
+  }
+
+  if (S.mapTool === 'arrow') {
+    h += '<p class="hint">Drag on the map to place a storm-motion arrow.</p>' +
+      '<div class="row tight">' + ['#ffffff','#fde047','#f87171','#38bdf8','#a78bfa'].map(c =>
+        '<button data-act="arrowColor" data-val="' + c + '" style="width:22px;height:22px;padding:0;background:' + c + ';' +
+        (c === S.arrowColor ? 'outline:2px solid var(--accent);outline-offset:1px;' : '') + '"></button>').join('') +
+      (S.arrows.length ? '<button class="sm danger" data-act="clearArrows">Clear ' + S.arrows.length + '</button>' : '') +
+      '</div>';
+  }
+
+  /* ---- Confidence / granularity / region ---- */
+  if (!radar) {
+    h += '<h2>Confidence</h2>' + seg('confidence',
+      [{ v:'', l:'None' }].concat(CONFIDENCE_LEVELS.map(c => ({ v:c.id, l:c.label }))),
+      S.confidence || '');
+    h += '<h2>Timeline</h2>' + seg('gran',
+      [{ v:'3h', l:'3-hourly' }, { v:'2h', l:'2-hourly' }, { v:'1h', l:'Hourly' }], S.timelineGran) +
+      '<div class="row" style="margin-top:6px">' +
+      '<button data-act="toggleRange"' + (S.timelineRangeMode ? ' class="on"' : '') + '>Range fill</button>' +
+      '<button data-act="clearTimeline" class="sm">Clear</button>' +
+      '<button data-act="fillTimeline" class="sm">From model</button></div>' +
+      '<p class="hint">Click a stamp on the graphic to walk it up the ladder. Severe and Conditional Severe are overlay tiers - they sit on top of the base band rather than replacing it.</p>';
+    h += '<h2>Region</h2><select data-act="region">' + UK_REGIONS.map(r =>
+      '<option value="' + r.id + '"' + (r.id === S.outlookRegion ? ' selected' : '') + '>' + r.label + '</option>').join('') + '</select>';
+  }
+
+  /* ---- Active risk ---- */
+  h += '<h2>' + (radar ? 'Rain rate' : 'Risk level') + '</h2><div class="row tight">' +
+    levels.map(l => '<button class="lvlbtn' + (l.id === S.activeRisk ? ' on' : '') +
+      '" data-act="risk" data-val="' + l.id + '"><span class="swatch" style="background:' + l.color +
+      '"></span>' + esc(l.short) + '</button>').join('') + '</div>';
+
+  /* ---- Hazards ---- */
+  h += '<h2>' + (radar ? 'Features' : 'Hazards') + '</h2><div class="row tight">' +
+    activeHazards().map(hz => '<button class="lvlbtn' + (S.hazards.includes(hz.id) ? ' on' : '') +
+      '" data-act="hazard" data-val="' + hz.id + '"><span class="swatch" style="background:' + hz.color +
+      '"></span>' + esc(hz.label) + '</button>').join('') + '</div>';
+  if (S.showLightning)
+    h += '<div class="warnbox">The hazards card is replaced by the observed-strike panel while the lightning overlay is on, so the graphic never claims a forecast hazard and shows verification in the same breath.</div>';
+
+  /* ---- Areas ---- */
+  h += '<h2>Areas</h2><div class="row">' +
+    '<button data-act="toggleDraw"' + (S.drawMode ? ' class="on"' : '') + '>Draw ' + (S.drawMode ? 'on' : 'off') + '</button>' +
+    '<button data-act="toggleShapes"' + (S.showShapes ? ' class="on"' : '') + '>Show</button>' +
+    '<button data-act="undo" class="sm"' + (S.shapes.length ? '' : ' disabled') + '>Undo</button>' +
+    '<button data-act="clearShapes" class="sm danger"' + (S.shapes.length ? '' : ' disabled') + '>Clear</button></div>' +
+    '<div class="grid2" style="margin-top:6px"><label>Opacity</label>' +
+    '<input type="range" min="0.2" max="1" step="0.05" data-act="drawOpacity" value="' + S.drawOpacity + '"></div>';
+  if (S.shapes.length)
+    h += '<div class="chips" style="margin-top:8px">' + S.shapes.map((sh, i) => {
+      const m = LEVEL_LOOKUP[sh.riskLevel] || {};
+      return '<span class="chip"><span class="swatch" style="background:' + (m.color || '#666') + '"></span>' +
+        '<button data-act="promote" data-val="' + i + '" title="Promote to the next level up" style="color:var(--text)">' +
+        esc(m.short || sh.riskLevel) + (sh.cond ? ' *' : '') + '</button>' +
+        '<button data-act="delShape" data-val="' + i + '">&times;</button></span>';
+    }).join('') + '</div>' +
+    '<p class="hint">Click a chip\'s label to promote that area one level; * marks a conditional area.</p>';
+
+  h += '<div class="row" style="margin-top:8px">' +
+    '<button data-act="toggleCities"' + (S.showCities ? ' class="on"' : '') + '>City labels</button>' +
+    '<button data-act="toggleCounties"' + (S.showCounties ? ' class="on"' : '') + '>County lines</button></div>' +
+    (S.counties ? '' : '<p class="hint">County boundaries are still loading (about 7 MB across three sources); they are cached after the first run.</p>');
+
+  /* ---- Model import ---- */
+  h += '<h2>From the model</h2><div class="row">' +
+    '<button data-act="importReplace">Import outlook</button>' +
+    '<button data-act="importAdd" class="sm">Add to existing</button></div>' +
+    '<p class="hint">Brings in TCM\'s own categorical areas for the selected day as editable shapes, projected through the same map as the coastline.</p>' +
+    '<div class="status" id="tcmStatus"></div>';
+
+  /* ---- Lightning ---- */
+  h += '<h2>Observed lightning</h2><div class="row">' +
+    '<button data-act="toggleLightning"' + (S.showLightning ? ' class="on"' : '') + '>Overlay</button>' +
+    '<button data-act="toggleLive"' + (S.liveStrikes ? ' class="on"' : '') + '>Live</button></div>' +
+    '<div class="row tight">' +
+    [[1440, 'Today'], [180, '3 h'], [60, '1 h']].map(w =>
+      '<button data-act="strikes" data-val="' + w[0] + '" class="sm' +
+      (S.strikeWindow === w[0] ? ' on' : '') + '">' + w[1] + '</button>').join('') + '</div>' +
+    '<p class="hint">Live re-checks every 60 s, matching how often the server samples Blitzortung. New strikes plot themselves.</p>' +
+    '<div class="grid2" style="margin-top:6px">' +
+    '<label>Fill</label><input type="color" data-act="lightningColor" value="' + S.lightningColor + '">' +
+    '<label>Outline</label><div class="row" style="margin:0">' +
+    '<button data-act="toggleStrikeOutline" class="sm' + (S.lightningOutline ? ' on' : '') + '">' +
+    (S.lightningOutline ? 'On' : 'Off') + '</button>' +
+    '<input type="color" data-act="lightningOutlineColor" value="' + S.lightningOutlineColor + '" style="flex:1"></div>' +
+    '</div><div class="row tight" style="margin-top:6px">' +
+    LIGHTNING_SWATCHES.map(c => '<button data-act="lightningColor" data-val="' + c +
+      '" style="width:22px;height:22px;padding:0;background:' + c + '"></button>').join('') + '</div>' +
+    '<div class="status" id="strikeStatus"></div>';
+
+  /* ---- Text ---- */
+  h += '<h2>Wording</h2><div class="grid2">' +
+    '<label>Strapline</label><input type="text" data-act="footerText" value="' + esc(S.footerText) + '">' +
+    '<label>Handle</label><input type="text" data-act="handle" value="' + esc(S.handle) + '">' +
+    '<label>Version</label><input type="text" data-act="version" value="' + esc(S.version) + '">' +
+    '<label>Valid until</label><input type="datetime-local" data-act="validUntil" value="' + esc(S.validUntil) + '">' +
+    '</div>' +
+    '<input type="text" data-act="disclaimer" value="' + esc(S.disclaimer) + '" style="margin-top:6px">' +
+    '<p class="hint">The disclaimer line. Clearing it publishes a graphic that can be mistaken for an official warning.</p>';
+  if (!radar) {
+    h += '<div class="row" style="margin-top:8px"><button data-act="toggleDiscussion"' +
+      (S.discussionEnabled ? ' class="on"' : '') + '>Forecast discussion</button></div>';
+    if (S.discussionEnabled)
+      h += '<textarea data-act="discussionText" placeholder="Forecaster narrative...">' + esc(S.discussionText) + '</textarea>';
+  }
+
+  /* ---- Export ---- */
+  h += '<h2>Export</h2><div class="row">' +
+    seg('exportScale', [{ v:'1', l:'1x' }, { v:'2', l:'2x' }, { v:'4', l:'4x' }], String(S.exportScale)) +
+    '<button data-act="export" class="primary">Save PNG</button></div>' +
+    '<div class="status" id="exportStatus"></div>' +
+    (siteLogoIsPlaceholder ? '<div class="warnbox">The footer mark is a placeholder. Drop the real logo in as <b>frontend/assets/myweatheruk-logo.png</b> and it is used automatically.</div>' : '') +
+    '<div class="meta" style="margin-top:10px">Map ' + (S.coastSource === 'tcm-landmask'
+      ? '<b>TCM land mask</b> - the detailed coastline could not be reached, so this is the model outline and is coarser'
+      : S.coastSource ? '<b>high-detail coastline</b>' : 'loading') + '.</div>';
+
+  box.innerHTML = h;
+  // The surface only captures pointers when there is something to place: the
+  // draw tool needs drawing switched on, the others are always live.
+  surface.className = (S.mapTool !== 'draw' || S.drawMode) ? S.mapTool : 'off';
+}
+
+/* ---- Control wiring ---------------------------------------------------- */
+box.addEventListener('click', e => {
+  const t = e.target.closest('[data-act]');
+  if (!t || t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA') return;
+  const act = t.dataset.act, val = t.dataset.val;
+  let rebuild = true;
+  switch (act) {
+    case 'mode':        S.graphicMode = val;
+                        S.activeRisk = val === 'radar' ? RADAR_LEVELS[0].id : 'Slight';
+                        S.hazards = val === 'radar' ? ['thunder'] : ['lightning','hail','flood']; break;
+    case 'forecastType': S.forecastType = val; break;
+    case 'toggleOvernight': S.overnightEnabled = !S.overnightEnabled; break;
+    case 'mapTool':     S.mapTool = val; break;
+    case 'annColor':    S.annColor = val; break;
+    case 'annSize':     S.annSize = val; break;
+    case 'toggleAnnPill':   S.annPill = !S.annPill; break;
+    case 'toggleAnnLeader': S.annLeader = !S.annLeader; break;
+    case 'delAnn':      S.annotations.splice(+val, 1); break;
+    case 'arrowColor':  S.arrowColor = val; break;
+    case 'clearArrows': S.arrows = []; break;
+    case 'confidence':  S.confidence = val || null; break;
+    case 'gran':        setGranularity(val); break;
+    case 'toggleRange': S.timelineRangeMode = !S.timelineRangeMode; S.rangeAnchor = null; break;
+    case 'clearTimeline': S.stampRisks = stamps.map(() => null);
+                          S.stampOverlays = stamps.map(() => null); S.rangeAnchor = null; break;
+    case 'fillTimeline': fillTimelineFromModel(); rebuild = false; break;
+    case 'risk':        S.activeRisk = val; break;
+    case 'hazard':      S.hazards = S.hazards.includes(val)
+                          ? S.hazards.filter(x => x !== val) : S.hazards.concat([val]); break;
+    case 'toggleDraw':  S.drawMode = !S.drawMode; break;
+    case 'toggleShapes': S.showShapes = !S.showShapes; break;
+    case 'toggleCities': S.showCities = !S.showCities; break;
+    case 'toggleCounties': S.showCounties = !S.showCounties; break;
+    case 'undo':        S.shapes.pop(); break;
+    case 'clearShapes': S.shapes = []; break;
+    case 'delShape':    S.shapes.splice(+val, 1); break;
+    case 'promote':     promoteShape(+val); break;
+    case 'importReplace': importOutlook(true); rebuild = false; break;
+    case 'importAdd':     importOutlook(false); rebuild = false; break;
+    case 'toggleLightning': S.showLightning = !S.showLightning;
+                            if (S.showLightning && !S.strikes) { loadStrikes(1440); } break;
+    case 'strikes':     loadStrikes(+val); S.showLightning = true; break;
+    case 'toggleLive':  setLivePolling(!S.liveStrikes); if (S.liveStrikes) loadStrikes(null, true); break;
+    case 'lightningColor': if (val) S.lightningColor = val; break;
+    case 'toggleStrikeOutline': S.lightningOutline = !S.lightningOutline; break;
+    case 'toggleDiscussion': S.discussionEnabled = !S.discussionEnabled; break;
+    case 'exportScale': S.exportScale = +val; break;
+    case 'export':      exportPNG(); rebuild = false; break;
+    default: rebuild = false;
+  }
+  if (rebuild) buildControls();
+  render();
+});
+
+box.addEventListener('input', e => {
+  const t = e.target.closest('[data-act]');
+  if (!t) return;
+  const act = t.dataset.act, v = t.value;
+  switch (act) {
+    case 'validDate':  S.validDate = v; break;
+    case 'validDate2': S.validDate2 = v; break;
+    case 'updateNumber': S.updateNumber = Math.max(1, +v || 1); break;
+    case 'overnightStart': S.overnightStart = v; break;
+    case 'overnightEnd':   S.overnightEnd = v; break;
+    case 'annDraft':   S.annDraft = v; break;
+    case 'region':     S.outlookRegion = v; break;
+    case 'drawOpacity': S.drawOpacity = +v; break;
+    case 'lightningColor': S.lightningColor = v; break;
+    case 'lightningOutlineColor': S.lightningOutlineColor = v; break;
+    case 'footerText': S.footerText = v; break;
+    case 'handle':     S.handle = v; break;
+    case 'version':    S.version = v; break;
+    case 'validUntil': S.validUntil = v; break;
+    case 'discussionText': S.discussionText = v; break;
+    case 'disclaimer': S.disclaimer = v; break;
+    default: return;
+  }
+  render();
+});
+
+/* Promote an area one rung up the ladder, wrapping at the top. */
+function promoteShape(i) {
+  const ids = activeLevels().map(l => l.id);
+  const at = ids.indexOf(S.shapes[i].riskLevel);
+  S.shapes[i].riskLevel = ids[(at + 1) % ids.length];
+}
+
+/* Changing granularity resizes the stamp arrays. Existing stamps are carried
+   across by their LABEL, not their index, so a band set at 15Z stays at 15Z
+   instead of sliding to whatever now sits in that slot. */
+function setGranularity(g) {
+  const oldLabels = TIMELINE_PRESETS[S.timelineGran];
+  const oldRisks = S.stampRisks, oldOver = S.stampOverlays;
+  const byLabel = {}, byLabelOver = {};
+  oldLabels.forEach((l, i) => {
+    if (oldRisks[i]) byLabel[l] = oldRisks[i];
+    if (oldOver[i])  byLabelOver[l] = oldOver[i];
+  });
+  S.timelineGran = g;
+  stamps = buildStamps(g);
+  S.stampRisks    = TIMELINE_PRESETS[g].map(l => byLabel[l] || null);
+  S.stampOverlays = TIMELINE_PRESETS[g].map(l => byLabelOver[l] || null);
+  S.rangeAnchor = null;
+}
+
+/* ==========================================================================
+   BOOT
+   ========================================================================== */
+let rafPending = false;
+function render() {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame(() => { rafPending = false; draw(); });
+}
+
+window.addEventListener('resize', () => { sizeCanvas(); render(); });
+
+(async function boot() {
+  sizeCanvas();
+  buildControls();
+  render();
+  // The map is the slow part; draw everything else first rather than making the
+  // page wait on it, then repaint when it lands.
+  const c = await loadCoastline();
+  S.coast = c.rings; S.coastSource = c.source;
+  buildControls();
+  render();
+  loadStrikes(1440).catch(() => {});
+  setLivePolling(S.liveStrikes);
+  // County lines are ~7 MB of source across three files, so they land last and
+  // repaint when ready rather than holding up the coastline behind them.
+  loadCounties().then(function (rings) {
+    if (rings) { S.counties = rings; render(); }
+  }).catch(() => {});
+})();
+</script>
+</body>
+</html>

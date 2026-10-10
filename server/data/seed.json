@@ -1,0 +1,77 @@
+{
+  "_comment": "Starting content for the self-hosted site. Copied into data/db.json on first run. To reset, delete db.json and restart. Your real site content still lives in the Base44 cloud database and is NOT here — see README, 'Bringing your live content across'.",
+  "_users": [],
+  "_sessions": {},
+  "_logs": [],
+  "SiteSettings": [
+    {
+      "id": "site-settings",
+      "site_name": "MyWeatherUK",
+      "description": "UK weather warnings, forecasts and storm outlooks",
+      "version": "self-hosted",
+      "logo_url": "/logo.png",
+      "banner_url": "",
+      "tcm_logo_url": "",
+      "twitter_url": "",
+      "facebook_url": "",
+      "instagram_url": "",
+      "youtube_url": "",
+      "discord_url": "",
+      "buymeacoffee_url": "",
+      "site_disabled": false,
+      "disabled_message": "This website is temporarily unavailable.",
+      "countdown_enabled": false,
+      "countdown_target": "",
+      "countdown_title": "",
+      "countdown_description": "",
+      "countdown_display": "disabled_page",
+      "location_search_enabled": true,
+      "met_office_api_key": "",
+      "landing_page": "Home",
+      "created_date": "2026-09-05T00:00:00.000Z"
+    }
+  ],
+  "PublishedFeatures": [
+    {
+      "id": "feat-graphics",
+      "feature_name": "graphics",
+      "is_published": true,
+      "created_date": "2026-09-05T00:00:00.000Z"
+    },
+    {
+      "id": "feat-dashboard",
+      "feature_name": "dashboard",
+      "is_published": true,
+      "created_date": "2026-09-05T00:00:00.000Z"
+    },
+    {
+      "id": "feat-countdown",
+      "feature_name": "countdown",
+      "is_published": false,
+      "created_date": "2026-09-05T00:00:00.000Z"
+    }
+  ],
+  "AccessRequest": [],
+  "Announcement": [],
+  "AppUpdate": [],
+  "CachedWarnings": [],
+  "EmailNotificationPref": [],
+  "ForecastVerification": [],
+  "LightningArchive": [],
+  "LightningStrike": [],
+  "ManualWarning": [],
+  "MapProject": [],
+  "MenuItemConfig": [],
+  "ModelBiasCalibration": [],
+  "NewsArticle": [],
+  "RiskGridCache": [],
+  "SiteAccessCode": [],
+  "SubscriptionCoupon": [],
+  "SubscriptionPlan": [],
+  "SubscriptionSale": [],
+  "TCMOutlook": [],
+  "TCMRiskOverride": [],
+  "User": [],
+  "UserSubscription": [],
+  "WeatherGraphic": []
+}

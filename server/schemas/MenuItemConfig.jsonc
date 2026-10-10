@@ -1,0 +1,41 @@
+{
+  "name": "MenuItemConfig",
+  "type": "object",
+  "properties": {
+    "section_id": {
+      "type": "string",
+      "description": "Section ID (e.g. activeWarnings, forecasts, tcm)"
+    },
+    "label": {
+      "type": "string",
+      "description": "Display label"
+    },
+    "is_coming_soon": {
+      "type": "boolean",
+      "default": false,
+      "description": "Mark as Coming Soon (locked)"
+    }
+  },
+  "required": [
+    "section_id",
+    "label"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "StudioGraphic",
+  "type": "object",
+  "description": "A graphic saved from the public Thunderstorm Studio tool. Each user only ever sees their own saves (read/update/delete are owner-only via created_by).",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Name the user gave this saved graphic"
+    },
+    "graphic_state": {
+      "type": "object",
+      "description": "Full saved Thunderstorm Studio state: risks, timeline window, drawn shapes, hazards, custom logo (data URL), handle, version, confidence, etc."
+    },
+    "user_email": {
+      "type": "string",
+      "description": "Owner's email (denormalised for convenience; RLS already restricts to created_by)"
+    }
+  },
+  "required": [
+    "title"
+  ],
+  "rls": {
+    "create": {},
+    "read": {
+      "created_by": "{{user.id}}"
+    },
+    "update": {
+      "created_by": "{{user.id}}"
+    },
+    "delete": {
+      "created_by": "{{user.id}}"
+    }
+  }
+}

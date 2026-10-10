@@ -1,0 +1,61 @@
+{
+  "name": "ModelBiasCalibration",
+  "type": "object",
+  "properties": {
+    "region": {
+      "type": "string",
+      "enum": [
+        "uk",
+        "eu"
+      ],
+      "description": "Region this calibration applies to"
+    },
+    "score_offset": {
+      "type": "number",
+      "default": 0,
+      "description": "Score adjustment applied to all forecasts (-20 to +20). Negative = engine over-forecasts."
+    },
+    "sample_size": {
+      "type": "number",
+      "default": 0,
+      "description": "Number of verification days that contributed to this calibration"
+    },
+    "rolling_bias": {
+      "type": "number",
+      "default": 1,
+      "description": "30-day rolling mean bias score"
+    },
+    "last_updated": {
+      "type": "string",
+      "description": "ISO timestamp of last calibration update"
+    },
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Last 30 days of {date, bias, hitRate, far} for trend"
+    }
+  },
+  "required": [
+    "region"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

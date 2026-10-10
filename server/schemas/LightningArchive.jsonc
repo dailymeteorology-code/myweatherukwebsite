@@ -1,0 +1,68 @@
+{
+  "name": "LightningArchive",
+  "type": "object",
+  "properties": {
+    "date": {
+      "type": "string",
+      "description": "Archived date in YYYY-MM-DD UTC"
+    },
+    "region": {
+      "type": "string",
+      "enum": [
+        "uk",
+        "europe",
+        "global"
+      ],
+      "default": "global",
+      "description": "Geographic scope of the archived snapshot"
+    },
+    "captured_at": {
+      "type": "number",
+      "description": "Snapshot epoch ms (typically end-of-day 23:59 UTC)"
+    },
+    "strike_count": {
+      "type": "number",
+      "description": "Total strikes in this archive"
+    },
+    "uk_count": {
+      "type": "number",
+      "description": "Strikes inside UK & Ireland bbox"
+    },
+    "eu_count": {
+      "type": "number",
+      "description": "Strikes inside Europe bbox"
+    },
+    "peak_hour": {
+      "type": "string",
+      "description": "Hour with most strikes, e.g. 14:00"
+    },
+    "strikes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Array of {lat,lon,time,amp} strike records for this day"
+    }
+  },
+  "required": [
+    "date"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

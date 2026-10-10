@@ -1,0 +1,104 @@
+{
+  "type": "object",
+  "description": "One saved year of TCM engine calibration against historical self-hosted Open-Meteo archive data. Stores the compact score->outcome histogram (sufficient statistic) so multiple years combine exactly, plus summary skill metrics and the recommended v3.00 tuning.",
+  "properties": {
+    "year": {
+      "type": "number",
+      "description": "Calendar year calibrated (e.g. 2023)"
+    },
+    "region": {
+      "type": "string",
+      "description": "Region label, e.g. 'UK & Ireland'"
+    },
+    "outcome_id": {
+      "type": "string",
+      "description": "Truth definition id: wxcode | lightning | cape | convprecip"
+    },
+    "outcome_threshold": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Threshold used for numeric outcome definitions (null for wxcode)"
+    },
+    "grid_points": {
+      "type": "number",
+      "description": "Number of grid points sampled"
+    },
+    "hours_scored": {
+      "type": "number",
+      "description": "Total hours scored across all grid points"
+    },
+    "n": {
+      "type": "number",
+      "description": "Total records (hours) in the histogram"
+    },
+    "hits": {
+      "type": "number",
+      "description": "Total positive outcomes"
+    },
+    "base_rate": {
+      "type": "number",
+      "description": "Observed occurrence base rate (hits / n)"
+    },
+    "brier": {
+      "type": "number",
+      "description": "Brier score of the current thunderProb logistic"
+    },
+    "brier_skill_score": {
+      "type": "number",
+      "description": "Brier skill score vs climatology (>0 beats climatology)"
+    },
+    "reliability": {
+      "type": "number",
+      "description": "Reliability (lower is better calibrated)"
+    },
+    "resolution": {
+      "type": "number",
+      "description": "Resolution (higher is more informative)"
+    },
+    "recommend_thunder_occur_score": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Suggested THUNDER_OCCUR_SCORE (max-CSI cut-off)"
+    },
+    "recommend_prob_center": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Suggested thunderProb logistic centre C"
+    },
+    "recommend_prob_slope": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Suggested thunderProb logistic slope S"
+    },
+    "hist_tot": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "description": "101-bucket histogram: total hours at each thunderstorm score 0..100"
+    },
+    "hist_hit": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "description": "101-bucket histogram: positive outcomes at each thunderstorm score 0..100"
+    }
+  },
+  "required": [
+    "year",
+    "outcome_id",
+    "n",
+    "hist_tot",
+    "hist_hit"
+  ],
+  "name": "TCMCalibrationRun"
+}

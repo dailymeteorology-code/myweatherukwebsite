@@ -1,0 +1,169 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 3.9%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 0 0% 83.1%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html, body {
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  button, a[role="button"], [role="tab"] {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+/* ── Page transition: progress bar shimmer ───────────────────────────────── */
+@keyframes mwuk-progress-shimmer {
+  0%   { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+/* ── Loading screen ───────────────────────────────────────────────────────────
+   Three ideas, not seven. The loader this replaced ran a radar sweep, three
+   ripple rings, three orbiting dots, a pulsing core, a striking lightning bolt,
+   a full-screen flash and a progress bar all at once — eight things competing
+   for the same two seconds, which reads as noise rather than as polish.
+
+   What is left: isobars drifting behind, one glint crossing the wordmark, and a
+   single light running the progress line. All three are transform or
+   background-position only, so they stay on the compositor and cost nothing on
+   the frame the app is trying to boot in. */
+
+/* The glint. Travels right to left across the letters, pauses, repeats — the
+   gradient is mostly transparent, so what moves is a highlight ON the wordmark
+   rather than a shape near it. */
+@keyframes mwuk-glint {
+  0%        { background-position: 190% 0; }
+  62%, 100% { background-position: -70% 0; }
+}
+
+/* Isobars. The curve repeats every 40 user units, so sliding by exactly 40
+   returns to an identical frame and the loop has no seam. */
+@keyframes mwuk-isobar {
+  to { transform: translateX(-40px); }
+}
+
+/* The light on the progress line. */
+@keyframes mwuk-runner {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+
+/* A slow breath on the whole mark, so a long wait never looks frozen. */
+@keyframes mwuk-breathe {
+  0%, 100% { opacity: 0.88; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mwuk-glint, .mwuk-isobar, .mwuk-runner, .mwuk-breathe { animation: none !important; }
+  /* Without its travelling light the track would be an empty line, so pin the
+     runner across it — still obviously a loading state, just not moving. */
+  .mwuk-runner { transform: none !important; width: 100% !important; opacity: 0.6; }
+}
+
+/* ── Newsletter popup ────────────────────────────────────────────────────── */
+@keyframes nlp-aurora {
+  0%   { background-position: 0% center; }
+  100% { background-position: 200% center; }
+}
+@keyframes nlp-spin {
+  to { transform: rotate(360deg); }
+}
+/* Lightning page — map skeleton shimmer while Leaflet boots. A sweep across
+   a map-coloured slab reads as "the map is coming" far better than a spinner
+   on a flat rectangle, which reads as "something is broken". */
+@keyframes lx-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  @keyframes lx-shimmer { from { background-position: 0 0; } to { background-position: 0 0; } }
+}

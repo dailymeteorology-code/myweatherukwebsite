@@ -1,0 +1,64 @@
+{
+  "name": "SubscriptionCoupon",
+  "type": "object",
+  "properties": {
+    "code": {
+      "type": "string",
+      "description": "Coupon code (uppercase)"
+    },
+    "description": {
+      "type": "string",
+      "description": "What this coupon is for"
+    },
+    "discount_percent": {
+      "type": "number",
+      "description": "Discount percentage"
+    },
+    "applies_to_tiers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Which tiers this coupon applies to (empty = all)"
+    },
+    "expires_at": {
+      "type": "string",
+      "description": "ISO date when coupon expires"
+    },
+    "max_uses": {
+      "type": "number",
+      "description": "Maximum number of uses (0 = unlimited)"
+    },
+    "uses_count": {
+      "type": "number",
+      "default": 0,
+      "description": "How many times used"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "code",
+    "discount_percent"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

@@ -1,0 +1,155 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   Weather icon motion.
+
+   THE RULE THAT SHAPES EVERY KEYFRAME BELOW: the 100% frame is the finished
+   symbol. Each animation runs a small number of times and then stops, and
+   `animation-fill-mode: both` holds that last frame forever after. So the
+   motion is an entrance — it draws the eye when a forecast first appears and
+   then gets out of the way, leaving a complete, legible, perfectly static
+   icon. Nothing is left mid-fall, faded, or rotated when the motion ends.
+
+   That also means nothing may exist ONLY during the animation. Every drop,
+   flake, ray and bolt is fully present and correctly placed at 100%, so an icon
+   that never animates at all (reduced motion, a print, html2canvas capturing a
+   PNG) is still the complete symbol.
+
+   `both` rather than `forwards` matters where a delay staggers the parts: it
+   holds the 0% frame during the delay, so a drop waiting its turn is hidden
+   rather than sitting in its final position and then jumping back to the top.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.wx {
+  /* Transforms are authored around each element's own centre; without this the
+     browser rotates and scales about the SVG origin and everything flies off. */
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* Runs count. Three passes is a shade over two seconds at these durations —
+   long enough to register, short enough not to nag on a 7-day row. */
+.wx-anim { animation-iteration-count: 3; animation-fill-mode: both; }
+.wx-anim-2 { animation-iteration-count: 2; animation-fill-mode: both; }
+
+/* ── Sun and moon ─────────────────────────────────────────────────────────── */
+
+/* A whole number of turns, so the last frame lands back at 0deg and the rays
+   finish exactly where they were drawn. */
+@keyframes wx-rays {
+  0%   { transform: rotate(0deg);   opacity: 0.55; }
+  50%  { opacity: 1; }
+  100% { transform: rotate(360deg); opacity: 1; }
+}
+.wx-rays { animation: wx-rays 2600ms cubic-bezier(0.45, 0, 0.25, 1); }
+
+@keyframes wx-breathe {
+  0%   { transform: scale(0.86); }
+  55%  { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+.wx-breathe { animation: wx-breathe 1500ms ease-in-out; }
+
+@keyframes wx-twinkle {
+  0%   { opacity: 0.15; transform: scale(0.6); }
+  55%  { opacity: 1;    transform: scale(1.15); }
+  100% { opacity: 1;    transform: scale(1); }
+}
+.wx-twinkle { animation: wx-twinkle 1300ms ease-in-out; }
+
+/* ── Cloud ────────────────────────────────────────────────────────────────── */
+
+@keyframes wx-drift {
+  0%   { transform: translateX(-3px); }
+  55%  { transform: translateX(2px); }
+  100% { transform: translateX(0); }
+}
+.wx-drift { animation: wx-drift 2200ms ease-in-out; }
+
+@keyframes wx-swell {
+  0%   { transform: scale(0.94); opacity: 0.75; }
+  60%  { transform: scale(1.03); opacity: 1; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+.wx-swell { animation: wx-swell 1600ms ease-out; }
+
+/* ── Falling precipitation ────────────────────────────────────────────────── */
+
+/* Falls, then settles AT its drawn position rather than continuing off the
+   bottom — the icon has to read as a finished picture once it stops. */
+@keyframes wx-fall {
+  0%   { transform: translateY(-7px); opacity: 0; }
+  30%  { opacity: 1; }
+  70%  { transform: translateY(3px);  opacity: 1; }
+  100% { transform: translateY(0);    opacity: 1; }
+}
+.wx-fall { animation: wx-fall 1150ms cubic-bezier(0.5, 0, 0.5, 1); }
+
+/* Heavier, faster, steeper — used for downpours and showers. */
+@keyframes wx-fall-hard {
+  0%   { transform: translate(2px, -9px); opacity: 0; }
+  25%  { opacity: 1; }
+  75%  { transform: translate(-1px, 4px); opacity: 1; }
+  100% { transform: translate(0, 0);      opacity: 1; }
+}
+.wx-fall-hard { animation: wx-fall-hard 900ms cubic-bezier(0.55, 0, 0.5, 1); }
+
+/* Snow: slower, wandering, and it spins. */
+@keyframes wx-flake {
+  0%   { transform: translate(0, -8px) rotate(0deg);      opacity: 0; }
+  30%  { opacity: 1; }
+  60%  { transform: translate(2.5px, 2px) rotate(200deg); opacity: 1; }
+  100% { transform: translate(0, 0) rotate(360deg);       opacity: 1; }
+}
+.wx-flake { animation: wx-flake 2000ms cubic-bezier(0.45, 0, 0.55, 1); }
+
+/* Hail bounces at the bottom of its travel instead of easing to rest. */
+@keyframes wx-bounce {
+  0%   { transform: translateY(-8px); opacity: 0; }
+  25%  { opacity: 1; }
+  60%  { transform: translateY(4px); }
+  78%  { transform: translateY(-2px); }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.wx-bounce { animation: wx-bounce 1000ms cubic-bezier(0.4, 0, 0.6, 1); }
+
+/* ── Lightning, fog, wind ─────────────────────────────────────────────────── */
+
+/* Ends fully lit. A bolt that finished dim would read as a missing symbol. */
+@keyframes wx-flash {
+  0%   { opacity: 0.2; }
+  12%  { opacity: 1; }
+  26%  { opacity: 0.3; }
+  42%  { opacity: 1; }
+  62%  { opacity: 0.45; }
+  100% { opacity: 1; }
+}
+.wx-flash { animation: wx-flash 1400ms ease-out; }
+
+@keyframes wx-sweep {
+  0%   { transform: translateX(-6px); opacity: 0.2; }
+  45%  { opacity: 1; }
+  75%  { transform: translateX(4px); }
+  100% { transform: translateX(0);   opacity: 1; }
+}
+.wx-sweep { animation: wx-sweep 1700ms ease-in-out; }
+
+/* Staggers. Applied alongside a motion class so neighbouring drops, flakes and
+   fog bands do not move in lockstep, which reads as a single sliding block. */
+.wx-d1 { animation-delay: 120ms; }
+.wx-d2 { animation-delay: 240ms; }
+.wx-d3 { animation-delay: 360ms; }
+.wx-d4 { animation-delay: 480ms; }
+.wx-d5 { animation-delay: 600ms; }
+
+/* ── Reduced motion ───────────────────────────────────────────────────────── */
+
+/* Not "animation: none" — that would drop the element back to its unanimated
+   inline state, which for a staggered drop is the 0% frame and therefore
+   invisible. Collapsing the duration instead lands every element on its final
+   frame immediately, so the complete symbol is what is shown. */
+@media (prefers-reduced-motion: reduce) {
+  .wx-anim, .wx-anim-2 {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "name": "AppUpdate",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Update title"
+    },
+    "description": {
+      "type": "string",
+      "description": "What changed in this update"
+    },
+    "version": {
+      "type": "string",
+      "description": "Version or label (e.g. v1.2, Week 3)"
+    },
+    "is_published": {
+      "type": "boolean",
+      "default": true,
+      "description": "Show this update publicly"
+    }
+  },
+  "required": [
+    "title",
+    "description"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

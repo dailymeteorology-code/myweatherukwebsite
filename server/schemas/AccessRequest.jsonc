@@ -1,0 +1,65 @@
+{
+  "name": "AccessRequest",
+  "type": "object",
+  "properties": {
+    "full_name": {
+      "type": "string",
+      "description": "Full name of the applicant"
+    },
+    "email": {
+      "type": "string",
+      "description": "Email address"
+    },
+    "social_media_handle": {
+      "type": "string",
+      "description": "Social media handle or username"
+    },
+    "invitation_token": {
+      "type": "string",
+      "description": "Invitation token for access"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "rejected"
+      ],
+      "default": "pending",
+      "description": "Application status"
+    },
+    "admin_notes": {
+      "type": "string",
+      "description": "Notes from admin review"
+    },
+    "email_sent": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether decision email has been sent"
+    }
+  },
+  "required": [
+    "full_name",
+    "email",
+    "social_media_handle",
+    "invitation_token"
+  ],
+  "rls": {
+    "create": {},
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

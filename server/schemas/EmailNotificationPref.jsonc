@@ -1,0 +1,74 @@
+{
+  "name": "EmailNotificationPref",
+  "type": "object",
+  "properties": {
+    "user_email": {
+      "type": "string",
+      "description": "Email address of the user this preference belongs to"
+    },
+    "outlook_alerts_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the user wants to receive email alerts when a new admin outlook is published"
+    },
+    "min_risk_level": {
+      "type": "string",
+      "enum": [
+        "any",
+        "Marginal",
+        "Slight",
+        "Moderate",
+        "High",
+        "Severe"
+      ],
+      "default": "Moderate",
+      "description": "Minimum outlook risk level that triggers an email (only outlooks with this overall risk or higher will email)"
+    }
+  },
+  "required": [
+    "user_email"
+  ],
+  "rls": {
+    "create": {
+      "$or": [
+        {
+          "data.user_email": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "read": {
+      "$or": [
+        {
+          "data.user_email": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "data.user_email": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "name": "SiteSettings",
+  "type": "object",
+  "properties": {
+    "site_name": {
+      "type": "string",
+      "description": "Name of your weather site"
+    },
+    "description": {
+      "type": "string",
+      "description": "Site description/tagline"
+    },
+    "logo_url": {
+      "type": "string",
+      "description": "URL to your logo image"
+    },
+    "banner_url": {
+      "type": "string",
+      "description": "URL to your banner image"
+    },
+    "tcm_logo_url": {
+      "type": "string",
+      "description": "URL to the TCM page logo"
+    },
+    "version": {
+      "type": "string",
+      "description": "Website version number"
+    },
+    "twitter_url": {
+      "type": "string"
+    },
+    "facebook_url": {
+      "type": "string"
+    },
+    "instagram_url": {
+      "type": "string"
+    },
+    "youtube_url": {
+      "type": "string"
+    },
+    "discord_url": {
+      "type": "string",
+      "description": "Discord server invite URL"
+    },
+    "site_disabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Disable the site \u2014 visitors will see a maintenance page"
+    },
+    "disabled_title": {
+      "type": "string",
+      "description": "Title shown on the site-disabled / request-access page"
+    },
+    "disabled_message": {
+      "type": "string",
+      "description": "Message shown to visitors when the site is disabled",
+      "default": "This website is temporarily unavailable."
+    },
+    "universal_access_key": {
+      "type": "string",
+      "description": "A single permanent access code usable by unlimited people to bypass the site-disabled gate"
+    },
+    "countdown_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Show a countdown timer"
+    },
+    "countdown_target": {
+      "type": "string",
+      "description": "ISO datetime for the countdown target"
+    },
+    "countdown_title": {
+      "type": "string",
+      "description": "Countdown page title"
+    },
+    "countdown_description": {
+      "type": "string",
+      "description": "Countdown page description"
+    },
+    "countdown_display": {
+      "type": "string",
+      "enum": [
+        "disabled_page",
+        "homepage"
+      ],
+      "default": "disabled_page",
+      "description": "Where to display the countdown"
+    },
+    "location_weather_api_url": {
+      "type": "string",
+      "description": "Legacy API endpoint URL (unused)"
+    },
+    "met_office_api_key": {
+      "type": "string",
+      "description": "Met Office DataHub API key for location weather forecasts"
+    },
+    "location_search_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Show the floating location search bar"
+    },
+    "admin_photo_outlook": {
+      "type": "string",
+      "description": "JSON payload for the admin's photo-backed risk outlook (photoUrl + drawn shapes)"
+    }
+  },
+  "required": [
+    "site_name"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

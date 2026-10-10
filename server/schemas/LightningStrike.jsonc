@@ -1,0 +1,49 @@
+{
+  "name": "LightningStrike",
+  "type": "object",
+  "properties": {
+    "lat": {
+      "type": "number",
+      "description": "Strike latitude"
+    },
+    "lon": {
+      "type": "number",
+      "description": "Strike longitude"
+    },
+    "time": {
+      "type": "number",
+      "description": "Strike timestamp in ms (epoch)"
+    },
+    "amp": {
+      "type": "number",
+      "description": "Strike amplitude (kA)"
+    },
+    "dedup_key": {
+      "type": "string",
+      "description": "Unique dedup key: time_lat_lon for deduplication"
+    }
+  },
+  "required": [
+    "lat",
+    "lon",
+    "time"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

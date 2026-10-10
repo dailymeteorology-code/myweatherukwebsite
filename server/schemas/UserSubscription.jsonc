@@ -1,0 +1,99 @@
+{
+  "name": "UserSubscription",
+  "type": "object",
+  "properties": {
+    "user_email": {
+      "type": "string",
+      "description": "User email address"
+    },
+    "user_name": {
+      "type": "string",
+      "description": "User display name"
+    },
+    "plan_tier": {
+      "type": "string",
+      "enum": [
+        "free",
+        "lite",
+        "pro",
+        "developer"
+      ],
+      "description": "Subscribed plan tier"
+    },
+    "billing_cycle": {
+      "type": "string",
+      "enum": [
+        "monthly",
+        "yearly",
+        "one_time"
+      ],
+      "default": "monthly"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "cancelled",
+        "expired",
+        "pending"
+      ],
+      "default": "active"
+    },
+    "starts_at": {
+      "type": "string",
+      "description": "ISO date when subscription starts"
+    },
+    "expires_at": {
+      "type": "string",
+      "description": "ISO date when subscription expires"
+    },
+    "coupon_applied": {
+      "type": "string",
+      "description": "Coupon code applied"
+    },
+    "sale_applied": {
+      "type": "string",
+      "description": "Sale ID applied"
+    },
+    "stripe_subscription_id": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Admin notes"
+    }
+  },
+  "required": [
+    "user_email",
+    "plan_tier"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {
+      "$or": [
+        {
+          "data.user_email": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

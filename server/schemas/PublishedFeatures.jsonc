@@ -1,0 +1,36 @@
+{
+  "name": "PublishedFeatures",
+  "type": "object",
+  "properties": {
+    "feature_name": {
+      "type": "string",
+      "description": "Name of the feature (e.g., 'graphics', 'dashboard')"
+    },
+    "is_published": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this feature is published to the public"
+    }
+  },
+  "required": [
+    "feature_name"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

@@ -1,0 +1,208 @@
+{
+  "name": "WeatherGraphic",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Title of the graphic"
+    },
+    "description": {
+      "type": "string",
+      "description": "Description or caption"
+    },
+    "image_url": {
+      "type": "string",
+      "description": "URL to the graphic image"
+    },
+    "is_featured": {
+      "type": "boolean",
+      "default": false,
+      "description": "Show on homepage"
+    },
+    "is_forecast": {
+      "type": "boolean",
+      "default": false,
+      "description": "Is this a forecast graphic"
+    },
+    "published": {
+      "type": "boolean",
+      "default": true
+    },
+    "weather_condition": {
+      "type": "string",
+      "enum": [
+        "Snow",
+        "Ice",
+        "Thunderstorms",
+        "Rain",
+        "Wind",
+        "Heat",
+        "Daily Risks"
+      ],
+      "description": "Primary weather condition (legacy)"
+    },
+    "weather_conditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Multiple selected weather conditions"
+    },
+    "expires_at": {
+      "type": "string",
+      "description": "ISO datetime when this forecast expires"
+    },
+    "in_force_from": {
+      "type": "string",
+      "description": "ISO datetime when this forecast comes into force"
+    },
+    "impact_level": {
+      "type": "string",
+      "enum": [
+        "Low",
+        "SLGT",
+        "Moderate",
+        "High"
+      ],
+      "description": "Impact severity level (legacy single)"
+    },
+    "impact_levels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Multiple selected impact levels"
+    },
+    "locations_impacted": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of locations impacted by this forecast"
+    },
+    "impact_drawing": {
+      "type": "string",
+      "description": "JSON string of drawn impact area paths on the map"
+    },
+    "update_reason": {
+      "type": "string",
+      "description": "Reason for the latest update to this forecast"
+    },
+    "is_archived": {
+      "type": "boolean",
+      "default": false,
+      "description": "Moved to archive (soft delete)"
+    },
+    "graphic_tool_state": {
+      "type": "object",
+      "description": "Full saved state from the Storm Outlook Graphic Tool (shapes, settings, timeline etc.)"
+    },
+    "thunderstorm_data": {
+      "type": "object",
+      "description": "Thunderstorm-specific risk and hazard data",
+      "properties": {
+        "tornado_risk": {
+          "type": "number"
+        },
+        "hail_risk": {
+          "type": "number"
+        },
+        "flash_flood_risk": {
+          "type": "number"
+        },
+        "strong_winds_risk": {
+          "type": "number"
+        },
+        "supercell_risk": {
+          "type": "number"
+        },
+        "high_lightning_min": {
+          "type": "string"
+        },
+        "high_lightning_max": {
+          "type": "string"
+        },
+        "severe_min": {
+          "type": "string"
+        },
+        "severe_max": {
+          "type": "string"
+        },
+        "heavy_rain_min": {
+          "type": "string"
+        },
+        "heavy_rain_max": {
+          "type": "string"
+        },
+        "high_lightning": {
+          "type": "boolean"
+        },
+        "severe": {
+          "type": "boolean"
+        },
+        "heavy_rain": {
+          "type": "boolean"
+        },
+        "wind_speed_mph": {
+          "type": "number"
+        },
+        "rain_mm_per_hour": {
+          "type": "number"
+        },
+        "hail_diameter_mm": {
+          "type": "number"
+        },
+        "tornado_intensity": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "required": [
+    "title"
+  ],
+  "rls": {
+    "create": {
+      "created_by": "{{user.email}}"
+    },
+    "read": {
+      "$or": [
+        {
+          "data.published": true
+        },
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

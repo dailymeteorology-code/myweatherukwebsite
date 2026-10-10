@@ -1,0 +1,56 @@
+{
+  "name": "RiskGridCache",
+  "type": "object",
+  "properties": {
+    "cache_key": {
+      "type": "string",
+      "description": "Unique cache key, e.g. uk-risk-grid-v1"
+    },
+    "generated_at": {
+      "type": "string",
+      "description": "ISO timestamp of when this grid was computed"
+    },
+    "expires_at": {
+      "type": "string",
+      "description": "ISO timestamp when this cache entry should be regenerated"
+    },
+    "model_run": {
+      "type": "string",
+      "description": "Source model run label (e.g. ECMWF 12Z + UKMO 06Z + ARPEGE 12Z)"
+    },
+    "grid_data": {
+      "type": "object",
+      "description": "Risk grid keyed by day index (0,1,2) -> { lightning:[{lat,lon,p}], hail:[...], tornado:[...], wind:[...] }"
+    },
+    "polygons": {
+      "type": "object",
+      "description": "Auto-derived contour polygons keyed by day -> risk-type -> [{level, coords:[[lat,lon],...]}]"
+    },
+    "diagnostics": {
+      "type": "object",
+      "description": "Per-source success counts and timing info"
+    }
+  },
+  "required": [
+    "cache_key",
+    "generated_at"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

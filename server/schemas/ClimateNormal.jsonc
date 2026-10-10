@@ -1,0 +1,87 @@
+{
+  "name": "ClimateNormal",
+  "type": "object",
+  "description": "Precomputed 1991-2020 ERA5 climate normals for one calendar month, on the climate-anomaly map's land-point grid. Built once server-side by the computeClimateNormals function so the browser only ever fetches the month being displayed.",
+  "properties": {
+    "month": {
+      "type": "number",
+      "description": "Calendar month, 1-12"
+    },
+    "grid_signature": {
+      "type": "string",
+      "description": "Signature of the bbox + grid step the points were built for. A grid change yields a new signature so stale normals are never matched against a different grid."
+    },
+    "points_hash": {
+      "type": "string",
+      "description": "Stable hash of the exact ordered lat/lon point list, so stored values can never be misaligned against a different point ordering."
+    },
+    "point_count": {
+      "type": "number",
+      "description": "Number of land points in this normal"
+    },
+    "baseline_start": {
+      "type": "number",
+      "description": "First year of the baseline, e.g. 1991"
+    },
+    "baseline_end": {
+      "type": "number",
+      "description": "Last year of the baseline, e.g. 2020"
+    },
+    "years_done": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "description": "Years already accumulated. Lets a build resume across invocations rather than restarting."
+    },
+    "complete": {
+      "type": "boolean",
+      "default": false,
+      "description": "True once every baseline year has been accumulated"
+    },
+    "totals": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Running per-point {sum,n} accumulators per variable while the build is in progress"
+    },
+    "values": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Final per-point normals {rain,temp,sun,cloud}, aligned to the point list. Populated once complete."
+    },
+    "source": {
+      "type": "string",
+      "description": "Which archive answered, e.g. public"
+    },
+    "built_at": {
+      "type": "number",
+      "description": "Epoch ms when the build finished"
+    }
+  },
+  "required": [
+    "month",
+    "grid_signature"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

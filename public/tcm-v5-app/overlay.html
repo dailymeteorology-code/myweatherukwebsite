@@ -1,0 +1,846 @@
+<!-- Ported from ukv-platform/frontend by scripts/import-tcmv5.
+     Two edits only: /api/ now points at the V5 service directly, and /assets/
+     points at the copy alongside this file. Nothing else is changed. -->
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCM V5 — Lightning Overlay Studio</title>
+<!--
+  Composites observed lightning strikes onto your own graphic.
+
+  Everything happens in this page. The graphic you load is never uploaded
+  anywhere: it is read with FileReader, drawn to a canvas here, and the
+  export is produced from that same canvas. Only the strike positions come
+  from the server.
+
+  The alignment assumption is chosen, not guessed. This platform's own PNG
+  exports are EQUIRECTANGULAR; the MyWeatherUK storm-outlook graphics are
+  MERCATOR in latitude. At 61 N the two disagree by tens of kilometres -- the
+  difference between a strike over Orkney and one in the sea -- so the preset
+  selects the projection as well as the bounds. The coastline reference
+  exists so a mismatch is visible immediately rather than discovered later.
+-->
+<style>
+  :root {
+    --bg:#10131a; --panel:#171b24; --line:#262c38; --text:#e6e9ef;
+    --muted:#97a0b0; --accent:#6ea8fe;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  #app { display:grid; grid-template-columns:392px 1fr; height:100%; }
+  #side { background:var(--panel); border-right:1px solid var(--line);
+    overflow-y:auto; padding:16px 18px 30px; scrollbar-width:thin; }
+  #stage { position:relative; display:flex; align-items:center;
+    justify-content:center; padding:22px; overflow:auto; background:#0b0e13; }
+  canvas { max-width:100%; max-height:100%; background:#0e1219;
+    border:1px solid var(--line); border-radius:6px;
+    box-shadow:0 6px 26px rgba(0,0,0,.5); }
+
+  .brand { display:flex; align-items:center; gap:10px; padding-bottom:14px;
+    margin-bottom:14px; border-bottom:1px solid var(--line); }
+  .brand img { width:52px; height:auto; }
+  h1 { font-size:16px; margin:0; font-weight:700; }
+  h1 .ver { color:var(--accent); }
+  .sub { color:var(--muted); font-size:12px; }
+  h2 { font-size:10.5px; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--muted); margin:20px 0 9px; font-weight:600;
+    display:flex; align-items:center; gap:9px; }
+  h2::after { content:""; flex:1 1 auto; height:1px; background:var(--line); }
+
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    margin-bottom:6px; }
+  button { background:#1d2636; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:6px 12px; cursor:pointer; font-size:12px;
+    white-space:nowrap; }
+  button:hover { border-color:#3a475f; }
+  button.primary { background:var(--accent); border-color:var(--accent);
+    color:#0c1220; font-weight:600; }
+  button.on { background:var(--accent); border-color:var(--accent);
+    color:#0c1220; font-weight:600; }
+  select, input[type=text], input[type=number] {
+    background:#131824; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:5px 8px; font-size:12px; }
+  .grid2 { display:grid; grid-template-columns:auto 1fr; gap:6px 10px;
+    align-items:center; font-size:11.5px; color:var(--muted); }
+  .grid2 label { display:contents; }
+  input[type=color] { width:100%; height:22px; padding:0; cursor:pointer;
+    border:1px solid var(--line); border-radius:4px; background:none; }
+  input[type=range] { width:100%; }
+  .bounds { display:grid; grid-template-columns:repeat(4,1fr); gap:6px;
+    font-size:11px; color:var(--muted); }
+  .bounds input { width:100%; }
+  .meta { color:var(--muted); font-size:11.5px; line-height:1.5; }
+  .warn { color:#e8b04b; }
+  .drop { border:1px dashed #33405a; border-radius:8px; padding:14px;
+    text-align:center; color:var(--muted); font-size:12px; cursor:pointer; }
+  .drop:hover { border-color:var(--accent); color:var(--text); }
+  a.back { color:var(--accent); text-decoration:none; font-size:12px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <header class="brand">
+      <img src="/tcm-v5-app/assets/tcm-logo.png" alt="">
+      <div>
+        <h1>Overlay <span class="ver">Studio</span></h1>
+        <div class="sub">Strikes on your graphic</div>
+      </div>
+    </header>
+    <a class="back" href="/">&larr; Back to the forecast</a>
+
+    <h2>Your graphic</h2>
+    <div class="drop" id="drop">
+      Click or drop an image here<br>
+      <span style="font-size:11px">It stays on this machine — nothing is uploaded.</span>
+    </div>
+    <input type="file" id="file" accept="image/*" hidden>
+    <div class="meta" id="imageNote">No image loaded.</div>
+
+    <h2>Alignment</h2>
+    <div class="row">
+      <select id="preset">
+        <option value="tcm">TCM export — equirectangular (−11, 49.5 → 2.5, 61)</option>
+        <option value="graphic">MyWeatherUK graphic — Mercator (−10.8 → 2.5)</option>
+        <option value="custom">Custom bounds…</option>
+      </select>
+    </div>
+    <div class="bounds">
+      <label>W<input type="number" id="west" value="-11" step="0.1"></label>
+      <label>S<input type="number" id="south" value="49.5" step="0.1"></label>
+      <label>E<input type="number" id="east" value="2.5" step="0.1"></label>
+      <label>N<input type="number" id="north" value="61" step="0.1"></label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="autofit" class="primary">Fit to graphic</button>
+      <button id="coastToggle" class="on">Coastline reference</button>
+      <button id="gridToggle">Lat/lon grid</button>
+    </div>
+    <div class="meta" id="fitNote">
+      Load a graphic and this reads its own coastline to work out the bounds
+      and the projection. It runs automatically on load.
+    </div>
+    <div class="meta" id="projNote">
+      Equirectangular over these bounds — TCM's own exports line up as loaded.
+    </div>
+
+    <h2>Strikes</h2>
+    <div class="row">
+      <select id="window">
+        <option value="day" selected>All today</option>
+        <option value="60">Last hour</option>
+        <option value="180">Last 3 hours</option>
+        <option value="360">Last 6 hours</option>
+        <option value="1440">Last 24 hours</option>
+      </select>
+      <button id="reload">Reload</button>
+    </div>
+    <div class="meta" id="strikeNote">Loading…</div>
+
+    <h2>Strike style</h2>
+    <div class="grid2">
+      <label>Fill<input type="color" id="fill" value="#ffd84d"></label>
+      <label>Outline<input type="color" id="line" value="#101010"></label>
+      <label>Radius<input type="range" id="size" min="1" max="24" value="6"></label>
+      <label>Edge<input type="range" id="weight" min="0" max="8" value="2"></label>
+      <label>Opacity<input type="range" id="alpha" min="5" max="100" value="95"></label>
+      <label>Glow<input type="range" id="glow" min="0" max="30" value="0"></label>
+    </div>
+
+    <h2>Export</h2>
+    <div class="row">
+      <button id="download" class="primary">Download PNG</button>
+      <button id="copy">Copy to clipboard</button>
+    </div>
+    <div class="meta" id="exportNote">
+      Exported at the graphic's own resolution, not the screen's.
+    </div>
+  </aside>
+
+  <div id="stage"><canvas id="canvas" width="1350" height="1150"></canvas></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const canvas = $("canvas");
+const ctx = canvas.getContext("2d");
+
+let image = null;          // the loaded graphic
+let strikes = [];          // [{lat, lon, time}]
+let coast = null;          // reference outline
+let showCoast = true, showGrid = false;
+
+const bounds = () => ({
+  west: Number($("west").value), south: Number($("south").value),
+  east: Number($("east").value), north: Number($("north").value),
+});
+
+// Equirectangular: longitude linear in x, latitude linear in y. Stated in the
+// UI too, because a graphic on any other projection will not line up and the
+// reader has to be able to see why.
+// Two projections, because the two kinds of graphic genuinely use different
+// ones. This platform's PNG exports are equirectangular; the MyWeatherUK
+// storm-outlook graphics are Mercator in latitude. At 61 N they disagree by
+// tens of kilometres -- the difference between a strike over Orkney and one
+// in the sea -- so guessing is not an option.
+let projection = "equirectangular";
+const mercY = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 180) / 2));
+
+function project(lat, lon, b, w, h) {
+  const x = ((lon - b.west) / (b.east - b.west)) * w;
+  if (projection === "mercator") {
+    const top = mercY(b.north), bot = mercY(b.south);
+    return [x, ((top - mercY(lat)) / (top - bot)) * h];
+  }
+  return [x, ((b.north - lat) / (b.north - b.south)) * h];
+}
+
+function draw() {
+  const b = bounds();
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  if (image) {
+    ctx.drawImage(image, 0, 0, w, h);
+  } else {
+    ctx.fillStyle = "#0e1219";
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = "#5a6478";
+    ctx.font = `${Math.round(w / 42)}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText("Load a graphic to begin", w / 2, h / 2);
+  }
+
+  if (showGrid) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,.18)";
+    ctx.lineWidth = Math.max(1, w / 1400);
+    ctx.font = `${Math.round(w / 90)}px system-ui, sans-serif`;
+    ctx.fillStyle = "rgba(255,255,255,.45)";
+    for (let lon = Math.ceil(b.west); lon <= b.east; lon += 2) {
+      const [x] = project(0, lon, b, w, h);
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+      ctx.fillText(`${lon}°`, x + 4, 14);
+    }
+    for (let lat = Math.ceil(b.south); lat <= b.north; lat += 2) {
+      const [, y] = project(lat, 0, b, w, h);
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      ctx.fillText(`${lat}°`, 4, y - 4);
+    }
+    ctx.restore();
+  }
+
+  if (showCoast && coast) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(120,200,255,.75)";
+    ctx.lineWidth = Math.max(1, w / 900);
+    for (const ring of coast) {
+      ctx.beginPath();
+      ring.forEach(([lon, lat], i) => {
+        const [x, y] = project(lat, lon, b, w, h);
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      });
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Strikes last, so nothing is drawn over them.
+  const radius = Number($("size").value) * (w / 1350);
+  const weight = Number($("weight").value) * (w / 1350);
+  const alpha = Number($("alpha").value) / 100;
+  const glow = Number($("glow").value);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = $("fill").value;
+  ctx.strokeStyle = $("line").value;
+  ctx.lineWidth = weight;
+  if (glow > 0) {
+    ctx.shadowColor = $("fill").value;
+    ctx.shadowBlur = glow * (w / 1350);
+  }
+  for (const s of strikes) {
+    const [x, y] = project(s.lat, s.lon, b, w, h);
+    if (x < -radius || y < -radius || x > w + radius || y > h + radius) continue;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    if (weight > 0) ctx.stroke();
+  }
+  ctx.restore();
+}
+
+async function loadStrikes() {
+  const choice = $("window").value;
+  const today = new Date().toISOString().slice(0, 10);
+  const query = choice === "day" ? `day=${today}` : `minutes=${choice}`;
+  $("strikeNote").textContent = "Loading…";
+  try {
+    const r = await fetch(`http://127.0.0.1:8000/api/observations/strikes?${query}`);
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    const data = await r.json();
+    strikes = data.strikes;
+    let note = `${data.count} strike${data.count === 1 ? "" : "s"}`;
+    if (data.hours_missing && data.hours_missing.length) {
+      note += `. Not recorded: ${data.hours_missing.join(", ")} — gaps in the `
+            + "archive, not quiet periods.";
+    } else {
+      note += " · the whole period was observed.";
+    }
+    $("strikeNote").textContent = note;
+  } catch (e) {
+    strikes = [];
+    $("strikeNote").innerHTML =
+      '<span class="warn">' + String(e.message || e).slice(0, 150) + "</span>";
+  }
+  draw();
+}
+
+/* The reference the fit matches against. This is the detailed coastline these
+   graphics are actually drawn from, not the platform's own /api/coastline --
+   that one is derived from the 2 km model land mask, and matching a survey
+   coastline against a blocky model outline caps the achievable overlap and
+   biases where the optimum sits. It stays as the offline fallback. */
+const COAST_SOURCES = [
+  ["https://raw.githubusercontent.com/georgique/world-geojson/develop/countries/united_kingdom.json",
+   "https://raw.githubusercontent.com/georgique/world-geojson/develop/countries/ireland.json"],
+  ["https://raw.githubusercontent.com/georgique/world-geojson/master/countries/united_kingdom.json",
+   "https://raw.githubusercontent.com/georgique/world-geojson/master/countries/ireland.json"],
+];
+const COAST_CACHE_KEY = "tcm_overlay_coast_v2";   // v2: overseas territories filtered out
+let coastSource = "";
+
+/* The country files include the OVERSEAS TERRITORIES -- the Falklands,
+   Pitcairn, Diego Garcia -- so an unfiltered "United Kingdom" spans lon
+   -130.8 to +72.5. Nothing draws them, because the map clips, but the fit
+   seeds itself from the reference's extent: left in, they scale the seed 16x
+   wrong and the search starts nowhere near the answer. Keep only rings whose
+   centre lies in these islands. */
+const HOME_BOX = { lonMin: -11.5, lonMax: 3.5, latMin: 48.5, latMax: 62.5 };
+function inHomeBox(ring) {
+  let lo = Infinity, hi = -Infinity, la = Infinity, lb = -Infinity;
+  for (const p of ring) {
+    if (p[0] < lo) lo = p[0];
+    if (p[0] > hi) hi = p[0];
+    if (p[1] < la) la = p[1];
+    if (p[1] > lb) lb = p[1];
+  }
+  const cx = (lo + hi) / 2, cy = (la + lb) / 2;
+  return cx >= HOME_BOX.lonMin && cx <= HOME_BOX.lonMax
+      && cy >= HOME_BOX.latMin && cy <= HOME_BOX.latMax;
+}
+
+function ringsFromGeoJSON(gj) {
+  const out = [];
+  for (const f of (gj.features || (gj.geometry ? [gj] : []))) {
+    const g = f.geometry;
+    if (!g) continue;
+    const polys = g.type === "Polygon" ? [g.coordinates]
+      : g.type === "MultiPolygon" ? g.coordinates : null;
+    if (!polys) continue;
+    for (const poly of polys) for (const ring of poly) {
+      if (inHomeBox(ring)) out.push(ring);
+    }
+  }
+  return out;
+}
+
+async function loadCoast() {
+  try {
+    const cached = localStorage.getItem(COAST_CACHE_KEY);
+    if (cached) {
+      const rings = JSON.parse(cached);
+      if (rings.reduce((n, r) => n + r.length, 0) > 800) {
+        coast = rings; coastSource = "detailed (cached)"; draw(); return;
+      }
+    }
+  } catch { /* fall through and refetch */ }
+
+  for (const pair of COAST_SOURCES) {
+    try {
+      const res = await Promise.all(pair.map(u => fetch(u).then(r => {
+        if (!r.ok) throw new Error("http " + r.status); return r.json();
+      })));
+      let rings = [];
+      for (const gj of res) rings = rings.concat(ringsFromGeoJSON(gj));
+      if (rings.reduce((n, r) => n + r.length, 0) < 800) continue;
+      coast = rings; coastSource = "detailed";
+      try { localStorage.setItem(COAST_CACHE_KEY, JSON.stringify(rings)); } catch {}
+      draw(); return;
+    } catch { /* try the next mirror */ }
+  }
+
+  try {
+    const r = await fetch("http://127.0.0.1:8000/api/coastline");
+    if (r.ok) {
+      coast = (await r.json()).geometry.coordinates;
+      coastSource = "model land mask";
+    }
+  } catch { /* the reference is optional */ }
+  draw();
+}
+
+function loadImage(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      image = img;
+      // Match the canvas to the graphic, so the export is at the graphic's
+      // own resolution rather than whatever the screen happens to be.
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      $("imageNote").textContent =
+        `${file.name} · ${img.naturalWidth}×${img.naturalHeight}`;
+      draw();
+      runAutoFit();
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+
+/* ==========================================================================
+   AUTOMATIC REGISTRATION
+
+   Work out where the map sits inside an uploaded graphic, and on which
+   projection, by matching the graphic's own landmass against the reference
+   coastline. The alternative is typing four bounds and picking a projection
+   by eye, which is guesswork -- and a wrong guess puts strikes in the sea
+   without ever looking wrong enough to notice.
+
+   The fit is a plain north-up affine with no rotation, which is what every
+   graphic of this kind actually is:
+
+       x = a * lon      + b
+       y = c * V(lat)   + d          V = identity, or mercY for Mercator
+
+   Four unknowns, so a bounding-box match already determines them; the search
+   afterwards exists because the bounding box is only right when the whole
+   landmass is visible and nothing bright sits outside it.
+
+   WHY TWO MASKS. Bright-and-neutral finds the white landmass cleanly, which
+   is what an unshaded graphic gives you. But a graphic carrying risk areas
+   has its land tinted orange or red, and those pixels are no longer neutral --
+   so that mask loses exactly the land it most needs. Bright-only keeps tinted
+   land, at the cost of also keeping bright risk areas drawn over the SEA,
+   which would drag the fit outward. Neither is right for both cases, so both
+   are tried and the one that actually agrees with the coastline wins.
+   ========================================================================== */
+
+/* Two stages. A coarse pass picks the mask and the projection cheaply; a fine
+   pass then refines the winner where a pixel is worth much less ground, which
+   is what separates Mercator from equirectangular. Over the UK's 11.5 degrees
+   of latitude the two are ALMOST affine-related, so at coarse resolution they
+   score within a few tenths of a percent of each other and the choice is
+   noise. Measured on a known-Mercator graphic: 79.88 vs 79.60 at 288 px --
+   the wrong one winning -- against a decisive margin at 640 px. */
+const FIT_W_COARSE = 288, FIT_W_FINE = 640;
+let fitCanvas = null, fitCtx = null;
+
+function fitScratch(w, h) {
+  if (!fitCanvas) {
+    fitCanvas = document.createElement("canvas");
+    fitCtx = fitCanvas.getContext("2d", { willReadFrequently: true });
+  }
+  if (fitCanvas.width !== w || fitCanvas.height !== h) {
+    fitCanvas.width = w; fitCanvas.height = h;
+  }
+  return fitCtx;
+}
+
+/* Otsu's method: split the histogram where between-class variance peaks. A
+   fixed threshold cannot work across graphics with different backgrounds. */
+function otsu(lum) {
+  const hist = new Float64Array(256);
+  for (let i = 0; i < lum.length; i++) hist[lum[i]]++;
+  const total = lum.length;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, best = -1, thr = 128;
+  for (let i = 0; i < 256; i++) {
+    wB += hist[i];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += i * hist[i];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > best) { best = between; thr = i; }
+  }
+  return thr;
+}
+
+/* Keep only components big enough to be land. Titles, city labels, legend
+   swatches and chips all pass a brightness threshold; none of them survives a
+   size filter, and none of them is connected to the landmass. */
+function largeComponents(mask, w, h, minPx) {
+  const seen = new Uint8Array(w * h);
+  const out = new Uint8Array(w * h);
+  const stack = new Int32Array(w * h);
+  const idx = new Int32Array(w * h);
+  for (let s = 0; s < mask.length; s++) {
+    if (!mask[s] || seen[s]) continue;
+    let top = 0, n = 0;
+    stack[top++] = s; seen[s] = 1;
+    while (top) {
+      const p = stack[--top];
+      idx[n++] = p;
+      const x = p % w, y = (p - x) / w;
+      if (x > 0     && mask[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack[top++] = p - 1; }
+      if (x < w - 1 && mask[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack[top++] = p + 1; }
+      if (y > 0     && mask[p - w] && !seen[p - w]) { seen[p - w] = 1; stack[top++] = p - w; }
+      if (y < h - 1 && mask[p + w] && !seen[p + w]) { seen[p + w] = 1; stack[top++] = p + w; }
+    }
+    if (n >= minPx) for (let i = 0; i < n; i++) out[idx[i]] = 1;
+  }
+  return out;
+}
+
+/* Two candidate land masks from one image. `neutral` also demands low
+   saturation, which rejects coloured risk shading; `bright` does not. */
+function landMasks(img, FIT_W) {
+  const w = FIT_W, h = Math.max(1, Math.round(img.naturalHeight * (FIT_W / img.naturalWidth)));
+  const cx = fitScratch(w, h);
+  cx.clearRect(0, 0, w, h);
+  cx.drawImage(img, 0, 0, w, h);
+  const d = cx.getImageData(0, 0, w, h).data;
+
+  const lum = new Uint8Array(w * h);
+  const sat = new Float32Array(w * h);
+  for (let i = 0, p = 0; i < lum.length; i++, p += 4) {
+    const r = d[p], g = d[p + 1], b = d[p + 2];
+    lum[i] = Math.max(0, Math.min(255, Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b)));
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    sat[i] = mx ? (mx - mn) / mx : 0;
+  }
+  const t = otsu(lum);
+  const minPx = Math.max(24, Math.round(0.0015 * w * h));
+
+  const bright = new Uint8Array(w * h);
+  const neutral = new Uint8Array(w * h);
+  for (let i = 0; i < lum.length; i++) {
+    if (lum[i] > t) {
+      bright[i] = 1;
+      if (sat[i] < 0.22) neutral[i] = 1;
+    }
+  }
+  return {
+    w: w, h: h, threshold: t,
+    variants: [
+      { name: "neutral", mask: largeComponents(neutral, w, h, minPx) },
+      { name: "bright",  mask: largeComponents(bright,  w, h, minPx) },
+    ],
+  };
+}
+
+function maskBBox(mask, w, h) {
+  let x0 = w, y0 = h, x1 = -1, y1 = -1, n = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!mask[y * w + x]) continue;
+      n++;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  return n ? { x0: x0, y0: y0, x1: x1 + 1, y1: y1 + 1, n: n } : null;
+}
+
+const mercYf = lat => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 180) / 2));
+const invMercY = v => (2 * Math.atan(Math.exp(v)) - Math.PI / 2) * 180 / Math.PI;
+const Vof = (lat, proj) => (proj === "mercator" ? mercYf(lat) : lat);
+
+/* The reference coastline as a Path2D in (lon, V) space, built once per
+   projection. The search rasterises it hundreds of times; rebuilding the path
+   in JS each time was the whole cost of the fit, whereas a prebuilt path only
+   needs a transform set on the context. */
+function refPath(rings, proj) {
+  const p = new Path2D();
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length; i++) {
+      const X = ring[i][0], Y = Vof(ring[i][1], proj);
+      if (i === 0) p.moveTo(X, Y); else p.lineTo(X, Y);
+    }
+    p.closePath();
+  }
+  return p;
+}
+
+/* Reference land, rasterised at a candidate transform. setTransform(a,0,0,c,b,d)
+   is exactly x = a*lon + b, y = c*V + d. */
+function refMask(path, a, b, c, d, w, h) {
+  const cx = fitScratch(w, h);
+  cx.setTransform(1, 0, 0, 1, 0, 0);
+  cx.clearRect(0, 0, w, h);
+  cx.setTransform(a, 0, 0, c, b, d);
+  cx.fillStyle = "#fff";
+  cx.fill(path, "evenodd");
+  cx.setTransform(1, 0, 0, 1, 0, 0);
+  const px = cx.getImageData(0, 0, w, h).data;
+  const m = new Uint8Array(w * h);
+  for (let i = 0, p = 3; i < m.length; i++, p += 4) m[i] = px[p] > 100 ? 1 : 0;
+  return m;
+}
+
+function iou(m1, m2) {
+  let inter = 0, uni = 0;
+  for (let i = 0; i < m1.length; i++) {
+    const p = m1[i], q = m2[i];
+    if (p | q) { uni++; if (p & q) inter++; }
+  }
+  return uni ? inter / uni : 0;
+}
+
+/* Reference land extent in (lon, V) space, for the bounding-box seed. */
+function refExtent(rings, proj) {
+  let lo0 = Infinity, lo1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+  for (const ring of rings) {
+    for (const pt of ring) {
+      const v = Vof(pt[1], proj);
+      if (pt[0] < lo0) lo0 = pt[0];
+      if (pt[0] > lo1) lo1 = pt[0];
+      if (v < v0) v0 = v;
+      if (v > v1) v1 = v;
+    }
+  }
+  return { lo0: lo0, lo1: lo1, v0: v0, v1: v1 };
+}
+
+/* Compass search on the four parameters: try each one up and down, keep any
+   improvement, shrink the step when a whole pass finds none. Cheap, and it
+   cannot wander off the way a gradient estimate on a noisy mask can. */
+function refine(target, path, w, h, p0, scaleStep, offsetStep, maxPasses) {
+  let p = p0.slice();
+  let best = iou(target, refMask(path, p[0], p[1], p[2], p[3], w, h));
+  // Steps are proportional to the seed, so they mean the same thing whatever
+  // the graphic's size.
+  let steps = [Math.abs(p[0]) * scaleStep, w * offsetStep,
+               Math.abs(p[2]) * scaleStep, h * offsetStep];
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let improved = false;
+    for (let k = 0; k < 4; k++) {
+      for (const dir of [1, -1]) {
+        const q = p.slice();
+        q[k] += dir * steps[k];
+        const s = iou(target, refMask(path, q[0], q[1], q[2], q[3], w, h));
+        if (s > best) { best = s; p = q; improved = true; break; }
+      }
+    }
+    if (!improved) {
+      steps = steps.map(s => s * 0.5);
+      // Stop once a step is worth less than a twentieth of a pixel; below that
+      // the mask cannot register the change and the search is just spinning.
+      if (steps[1] < 0.05 && steps[3] < 0.05) break;
+    }
+  }
+  return { params: p, score: best };
+}
+
+/* Fit one mask variant on one projection, from a bounding-box seed. */
+function fitOne(target, rings, w, h, proj, path) {
+  const bb = maskBBox(target, w, h);
+  if (!bb) return null;
+  const ext = refExtent(rings, proj);
+  // Seed: stretch the reference's land extent onto the mask's bounding box.
+  // V grows northward while y grows downward, so c comes out negative.
+  const a = (bb.x1 - bb.x0) / (ext.lo1 - ext.lo0);
+  const b = bb.x0 - a * ext.lo0;
+  const c = (bb.y1 - bb.y0) / (ext.v0 - ext.v1);
+  const d = bb.y0 - c * ext.v1;
+  return refine(target, path || refPath(rings, proj), w, h, [a, b, c, d], 0.04, 0.04, 60);
+}
+
+/* Fit every (mask, projection) pair and return the best. Trying both
+   projections is the point: this platform's exports are equirectangular and
+   the MyWeatherUK graphics are Mercator, and at 61 N the two disagree by tens
+   of kilometres. Whichever actually matches the coastline wins. */
+function autoFit(img, rings) {
+  const paths = { mercator: refPath(rings, "mercator"),
+                  equirectangular: refPath(rings, "equirectangular") };
+
+  // Stage 1, coarse: which mask, roughly where.
+  const coarse = landMasks(img, FIT_W_COARSE);
+  let pick = null;
+  for (const variant of coarse.variants) {
+    if (!maskBBox(variant.mask, coarse.w, coarse.h)) continue;
+    for (const proj of ["mercator", "equirectangular"]) {
+      const got = fitOne(variant.mask, rings, coarse.w, coarse.h, proj, paths[proj]);
+      if (got && (!pick || got.score > pick.score)) {
+        pick = { score: got.score, params: got.params, proj: proj, variant: variant.name };
+      }
+    }
+  }
+  if (!pick) return null;
+
+  // Stage 2, fine: refine the winning MASK on BOTH projections at higher
+  // resolution and re-choose. The projection is decided here, not above,
+  // because at coarse resolution the two are within noise of each other.
+  const fine = landMasks(img, FIT_W_FINE);
+  const target = (fine.variants.find(v => v.name === pick.variant) || fine.variants[0]).mask;
+  const up = fine.w / coarse.w;
+  let best = null;
+  const margins = {};
+  for (const proj of ["mercator", "equirectangular"]) {
+    const seed = proj === pick.proj
+      ? [pick.params[0] * up, pick.params[1] * up, pick.params[2] * up, pick.params[3] * up]
+      : null;
+    const got = seed
+      ? refine(target, paths[proj], fine.w, fine.h, seed, 0.012, 0.012, 40)
+      : fitOne(target, rings, fine.w, fine.h, proj, paths[proj]);
+    if (!got) continue;
+    margins[proj] = got.score;
+    if (!best || got.score > best.score) {
+      best = { score: got.score, params: got.params, proj: proj, variant: pick.variant };
+    }
+  }
+  if (!best) return null;
+  best.margin = Math.abs((margins.mercator || 0) - (margins.equirectangular || 0));
+  best.scores = margins;
+  const masks = fine;
+
+  // Convert the working-resolution fit into bounds for the full image.
+  // x_full = k * x_work, so the coefficients MULTIPLY by k. Getting this
+  // backwards is not obvious from the output: k cancels in west = -b/a and in
+  // north = -d/c, so those two stay correct while east and south go wild.
+  const k = img.naturalWidth / masks.w;
+  const a = best.params[0] * k, b = best.params[1] * k;
+  const c = best.params[2] * k, d = best.params[3] * k;
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const west = -b / a, east = (W - b) / a;
+  const vTop = -d / c, vBot = (H - d) / c;
+  const north = best.proj === "mercator" ? invMercY(vTop) : vTop;
+  const south = best.proj === "mercator" ? invMercY(vBot) : vBot;
+  return {
+    west: west, east: east, north: north, south: south,
+    projection: best.proj, score: best.score, variant: best.variant,
+    threshold: masks.threshold, margin: best.margin, scores: best.scores,
+  };
+}
+
+/* Run the fit and apply it. The score is an intersection-over-union between
+   the graphic's own landmass and the reference coastline drawn at the fitted
+   transform, so it is a direct measure of how well the two agree -- not a
+   confidence invented after the fact. It is always shown, because a fit that
+   half-worked looks identical to one that worked until you check. */
+function runAutoFit() {
+  if (!image) { $("fitNote").innerHTML = '<span class="warn">Load a graphic first.</span>'; return; }
+  if (!coast || !coast.length) {
+    $("fitNote").innerHTML = '<span class="warn">The coastline reference has not loaded, so there is nothing to match against.</span>';
+    return;
+  }
+  $("fitNote").textContent = "Reading the graphic…";
+  // Yield first so the note paints before the search blocks the thread.
+  setTimeout(() => {
+    const t0 = performance.now();
+    let fit = null;
+    try { fit = autoFit(image, coast); }
+    catch (e) { $("fitNote").innerHTML = '<span class="warn">Fit failed: ' + String(e.message || e).slice(0, 120) + '</span>'; return; }
+    const ms = Math.round(performance.now() - t0);
+    if (!fit) {
+      $("fitNote").innerHTML = '<span class="warn">No landmass found in this image, so there was nothing to align to. Set the bounds by hand.</span>';
+      return;
+    }
+    if (fit.score < 0.55) {
+      // Below this the shapes are not really agreeing, and applying the fit
+      // would move strikes confidently to the wrong place.
+      $("fitNote").innerHTML = '<span class="warn">Best match was only ' +
+        (fit.score * 100).toFixed(0) + '% overlap — not good enough to trust, so nothing was changed. ' +
+        'This usually means the map is cropped, rotated, or not UK and Ireland. Set the bounds by hand.</span>';
+      return;
+    }
+    $("west").value  = fit.west.toFixed(3);
+    $("east").value  = fit.east.toFixed(3);
+    $("north").value = fit.north.toFixed(3);
+    $("south").value = fit.south.toFixed(3);
+    projection = fit.projection;
+    $("preset").value = "custom";
+    $("projNote").textContent = projection === "mercator"
+      ? "Mercator in latitude, fitted from the graphic itself."
+      : "Equirectangular, fitted from the graphic itself.";
+    $("fitNote").innerHTML = "Fitted in " + ms + " ms · <b>" + (fit.score * 100).toFixed(1) +
+      "% overlap</b> with the reference coastline · " + projection +
+      " · matched on the " + fit.variant + " mask.";
+    draw();
+  }, 20);
+}
+
+// --- wiring ---------------------------------------------------------------
+$("drop").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => loadImage(e.target.files[0]));
+["dragover", "dragenter"].forEach(type =>
+  $("drop").addEventListener(type, (e) => { e.preventDefault(); }));
+$("drop").addEventListener("drop", (e) => {
+  e.preventDefault();
+  loadImage(e.dataTransfer.files[0]);
+});
+
+for (const id of ["fill", "line", "size", "weight", "alpha", "glow",
+                  "west", "south", "east", "north"]) {
+  $(id).addEventListener("input", draw);
+}
+$("window").addEventListener("change", loadStrikes);
+$("reload").addEventListener("click", loadStrikes);
+$("autofit").addEventListener("click", runAutoFit);
+$("preset").addEventListener("change", (e) => {
+  if (e.target.value === "tcm") {
+    projection = "equirectangular";
+    $("west").value = -11; $("south").value = 49.5;
+    $("east").value = 2.5; $("north").value = 61;
+  } else if (e.target.value === "graphic") {
+    projection = "mercator";
+    $("west").value = -10.8; $("south").value = 49.5;
+    $("east").value = 2.5; $("north").value = 61;
+  }
+  $("projNote").textContent = projection === "mercator"
+    ? "Mercator in latitude — matches the MyWeatherUK storm-outlook graphics."
+    : "Equirectangular over these bounds — TCM's own exports line up as loaded.";
+  draw();
+});
+$("coastToggle").addEventListener("click", (e) => {
+  showCoast = !showCoast;
+  e.target.classList.toggle("on", showCoast);
+  draw();
+});
+$("gridToggle").addEventListener("click", (e) => {
+  showGrid = !showGrid;
+  e.target.classList.toggle("on", showGrid);
+  draw();
+});
+
+$("download").addEventListener("click", () => {
+  canvas.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `tcm-strikes-${new Date().toISOString().slice(0, 10)}.png`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, "image/png");
+});
+
+$("copy").addEventListener("click", async () => {
+  try {
+    const blob = await new Promise(r => canvas.toBlob(r, "image/png"));
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    $("exportNote").textContent = "Copied to the clipboard.";
+  } catch (e) {
+    $("exportNote").innerHTML =
+      '<span class="warn">Clipboard refused; use Download instead.</span>';
+  }
+});
+
+draw();
+loadCoast();
+loadStrikes();
+</script>
+</body>
+</html>

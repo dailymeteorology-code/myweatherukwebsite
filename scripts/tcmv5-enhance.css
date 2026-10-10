@@ -1,0 +1,129 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   TCM V5 — MAP-FIRST LAYOUT
+   ────────────────────────────────────────────────────────────────────────────
+   Injected on top of the ported viewer rather than edited into it, so
+   re-running scripts/import-tcmv5.cjs re-ports whatever the platform's
+   frontend has become and these changes land on top of the new copy instead
+   of being overwritten by it.
+
+   WHAT CHANGES AND WHY.
+
+   The ported layout is a two-column grid: a 392px panel, then the map in
+   whatever is left. On a 1440px screen that is a quarter of the width spent on
+   controls before the map gets any, and the map is the thing being read. Here
+   the map takes the whole canvas and the panel becomes a drawer that slides
+   over it — so closing the panel gives the map the full width rather than
+   merely a wider column, and the map never has to be squeezed to make room for
+   something you are not currently reading.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* The grid becomes a single cell: the map. */
+#app {
+  grid-template-columns: 1fr !important;
+  position: relative;
+}
+
+#map {
+  grid-column: 1 / -1 !important;
+  grid-row: 1 !important;
+}
+
+/* The panel, lifted out of the grid and floated over the map. */
+#side {
+  position: absolute !important;
+  left: 0; top: 0; bottom: 0;
+  width: 392px;
+  max-width: 88vw;
+  z-index: 1200;
+  border-right: 1px solid var(--line);
+  box-shadow: 0 0 44px rgba(0, 0, 0, 0.55);
+  transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
+}
+
+body.tcmx-side-closed #side {
+  transform: translateX(-100%);
+}
+
+/* ── the handle ──────────────────────────────────────────────────────────────
+   Rides the panel's edge, so it is always where the panel is: at its border
+   when open, at the screen edge when closed. One control, never two. */
+.tcmx-handle {
+  position: absolute;
+  top: 50%;
+  left: 392px;
+  transform: translateY(-50%);
+  z-index: 1250;
+  width: 22px;
+  height: 74px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-left: none;
+  border-radius: 0 9px 9px 0;
+  background: var(--panel, #131923);
+  color: #9fb0c6;
+  transition: left 280ms cubic-bezier(0.4, 0, 0.2, 1), color 140ms ease, background 140ms ease;
+  padding: 0;
+  font: inherit;
+}
+.tcmx-handle:hover { color: #e8eef8; background: #1a2330; }
+body.tcmx-side-closed .tcmx-handle { left: 0; }
+
+.tcmx-handle svg { width: 13px; height: 13px; transition: transform 280ms ease; }
+body.tcmx-side-closed .tcmx-handle svg { transform: rotate(180deg); }
+
+/* ── map controls ────────────────────────────────────────────────────────────
+   Top right, clear of Leaflet's own zoom buttons at the top left. */
+.tcmx-mapbtns {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1210;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.tcmx-mapbtn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: rgba(15, 20, 28, 0.86);
+  backdrop-filter: blur(6px);
+  color: #cbd8e8;
+  padding: 0;
+  font: inherit;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.tcmx-mapbtn:hover {
+  background: rgba(30, 41, 56, 0.94);
+  color: #fff;
+  border-color: #3a4757;
+}
+.tcmx-mapbtn svg { width: 15px; height: 15px; }
+
+/* ── the panel belongs to fullscreen ─────────────────────────────────────────
+   On the page the map has perhaps 750px of height, and a 392px panel over it
+   leaves a strip of map beside a wall of controls — the panel wins a fight it
+   should not be in. Fullscreen is where there is room for both, so that is
+   where it appears. In the page the map is the whole of it. */
+#side, .tcmx-handle { display: none; }
+#app:fullscreen #side { display: block; }
+#app:fullscreen .tcmx-handle { display: flex; }
+
+/* Fullscreen hides the drawer's shadow seam against the screen edge. */
+#app:fullscreen #side { box-shadow: 0 0 44px rgba(0, 0, 0, 0.7); }
+
+/* On a narrow screen the drawer is the whole width and starts closed, because
+   a panel that covers the map on arrival hides the thing you came for. */
+@media (max-width: 720px) {
+  #side { width: 320px; }
+  .tcmx-handle { left: 320px; }
+}

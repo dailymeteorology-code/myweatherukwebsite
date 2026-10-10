@@ -1,0 +1,36 @@
+<!--
+  PLACEHOLDER, not the real brand asset.
+
+  The supplied MyWeatherUK mark could not be installed: it arrived as a chat
+  attachment, which cannot be written to disk, and the copies on this machine
+  are a different variant (a beach photograph behind the circle) rather than
+  the clean mark. Drop the real file in as
+
+      frontend/assets/myweatheruk-logo.png
+
+  and the header picks it up automatically. The img tag tries the PNG first
+  and only falls back to this file when it is missing.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img"
+     aria-label="MyWeatherUK">
+  <circle cx="100" cy="100" r="89" fill="none" stroke="#2b5580" stroke-width="12"/>
+  <g stroke="#f7d94c" stroke-width="9" stroke-linecap="round">
+    <line x1="76" y1="28" x2="76" y2="48"/>
+    <line x1="41" y1="43" x2="55" y2="57"/>
+    <line x1="28" y1="76" x2="48" y2="76"/>
+    <line x1="41" y1="109" x2="55" y2="96"/>
+    <line x1="111" y1="43" x2="98" y2="57"/>
+  </g>
+  <circle cx="78" cy="78" r="26" fill="#f6b73c"/>
+  <path d="M78 52a26 26 0 0 0-18 44 26 26 0 0 1 18-44z" fill="#f8cf5e"/>
+  <path d="M80 146a25 25 0 0 1 3-50 32 32 0 0 1 60 8 23 23 0 0 1-4 42z"
+        fill="#4a90c8" stroke="#2b5580" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M96 140a25 25 0 0 1 3-44 32 32 0 0 1 24-7 32 32 0 0 0-20 51z"
+        fill="#69aede"/>
+  <g stroke="#4a90c8" stroke-width="10" stroke-linecap="round">
+    <line x1="92" y1="152" x2="83" y2="170"/>
+    <line x1="119" y1="150" x2="110" y2="168"/>
+    <line x1="146" y1="150" x2="133" y2="172"/>
+    <line x1="105" y1="174" x2="100" y2="185"/>
+  </g>
+</svg>

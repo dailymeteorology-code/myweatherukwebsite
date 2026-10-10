@@ -1,0 +1,71 @@
+{
+  "name": "SubscriptionSale",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Sale title shown to users"
+    },
+    "description": {
+      "type": "string",
+      "description": "Short sale description"
+    },
+    "discount_percent": {
+      "type": "number",
+      "description": "Discount percentage (e.g. 25 for 25% off)"
+    },
+    "applies_to_tiers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Which tiers this sale applies to"
+    },
+    "selected_user_emails": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Specific users who get this sale (empty = everyone)"
+    },
+    "starts_at": {
+      "type": "string",
+      "description": "ISO date sale starts"
+    },
+    "ends_at": {
+      "type": "string",
+      "description": "ISO date sale ends"
+    },
+    "show_countdown": {
+      "type": "boolean",
+      "default": true,
+      "description": "Show countdown timer on subscription page"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "title",
+    "discount_percent"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

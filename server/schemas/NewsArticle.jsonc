@@ -1,0 +1,70 @@
+{
+  "name": "NewsArticle",
+  "type": "object",
+  "description": "A weather news story. Written in Admin Settings -> News and shown on the public /News page once published.",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Headline"
+    },
+    "body": {
+      "type": "string",
+      "description": "Article text. Blank lines separate paragraphs; a line wrapped in ** ** renders as a section heading; lines starting with '- ' render as a bullet list."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "Analysis",
+        "Storm",
+        "Climate",
+        "Forecast",
+        "Update"
+      ],
+      "default": "Analysis",
+      "description": "Story type, drives the colour tag"
+    },
+    "link_url": {
+      "type": "string",
+      "description": "Optional outbound link shown as a button at the end"
+    },
+    "link_label": {
+      "type": "string",
+      "description": "Text for that link button"
+    },
+    "image_url": {
+      "type": "string",
+      "description": "Optional lead image, e.g. a PNG exported from the Monthly Climate graphic tool"
+    },
+    "published": {
+      "type": "boolean",
+      "default": false,
+      "description": "Only published articles appear on the public page"
+    },
+    "published_at": {
+      "type": "string",
+      "description": "ISO datetime used for ordering and the displayed date"
+    }
+  },
+  "required": [
+    "title",
+    "body"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

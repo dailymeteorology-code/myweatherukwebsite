@@ -1,0 +1,1284 @@
+<!-- Ported from ukv-platform/frontend by scripts/import-tcmv5.
+     Two edits only: /api/ now points at the V5 service directly, and /assets/
+     points at the copy alongside this file. Nothing else is changed. -->
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCM V5 — convective forecasting</title>
+<!--
+  Leaflet is loaded from a CDN for the base map. It is the ONLY external
+  dependency in the platform; everything else is served locally. To run fully
+  offline, drop leaflet.js/leaflet.css into frontend/vendor/ and repoint these
+  two tags — no other change is needed.
+-->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --bg:#10131a; --panel:#171b24; --line:#262c38; --text:#e6e9ef;
+    --muted:#97a0b0; --accent:#6ea8fe;
+    --none:#3a4150; --very_low:#78be78; --low:#f5dc5a;
+    --moderate:#f09632; --high:#dc3c28;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  #app { display:grid; grid-template-columns:392px 1fr; height:100%; }
+  #side { background:var(--panel); border-right:1px solid var(--line);
+    overflow-y:auto; padding:16px 18px 28px; scrollbar-width:thin;
+    scrollbar-color:#2f3949 transparent; }
+  #side::-webkit-scrollbar { width:9px; }
+  #side::-webkit-scrollbar-thumb { background:#2f3949; border-radius:5px; }
+  #map { height:100%; background:#0b0e13; position:relative; }
+  h1 { font-size:17px; margin:0; letter-spacing:.02em; font-weight:700; }
+  h1 .ver { color:var(--accent); font-weight:700; }
+  .sub { color:var(--muted); font-size:12px; }
+
+  /* --- brand header --------------------------------------------------- */
+  .brand { display:flex; align-items:center; gap:10px; padding-bottom:14px;
+    margin-bottom:14px; border-bottom:1px solid var(--line); }
+  .brand-mark { width:58px; height:auto; flex:none;
+    filter:drop-shadow(0 2px 7px rgba(0,0,0,.5)); }
+  .brand-text { flex:1 1 auto; min-width:0; }
+  .brand-uk { width:36px; height:36px; flex:none; opacity:.95; }
+  .brand-uk:hover { opacity:1; }
+
+  /* --- run bar -------------------------------------------------------- */
+  .runbar { display:flex; align-items:center; gap:10px;
+    background:#131824; border:1px solid var(--line); border-radius:8px;
+    padding:9px 10px; margin-bottom:6px; }
+  .runbar-info { flex:1 1 auto; min-width:0; font-size:12px; }
+  #runLabel { font-weight:600; }
+  button.primary { background:var(--accent); border-color:var(--accent);
+    color:#0c1220; font-weight:600; }
+  button.primary:hover:not(:disabled) { filter:brightness(1.1); }
+  button:disabled { opacity:.55; cursor:progress; }
+  button.toggle.on { background:var(--accent); border-color:var(--accent);
+    color:#0c1220; font-weight:600; }
+
+  /* --- strike styling controls ----------------------------------------- */
+  .strikestyle { display:grid; grid-template-columns:auto 1fr; gap:6px 10px;
+    align-items:center; margin:8px 0 6px; font-size:11.5px;
+    color:var(--muted); }
+  .strikestyle label { display:contents; }
+  .strikestyle input[type=color] { width:100%; height:22px; padding:0;
+    border:1px solid var(--line); border-radius:4px; background:none;
+    cursor:pointer; }
+  .strikestyle input[type=range] { width:100%; }
+
+  /* --- background-work banner ------------------------------------------ */
+  #busy { position:absolute; top:10px; left:50%; transform:translateX(-50%);
+    z-index:600; display:flex; align-items:center; gap:8px;
+    background:rgba(16,20,30,.92); border:1px solid var(--line);
+    border-radius:20px; padding:6px 14px; font-size:12px; color:var(--muted);
+    box-shadow:0 2px 10px rgba(0,0,0,.4); }
+  #busy[hidden] { display:none; }
+  .spin { width:11px; height:11px; border-radius:50%; flex:none;
+    border:2px solid #33405a; border-top-color:var(--accent);
+    animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* --- startup screen -------------------------------------------------- */
+  #boot { position:fixed; inset:0; z-index:9000; display:flex;
+    align-items:center; justify-content:center; background:var(--bg); }
+  #boot[hidden] { display:none; }
+  /* A rebuild can run for minutes. Covering the whole page for all of it
+     reads as a site that has failed to load, so past DEMOTE_AFTER_MS the
+     panel shrinks to a corner card: the map is visible and pannable while
+     the forecast products finish, and nothing half-built is on screen. */
+  #boot.mini { inset:auto 16px 16px auto; background:none;
+    pointer-events:none; display:block; }
+  #boot.mini .boot-card { width:min(320px,84vw); text-align:left;
+    padding:14px 16px; background:var(--panel);
+    border:1px solid var(--line); border-radius:9px;
+    box-shadow:0 10px 34px rgba(0,0,0,.55); pointer-events:auto; }
+  #boot.mini .boot-mark { width:36px; margin-bottom:8px; }
+  #boot.mini .boot-why { display:none; }
+  .boot-card { width:min(430px,88vw); text-align:center; padding:26px 28px 30px; }
+  .boot-mark { width:96px; height:auto; margin-bottom:16px;
+    filter:drop-shadow(0 3px 12px rgba(0,0,0,.55)); }
+  .boot-title { font-size:17px; font-weight:700; margin:0 0 6px;
+    text-transform:none; letter-spacing:0; color:var(--text); display:block; }
+  .boot-title::after { content:none; }
+  .boot-detail { color:var(--muted); font-size:13px; margin-bottom:16px; }
+  .boot-track { height:6px; border-radius:3px; background:#222937;
+    overflow:hidden; }
+  .boot-fill { height:100%; width:0%; border-radius:3px;
+    background:linear-gradient(90deg,#4a86bd,var(--accent));
+    transition:width .45s ease; }
+  .boot-eta { margin-top:10px; font-size:12px; color:var(--muted);
+    font-variant-numeric:tabular-nums; }
+  .boot-why { margin-top:18px; font-size:11.5px; line-height:1.55;
+    color:#7d8697; }
+
+  /* --- the highest-risk marker ---------------------------------------- */
+  .peakstar { font-size:26px; line-height:1; text-align:center;
+    color:#ffd84d; text-shadow:0 0 4px #000, 0 0 10px rgba(0,0,0,.8);
+    pointer-events:none; }
+  .peaklabel { background:rgba(12,16,26,.9); border:1px solid var(--line);
+    border-radius:6px; padding:4px 7px; font-size:11px; white-space:nowrap;
+    color:var(--text); }
+  h2 { font-size:10.5px; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--muted); margin:22px 0 9px; font-weight:600;
+    display:flex; align-items:center; gap:9px; }
+  h2::after { content:""; flex:1 1 auto; height:1px; background:var(--line); }
+
+  .day { border:1px solid var(--line); border-radius:9px; padding:11px 13px;
+    margin-bottom:9px; cursor:pointer; background:#141821;
+    transition:border-color .12s, background .12s; }
+  .day:hover { border-color:#38445c; }
+  .day.open { border-color:var(--accent); background:#161c28; }
+  .day-top { display:flex; align-items:center; gap:8px; }
+  .dot { width:10px; height:10px; border-radius:50%; flex:none; }
+  .day-name { font-weight:600; }
+  .day-level { margin-left:auto; font-size:11px; text-transform:uppercase;
+    letter-spacing:.06em; color:var(--muted); }
+  .day-meta { font-size:12px; color:var(--muted); margin-top:4px; }
+  .day-areas { font-size:12px; margin-top:4px; }
+
+  .mode-toggle { display:flex; gap:4px; margin-top:10px; }
+  .mode-toggle button { flex:1; font-size:11px; padding:4px 6px; }
+  .mode-toggle button.sel { border-color:var(--accent); background:#1d2636;
+    color:#fff; }
+  .hours { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
+  .hr { font-size:11px; padding:4px 7px; border-radius:5px; cursor:pointer;
+    border:1px solid var(--line); background:#11151d;
+    font-variant-numeric:tabular-nums; }
+  .hr:hover { border-color:#4a5670; }
+  .hr.sel { border-color:var(--accent); background:#1d2636; color:#fff; }
+
+  label.layer { display:flex; align-items:center; gap:8px; padding:6px 0;
+    cursor:pointer; flex-wrap:wrap; }
+  /* Keep the label on one line even when a long "unavailable" reason follows:
+     the reason takes a full row of its own underneath. */
+  label.layer > span:not(.badge):not(.swatch) { flex:1 1 auto; min-width:0; }
+  label.layer.off { opacity:.45; cursor:not-allowed; }
+  .swatch { width:14px; height:14px; border-radius:3px; flex:none; }
+  .badge { font-size:10px; color:var(--muted); margin-left:auto; }
+  /* A layer that failed says why, in warning colour so it cannot be mistaken
+     for the resolution badge next to it. */
+  .badge.why:empty { display:none; }
+  .badge.why { color:#e8b04b; font-style:italic; flex-basis:100%;
+               margin-left:0; text-align:left; line-height:1.45;
+               padding:2px 0 1px 22px; }
+  input[type=range] { width:100%; }
+  .meta { font-size:12px; color:var(--muted); }
+  #outlook { white-space:pre-wrap; font-size:12.5px; line-height:1.55;
+    border-top:1px solid var(--line); padding-top:12px; }
+  .warn { color:#ffca6e; }
+  .legend { display:flex; height:10px; border-radius:3px; overflow:hidden;
+    margin:6px 0 2px; }
+  .legend i { flex:1; }
+  .legend-labels { display:flex; justify-content:space-between; font-size:10px;
+    color:var(--muted); }
+  #status { position:absolute; top:10px; left:50%; transform:translateX(-50%);
+    background:rgba(20,24,32,.92); border:1px solid var(--line);
+    border-radius:20px; padding:5px 14px; font-size:12px; z-index:500;
+    display:none; }
+  #status.on { display:block; }
+  .row { display:flex; align-items:center; gap:8px; margin:8px 0 6px; }
+  button { background:#1d2636; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:6px 12px; cursor:pointer; font-size:12px;
+    white-space:nowrap; transition:background .12s, border-color .12s; }
+  button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  select { width:100%; background:#11151d; color:var(--text);
+    border:1px solid var(--line); border-radius:6px; padding:6px; }
+  .auto { font-size:12px; color:var(--muted); display:flex; gap:4px;
+    align-items:center; cursor:pointer; }
+  #stamp { position:absolute; bottom:10px; left:10px; z-index:500;
+    background:rgba(20,24,32,.92); border:1px solid var(--line);
+    border-radius:6px; padding:6px 10px; font-size:12px; }
+</style>
+</head>
+<body>
+<!-- Shown while the backend rebuilds its products. A restart or a forced run
+     leaves the site unable to answer for around a minute and a half; without
+     this the page simply sat on "Loading…" with no sign of progress. -->
+<div id="boot" hidden>
+  <div class="boot-card">
+    <img class="boot-mark" src="/tcm-v5-app/assets/tcm-logo.png" alt="">
+    <h2 class="boot-title">TCM V5 is starting up</h2>
+    <div class="boot-detail" id="bootDetail">Contacting the server…</div>
+    <div class="boot-track"><div class="boot-fill" id="bootFill"></div></div>
+    <div class="boot-eta" id="bootEta">Estimating…</div>
+    <div class="boot-why">
+      The forecast products are rebuilt after every model run. Nothing stale
+      is served meanwhile — the site simply is not ready yet.
+    </div>
+  </div>
+</div>
+<div id="app">
+  <aside id="side">
+    <header class="brand">
+      <img class="brand-mark" src="/tcm-v5-app/assets/tcm-logo.png" alt="">
+      <div class="brand-text">
+        <h1>TCM <span class="ver">V5</span></h1>
+        <div class="sub">Convective forecasting · UK &amp; Ireland</div>
+      </div>
+      <!-- Tries the real mark first; falls back to the placeholder SVG so
+           dropping myweatheruk-logo.png into frontend/assets/ is the only
+           step needed to install the genuine one. -->
+      <img class="brand-uk" src="/tcm-v5-app/assets/myweatheruk-logo.png"
+           onerror="this.onerror=null;this.src='/tcm-v5-app/assets/myweatheruk-logo.svg'"
+           alt="MyWeatherUK" title="MyWeatherUK">
+    </header>
+
+    <div class="runbar">
+      <div class="runbar-info">
+        <div id="runLabel">—</div>
+        <div class="meta" id="runNext">—</div>
+      </div>
+      <button id="rerun" class="primary" title="Fetch the latest cycle and rebuild every product">Re-run model</button>
+    </div>
+    <div class="meta" id="rerunNote"></div>
+
+    <h2>Daily risk</h2>
+    <div id="days" class="meta">Loading…</div>
+
+    <h2>Live lightning strikes</h2>
+    <div class="row">
+      <button id="strikeToggle" class="toggle">◉ Show strikes</button>
+      <select id="strikeWindow">
+        <option value="day" selected>All today</option>
+        <option value="60">Last hour</option>
+        <option value="180">Last 3 hours</option>
+        <option value="360">Last 6 hours</option>
+      </select>
+    </div>
+    <div class="strikestyle">
+      <label>Fill<input type="color" id="strikeFill" value="#ffd84d"></label>
+      <label>Outline<input type="color" id="strikeLine" value="#1a1a1a"></label>
+      <label>Size<input type="range" id="strikeSize" min="2" max="14" value="5"></label>
+      <label>Edge<input type="range" id="strikeWeight" min="0" max="5" value="1"></label>
+      <label>Opacity<input type="range" id="strikeAlpha" min="10" max="100" value="90"></label>
+    </div>
+    <div class="meta" id="strikeNote"></div>
+
+    <h2>Outlook areas</h2>
+    <div class="row">
+      <button id="polyToggle" class="toggle">▧ Categorical outlook</button>
+    </div>
+    <div class="meta" id="polyNote"></div>
+
+    <h2>Map detail</h2>
+    <div class="mode-toggle" id="mapStyle">
+      <button data-style="simple" class="sel">Simple</button>
+      <button data-style="detailed">Detailed</button>
+    </div>
+    <div class="meta" id="styleNote"></div>
+
+    <h2>Map tools</h2>
+    <div class="row">
+      <button id="starToggle" class="toggle">☆ Mark highest risk</button>
+    </div>
+    <div class="meta" id="starNote"></div>
+
+    <h2>Graphic Studio</h2>
+    <div class="meta" id="studioInfo">…</div>
+    <div class="row">
+      <button id="studioDownload">Download run</button>
+      <button id="studioCopy">Copy API URL</button>
+      <a href="/graphic" target="_blank"><button>Graphic maker ↗</button></a>
+      <a href="/overlay" target="_blank"><button>Overlay Studio ↗</button></a>
+    </div>
+
+    <h2>Animation</h2>
+    <select id="mode"></select>
+    <div class="row">
+      <button id="play">Play</button>
+      <label class="auto"><input type="checkbox" id="auto"> Auto</label>
+      <span class="meta" id="frameInfo"></span>
+    </div>
+    <input type="range" id="scrub" min="0" max="0" value="0">
+    <div class="meta" id="animNote"></div>
+
+    <h2>Layers</h2>
+    <div id="layers"></div>
+
+    <h2>Opacity</h2>
+    <input type="range" id="opacity" min="10" max="100" value="80">
+
+    <h2>Legend</h2>
+    <div id="legend"></div>
+
+    <h2>Outlook</h2>
+    <div class="mode-toggle" id="outlookMode">
+      <button data-style="plain" class="sel">Simple</button>
+      <button data-style="full">Detailed</button>
+    </div>
+    <div id="outlook" class="meta">Loading…</div>
+  </aside>
+  <div id="map">
+    <!-- Background work, shown WITHOUT blocking: the previous cycle is still
+         being served while a new one downloads. -->
+    <div id="busy" hidden><span class="spin"></span><span id="busyText"></span></div>
+    <div id="status">Loading…</div>
+    <div id="stamp" class="meta">—</div>
+  </div>
+</div>
+
+<script>
+const BOUNDS = [[49.5, -11.0], [61.0, 2.5]];
+const map = L.map("map", { zoomControl: true, minZoom: 4, maxZoom: 10 });
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 10, opacity: 0.55, attribution: "&copy; OpenStreetMap"
+}).addTo(map);
+
+// Fit AFTER layout: the map sits in a CSS grid cell with no computed size
+// while this script first runs, and fitting then leaves Leaflet at zoom 0.
+function fitToRegion() { map.invalidateSize(); map.fitBounds(BOUNDS); }
+requestAnimationFrame(fitToRegion);
+window.addEventListener("resize", () => map.invalidateSize());
+
+let overlays = {};
+let scales = {};
+let days = [];
+let LAYERS = [];
+// view: 'day' shows the whole-day maximum (00:00-23:59); 'hour' shows one hour.
+const state = {
+  hour: null, day: null, view: "day",
+  active: new Set(["risk"]), opacity: 0.8, star: false, polygons: false,
+  strikes: false,
+  outlookStyle: "plain",
+  // The generalised map is the default. The 2 km field shows detail the
+  // forecast cannot justify at these lead times, and a reader with no
+  // training cannot tell which of its gradients matter.
+  mapStyle: "simple",
+};
+
+let dayImageUrl = null;
+
+const $ = (id) => document.getElementById(id);
+const busy = (on, text) => {
+  const el = $("status");
+  el.textContent = text || "Loading…";
+  el.classList.toggle("on", Boolean(on));
+};
+
+async function json(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(path + " -> " + r.status);
+  return r.json();
+}
+
+function legendFor(name) {
+  const s = scales[name], box = $("legend");
+  if (!s) { box.innerHTML = '<div class="meta">—</div>'; return; }
+  const bar = s.stops.map(st =>
+    `<i style="background:rgba(${st.rgba[0]},${st.rgba[1]},${st.rgba[2]},${st.rgba[3] / 255})"></i>`).join("");
+  box.innerHTML = `<div class="legend">${bar}</div>
+    <div class="legend-labels"><span>${s.stops[0].value}</span>
+    <span>${s.stops[s.stops.length - 1].value}</span></div>
+    <div class="meta">${s.description} (${s.units})</div>`;
+}
+
+function clearOverlays() {
+  for (const o of Object.values(overlays)) map.removeLayer(o);
+  overlays = {};
+}
+
+// Each draw carries a generation. Drawing is async, so changing the hour
+// starts overlapping draws; without this a later draw clears the registry
+// while an earlier one's fetches are in flight and its images then land on
+// the map untracked — stale lead times painted under the current one.
+let generation = 0;
+
+//: A layer whose path carries no {forecast_hour} is not a forecast at a lead
+//  time -- observed lightning is a rolling window of what has already
+//  happened -- so it can be drawn in the whole-day view too.
+const needsHour = (layer) => layer.path.includes("{forecast_hour}");
+
+async function drawLayers({ keepDay = false } = {}) {
+  const mine = ++generation;
+
+  // Drop the old images IMMEDIATELY. Leaving them up while the new ones load
+  // shows the previous hour's data under the new hour's label.
+  clearOverlays();
+  busy(true, state.hour === null
+    ? "Rendering layers…" : "Rendering T+" + state.hour + "…");
+
+  // In the whole-day view only the day raster and the lead-time-free layers
+  // can be drawn. Silently skipping the rest left a ticked checkbox with
+  // nothing on the map and no explanation.
+  const wanted = LAYERS.filter(l =>
+    state.active.has(l.id) && l.path
+    && !(state.hour === null && needsHour(l))
+  );
+  if (state.hour === null && !wanted.length && !dayImageUrl) {
+    busy(false);
+    return;
+  }
+  const loaded = await Promise.all(wanted.map(async (layer) => {
+    try {
+      const r = await fetch(withStyle(
+        layer.path.replace("{forecast_hour}", state.hour), layer.id));
+
+      if (!r.ok) {
+        // A layer that fails must SAY so. Dropping it silently left the
+        // checkbox ticked with nothing drawn, which reads as "nothing
+        // happening" -- and on the observed layer that is the exact
+        // confusion between an unwatched sky and a quiet one that the
+        // observation archive refuses to make.
+        let why = "unavailable";
+        try { why = (await r.json()).detail || why; } catch { /* not json */ }
+        return { layer, error: String(why) };
+      }
+      return { layer, blob: await r.blob(), headers: r.headers };
+    } catch { return { layer, error: "could not be loaded" }; }
+  }));
+
+  if (mine !== generation) return;          // superseded while fetching
+  clearOverlays();
+
+  // The whole-day raster sits underneath whatever else is switched on.
+  if (state.hour === null && dayImageUrl && state.active.has("risk")) {
+    overlays.risk = L.imageOverlay(dayImageUrl, BOUNDS,
+      { opacity: state.opacity }).addTo(map);
+  }
+
+  for (const item of loaded) {
+    if (!item) continue;
+    const note = document.querySelector(`[data-why="${item.layer.id}"]`);
+    if (item.error) {
+      if (note) note.textContent = item.error;
+      continue;
+    }
+    if (note) note.textContent = "";
+    overlays[item.layer.id] = L.imageOverlay(
+      URL.createObjectURL(item.blob), BOUNDS, { opacity: state.opacity }
+    ).addTo(map);
+    const res = item.headers.get("X-TCM-Effective-Resolution-M");
+    const badge = document.querySelector(`[data-badge="${item.layer.id}"]`);
+    if (badge && res) {
+      badge.textContent =
+        (Number(res) / 1000).toFixed(Number(res) > 9999 ? 0 : 1) + " km";
+    }
+  }
+  busy(false);
+}
+
+async function showDayField(day) {
+  const mine = ++generation;
+  clearOverlays();
+  busy(true, "Rendering whole day…");
+  try {
+    const r = await fetch(withStyle(`http://127.0.0.1:8000/api/render/day/${day}.png`, "risk"));
+    if (!r.ok) throw new Error(await r.text());
+    const blob = await r.blob();
+    if (mine !== generation) return;
+    clearOverlays();
+    // Kept so the day image can be put back when another layer is toggled:
+    // the day raster is not a lead-time layer and drawLayers cannot rebuild
+    // it from LAYERS.
+    dayImageUrl = URL.createObjectURL(blob);
+    overlays.risk = L.imageOverlay(dayImageUrl, BOUNDS,
+      { opacity: state.opacity }).addTo(map);
+    const info = days.find(d => d.date === day);
+    const hours = (r.headers.get("X-TCM-Hours") || "").split(",").length;
+    $("stamp").textContent =
+      `${info ? info.label : day} · whole day 00:00–23:59Z · `
+      + `${info ? info.level : ""} · max across ${hours} hours`;
+    refreshStar();
+    refreshPolygons();
+  } catch (e) {
+    $("stamp").textContent = "No whole-day field: " + String(e).slice(0, 80);
+  }
+  busy(false);
+}
+
+function selectHour(hour, entry) {
+  state.hour = hour;
+  state.view = "hour";
+  $("stamp").textContent =
+    "T+" + hour + " · " + new Date(entry.valid_time).toUTCString().slice(5, 22)
+    + "Z · " + entry.level + " · " + entry.area_percent + "% of area";
+  document.querySelectorAll(".hr").forEach(el =>
+    el.classList.toggle("sel", Number(el.dataset.hour) === hour));
+  drawLayers();
+  refreshStar();
+  refreshPolygons();
+}
+
+function renderDays() {
+  const box = $("days");
+  box.innerHTML = "";
+  for (const day of days) {
+    const card = document.createElement("div");
+    card.className = "day" + (state.day === day.date ? " open" : "");
+    card.innerHTML = `
+      <div class="day-top">
+        <span class="dot" style="background:var(--${day.level})"></span>
+        <span class="day-name">${day.label}</span>
+        <span class="day-level">${day.level.replace("_", " ")}</span>
+      </div>
+      <div class="day-meta">peak ${day.peak_valid_time.slice(11, 16)}Z ·
+        ${day.area_percent}% of area · ${day.regime}</div>
+      <div class="day-areas">${day.areas.join(", ") || "no notable areas"}</div>`;
+
+    if (state.day === day.date) {
+      const toggle = document.createElement("div");
+      toggle.className = "mode-toggle";
+      for (const [id, label] of [["day", "Whole day"], ["hour", "Hourly"]]) {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.className = state.view === id ? "sel" : "";
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          state.view = id;
+          renderDays();
+          if (id === "day") showDayField(day.date);
+          else {
+            const peak = day.hours.find(
+              h => h.forecast_hour === day.peak_forecast_hour) || day.hours[0];
+            selectHour(peak.forecast_hour, peak);
+          }
+        });
+        toggle.appendChild(b);
+      }
+      card.appendChild(toggle);
+
+      const strip = document.createElement("div");
+      strip.className = "hours";
+      if (state.view !== "hour") strip.style.display = "none";
+      for (const h of day.hours) {
+        const b = document.createElement("span");
+        b.className = "hr" + (state.hour === h.forecast_hour ? " sel" : "");
+        b.dataset.hour = h.forecast_hour;
+        b.textContent = h.hour_label.slice(0, 2) + "Z";
+        b.title = `T+${h.forecast_hour} · ${h.level} · ${h.area_percent}%`;
+        b.addEventListener("click", (e) => {
+          e.stopPropagation(); selectHour(h.forecast_hour, h);
+        });
+        strip.appendChild(b);
+      }
+      card.appendChild(strip);
+    }
+
+    card.addEventListener("click", () => {
+      state.day = state.day === day.date ? null : day.date;
+      renderDays();
+      loadAnimation($("mode").value || anim.mode, state.day);
+      if (state.day === day.date) {
+        // Opening a day shows the WHOLE DAY first; hourly is a deliberate
+        // second step, not the default.
+        state.view = "day";
+        renderDays();
+        showDayField(day.date);
+      }
+    });
+    box.appendChild(card);
+  }
+}
+
+function renderLayerList() {
+  const box = $("layers");
+  box.innerHTML = "";
+  for (const layer of LAYERS) {
+    const usable = Boolean(layer.path);
+    const el = document.createElement("label");
+    el.className = "layer" + (usable ? "" : " off");
+    const scale = scales[layer.scale];
+    const mid = scale ? scale.stops[Math.floor(scale.stops.length / 2)] : null;
+    el.innerHTML = `
+      <input type="checkbox" ${usable ? "" : "disabled"}
+             ${state.active.has(layer.id) ? "checked" : ""}>
+      <span class="swatch" style="background:${mid
+        ? `rgba(${mid.rgba[0]},${mid.rgba[1]},${mid.rgba[2]},${mid.rgba[3] / 255})`
+        : "#333"}"></span>
+      <span>${layer.label}</span>
+      <span class="badge" data-badge="${layer.id}"></span>
+      <span class="badge why" data-why="${layer.id}">${
+        usable ? "" : (layer.unavailable || "unavailable")}</span>`;
+    el.querySelector("input")?.addEventListener("change", (e) => {
+      if (e.target.checked) state.active.add(layer.id);
+      else state.active.delete(layer.id);
+      if (e.target.checked && layer.scale) legendFor(layer.scale);
+      // A lead-time layer switched on from the whole-day view needs an hour
+      // to be drawn at. Jump to the day's peak hour rather than ticking a
+      // box that cannot show anything.
+      if (e.target.checked && state.hour === null && needsHour(layer)) {
+        const day = days.find(d => d.date === state.day);
+        const peak = day && (day.hours.find(
+          h => h.forecast_hour === day.peak_forecast_hour) || day.hours[0]);
+        if (peak) { state.view = "hour"; renderDays(); selectHour(peak.forecast_hour, peak); return; }
+      }
+      drawLayers();
+    });
+    box.appendChild(el);
+  }
+}
+
+// --- animation ----------------------------------------------------------
+const anim = {
+  frames: [], index: 0, timer: null, cache: new Map(), mode: "risk",
+  ms: 450, loaded: false,
+};
+
+function stopPlaying() {
+  if (anim.timer) { clearInterval(anim.timer); anim.timer = null; }
+  $("play").textContent = "Play";
+}
+
+async function loadAnimation(mode, day) {
+  stopPlaying();
+  anim.mode = mode;
+  anim.cache.clear();
+  anim.loaded = false;
+  const q = new URLSearchParams({ mode });
+  if (day) q.set("day", day);
+
+  let data;
+  try { data = await json("http://127.0.0.1:8000/api/animation?" + q); }
+  catch (e) { $("animNote").innerHTML =
+    '<span class="warn">' + e.message + "</span>"; return; }
+
+  anim.frames = data.frames;
+  anim.ms = data.frame_ms;
+  $("scrub").max = String(Math.max(anim.frames.length - 1, 0));
+  $("play").disabled = anim.frames.length < 2;
+
+  // A mode that cannot be drawn says why rather than playing a short loop
+  // that looks like the whole forecast.
+  const gaps = data.missing.length;
+  $("animNote").innerHTML = anim.frames.length === 0
+    ? '<span class="warn">No frames: ' +
+      (data.missing[0]?.reason || "nothing stored") + "</span>"
+    : data.is_continuous
+      ? data.frame_count + " frames · continuous"
+      : '<span class="warn">' + data.frame_count + " frames · " + gaps +
+        " lead time(s) skipped (see /api/animation)</span>";
+
+  // Warm the frames, but do NOT draw one over a whole-day map. Loading the
+  // animation used to call showFrame(0), which replaced the day the user had
+  // just selected with T+1 without anyone pressing Play.
+  if (anim.frames.length) {
+    if (state.view === "hour") showFrame(0);
+    prefetchFrames();
+  }
+}
+
+async function prefetchFrames() {
+  // Warm every frame before playing: the first pass renders server-side, and
+  // playing straight away would stutter through it at one frame per second.
+  let done = 0;
+  for (const frame of anim.frames) {
+    for (const [id, url] of Object.entries(frame.images)) {
+      const key = id + "|" + frame.forecast_hour + "|" + state.mapStyle;
+      if (anim.cache.has(key)) continue;
+      try {
+        const r = await fetch(withStyle(url, id));
+        if (r.ok) anim.cache.set(key, URL.createObjectURL(await r.blob()));
+      } catch { /* frame stays uncached; showFrame falls back to the URL */ }
+    }
+    done += 1;
+    $("frameInfo").textContent = "buffering " + done + "/" + anim.frames.length;
+  }
+  anim.loaded = true;
+  $("frameInfo").textContent = anim.frames.length + " frames ready";
+}
+
+function showFrame(i) {
+  if (!anim.frames.length) return;
+  // Drawing a frame IS switching to the hourly view; say so, so the day/hour
+  // toggle and the map cannot disagree about what is on screen. Only
+  // re-render when the view actually changes: showFrame runs once per frame
+  // during playback and rebuilding the day list every second is wasted work.
+  if (state.view !== "hour") { state.view = "hour"; renderDays(); }
+  anim.index = ((i % anim.frames.length) + anim.frames.length)
+    % anim.frames.length;
+  const frame = anim.frames[anim.index];
+  $("scrub").value = String(anim.index);
+  state.hour = frame.forecast_hour;
+
+  clearOverlays();
+  for (const [id, url] of Object.entries(frame.images)) {
+    const src = anim.cache.get(
+      id + "|" + frame.forecast_hour + "|" + state.mapStyle
+    ) || withStyle(url, id);
+    overlays[id] = L.imageOverlay(src, BOUNDS, { opacity: state.opacity })
+      .addTo(map);
+  }
+  $("stamp").textContent =
+    "T+" + frame.forecast_hour + " · " + frame.label + " · " + frame.level
+    + " · " + frame.area_percent + "% of area";
+  refreshStar();
+  refreshPolygons();
+  document.querySelectorAll(".hr").forEach(el =>
+    el.classList.toggle("sel", Number(el.dataset.hour) === frame.forecast_hour));
+}
+
+function togglePlay() {
+  if (anim.timer) { stopPlaying(); return; }
+  if (anim.frames.length < 2) return;
+  // Pressing Play is an explicit request for the hourly view.
+  if (state.view !== "hour") { state.view = "hour"; renderDays(); }
+  $("play").textContent = "Pause";
+  anim.timer = setInterval(() => showFrame(anim.index + 1), anim.ms);
+}
+
+const STYLE_NOTES = {
+  simple: "Smoothed to about 20 km, snapped to the risk bands, and areas "
+        + "smaller than roughly a county removed. Never shows risk where the "
+        + "detailed map does not.",
+  detailed: "The model's own 2 km field, every gradient included. Storm "
+          + "PLACEMENT at this resolution is not reliable — read the areas, "
+          + "not the individual cells.",
+};
+
+// --- observed lightning strikes ---------------------------------------
+//
+// Individual marks, not a gridded density: a strike is a point observation
+// with a time and a place, and averaging it into cells throws that away.
+// Every visual property is under the user's control because these get
+// composited into graphics where they have to match a house style.
+let strikeLayer = null;
+
+function strikeStyle() {
+  return {
+    radius: Number($("strikeSize").value),
+    fillColor: $("strikeFill").value,
+    color: $("strikeLine").value,
+    weight: Number($("strikeWeight").value),
+    fillOpacity: Number($("strikeAlpha").value) / 100,
+    opacity: Number($("strikeAlpha").value) / 100,
+  };
+}
+
+function restyleStrikes() {
+  if (!strikeLayer) return;
+  const style = strikeStyle();
+  strikeLayer.eachLayer(marker => marker.setStyle(style) || marker.setRadius(style.radius));
+}
+
+function clearStrikes() {
+  if (strikeLayer) { map.removeLayer(strikeLayer); strikeLayer = null; }
+}
+
+async function refreshStrikes() {
+  clearStrikes();
+  if (!state.strikes) { $("strikeNote").textContent = ""; return; }
+
+  const choice = $("strikeWindow").value;
+  const today = new Date().toISOString().slice(0, 10);
+  const query = choice === "day" ? `day=${today}` : `minutes=${choice}`;
+
+  try {
+    const data = await json(`http://127.0.0.1:8000/api/observations/strikes?${query}`);
+    const style = strikeStyle();
+    strikeLayer = L.layerGroup(
+      data.strikes.map(s =>
+        L.circleMarker([s.lat, s.lon], style)
+          .bindTooltip(`${s.time.slice(11, 19)}Z`, { direction: "top" })
+      )
+    ).addTo(map);
+
+    let note = `${data.count} strike${data.count === 1 ? "" : "s"}`;
+    // Coverage, always. "All strikes today" is a completeness claim, and an
+    // hour nobody polled holds no observation rather than zero strikes.
+    if (data.hours_missing && data.hours_missing.length) {
+      note += ` from ${data.hours_observed.length} observed hour`
+            + `${data.hours_observed.length === 1 ? "" : "s"}. `
+            + `Not recorded: ${data.hours_missing.join(", ")} — these are `
+            + `gaps in the archive, not quiet periods.`;
+    } else if (data.complete === false) {
+      note += ` · ${Math.round((data.coverage_fraction || 0) * 100)}% of the `
+            + "window was actually observed.";
+    } else {
+      note += " · the whole period was observed.";
+    }
+    $("strikeNote").textContent = note;
+  } catch (e) {
+    $("strikeNote").textContent =
+      "No strike data: " + String(e.message || e).slice(0, 110);
+  }
+}
+
+
+// --- categorical outlook areas ----------------------------------------
+//
+// Drawn as real vectors rather than another image: the categories are areas
+// with definite edges, so they stay crisp at any zoom and can be labelled.
+// The server decides which categories have a drawable area; the viewer only
+// draws what it is given, and reports what was left out.
+let polygonLayer = null;
+
+function clearPolygons() {
+  if (polygonLayer) { map.removeLayer(polygonLayer); polygonLayer = null; }
+}
+
+async function refreshPolygons() {
+  clearPolygons();
+  if (!state.polygons) { $("polyNote").textContent = ""; return; }
+
+  const query = state.view === "day" && state.day
+    ? `day=${encodeURIComponent(state.day)}`
+    : `forecast_hour=${state.hour}`;
+  if (state.view !== "day" && state.hour === null) return;
+
+  try {
+    const geo = await json(`http://127.0.0.1:8000/api/outlook/polygons?${query}`);
+    if (!geo.features.length) {
+      $("polyNote").textContent =
+        "No area reaches a drawable category for this period.";
+      return;
+    }
+    polygonLayer = L.geoJSON(geo, {
+      style: (feature) => ({
+        color: feature.properties.colour,
+        weight: 2,
+        opacity: 0.95,
+        fillColor: feature.properties.colour,
+        fillOpacity: 0.28,
+      }),
+      onEachFeature: (feature, layer) => {
+        const p = feature.properties;
+        layer.bindTooltip(
+          `${p.label} — index ${p.min_index}+`, { sticky: true }
+        );
+      },
+    }).addTo(map);
+
+    const drawn = geo.properties.categories_drawn
+      .map(c => c.replace("_", " ")).reverse().join(", ");
+    let note = `Areas drawn: ${drawn}.`;
+    // A straight edge along the model boundary is a data limit, not a
+    // forecast boundary; say so rather than letting it read as one.
+    const atEdge = geo.features
+      .filter(f => f.properties.reaches_domain_edge)
+      .map(f => f.properties.label);
+    if (atEdge.length) {
+      note += ` ${atEdge.join(", ")} reach${atEdge.length === 1 ? "es" : ""}`
+            + " the edge of the model domain — the straight boundary there is"
+            + " the limit of the data, not of the risk.";
+    }
+    // Say what was NOT drawn and why, so this cannot look like it disagrees
+    // with the peak index on the day card.
+    for (const t of geo.properties.categories_too_small_to_draw || []) {
+      note += ` ${t.label} is reached in places but its largest patch is `
+            + `${t.largest_patch_km2} km² — too small to draw as an area `
+            + `(needs ${t.needs_km2} km²).`;
+    }
+    $("polyNote").textContent = note;
+  } catch (e) {
+    $("polyNote").textContent = "Could not build the outlook areas.";
+  }
+}
+
+
+// --- the highest-risk marker ------------------------------------------
+//
+// The point comes from the SERVER, not from the rendered image: the PNG is a
+// colour ramp with no values in it, and reading a maximum back out of pixels
+// would find whichever cell happened to survive resampling. The server also
+// restricts it to UK and Ireland land, for the same reason the headline is --
+// the domain maximum is routinely a cell in the middle of the North Sea.
+let starLayer = null;
+
+// The style applies to the risk index and the per-hazard indices, which are
+// all on the same 0-100 band scale the simplifier is built around. Lightning
+// (a flash density) and CAPE (an energy) are different quantities with their
+// own units; banding them against risk levels would be a different claim
+// entirely, not a simpler view of this one.
+const STYLEABLE = (id) => id === "risk" || id.startsWith("hazard_");
+
+function withStyle(path, layerId) {
+  if (!STYLEABLE(layerId)) return path;
+  return path + (path.includes("?") ? "&" : "?") + "style=" + state.mapStyle;
+}
+
+function clearStar() {
+  if (starLayer) { map.removeLayer(starLayer); starLayer = null; }
+}
+
+async function refreshStar() {
+  clearStar();
+  if (!state.star) { $("starNote").textContent = ""; return; }
+
+  const query = state.view === "day" && state.day
+    ? `day=${encodeURIComponent(state.day)}`
+    : `forecast_hour=${state.hour}`;
+  if (state.view !== "day" && state.hour === null) return;
+
+  try {
+    const point = await json(`http://127.0.0.1:8000/api/risk/peak?${query}`);
+    if (!point.available) {
+      $("starNote").textContent = point.reason || "no peak available";
+      return;
+    }
+    starLayer = L.marker([point.lat, point.lon], {
+      icon: L.divIcon({ className: "", html: '<div class="peakstar">★</div>',
+                        iconSize: [26, 26], iconAnchor: [13, 13] }),
+      interactive: false, keyboard: false,
+    }).addTo(map);
+    $("starNote").innerHTML =
+      `Highest risk ${point.index} (${point.level.replace("_", " ")})`
+      + (point.region ? ` over ${point.region}` : "")
+      + `<br>${point.lat.toFixed(2)}°N ${point.lon.toFixed(2)}°E · ${point.scope}`;
+  } catch (e) {
+    $("starNote").textContent = "Could not locate the peak.";
+  }
+}
+
+// --- the startup screen ------------------------------------------------
+//
+// The backend rebuilds its day summaries and whole-day rasters after every
+// run and on every restart, which takes around a minute and a half. The
+// countdown is the duration of the PREVIOUS rebuild on this machine, not a
+// guess; the first ever start has nothing to measure and says so.
+//: After this long the full-screen panel becomes a corner card and the map
+//: is revealed. Long enough that a quick restart never flashes it, short
+//: enough that a slow rebuild is not mistaken for a broken site.
+const DEMOTE_AFTER_MS = 15000;
+
+async function waitUntilReady({ force = false, maxSeconds = 900 } = {}) {
+  const panel = $("boot");
+  const startedAt = Date.now();
+  let shown = false;
+  let sawBusy = false;
+  let demoted = false;
+
+  for (;;) {
+    if (!demoted && shown && Date.now() - startedAt > DEMOTE_AFTER_MS) {
+      panel.classList.add("mini");
+      map.invalidateSize();     // it was laid out behind a full-screen cover
+      demoted = true;
+    }
+    // Never trap the page. If a rebuild wedges, show the site rather than a
+    // progress bar that will never finish.
+    if ((Date.now() - startedAt) / 1000 > maxSeconds) {
+      panel.hidden = true;
+      return { ready: false, phase: "timed out" };
+    }
+    let status;
+    try {
+      status = await json("http://127.0.0.1:8000/api/readiness");
+    } catch {
+      // The server is still coming up and is not answering at all yet.
+      status = { ready: false, detail: "waiting for the server", phase: "starting" };
+    }
+
+    if (!status.ready) sawBusy = true;
+
+    // Background work never blocks a site that can already answer.
+    const banner = $("busy");
+    if (status.ready && status.busy) {
+      banner.hidden = false;
+      $("busyText").textContent =
+        (status.detail || "working") +
+        (status.remaining_seconds
+          ? ` · about ${Math.ceil(status.remaining_seconds)}s left` : "…");
+    } else {
+      banner.hidden = true;
+    }
+
+    // In force mode the server may not have picked up the request yet, so a
+    // single "ready" straight after clicking means nothing. Wait until it has
+    // actually reported itself busy, or give up on that after 15 seconds.
+    const forcing = force && !sawBusy && (Date.now() - startedAt) < 15000;
+    if (status.ready && !forcing) {
+      if (shown) panel.hidden = true;
+      // Keep watching quietly while background work finishes, so the banner
+      // clears itself without the caller having to poll again.
+      if (status.busy) watchBackgroundWork();
+      return status;
+    }
+
+    if (!shown) { panel.hidden = false; shown = true; }
+    $("bootDetail").textContent =
+      (status.detail || status.phase || "starting up")
+        .replace(/^./, c => c.toUpperCase()) + "…";
+
+    const total = status.expected_seconds;
+    const left = status.remaining_seconds;
+    const elapsed = status.elapsed_seconds || 0;
+    // A stored estimate is only worth showing while it still holds. The
+    // recorded figure was 8.7 s against a rebuild that now runs for minutes,
+    // so the bar filled in nine seconds and then sat at 100% looking wedged.
+    // Once elapsed passes the estimate, say so rather than keep counting down
+    // to a moment that has already gone.
+    const estimateBlown = total && elapsed > total;
+    if (estimateBlown) {
+      $("bootFill").style.width = "92%";
+      $("bootEta").textContent =
+        `Taking longer than the last rebuild (${Math.round(elapsed)}s so far, ` +
+        `previous run took ${Math.round(total)}s). Still working.`;
+    } else if (total && left !== null && left !== undefined) {
+      const done = Math.max(0, Math.min(1, 1 - left / total));
+      $("bootFill").style.width = (done * 100).toFixed(0) + "%";
+      $("bootEta").textContent = left > 1
+        ? `About ${Math.ceil(left)} seconds remaining`
+        : "Almost ready…";
+    } else if (status.steps_total) {
+      const done = status.steps_done / status.steps_total;
+      $("bootFill").style.width = (done * 100).toFixed(0) + "%";
+      $("bootEta").textContent =
+        `${status.steps_done} of ${status.steps_total} days rebuilt`;
+    } else {
+      // Nothing measured yet: show motion without implying a countdown we
+      // cannot honour.
+      $("bootFill").style.width = "12%";
+      $("bootEta").textContent = status.expected_seconds === null
+        ? "First run on this machine — no timing to estimate from yet"
+        : "Estimating…";
+    }
+
+    await new Promise(r => setTimeout(r, 1200));
+  }
+}
+
+
+let backgroundWatch = null;
+
+function watchBackgroundWork() {
+  if (backgroundWatch) return;
+  backgroundWatch = setInterval(async () => {
+    let status;
+    try { status = await json("http://127.0.0.1:8000/api/readiness"); } catch { return; }
+    const banner = $("busy");
+    if (status.busy && status.ready) {
+      banner.hidden = false;
+      $("busyText").textContent =
+        (status.detail || "working") +
+        (status.remaining_seconds
+          ? ` · about ${Math.ceil(status.remaining_seconds)}s left` : "…");
+      return;
+    }
+    banner.hidden = true;
+    clearInterval(backgroundWatch);
+    backgroundWatch = null;
+    // A finished cycle means everything on screen belongs to the old one.
+    if (!status.busy) reloadForecast().catch(() => {});
+  }, 4000);
+}
+
+
+// --- forcing a run -----------------------------------------------------
+async function forceRerun() {
+  const button = $("rerun");
+  button.disabled = true;
+  button.textContent = "Running…";
+  $("rerunNote").innerHTML =
+    "Fetching the latest cycle from the Met Office. This takes several "
+    + "minutes and thousands of requests.";
+  try {
+    const running = fetch("http://127.0.0.1:8000/api/schedule/run-now", { method: "POST" });
+    // Show the same progress screen as a restart: a forced run rebuilds
+    // exactly the same products, and `force` makes it appear immediately
+    // rather than waiting for the server to report itself busy.
+    waitUntilReady({ force: true });
+    const report = await (await running).json();
+    $("rerunNote").textContent =
+      Object.entries(report)
+        .filter(([k]) => !["reason", "started", "finished"].includes(k))
+        .map(([k, v]) => `${k}: ${v}`).join(" · ");
+    // Everything derived from the old cycle is now stale.
+    await reloadForecast();
+  } catch (e) {
+    $("rerunNote").textContent = "Run failed: " + String(e).slice(0, 120);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Re-run model";
+  }
+}
+
+async function reloadForecast() {
+  const dayData = await json("http://127.0.0.1:8000/api/risk-days");
+  days = dayData.days;
+  // Keep the open day if the new cycle still has it.
+  if (!days.some(d => d.date === state.day)) {
+    state.day = days.length ? days[0].date : null;
+    state.view = "day";
+    state.hour = null;
+  }
+  renderDays();
+  await refreshRunInfo();
+  loadOutlook();
+  if (state.view === "day" && state.day) {
+    dayImageUrl = null;              // the old image belongs to the old run
+    await showDayField(state.day);
+  } else {
+    await drawLayers();
+  }
+  await loadAnimation($("mode").value || anim.mode, state.day);
+}
+
+
+async function refreshRunInfo() {
+  try {
+    const [schedule, runs] = await Promise.all([
+      json("http://127.0.0.1:8000/api/schedule"), json("http://127.0.0.1:8000/api/models/ukv/runs"),
+    ]);
+    const latest = (runs.runs || runs || []).slice(-1)[0];
+    const stamp = typeof latest === "string" ? latest : latest?.run;
+    $("runLabel").textContent = stamp
+      ? "Run " + String(stamp).replace("T", " ").slice(0, 16) + "Z"
+      : "No run stored";
+    const next = (schedule.jobs || [])
+      .filter(j => j.id.startsWith("ingest-") && j.next_run)
+      .map(j => j.next_run).sort()[0];
+    $("runNext").textContent = next
+      ? "Next automatic run " + next.replace("T", " ").slice(0, 16)
+      : "Automatic runs at 03:00 and 15:00";
+  } catch { /* the run bar is informational; never block the map on it */ }
+}
+
+async function boot() {
+  await waitUntilReady();
+  busy(true, "Loading forecast…");
+  const [scaleData, layerData, dayData] = await Promise.all([
+    json("http://127.0.0.1:8000/api/scales"), json("http://127.0.0.1:8000/api/layers"), json("http://127.0.0.1:8000/api/risk-days"),
+  ]);
+  scales = Object.fromEntries(scaleData.scales.map(s => [s.name, s]));
+  LAYERS = layerData.layers;
+  days = dayData.days;
+
+  $("opacity").addEventListener("input", (e) => {
+    state.opacity = Number(e.target.value) / 100;
+    Object.values(overlays).forEach(o => o.setOpacity(state.opacity));
+  });
+
+  renderLayerList();
+  legendFor("risk");
+  fitToRegion();
+
+  const modeData = await json("http://127.0.0.1:8000/api/animation/modes");
+  const modeSelect = $("mode");
+  modeSelect.innerHTML = modeData.modes
+    .map(m => `<option value="${m.id}">${m.label}</option>`).join("");
+  modeSelect.value = modeData.default;
+  modeSelect.addEventListener("change",
+    () => loadAnimation(modeSelect.value, state.day));
+  $("play").addEventListener("click", togglePlay);
+  $("rerun").addEventListener("click", forceRerun);
+  $("mapStyle").addEventListener("click", (e) => {
+    const button = e.target.closest("button");
+    if (!button) return;
+    state.mapStyle = button.dataset.style;
+    $("mapStyle").querySelectorAll("button").forEach(b =>
+      b.classList.toggle("sel", b.dataset.style === state.mapStyle));
+    $("styleNote").textContent = STYLE_NOTES[state.mapStyle];
+    anim.cache.clear();                 // frames were rendered in the old style
+    if (state.view === "day" && state.day) {
+      dayImageUrl = null;
+      showDayField(state.day);
+    } else {
+      drawLayers();
+    }
+  });
+  $("styleNote").textContent = STYLE_NOTES[state.mapStyle];
+
+  $("outlookMode").addEventListener("click", (e) => {
+    const button = e.target.closest("button");
+    if (!button) return;
+    state.outlookStyle = button.dataset.style;
+    $("outlookMode").querySelectorAll("button").forEach(b =>
+      b.classList.toggle("sel", b.dataset.style === state.outlookStyle));
+    loadOutlook();
+  });
+  $("strikeToggle").addEventListener("click", () => {
+    state.strikes = !state.strikes;
+    const button = $("strikeToggle");
+    button.classList.toggle("on", state.strikes);
+    button.textContent = (state.strikes ? "◉" : "○") + " Show strikes";
+    refreshStrikes();
+  });
+  $("strikeWindow").addEventListener("change", refreshStrikes);
+  for (const id of ["strikeFill", "strikeLine", "strikeSize",
+                    "strikeWeight", "strikeAlpha"]) {
+    // Restyle in place rather than refetching: the strikes have not changed,
+    // only how they are drawn.
+    $(id).addEventListener("input", restyleStrikes);
+  }
+
+  $("polyToggle").addEventListener("click", () => {
+    state.polygons = !state.polygons;
+    const button = $("polyToggle");
+    button.classList.toggle("on", state.polygons);
+    button.textContent = (state.polygons ? "▨" : "▧") + " Categorical outlook";
+    refreshPolygons();
+  });
+  $("starToggle").addEventListener("click", () => {
+    state.star = !state.star;
+    const button = $("starToggle");
+    button.classList.toggle("on", state.star);
+    button.textContent = (state.star ? "★" : "☆") + " Mark highest risk";
+    refreshStar();
+  });
+  refreshRunInfo();
+  $("scrub").addEventListener("input",
+    (e) => { stopPlaying(); showFrame(Number(e.target.value)); });
+  $("auto").addEventListener("change", (e) => {
+    if (e.target.checked) { if (anim.frames.length > 1) togglePlay(); }
+    else stopPlaying();
+  });
+
+  if (days.length) {
+    state.day = days[0].date;
+    state.view = "day";
+    renderDays();
+    await showDayField(days[0].date);
+    await loadAnimation(modeSelect.value, state.day);
+  } else {
+    $("days").textContent = "No forecast data stored.";
+    busy(false);
+  }
+
+  const studioUrl = new URL("http://127.0.0.1:8000/api/export/studio", location.origin).href;
+  $("studioCopy").addEventListener("click", () => {
+    navigator.clipboard?.writeText(studioUrl);
+    $("studioCopy").textContent = "Copied";
+    setTimeout(() => { $("studioCopy").textContent = "Copy API URL"; }, 1500);
+  });
+  $("studioDownload").addEventListener("click", async () => {
+    $("studioDownload").textContent = "Building…";
+    try {
+      const r = await fetch("http://127.0.0.1:8000/api/export/studio");
+      const text = await r.text();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+      a.download = "tcm-run.json";
+      a.click();
+    } finally { $("studioDownload").textContent = "Download run"; }
+  });
+  json("http://127.0.0.1:8000/api/export/studio")
+    .then(p => {
+      $("studioInfo").innerHTML =
+        `Run ${p.run.slice(0, 16)}Z · ${p.cellCount} nodes · `
+        + `${p.gridStep}° · ${p.daysAvailable} day(s)<br>`
+        + `Feeds the Thunderstorm Graphic Studio in the MyWeather app — `
+        + `point its run loader at this URL.`;
+    })
+    .catch(e => { $("studioInfo").innerHTML =
+      '<span class="warn">Export unavailable: ' + e.message + "</span>"; });
+
+  loadOutlook();
+}
+
+// "plain" is the default. The detailed outlook is written for a reader who
+// knows what a percentile and a ranking index are; most people do not, and a
+// forecast they cannot read is not a forecast. Both come from the same
+// diagnostics, so switching cannot change what is being said.
+function loadOutlook() {
+  $("outlook").textContent = "Loading…";
+  const path = state.outlookStyle === "full" ? "http://127.0.0.1:8000/api/outlook" : "http://127.0.0.1:8000/api/outlook/plain";
+  json(path)
+    .then(o => { $("outlook").textContent = o.text; })
+    .catch(e => {
+      $("outlook").innerHTML =
+        '<span class="warn">No outlook: ' + e.message + "</span>";
+    });
+}
+
+boot().catch(e => {
+  busy(false);
+  $("days").innerHTML = '<span class="warn">Startup failed: ' + e.message + "</span>";
+});
+</script>
+
+<link rel="stylesheet" href="/tcm-v5-app/tcmv5-enhance.css">
+<script defer src="/tcm-v5-app/tcmv5-enhance.js"></script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+{
+  "name": "TCMRiskOverride",
+  "type": "object",
+  "properties": {
+    "override_key": {
+      "type": "string",
+      "description": "Unique key: {type}-{date}, e.g. thunderstorm-2026-04-30"
+    },
+    "region": {
+      "type": "string",
+      "enum": [
+        "uk",
+        "europe"
+      ],
+      "default": "uk"
+    },
+    "overall_risk": {
+      "type": "string",
+      "description": "Overridden overall risk level"
+    },
+    "min_risk": {
+      "type": "string",
+      "description": "Overridden min risk level"
+    },
+    "max_risk": {
+      "type": "string",
+      "description": "Overridden max risk level"
+    }
+  },
+  "required": [
+    "override_key"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "name": "ManualWarning",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Warning headline"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "Rain",
+        "Snow",
+        "Ice",
+        "Wind",
+        "Thunderstorms",
+        "Fog",
+        "Extreme Heat",
+        "Wild Fire",
+        "Other"
+      ],
+      "description": "Type of weather warning"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "Yellow",
+        "Amber",
+        "Red"
+      ],
+      "description": "Warning severity level"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "upcoming",
+        "past"
+      ],
+      "default": "active",
+      "description": "Current status of the warning"
+    },
+    "description": {
+      "type": "string",
+      "description": "Full warning details"
+    },
+    "areas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Areas affected by this warning"
+    },
+    "area_drawing": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Admin-drawn warning area shapes (array of {latLngs:[[lat,lng],...], color})"
+    },
+    "valid_from": {
+      "type": "string",
+      "description": "ISO datetime when warning comes into force"
+    },
+    "valid_to": {
+      "type": "string",
+      "description": "ISO datetime when warning expires"
+    },
+    "is_published": {
+      "type": "boolean",
+      "default": true,
+      "description": "Show this warning publicly"
+    }
+  },
+  "required": [
+    "title",
+    "type",
+    "severity"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

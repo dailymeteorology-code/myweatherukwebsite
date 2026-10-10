@@ -1,0 +1,28 @@
+node_modules/
+dist/
+.env
+# Live data + uploads: yours, not part of the build.
+server/data/db.json
+server/data/db.json.tmp
+server/data/db.json.corrupt-*
+server/uploads/*
+!server/uploads/.gitkeep
+# Regenerated from server/base44-functions on every boot.
+server/.functions-build/
+
+# Local backups — your data, not part of the build.
+backups/
+
+# AI lightning warnings: live strike archive, warning state, audit log (contains
+# admin email addresses) and trained models. Data, not source.
+server/data/aiw/
+# Raw GeoNames downloads — rebuild with server/data/geo/build-gazetteer.mjs.
+# (gazetteer.json itself IS committed: the server needs it to run.)
+server/data/geo/raw/
+# Generated TCM V5 products.
+server/data/tcm-v5/
+# Scratch files.
+f.txt
+p_*.txt
+.previous-home-build/
+*.log
