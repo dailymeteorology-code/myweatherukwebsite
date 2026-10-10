@@ -1219,7 +1219,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     setLoadingGraphics(true);
     try {
       const list = await base44.entities.WeatherGraphic.filter({}, '-created_date', 50);
-      setSavedGraphics(list.filter(g => g.graphic_tool_state));
+      setSavedGraphics(list.filter(g => g.graphic_tool_state && g.graphic_tool_state.tool !== 'snow'));
     } finally {
       setLoadingGraphics(false);
     }

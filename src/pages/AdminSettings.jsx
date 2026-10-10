@@ -10,7 +10,7 @@ import {
   Image, Link2, Bell, Layers, Activity, Clock,
   ChevronDown, Copy, ExternalLink, Shield, Database,
   Newspaper, History, FileImage, Plus, Trash2, Edit, Thermometer, Radio,
-  Pen, Map as MapIcon, Wind, Code
+  Pen, Map as MapIcon, Wind, Code, Snowflake
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
@@ -30,6 +30,7 @@ import TCMAdmin from '@/components/TCMAdmin';
 import AnnouncementsAdmin from '@/components/AnnouncementsAdmin';
 import UpdatesTab from '@/components/UpdatesTab';
 import StormOutlookGraphicTool from '@/components/StormOutlookGraphicTool';
+import SnowOutlookGraphicTool from '@/components/SnowOutlookGraphicTool';
 import TrafficLightGraphicTool from '@/components/TrafficLightGraphicTool';
 import TemperatureMapTool from '@/components/TemperatureMapTool';
 import SolarEclipseGraphicTool from '@/components/SolarEclipseGraphicTool';
@@ -1740,6 +1741,7 @@ function StormGraphicTab({ logoUrl }) {
   // storm doing now", which is what this studio is for.
   const SUBS = [
     { id: 'outlook',  label: 'Thunderstorm Outlook', icon: CloudLightning, color: '#facc15', desc: 'Full risk map with timeline & drawing' },
+    { id: 'snow',     label: 'Snow Outlook',         icon: Snowflake,      color: '#7dd3fc', desc: 'Snow risk map with timeline, drawing & model snowfall' },
     { id: 'temp',     label: 'Temperature Map',      icon: Thermometer,    color: '#f59e0b', desc: 'Live UK temperature surface' },
     { id: 'mapdraw',  label: 'Map Drawing',          icon: Pen,            color: '#5b6ee8', desc: 'Synoptic charts & weather-type areas' },
     { id: 'pastfut',  label: 'Past & Future',        icon: History,        color: '#22d3ee', desc: 'Climate anomalies, likelihood & scenarios' },
@@ -1760,7 +1762,7 @@ function StormGraphicTab({ logoUrl }) {
             <p style={{ margin: '0 0 4px', fontSize: 10, fontWeight: 800, letterSpacing: '0.18em', textTransform: 'uppercase', color: '#ec4899' }}>Graphic Studio</p>
             <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: C.text, letterSpacing: '-0.02em' }}>Graphic Studio</h2>
             <p style={{ margin: '6px 0 0', fontSize: 12.5, color: C.textMid, lineHeight: 1.5, maxWidth: 440 }}>
-              Professional broadcast-quality social graphics for thunderstorm outlooks and live temperature maps. Drag, draw, and export.
+              Professional broadcast-quality social graphics for thunderstorm and snow outlooks and live temperature maps. Drag, draw, and export.
             </p>
           </div>
           <div style={{ display: 'flex', gap: 10, marginLeft: 'auto', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -1812,6 +1814,7 @@ function StormGraphicTab({ logoUrl }) {
         </div>
         <div style={{ background: C.bgAlt, padding: '22px 20px' }}>
           {sub === 'outlook' && <StormOutlookGraphicTool myWeatherLogoUrl={logoUrl} />}
+          {sub === 'snow'    && <SnowOutlookGraphicTool myWeatherLogoUrl={logoUrl} />}
           {sub === 'temp'    && <TemperatureMapTool />}
           {sub === 'mapdraw' && <MapDrawingSection logoUrl={logoUrl} />}
           {/* Nested, so it keeps its own three tools but drops the hero banner
