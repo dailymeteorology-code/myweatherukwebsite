@@ -230,6 +230,119 @@ function strikeStyle(timeMs, colourMode, light, now = Date.now()) {
   };
 }
 
+/* ── One canvas for every strike dot ──────────────────────────────────
+   Each strike used to be its own Leaflet circleMarker. On a busy day that is
+   30,000+ layer objects: adding them took seconds, every mouse move ran a
+   hit-test over all of them, and every pan/zoom re-walked the whole set
+   through Leaflet's renderer. This layer keeps strikes as plain records and
+   paints them in one pass — one path per age band — on a single canvas,
+   at most once per frame and only when something changed. Clicks are
+   resolved by a nearest-dot search on click, not on every mouse move. */
+function makeStrikeDotLayer(L, getMode, getLight, onPick) {
+  const Layer = L.Layer.extend({
+    initialize() { this._pts = []; this._raf = 0; this._last = 0; },
+    onAdd(map) {
+      this._map = map;
+      const pane = map.getPane('strikeDotsPane') || map.createPane('strikeDotsPane');
+      pane.style.zIndex = 600; pane.style.pointerEvents = 'none';
+      const c = this._canvas = L.DomUtil.create('canvas', 'leaflet-zoom-hide');
+      c.style.position = 'absolute';
+      pane.appendChild(c);
+      map.on('moveend zoomend resize viewreset', this._reset, this);
+      map.on('click', this._click, this);
+      this._reset();
+    },
+    onRemove(map) {
+      map.off('moveend zoomend resize viewreset', this._reset, this);
+      map.off('click', this._click, this);
+      L.DomUtil.remove(this._canvas);
+      cancelAnimationFrame(this._raf); this._raf = 0;
+    },
+    clearLayers() { this._pts = []; this.redraw(); return this; },
+    add(strike) {
+      // Projected once, at zoom 0; a redraw is then one multiply-add per axis
+      // instead of a full latLngToContainerPoint per dot (5x+ faster).
+      const w = L.CRS.EPSG3857.latLngToPoint(L.latLng(strike.lat, strike.lon), 0);
+      this._pts.push({ x: w.x, y: w.y, t: strike.time, band: ageBand(strike.time), s: strike });
+      this.redraw();
+    },
+    count() { return this._pts.length; },
+    /** Re-band every dot; redraw only if at least one crossed a band edge. */
+    tickAges(now = Date.now()) {
+      let changed = false;
+      for (const p of this._pts) { const b = ageBand(p.t, now); if (b !== p.band) { p.band = b; changed = true; } }
+      if (changed) this.redraw();
+    },
+    _reset() {
+      if (!this._map) return;
+      const size = this._map.getSize();
+      const dpr = window.devicePixelRatio || 1;
+      const c = this._canvas;
+      L.DomUtil.setPosition(c, this._map.containerPointToLayerPoint([0, 0]));
+      c.width = size.x * dpr; c.height = size.y * dpr;
+      c.style.width = size.x + 'px'; c.style.height = size.y + 'px';
+      this._draw();
+    },
+    redraw() {
+      if (!this._map || this._raf) return;
+      // Live strikes can arrive many per second. Repaint at most ~4 times a
+      // second, and on very busy days keep painting under ~10% of the time.
+      const wait = Math.max(0, Math.max(250, (this._cost || 0) * 10) - (performance.now() - this._last));
+      const go = () => { this._raf = requestAnimationFrame(() => { this._raf = 0; this._draw(); }); };
+      if (wait) { this._raf = -1; setTimeout(() => { this._raf = 0; go(); }, wait); } else go();
+    },
+    _draw() {
+      const map = this._map; if (!map) return;
+      this._last = performance.now();
+      const c = this._canvas, ctx = c.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, c.width, c.height);
+      const W = c.width / dpr, H = c.height / dpr;
+      const mode = getMode(), light = getLight();
+      const fixed = mode && mode !== 'age' ? LIVE_STRIKE_COLOUR_OPTIONS.find((o) => o.id === mode)?.hex : null;
+      const paths = AGE_BANDS.map(() => new Path2D());
+      const used = new Array(AGE_BANDS.length).fill(false);
+      const scr = this._scr = [];
+      const centre = map.getCenter();
+      const w0 = L.CRS.EPSG3857.latLngToPoint(centre, 0);
+      const c0 = map.latLngToContainerPoint(centre);
+      const k = map.getZoomScale(map.getZoom(), 0);
+      const pts = this._pts;
+      for (let i = 0; i < pts.length; i += 1) {
+        const p = pts[i];
+        const x = (p.x - w0.x) * k + c0.x, y = (p.y - w0.y) * k + c0.y;
+        if (x < -6 || y < -6 || x > W + 6 || y > H + 6) continue;
+        const r = AGE_BANDS[p.band].r;
+        paths[p.band].moveTo(x + r, y);
+        paths[p.band].arc(x, y, r, 0, Math.PI * 2);
+        used[p.band] = true;
+        scr.push(x, y, p);
+      }
+      // Oldest first, so the newest strikes sit on top.
+      for (let b = AGE_BANDS.length - 1; b >= 0; b -= 1) {
+        if (!used[b]) continue;
+        ctx.fillStyle = fixed || AGE_BANDS[b].color;
+        ctx.fill(paths[b]);
+        if (light) { ctx.strokeStyle = 'rgba(15,23,42,0.55)'; ctx.lineWidth = 0.8; ctx.stroke(paths[b]); }
+      }
+      this._cost = performance.now() - this._last;
+    },
+    _click(e) {
+      const scr = this._scr; if (!scr || !scr.length) return;
+      const { x, y } = e.containerPoint;
+      let best = null, bd = 64; // within 8 px
+      for (let i = 0; i < scr.length; i += 3) {
+        const dx = scr[i] - x, dy = scr[i + 1] - y, d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = scr[i + 2]; }
+      }
+      if (best) onPick(best.s, e);
+    },
+  });
+  const layer = new Layer();
+  return layer;
+}
+
 /* Storm tracking helpers moved to components/tcm/stormTracker */
 import { nearestCity, nearestCityShort } from '@/components/tcm/stormTracker';
 /* ── AI lightning warnings (server-side engine; see server/aiw) ──
@@ -968,7 +1081,11 @@ useEffect(() => {
 
     metOfficeLayer.current  = L.layerGroup(); // not added until toggled on
     worldLayer.current      = L.layerGroup();
-    allDayLayer.current     = L.layerGroup().addTo(map);
+    allDayLayer.current     = makeStrikeDotLayer(L,
+      () => liveStrikeColourRef.current || 'age',
+      () => lightModeRef.current,
+      (strike) => L.popup({ className: 'blitz-popup', maxWidth: 240 }).setLatLng([strike.lat, strike.lon]).setContent(strikePopupHtml(strike)).openOn(map),
+    ).addTo(map);
     flashLayer.current      = L.layerGroup().addTo(map);
     timeTravelLayerRef.current = L.layerGroup().addTo(map);
     boxSelectLayerRef.current  = L.layerGroup().addTo(map);
@@ -1065,34 +1182,16 @@ useEffect(() => {
     if (!inBounds(strike.lat, strike.lon, currentView)) return;
     const eightDaysAgo = Date.now() - 8 * 86400_000;
     if (strike.time < eightDaysAgo) return;
-    const st = strikeStyle(strike.time, liveStrikeColourRef.current || 'age', lightModeRef.current);
-    const dot = L.circleMarker([strike.lat, strike.lon], {
-      ...st,
-      fillOpacity: 1,
-      interactive: true,
-      pane: 'markerPane',
-    }).addTo(allDayLayer.current);
-    dot._band = ageBand(strike.time);
-    dot.on('click', () => dot.bindPopup(strikePopupHtml(strike), { className: 'blitz-popup', maxWidth: 240 }).openPopup());
-    dot._strikeTime = strike.time;
-    markerPoolRef.current.push(dot);
+    allDayLayer.current.add(strike);
   }, []);
 
   const paintStrikes = useCallback((strikes, L) => {
     if (!L || !allDayLayer.current) return;
     const valid = strikes.filter(s => s && s.lat != null && s.lon != null);
     if (!valid.length) return;
-    // Batch into chunks of 500 painted per animation frame so the main thread
-    // is never blocked for more than ~4ms — handles 28,000+ strikes smoothly.
-    const BATCH = 500;
-    let i = 0;
-    function paintBatch() {
-      if (!allDayLayer.current) return; // map may have unmounted
-      const end = Math.min(i + BATCH, valid.length);
-      for (; i < end; i++) paintStrikeOnMap(L, valid[i]);
-      if (i < valid.length) requestAnimationFrame(paintBatch);
-    }
-    requestAnimationFrame(paintBatch);
+    // Adding a strike to the dot layer is just a push; the layer paints the
+    // whole set once on the next frame, so there is nothing to chunk.
+    for (let i = 0; i < valid.length; i++) paintStrikeOnMap(L, valid[i]);
   }, [paintStrikeOnMap]);
 
 
@@ -1415,17 +1514,7 @@ useEffect(() => {
   // Restyle every marker when the colour preference or the theme changes.
   useEffect(() => {
     if (!window.L || !allDayLayer.current) return;
-    const now = Date.now();
-    allDayLayer.current.eachLayer(dot => {
-      try {
-        const t = dot._strikeTime;
-        if (!t) return;
-        const st = strikeStyle(t, liveStrikeColour, lightMode, now);
-        dot.setStyle({ fillColor: st.fillColor, color: st.color, weight: st.weight });
-        dot.setRadius(st.radius);
-        dot._band = ageBand(t, now);
-      } catch (_) {}
-    });
+    allDayLayer.current.redraw?.();
   }, [liveStrikeColour, lightMode]); // eslint-disable-line
 
   useEffect(() => {
@@ -1492,22 +1581,7 @@ useEffect(() => {
     const tick = () => {
       if (document.visibilityState !== 'visible') return;
       const now = Date.now();
-      const mode = liveStrikeColourRef.current || 'age';
-      const light = lightModeRef.current;
-      const pool = markerPoolRef.current;
-      for (let i = 0; i < pool.length; i += 1) {
-        const dot = pool[i];
-        const t = dot._strikeTime;
-        if (!t) continue;
-        const band = ageBand(t, now);
-        if (band === dot._band) continue;
-        dot._band = band;
-        try {
-          const st = strikeStyle(t, mode, light, now);
-          dot.setStyle({ fillColor: st.fillColor, color: st.color, weight: st.weight });
-          dot.setRadius(st.radius);
-        } catch (_) {}
-      }
+      allDayLayer.current?.tickAges?.(now);
       const today = new Date().toDateString();
       if (today !== heatDayRef.current) {
         heatDayRef.current = today;
@@ -1543,14 +1617,15 @@ useEffect(() => {
     setUkCount(todayStrikesRef.current.filter(s => inBounds(s.lat, s.lon, 'uk')).length);
     setEuCount(todayStrikesRef.current.filter(s => inBounds(s.lat, s.lon, 'europe')).length);
     setWorldCount(todayStrikesRef.current.length);
-    if (L) paintStrikes(existing, L);
+    // One full paint below (painting `existing` first and then everything
+    // again 300 ms later drew the whole day twice).
     // Deferred full repaint — allDayLayer may not be fully attached on first tick
     setTimeout(() => {
       if (!allDayLayer.current || !window.L) return;
       allDayLayer.current.clearLayers();
       markerPoolRef.current = [];
       paintStrikes(todayStrikesRef.current, window.L);
-    }, 300);
+    }, 0);
     setTimeout(rebuildStrikeHeatmap, 800);
     setTimeout(rebuildStrikeHeatmap, 3000);
   }
@@ -1658,8 +1733,12 @@ useEffect(() => {
       if (!saveTimerRef.current) {
         saveTimerRef.current = setTimeout(() => {
           saveTimerRef.current = null;
-          if (dirtyRef.current) { saveTodayStrikes(todayStrikesRef.current); dirtyRef.current = false; }
-        }, 1000);
+          /* Serialising the whole day (30k+ strikes) is tens of ms; doing it
+             every second was a visible hitch each second. Save every 15 s,
+             in idle time — the server holds the real record anyway. */
+          const save = () => { if (dirtyRef.current) { saveTodayStrikes(todayStrikesRef.current); dirtyRef.current = false; } };
+          (window.requestIdleCallback || ((f) => setTimeout(f, 0)))(save, { timeout: 5000 });
+        }, 15000);
       }
       newestLoadedTsRef.current = todayStrikesRef.current[todayStrikesRef.current.length - 1]?.time || 0;
       setTodayCount(todayStrikesRef.current.length);
@@ -2096,8 +2175,10 @@ useEffect(() => {
     if (!saveTimerRef.current) {
       saveTimerRef.current = setTimeout(() => {
         saveTimerRef.current = null;
-        if (dirtyRef.current) { saveTodayStrikes(todayStrikesRef.current); dirtyRef.current = false; }
-      }, 1000);
+        // Every 15 s in idle time, not every second (see commit() above).
+        const save = () => { if (dirtyRef.current) { saveTodayStrikes(todayStrikesRef.current); dirtyRef.current = false; } };
+        (window.requestIdleCallback || ((f) => setTimeout(f, 0)))(save, { timeout: 5000 });
+      }, 15000);
     }
     renderFlash(strike.lat, strike.lon);
 
