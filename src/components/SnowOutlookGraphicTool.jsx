@@ -26,6 +26,7 @@ import { RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConf
 import { buildOutlookLayers, buildHiResOutlookLayers } from '@/lib/tcmOutlookLayers';
 import { loadLatestTCMFromDB } from '@/lib/tcmForecastCache';
 import TimelinePill from '@/components/tcm/StormOutlookTimelinePill';
+import { SnowBackgroundPicker, snowBackground, readSnowBgId } from '@/lib/snowBackgrounds';
 
 // --- Conditional Severe -----------------------------------------------------
 // A risk tier that sits BETWEEN High and Severe. Like Severe it flags the
@@ -705,20 +706,7 @@ function UKOutlineMap({ region = null }) {
 }
 
 // --- Real thunderstorm photo background ---
-const STORM_BG_URL = (() => {
-  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  const flakes = Array.from({ length: 260 }, () => {
-    const x = (rnd() * 640).toFixed(1); const y = (rnd() * 760).toFixed(1); const r = (0.6 + rnd() * 2.2).toFixed(2); const o = (0.25 + rnd() * 0.6).toFixed(2);
-    return `<circle cx='${x}' cy='${y}' r='${r}' fill='white' opacity='${o}'/>`;
-  }).join('');
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='640' height='760' viewBox='0 0 640 760'>
-    <defs><linearGradient id='s' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#0b1f3d'/><stop offset='0.55' stop-color='#1d3b63'/><stop offset='1' stop-color='#cfdcec'/></linearGradient>
-    <radialGradient id='g' cx='0.7' cy='0.15' r='0.6'><stop offset='0' stop-color='#9cc4ff' stop-opacity='0.35'/><stop offset='1' stop-color='#9cc4ff' stop-opacity='0'/></radialGradient></defs>
-    <rect width='640' height='760' fill='url(#s)'/><rect width='640' height='760' fill='url(#g)'/>
-    <path d='M0 600 L90 520 L150 560 L240 470 L330 545 L410 480 L500 560 L570 505 L640 550 L640 760 L0 760 Z' fill='#e8eef7' opacity='0.85'/>
-    <path d='M0 650 L120 590 L210 630 L320 575 L430 640 L540 595 L640 630 L640 760 L0 760 Z' fill='#f6f9fd'/>${flakes}</svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-})();
+// Photo backgrounds live in lib/snowBackgrounds.
 
 // --- City markers (selectable layer, drawn ABOVE the risk colours) ---
 const CITY_MARKERS = [
@@ -1103,6 +1091,7 @@ const btnCss = {
 
 // --- Main component ---
 export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
+  const [bgId, setBgId] = useState(readSnowBgId);
   const [siteLogoUrl, setSiteLogoUrl] = useState(myWeatherLogoUrl || null);
   useEffect(() => {
     if (!myWeatherLogoUrl) {
@@ -1403,7 +1392,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     const blob = new Blob(chunks, { type: 'video/webm' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `snow-outlook-${validDate}.webm`; a.click();
+    a.href = url; a.download = `snow-chance-${validDate}.webm`; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     setIsRecording(false); setExportMode(false); setIsExporting(false); setPlayhead(null);
     if (wasAnimating) setIsAnimating(true);
@@ -1835,7 +1824,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
 
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.download = `snow-outlook-${validDate}.jpg`;
+      link.download = `snow-chance-${validDate}.jpg`;
       link.href = url;
       link.click();
       // Give the download a moment to take the URL before it is released.
@@ -1920,7 +1909,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     return Math.round((out - today) / 86400000);
   }, [validDate]);
   const isExtended = leadDays >= 3;
-  const outlookTitle = isExtended ? 'Extended Snow Outlook' : 'Snow Outlook';
+  const outlookTitle = isExtended ? 'Extended Snow Chance' : 'Snow Chance';
 
   // --- Forecast / Update label ---------------------------------------------
   const forecastLabel = forecastType === 'update'
@@ -2388,6 +2377,8 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 <span style={{ fontSize: 10.5, color: '#64748b' }}>End at/earlier than start = next day</span>
               </div>
             </div>
+
+            <SnowBackgroundPicker value={bgId} onChange={setBgId} labelStyle={labelCss} />
 
             {/* Outlook region zoom */}
             <div>
@@ -2890,10 +2881,10 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
             </>
           ) : (
             <>
-              <img src={STORM_BG_URL} alt="" crossOrigin="anonymous" style={{
+              <img src={snowBackground(bgId).url} alt="" crossOrigin="anonymous" style={{
                 position: 'absolute', inset: 0, width: '100%', height: '100%',
                 objectFit: 'cover', pointerEvents: 'none',
-                filter: 'blur(1.4px) brightness(0.58)',
+                filter: 'blur(0.8px) brightness(0.62)',
               }} />
               <div style={{
                 position: 'absolute', inset: 0, pointerEvents: 'none',
@@ -2957,7 +2948,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                   }}>{isRadar
                     ? <><Radar style={{ width: 28, height: 28, color: '#7dd3fc' }} strokeWidth={2.2} /> Radar</>
                     : showLightning ? 'Outlook Lightning Verification'
-                    : <>{isExtended ? 'Extended ' : ''}<Snowflake style={{ width: 28, height: 28, color: '#ffffff' }} strokeWidth={2.4} /> Snow Outlook</>}</span>
+                    : <>{isExtended ? 'Extended ' : ''}<Snowflake style={{ width: 28, height: 28, color: '#ffffff' }} strokeWidth={2.4} /> Snow Chance</>}</span>
 
                   {/* Outlook: forecast-type + extended badges under the title */}
                   {!isRadar && (
@@ -3499,6 +3490,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                   letterSpacing: '0.04em', lineHeight: 1.45, textAlign: 'right',
                 }}>{footerText}</span>
               )}
+              {!isRadar && snowBackground(bgId).credit && <span style={{ fontSize: 6.5, color: 'rgba(203,213,225,0.55)' }}>{snowBackground(bgId).credit}</span>}
               {!isRadar && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 8, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase',

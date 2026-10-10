@@ -10,7 +10,7 @@ import {
   Image, Link2, Bell, Layers, Activity, Clock,
   ChevronDown, Copy, ExternalLink, Shield, Database,
   Newspaper, History, FileImage, Plus, Trash2, Edit, Thermometer, Radio,
-  Pen, Map as MapIcon, Wind, Code, Snowflake
+  Pen, Map as MapIcon, Wind, Code, Snowflake, CloudSnow
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
@@ -31,6 +31,7 @@ import AnnouncementsAdmin from '@/components/AnnouncementsAdmin';
 import UpdatesTab from '@/components/UpdatesTab';
 import StormOutlookGraphicTool from '@/components/StormOutlookGraphicTool';
 import SnowOutlookGraphicTool from '@/components/SnowOutlookGraphicTool';
+import SnowMapGraphicTool from '@/components/SnowMapGraphicTool';
 import TrafficLightGraphicTool from '@/components/TrafficLightGraphicTool';
 import TemperatureMapTool from '@/components/TemperatureMapTool';
 import SolarEclipseGraphicTool from '@/components/SolarEclipseGraphicTool';
@@ -1741,7 +1742,9 @@ function StormGraphicTab({ logoUrl }) {
   // storm doing now", which is what this studio is for.
   const SUBS = [
     { id: 'outlook',  label: 'Thunderstorm Outlook', icon: CloudLightning, color: '#facc15', desc: 'Full risk map with timeline & drawing' },
-    { id: 'snow',     label: 'Snow Outlook',         icon: Snowflake,      color: '#7dd3fc', desc: 'Snow risk map with timeline, drawing & model snowfall' },
+    { id: 'snow',     label: 'Snow Chance',          icon: Snowflake,      color: '#7dd3fc', desc: 'Snow chance map with timeline, drawing & model snowfall' },
+    { id: 'snowacc',  label: 'Snow Accumulation',    icon: Layers,         color: '#93c5fd', desc: 'Model-consensus snow totals in cm' },
+    { id: 'snowrisk', label: 'Snow Risk',            icon: CloudSnow,      color: '#a78bfa', desc: 'Falling, settling and snow-and-rain areas with possible extent' },
     { id: 'temp',     label: 'Temperature Map',      icon: Thermometer,    color: '#f59e0b', desc: 'Live UK temperature surface' },
     { id: 'mapdraw',  label: 'Map Drawing',          icon: Pen,            color: '#5b6ee8', desc: 'Synoptic charts & weather-type areas' },
     { id: 'pastfut',  label: 'Past & Future',        icon: History,        color: '#22d3ee', desc: 'Climate anomalies, likelihood & scenarios' },
@@ -1815,6 +1818,8 @@ function StormGraphicTab({ logoUrl }) {
         <div style={{ background: C.bgAlt, padding: '22px 20px' }}>
           {sub === 'outlook' && <StormOutlookGraphicTool myWeatherLogoUrl={logoUrl} />}
           {sub === 'snow'    && <SnowOutlookGraphicTool myWeatherLogoUrl={logoUrl} />}
+          {sub === 'snowacc' && <SnowMapGraphicTool key="acc" mode="accumulation" myWeatherLogoUrl={logoUrl} />}
+          {sub === 'snowrisk' && <SnowMapGraphicTool key="risk" mode="risk" myWeatherLogoUrl={logoUrl} />}
           {sub === 'temp'    && <TemperatureMapTool />}
           {sub === 'mapdraw' && <MapDrawingSection logoUrl={logoUrl} />}
           {/* Nested, so it keeps its own three tools but drops the hero banner
