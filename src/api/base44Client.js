@@ -305,7 +305,17 @@ const auth = {
       err.status = 401;
       throw err;
     }
-    const user = await request('/auth/me');
+    let user;
+    try {
+      user = await request('/auth/me');
+    } catch (err) {
+      // A saved session that the server no longer recognises (expired or
+      // revoked): drop it and try the owner auto-login once before giving up.
+      if (err?.status !== 401) throw err;
+      writeToken(null);
+      if (!(await tryAutoLogin())) throw err;
+      user = await request('/auth/me');
+    }
     if (!user) {
       const err = new Error('Not authenticated');
       err.status = 401;
