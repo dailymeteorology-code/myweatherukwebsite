@@ -8,6 +8,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, Loader2, RefreshCw } from 'lucide-react';
+import { getJson, LIVE_FALLBACK } from './scenarioApi';
 
 const W = 2400; const H = 1960;
 const PANEL_W = 746; const PANEL_X = (i) => 40 + i * (PANEL_W + 40);
@@ -230,7 +231,7 @@ export default function LiveScenarios() {
 
   const load = () => {
     setErr(null);
-    fetch('/api/scenarios/live').then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error || 'Unavailable'); setData(j); }).catch((e) => setErr(e.message));
+    getJson('/api/scenarios/live', `${LIVE_FALLBACK}?t=${Math.floor(Date.now() / 600000)}`).then(setData).catch(() => setErr('The week-ahead scenarios are not available yet — they are rebuilt every day at 06:00 UK time.'));
   };
   useEffect(load, []);
 
@@ -238,7 +239,7 @@ export default function LiveScenarios() {
     if (!data || !canvas.current) return;
     let live = true;
     (async () => {
-      const [uk, ctxGeo] = await Promise.all([fetch('/api/scenarios/regions.geo.json').then((r) => r.json()), fetch('/api/scenarios/context.geo.json').then((r) => r.json())]);
+      const [uk, ctxGeo] = await Promise.all([getJson('/api/scenarios/regions.geo.json', '/static-data/regions.geo.json'), getJson('/api/scenarios/context.geo.json', '/static-data/context.geo.json')]);
       const logo = await new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = '/logo.png'; });
       try { await Promise.all([document.fonts.load(`900 40px Archivo`), document.fonts.load(`700 20px "DM Sans"`)]); } catch { /* fallback fonts */ }
       if (!live) return;

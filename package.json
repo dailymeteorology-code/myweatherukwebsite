@@ -1,7 +1,7 @@
 {
   "name": "myweatheruk-selfhost",
   "private": true,
-  "version": "2.0.0",
+  "version": "5.0.0",
   "type": "module",
   "description": "The full MyWeatherUK site, self-hosted. No Base44 runtime dependency.",
   "scripts": {
@@ -19,7 +19,9 @@
     "test": "node --test server/**/*.test.js",
     "scenarios:check-links": "node server/scenarios/check-links.mjs",
     "scenarios:build-climate": "node server/scenarios/build/build-climate.mjs",
-    "scenarios:build-regions": "node server/scenarios/build/build-regions.mjs"
+    "scenarios:build-regions": "node server/scenarios/build/build-regions.mjs",
+    "export:public": "node server/export-public.mjs",
+    "prebuild": "node server/export-public.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",

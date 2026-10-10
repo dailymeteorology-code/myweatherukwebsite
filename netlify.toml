@@ -1,0 +1,31 @@
+# Netlify build for the GitHub repository.
+# There is no Node server on Netlify: /api requests get a fast 404 and the
+# app falls back to the static snapshot in public/static-data (written by
+# `npm run export:public`) and, for the live forecast, to the daily
+# GitHub `live-data` copy. Every other path serves the single-page app.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/static-data/*"
+  [headers.values]
+    Cache-Control = "public, max-age=300"
+
+[[headers]]
+  for = "/uploads/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800"

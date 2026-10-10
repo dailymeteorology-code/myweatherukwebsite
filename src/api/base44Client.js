@@ -147,13 +147,46 @@ function ensureEventStream() {
   }
 }
 
+/* ── static fallback (Netlify) ────────────────────────────────────────────
+ * The GitHub → Netlify build has no server. When the API is unreachable (or
+ * answers with the SPA's HTML instead of JSON), read the public snapshot that
+ * `npm run export:public` writes to /static-data/<Entity>.json, and apply the
+ * same filter / sort / limit here. Entities without a snapshot return [].
+ */
+const staticCache = new Map();
+async function staticRows(name) {
+  if (!staticCache.has(name)) {
+    staticCache.set(name, fetch(`/static-data/${name}.json`)
+      .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('json') ? r.json() : []))
+      .catch(() => []));
+  }
+  return staticCache.get(name);
+}
+function applyQuery(rows, { query, sort, limit }) {
+  let out = Array.isArray(rows) ? rows.slice() : [];
+  if (query) out = out.filter((r) => Object.entries(query).every(([k, v]) => r[k] === v));
+  if (sort) {
+    const desc = sort.startsWith('-'); const key = desc ? sort.slice(1) : sort;
+    out.sort((a, b) => (a[key] > b[key] ? 1 : a[key] < b[key] ? -1 : 0) * (desc ? -1 : 1));
+  }
+  return limit != null ? out.slice(0, limit) : out;
+}
+async function readWithFallback(name, opts) {
+  try {
+    return await request(`/entities/${name}${buildQuery(opts)}`);
+  } catch (err) {
+    if (err?.status && err.status !== 404 && err.status < 500) throw err; // real auth/validation errors
+    return applyQuery(await staticRows(name), opts);
+  }
+}
+
 function makeEntity(name) {
   return {
     async list(sort, limit) {
-      return request(`/entities/${name}${buildQuery({ sort, limit })}`);
+      return readWithFallback(name, { sort, limit });
     },
     async filter(query, sort, limit) {
-      return request(`/entities/${name}${buildQuery({ query, sort, limit })}`);
+      return readWithFallback(name, { query, sort, limit });
     },
     async get(id) {
       return request(`/entities/${name}/${encodeURIComponent(id)}`);

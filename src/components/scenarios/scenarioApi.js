@@ -10,13 +10,26 @@ function authHeaders() {
   try { const t = localStorage.getItem(TOKEN_KEY); return t ? { Authorization: `Bearer ${t}` } : {}; } catch { return {}; }
 }
 
+/** Try the server API; with no server (the Netlify build) fall back to the
+    static copies written by `npm run export:public`. */
+async function json(url) {
+  const r = await fetch(url);
+  const text = r.ok ? await r.text() : '';
+  // Netlify answers unknown /api paths with the site's HTML; GitHub raw sends JSON as text/plain.
+  if (!r.ok || text.trimStart().startsWith('<')) { const e = new Error(`${url} unavailable (${r.status})`); e.status = r.status; throw e; }
+  return JSON.parse(text);
+}
+export async function getJson(apiPath, staticPath) {
+  try { return await json(apiPath); } catch (e) { if (!staticPath) throw e; return json(staticPath); }
+}
+/** Live week-ahead scenarios: local server, else GitHub's daily copy. */
+export const LIVE_FALLBACK = 'https://raw.githubusercontent.com/dailymeteorology-code/myweatherukwebsite/live-data/live-scenarios.json';
+
+let staticItems = null;
 let catalogPromise = null;
 export function loadCatalogue(force = false) {
   if (!catalogPromise || force) {
-    catalogPromise = fetch('/api/scenarios/catalogue').then((r) => {
-      if (!r.ok) throw new Error(`Catalogue unavailable (${r.status})`);
-      return r.json();
-    }).then((c) => {
+    catalogPromise = getJson('/api/scenarios/catalogue', '/static-data/scenarios-catalogue.json').then((c) => {
       c.byId = new Map(c.scenarios.map((s) => [s.id, s]));
       c.eventById = new Map(c.events.map((e) => [e.id, e]));
       c.sourceById = new Map(c.sources.map((s) => [s.id, s]));
@@ -41,9 +54,11 @@ export function useCatalogue() {
 const itemCache = new Map();
 export function loadItem(id) {
   if (!itemCache.has(id)) {
-    itemCache.set(id, fetch(`/api/scenarios/item/${encodeURIComponent(id)}`).then((r) => {
-      if (!r.ok) throw new Error(r.status === 404 ? 'Scenario not found' : `Could not load scenario (${r.status})`);
-      return r.json();
+    itemCache.set(id, json(`/api/scenarios/item/${encodeURIComponent(id)}`).catch(async () => {
+      staticItems = staticItems || json('/static-data/scenarios-items.json');
+      const rec = (await staticItems)[id];
+      if (!rec) throw new Error('Scenario not found');
+      return rec;
     }).catch((e) => { itemCache.delete(id); throw e; }));
   }
   return itemCache.get(id);
@@ -63,7 +78,7 @@ export function useItem(id) {
 
 let geoPromise = null;
 export function loadRegionsGeo() {
-  if (!geoPromise) geoPromise = fetch('/api/scenarios/regions.geo.json').then((r) => r.json()).catch((e) => { geoPromise = null; throw e; });
+  if (!geoPromise) geoPromise = getJson('/api/scenarios/regions.geo.json', '/static-data/regions.geo.json').catch((e) => { geoPromise = null; throw e; });
   return geoPromise;
 }
 
