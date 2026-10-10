@@ -73,12 +73,12 @@ function writeToken(token) {
 async function request(path, options = {}) {
   const token = readToken();
   const res = await fetch(`${API}${path}`, {
+    ...options,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
-    ...options,
   });
   if (!res.ok) {
     let detail = '';
@@ -259,9 +259,14 @@ function tryAutoLogin() {
   if (autoLoginDisabled()) return Promise.resolve(null);
   if (autoLoginInFlight) return autoLoginInFlight;
 
-  autoLoginInFlight = request('/auth/auto-login', { method: 'POST' })
+  // The server only auto-logs-in the owner: a request straight from the
+  // owner's PC, or a browser holding the device key that PC was given.
+  let deviceKey = null;
+  try { deviceKey = localStorage.getItem('mwuk_device_key'); } catch { /* storage off */ }
+  autoLoginInFlight = request('/auth/auto-login', { method: 'POST', headers: deviceKey ? { 'X-Device-Key': deviceKey } : {} })
     .then((result) => {
       if (!result?.access_token) return null;
+      if (result.device_key) { try { localStorage.setItem('mwuk_device_key', result.device_key); } catch { /* storage off */ } }
       writeToken(result.access_token);
       return result.access_token;
     })

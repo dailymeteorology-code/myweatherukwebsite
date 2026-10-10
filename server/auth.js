@@ -12,6 +12,7 @@
  * outside this process ever validates them.
  */
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import express from 'express';
 import db from './db.js';
 import { publicUser } from './base44Server.js';
@@ -32,11 +33,48 @@ const MIN_PASSWORD = 8;
  * downstream — entity writes, the admin-only edge functions — sees an ordinary
  * signed-in user.
  *
- * Set AUTO_LOGIN=false in .env to require a password again. Do that before
- * exposing this server beyond localhost: with it on, anyone who can reach the
- * port is an admin.
+ * Only the owner is auto-logged-in (see isDirectLocalRequest / device keys
+ * below): requests straight from this PC, or a browser this PC trusted.
+ * Visitors, tunnels and proxies are refused. Set AUTO_LOGIN=false in .env to
+ * turn it off entirely.
  */
 const AUTO_LOGIN = process.env.AUTO_LOGIN !== 'false';
+
+/* ── who counts as "the owner" for auto-login ──────────────────────────────
+ * 1. A request made directly on this PC: the TCP peer is loopback, the Host
+ *    header is localhost, and there are NO proxy/tunnel headers. Tunnels and
+ *    reverse proxies (Cloudflare, ngrok, nginx…) connect from loopback too,
+ *    but they add forwarding headers and a public Host, so they fail this.
+ * 2. A browser presenting a device key that this server issued to a browser
+ *    on this PC. Only a SHA-256 hash of each key is stored, in
+ *    server/data/trusted-devices.json (git-ignored), so the file itself can't
+ *    be used to log in. Delete that file to revoke every device.
+ */
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const PROXY_HEADERS = ['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'x-real-ip', 'cf-connecting-ip', 'true-client-ip', 'x-client-ip', 'fly-client-ip'];
+export function isDirectLocalRequest(req) {
+  if (!LOOPBACK.has(req.socket?.remoteAddress)) return false;
+  if (PROXY_HEADERS.some((h) => req.headers[h])) return false;
+  const host = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+}
+const DEVICES_FILE = new URL('./data/trusted-devices.json', import.meta.url);
+const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+function readDevices() {
+  try { return JSON.parse(fs.readFileSync(DEVICES_FILE, 'utf8')); } catch { return []; }
+}
+function deviceKeyValid(key) {
+  if (!key || typeof key !== 'string' || key.length < 40) return false;
+  const h = Buffer.from(sha(key), 'hex');
+  return readDevices().some((d) => { const b = Buffer.from(d.hash, 'hex'); return b.length === h.length && crypto.timingSafeEqual(b, h); });
+}
+function issueDeviceKey() {
+  const key = crypto.randomBytes(32).toString('base64url');
+  const list = readDevices();
+  list.push({ hash: sha(key), issued: new Date().toISOString() });
+  fs.writeFileSync(DEVICES_FILE, JSON.stringify(list.slice(-20), null, 1));
+  return key;
+}
 
 /* ── password hashing ───────────────────────────────────────────────────── */
 
@@ -149,12 +187,22 @@ export function authRouter() {
     if (!AUTO_LOGIN) {
       return res.status(403).json({ error: 'Automatic login is disabled' });
     }
+    // Only the owner: a request straight from this PC, or a browser holding a
+    // device key that was issued to the owner. Everyone else gets nothing.
+    const fromThisPc = isDirectLocalRequest(req);
+    const trusted = fromThisPc || deviceKeyValid(req.get('x-device-key'));
+    if (!trusted) {
+      return res.status(403).json({ error: 'Automatic login is only available to the site owner' });
+    }
     const email = (process.env.ADMIN_EMAIL || 'admin@localhost').toLowerCase();
     const user = db.findUserByEmail(email);
     if (!user) return res.status(404).json({ error: 'No admin account' });
 
     const token = db.createSession(user.id, SESSION_TTL_MS);
-    res.json({ access_token: token, user: publicUser(user) });
+    // A browser on this PC gets its own device key, so it stays trusted even
+    // if the site is later opened through a public address.
+    const device_key = fromThisPc && !deviceKeyValid(req.get('x-device-key')) ? issueDeviceKey() : undefined;
+    res.json({ access_token: token, user: publicUser(user), ...(device_key ? { device_key } : {}) });
   });
 
   router.post('/register', async (req, res) => {

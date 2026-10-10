@@ -30,3 +30,5 @@ p_*.txt
 server/data/scenarios-local/
 # Local Claude Code launch config.
 .claude/
+# Trusted-device key hashes for owner auto-login.
+server/data/trusted-devices.json
