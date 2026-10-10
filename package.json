@@ -16,7 +16,10 @@
     "backup": "node server/backup.js",
     "backup:list": "node server/backup.js list",
     "backup:restore": "node server/backup.js restore",
-    "test": "node --test server/**/*.test.js"
+    "test": "node --test server/**/*.test.js",
+    "scenarios:check-links": "node server/scenarios/check-links.mjs",
+    "scenarios:build-climate": "node server/scenarios/build/build-climate.mjs",
+    "scenarios:build-regions": "node server/scenarios/build/build-regions.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",

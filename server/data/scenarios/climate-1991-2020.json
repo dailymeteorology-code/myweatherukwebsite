@@ -1,0 +1,1880 @@
+{
+ "period": "1991–2020",
+ "source": "Met Office HadUK-Grid areal series (National Climate Information Centre), Open Government Licence v3.0",
+ "sourceUrl": "https://www.metoffice.gov.uk/research/climate/maps-and-data/uk-and-regional-series",
+ "method": "Arithmetic mean of each calendar month over 1991–2020 inclusive; a value is published only if all 30 years are present.",
+ "builtAt": "2026-10-10T14:02:17.523Z",
+ "variables": {
+  "Tmean": {
+   "label": "Mean temperature",
+   "unit": "°C",
+   "dp": 1
+  },
+  "Tmax": {
+   "label": "Mean daily maximum",
+   "unit": "°C",
+   "dp": 1
+  },
+  "Tmin": {
+   "label": "Mean daily minimum",
+   "unit": "°C",
+   "dp": 1
+  },
+  "Rainfall": {
+   "label": "Rainfall",
+   "unit": "mm",
+   "dp": 0
+  },
+  "Raindays1mm": {
+   "label": "Days with ≥1 mm rain",
+   "unit": "days",
+   "dp": 1
+  },
+  "Sunshine": {
+   "label": "Sunshine",
+   "unit": "hours",
+   "dp": 0
+  },
+  "AirFrost": {
+   "label": "Days of air frost",
+   "unit": "days",
+   "dp": 1
+  }
+ },
+ "series": {
+  "UK": {
+   "name": "United Kingdom",
+   "vars": {
+    "Tmean": {
+     "months": [
+      3.9,
+      4.1,
+      5.7,
+      7.9,
+      10.6,
+      13.3,
+      15.3,
+      15.1,
+      12.9,
+      9.7,
+      6.5,
+      4.2
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/UK.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmax": {
+     "months": [
+      6.7,
+      7.2,
+      9.2,
+      12,
+      15.1,
+      17.7,
+      19.6,
+      19.3,
+      16.9,
+      13.1,
+      9.4,
+      7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/UK.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmin": {
+     "months": [
+      1.2,
+      1.1,
+      2.2,
+      3.8,
+      6.3,
+      9.1,
+      11,
+      11,
+      9,
+      6.4,
+      3.6,
+      1.4
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/UK.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Rainfall": {
+     "months": [
+      121,
+      96,
+      85,
+      72,
+      71,
+      77,
+      82,
+      94,
+      91,
+      123,
+      123,
+      127
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/UK.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Raindays1mm": {
+     "months": [
+      15.4,
+      13.2,
+      12.7,
+      11.6,
+      11.2,
+      11.5,
+      12.3,
+      12.9,
+      12.1,
+      14.8,
+      15.8,
+      15.6
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/UK.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Sunshine": {
+     "months": [
+      47,
+      72,
+      109,
+      155,
+      192,
+      171,
+      173,
+      162,
+      128,
+      92,
+      58,
+      43
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/UK.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "AirFrost": {
+     "months": [
+      11.3,
+      10.7,
+      7.8,
+      4,
+      1.2,
+      0.1,
+      0,
+      0,
+      0.1,
+      1.6,
+      5.5,
+      10.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/UK.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  },
+  "England": {
+   "name": "England",
+   "vars": {
+    "Tmean": {
+     "months": [
+      4.4,
+      4.6,
+      6.4,
+      8.7,
+      11.6,
+      14.4,
+      16.5,
+      16.3,
+      13.9,
+      10.6,
+      7.1,
+      4.7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/England.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmax": {
+     "months": [
+      7.2,
+      7.8,
+      10.1,
+      13,
+      16.2,
+      19,
+      21.2,
+      20.9,
+      18.1,
+      14.1,
+      10.2,
+      7.6
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/England.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmin": {
+     "months": [
+      1.6,
+      1.5,
+      2.7,
+      4.3,
+      7,
+      9.8,
+      11.8,
+      11.8,
+      9.7,
+      7.1,
+      4.1,
+      1.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/England.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Rainfall": {
+     "months": [
+      83,
+      66,
+      58,
+      56,
+      57,
+      65,
+      66,
+      75,
+      68,
+      90,
+      92,
+      92
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/England.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Raindays1mm": {
+     "months": [
+      13.2,
+      11.1,
+      10.3,
+      10,
+      9.6,
+      10,
+      10.3,
+      10.9,
+      10.1,
+      12.6,
+      13.7,
+      13.5
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/England.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Sunshine": {
+     "months": [
+      55,
+      78,
+      117,
+      164,
+      199,
+      188,
+      196,
+      181,
+      141,
+      103,
+      65,
+      51
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/England.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "AirFrost": {
+     "months": [
+      10.1,
+      9.6,
+      6.3,
+      3.1,
+      0.6,
+      0,
+      0,
+      0,
+      0,
+      1.1,
+      4.5,
+      9.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/England.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  },
+  "Wales": {
+   "name": "Wales",
+   "vars": {
+    "Tmean": {
+     "months": [
+      4.4,
+      4.5,
+      5.9,
+      8.1,
+      10.9,
+      13.5,
+      15.3,
+      15.1,
+      13.1,
+      10.1,
+      7,
+      4.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/Wales.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmax": {
+     "months": [
+      7.1,
+      7.4,
+      9.3,
+      12.2,
+      15.2,
+      17.7,
+      19.4,
+      19,
+      16.9,
+      13.3,
+      9.9,
+      7.6
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/Wales.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmin": {
+     "months": [
+      1.7,
+      1.6,
+      2.6,
+      4.1,
+      6.6,
+      9.3,
+      11.3,
+      11.2,
+      9.3,
+      6.9,
+      4.2,
+      2.2
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/Wales.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Rainfall": {
+     "months": [
+      155,
+      120,
+      103,
+      88,
+      87,
+      92,
+      99,
+      112,
+      112,
+      158,
+      162,
+      176
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Raindays1mm": {
+     "months": [
+      17.1,
+      14.1,
+      13.7,
+      12.5,
+      12,
+      11.8,
+      12.8,
+      13.8,
+      13,
+      16.3,
+      17.9,
+      17.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/Wales.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Sunshine": {
+     "months": [
+      47,
+      69,
+      110,
+      158,
+      191,
+      178,
+      177,
+      160,
+      129,
+      91,
+      55,
+      41
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/Wales.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "AirFrost": {
+     "months": [
+      10,
+      9.3,
+      6.7,
+      3.4,
+      0.8,
+      0,
+      0,
+      0,
+      0,
+      1.3,
+      4.2,
+      9.1
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/Wales.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  },
+  "Scotland": {
+   "name": "Scotland",
+   "vars": {
+    "Tmean": {
+     "months": [
+      2.9,
+      3.1,
+      4.4,
+      6.5,
+      9.1,
+      11.6,
+      13.4,
+      13.2,
+      11.3,
+      8.2,
+      5.2,
+      3.1
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/Scotland.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmax": {
+     "months": [
+      5.5,
+      5.9,
+      7.6,
+      10.3,
+      13.4,
+      15.6,
+      17.3,
+      17,
+      14.8,
+      11.3,
+      8,
+      5.8
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/Scotland.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmin": {
+     "months": [
+      0.3,
+      0.3,
+      1.2,
+      2.8,
+      5,
+      7.9,
+      9.7,
+      9.6,
+      7.9,
+      5.1,
+      2.5,
+      0.4
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/Scotland.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Rainfall": {
+     "months": [
+      178,
+      141,
+      124,
+      93,
+      89,
+      93,
+      104,
+      120,
+      123,
+      168,
+      165,
+      174
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/Scotland.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Raindays1mm": {
+     "months": [
+      18.5,
+      16.1,
+      15.9,
+      13.7,
+      13.4,
+      13.7,
+      14.9,
+      15.5,
+      14.9,
+      18,
+      18.5,
+      18.2
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/Scotland.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Sunshine": {
+     "months": [
+      35,
+      63,
+      97,
+      142,
+      182,
+      146,
+      140,
+      135,
+      107,
+      75,
+      48,
+      30
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/Scotland.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "AirFrost": {
+     "months": [
+      14.1,
+      13.3,
+      11,
+      6,
+      2.5,
+      0.2,
+      0,
+      0,
+      0.3,
+      2.7,
+      7.8,
+      13.7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/Scotland.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  },
+  "Northern_Ireland": {
+   "name": "Northern Ireland",
+   "vars": {
+    "Tmean": {
+     "months": [
+      4.5,
+      4.7,
+      6,
+      7.9,
+      10.5,
+      13,
+      14.7,
+      14.5,
+      12.6,
+      9.6,
+      6.7,
+      4.7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/Northern_Ireland.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmax": {
+     "months": [
+      7.2,
+      7.8,
+      9.5,
+      12,
+      14.8,
+      17.2,
+      18.6,
+      18.3,
+      16.3,
+      12.9,
+      9.6,
+      7.5
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/Northern_Ireland.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmin": {
+     "months": [
+      1.7,
+      1.6,
+      2.4,
+      3.9,
+      6.2,
+      8.9,
+      10.8,
+      10.7,
+      8.9,
+      6.3,
+      3.8,
+      1.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/Northern_Ireland.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Rainfall": {
+     "months": [
+      115,
+      92,
+      87,
+      74,
+      74,
+      81,
+      89,
+      99,
+      87,
+      114,
+      122,
+      121
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/Northern_Ireland.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Raindays1mm": {
+     "months": [
+      17.2,
+      14.8,
+      14.8,
+      13.2,
+      13.3,
+      13.1,
+      15.1,
+      15.4,
+      14,
+      15.8,
+      17.5,
+      17.2
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/Northern_Ireland.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Sunshine": {
+     "months": [
+      43,
+      67,
+      101,
+      148,
+      183,
+      150,
+      136,
+      136,
+      113,
+      85,
+      54,
+      38
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/Northern_Ireland.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "AirFrost": {
+     "months": [
+      9,
+      8.9,
+      6.6,
+      2.9,
+      0.6,
+      0,
+      0,
+      0,
+      0.1,
+      1,
+      3.9,
+      8.2
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/Northern_Ireland.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  },
+  "England_SE_and_Central_S": {
+   "name": "England SE & central S",
+   "vars": {
+    "Tmean": {
+     "months": [
+      4.9,
+      5,
+      7,
+      9.3,
+      12.3,
+      15.2,
+      17.3,
+      17.2,
+      14.7,
+      11.4,
+      7.7,
+      5.3
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/England_SE_and_Central_S.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmax": {
+     "months": [
+      7.8,
+      8.3,
+      10.9,
+      13.9,
+      17.1,
+      20,
+      22.3,
+      22,
+      19.2,
+      15.1,
+      11,
+      8.3
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/England_SE_and_Central_S.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmin": {
+     "months": [
+      1.9,
+      1.8,
+      3.1,
+      4.7,
+      7.5,
+      10.3,
+      12.4,
+      12.4,
+      10.2,
+      7.6,
+      4.5,
+      2.3
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/England_SE_and_Central_S.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Rainfall": {
+     "months": [
+      84,
+      61,
+      52,
+      53,
+      52,
+      54,
+      54,
+      63,
+      61,
+      90,
+      94,
+      89
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/England_SE_and_Central_S.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Raindays1mm": {
+     "months": [
+      12.7,
+      10.5,
+      9.4,
+      9.4,
+      8.9,
+      8.5,
+      8.5,
+      9.3,
+      8.9,
+      12,
+      12.9,
+      12.7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/England_SE_and_Central_S.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Sunshine": {
+     "months": [
+      60,
+      80,
+      124,
+      177,
+      210,
+      209,
+      219,
+      201,
+      155,
+      113,
+      70,
+      54
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/England_SE_and_Central_S.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "AirFrost": {
+     "months": [
+      9.7,
+      9.2,
+      5.7,
+      2.8,
+      0.3,
+      0,
+      0,
+      0,
+      0,
+      1.1,
+      4.5,
+      9.7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/England_SE_and_Central_S.txt",
+     "updated": "01-Oct-2026 11:55"
+    }
+   }
+  },
+  "England_SW_and_S_Wales": {
+   "name": "England SW & S Wales",
+   "vars": {
+    "Tmean": {
+     "months": [
+      5,
+      5.1,
+      6.6,
+      8.6,
+      11.4,
+      14.1,
+      15.9,
+      15.8,
+      13.8,
+      10.8,
+      7.7,
+      5.5
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/England_SW_and_S_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmax": {
+     "months": [
+      7.8,
+      8.1,
+      10.1,
+      12.8,
+      15.8,
+      18.4,
+      20.1,
+      19.8,
+      17.7,
+      14.1,
+      10.7,
+      8.3
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/England_SW_and_S_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmin": {
+     "months": [
+      2.3,
+      2.1,
+      3.2,
+      4.6,
+      7.1,
+      9.9,
+      11.8,
+      11.8,
+      9.9,
+      7.5,
+      4.8,
+      2.8
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/England_SW_and_S_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Rainfall": {
+     "months": [
+      138,
+      104,
+      90,
+      78,
+      75,
+      79,
+      84,
+      98,
+      92,
+      140,
+      146,
+      152
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/England_SW_and_S_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Raindays1mm": {
+     "months": [
+      16.3,
+      13.4,
+      12.7,
+      11.6,
+      11,
+      10.7,
+      11.4,
+      12.6,
+      11.8,
+      15.5,
+      16.9,
+      16.7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/England_SW_and_S_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Sunshine": {
+     "months": [
+      54,
+      76,
+      117,
+      168,
+      200,
+      193,
+      193,
+      175,
+      142,
+      100,
+      64,
+      48
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/England_SW_and_S_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "AirFrost": {
+     "months": [
+      8.6,
+      8,
+      5.2,
+      2.6,
+      0.4,
+      0,
+      0,
+      0,
+      0,
+      1,
+      3.4,
+      7.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/England_SW_and_S_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    }
+   }
+  },
+  "East_Anglia": {
+   "name": "East Anglia",
+   "vars": {
+    "Tmean": {
+     "months": [
+      4.5,
+      4.8,
+      6.8,
+      9.2,
+      12.2,
+      15.1,
+      17.5,
+      17.4,
+      14.8,
+      11.3,
+      7.4,
+      4.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/East_Anglia.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmax": {
+     "months": [
+      7.4,
+      8.1,
+      10.7,
+      13.8,
+      17.1,
+      20.1,
+      22.6,
+      22.4,
+      19.3,
+      15,
+      10.6,
+      7.8
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/East_Anglia.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmin": {
+     "months": [
+      1.7,
+      1.6,
+      2.9,
+      4.5,
+      7.4,
+      10.2,
+      12.4,
+      12.4,
+      10.2,
+      7.6,
+      4.3,
+      2
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/East_Anglia.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Rainfall": {
+     "months": [
+      53,
+      43,
+      39,
+      40,
+      47,
+      53,
+      53,
+      60,
+      52,
+      65,
+      63,
+      58
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/East_Anglia.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Raindays1mm": {
+     "months": [
+      11.1,
+      9.8,
+      8.6,
+      8.7,
+      8.1,
+      9.1,
+      9.1,
+      9.3,
+      8.6,
+      10.6,
+      11.5,
+      11.4
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/East_Anglia.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Sunshine": {
+     "months": [
+      59,
+      80,
+      119,
+      171,
+      204,
+      196,
+      207,
+      195,
+      150,
+      111,
+      69,
+      55
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/East_Anglia.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "AirFrost": {
+     "months": [
+      9.5,
+      9.4,
+      5.7,
+      2.7,
+      0.4,
+      0,
+      0,
+      0,
+      0,
+      0.9,
+      4,
+      9.6
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/East_Anglia.txt",
+     "updated": "01-Oct-2026 11:55"
+    }
+   }
+  },
+  "Midlands": {
+   "name": "Midlands",
+   "vars": {
+    "Tmean": {
+     "months": [
+      4.2,
+      4.5,
+      6.3,
+      8.6,
+      11.5,
+      14.4,
+      16.5,
+      16.2,
+      13.8,
+      10.4,
+      6.9,
+      4.5
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/Midlands.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmax": {
+     "months": [
+      7,
+      7.7,
+      10.1,
+      13.1,
+      16.3,
+      19.1,
+      21.3,
+      20.9,
+      18.1,
+      13.9,
+      9.9,
+      7.3
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/Midlands.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmin": {
+     "months": [
+      1.3,
+      1.3,
+      2.5,
+      4.1,
+      6.8,
+      9.7,
+      11.6,
+      11.6,
+      9.5,
+      6.8,
+      3.8,
+      1.6
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/Midlands.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Rainfall": {
+     "months": [
+      73,
+      59,
+      54,
+      55,
+      58,
+      65,
+      65,
+      71,
+      65,
+      82,
+      81,
+      82
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/Midlands.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Raindays1mm": {
+     "months": [
+      12.7,
+      10.8,
+      10.2,
+      10.2,
+      9.9,
+      10,
+      10.3,
+      10.8,
+      10,
+      12,
+      13.2,
+      13.1
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/Midlands.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Sunshine": {
+     "months": [
+      53,
+      76,
+      114,
+      156,
+      192,
+      180,
+      192,
+      175,
+      136,
+      100,
+      62,
+      50
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/Midlands.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "AirFrost": {
+     "months": [
+      10.8,
+      10.1,
+      6.7,
+      3.2,
+      0.5,
+      0,
+      0,
+      0,
+      0,
+      1.3,
+      4.9,
+      10.4
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/Midlands.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  },
+  "England_E_and_NE": {
+   "name": "England E & NE",
+   "vars": {
+    "Tmean": {
+     "months": [
+      3.7,
+      4.1,
+      5.8,
+      7.9,
+      10.7,
+      13.5,
+      15.7,
+      15.5,
+      13.2,
+      9.9,
+      6.4,
+      3.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/England_E_and_NE.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmax": {
+     "months": [
+      6.5,
+      7.2,
+      9.4,
+      12.2,
+      15.2,
+      18,
+      20.3,
+      20,
+      17.3,
+      13.3,
+      9.4,
+      6.8
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/England_E_and_NE.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmin": {
+     "months": [
+      1,
+      1,
+      2.1,
+      3.7,
+      6.3,
+      9.1,
+      11.1,
+      11.1,
+      9.1,
+      6.5,
+      3.4,
+      1.1
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/England_E_and_NE.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Rainfall": {
+     "months": [
+      69,
+      59,
+      52,
+      54,
+      52,
+      68,
+      67,
+      73,
+      64,
+      77,
+      81,
+      77
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/England_E_and_NE.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Raindays1mm": {
+     "months": [
+      12.6,
+      10.9,
+      10,
+      9.7,
+      9.6,
+      10.5,
+      10.8,
+      11.1,
+      9.9,
+      12.4,
+      13.3,
+      12.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/England_E_and_NE.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Sunshine": {
+     "months": [
+      56,
+      81,
+      117,
+      157,
+      197,
+      174,
+      186,
+      173,
+      135,
+      99,
+      65,
+      53
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/England_E_and_NE.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "AirFrost": {
+     "months": [
+      11.5,
+      10.6,
+      7.5,
+      3.7,
+      0.9,
+      0,
+      0,
+      0,
+      0,
+      1.3,
+      5.3,
+      11.1
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/England_E_and_NE.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  },
+  "England_NW_and_N_Wales": {
+   "name": "England NW & N Wales",
+   "vars": {
+    "Tmean": {
+     "months": [
+      4.1,
+      4.2,
+      5.7,
+      8,
+      10.8,
+      13.4,
+      15.2,
+      15,
+      12.9,
+      9.8,
+      6.7,
+      4.4
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/England_NW_and_N_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmax": {
+     "months": [
+      6.6,
+      7.1,
+      9.1,
+      12,
+      15.1,
+      17.5,
+      19.2,
+      18.8,
+      16.5,
+      13,
+      9.5,
+      7.1
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/England_NW_and_N_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Tmin": {
+     "months": [
+      1.4,
+      1.4,
+      2.4,
+      4,
+      6.6,
+      9.3,
+      11.3,
+      11.3,
+      9.3,
+      6.7,
+      3.9,
+      1.7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/England_NW_and_N_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Rainfall": {
+     "months": [
+      133,
+      110,
+      94,
+      77,
+      79,
+      89,
+      98,
+      110,
+      110,
+      140,
+      142,
+      155
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/England_NW_and_N_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Raindays1mm": {
+     "months": [
+      16.3,
+      13.5,
+      13.2,
+      12.1,
+      11.7,
+      12.1,
+      13.3,
+      14.2,
+      13.2,
+      15.9,
+      17.3,
+      17.2
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/England_NW_and_N_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "Sunshine": {
+     "months": [
+      45,
+      69,
+      107,
+      154,
+      191,
+      173,
+      173,
+      156,
+      124,
+      88,
+      54,
+      40
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/England_NW_and_N_Wales.txt",
+     "updated": "01-Oct-2026 11:55"
+    },
+    "AirFrost": {
+     "months": [
+      10.4,
+      9.8,
+      7.1,
+      3.5,
+      0.8,
+      0,
+      0,
+      0,
+      0,
+      1.4,
+      4.7,
+      9.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/England_NW_and_N_Wales.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  },
+  "Scotland_N": {
+   "name": "Scotland N",
+   "vars": {
+    "Tmean": {
+     "months": [
+      2.9,
+      2.9,
+      4.1,
+      6.2,
+      8.6,
+      11.1,
+      12.9,
+      12.8,
+      10.9,
+      7.9,
+      5,
+      2.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/Scotland_N.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmax": {
+     "months": [
+      5.5,
+      5.7,
+      7.2,
+      9.8,
+      12.8,
+      14.8,
+      16.5,
+      16.2,
+      14.2,
+      10.8,
+      7.7,
+      5.7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/Scotland_N.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmin": {
+     "months": [
+      0.3,
+      0.1,
+      1.1,
+      2.7,
+      4.7,
+      7.6,
+      9.5,
+      9.4,
+      7.7,
+      5,
+      2.4,
+      0.3
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/Scotland_N.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Rainfall": {
+     "months": [
+      201,
+      160,
+      141,
+      102,
+      96,
+      93,
+      101,
+      122,
+      137,
+      180,
+      177,
+      192
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/Scotland_N.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Raindays1mm": {
+     "months": [
+      20.2,
+      18.1,
+      18,
+      15.3,
+      14.6,
+      14.4,
+      15.6,
+      16.4,
+      16.3,
+      19.6,
+      20,
+      20.1
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/Scotland_N.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Sunshine": {
+     "months": [
+      28,
+      57,
+      92,
+      136,
+      177,
+      137,
+      126,
+      122,
+      99,
+      68,
+      39,
+      23
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/Scotland_N.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "AirFrost": {
+     "months": [
+      14.1,
+      13.7,
+      11.3,
+      6.5,
+      3,
+      0.3,
+      0,
+      0,
+      0.4,
+      2.8,
+      7.9,
+      14.1
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/Scotland_N.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  },
+  "Scotland_E": {
+   "name": "Scotland E",
+   "vars": {
+    "Tmean": {
+     "months": [
+      2.4,
+      2.8,
+      4.2,
+      6.4,
+      9,
+      11.7,
+      13.6,
+      13.3,
+      11.3,
+      8,
+      4.8,
+      2.5
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/Scotland_E.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmax": {
+     "months": [
+      5.2,
+      5.7,
+      7.7,
+      10.4,
+      13.5,
+      16,
+      17.9,
+      17.4,
+      15,
+      11.3,
+      7.8,
+      5.4
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/Scotland_E.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmin": {
+     "months": [
+      -0.3,
+      -0.2,
+      0.8,
+      2.4,
+      4.7,
+      7.7,
+      9.5,
+      9.4,
+      7.6,
+      4.7,
+      1.9,
+      -0.3
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/Scotland_E.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Rainfall": {
+     "months": [
+      125,
+      97,
+      87,
+      73,
+      72,
+      82,
+      90,
+      97,
+      89,
+      130,
+      125,
+      122
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/Scotland_E.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Raindays1mm": {
+     "months": [
+      15.5,
+      13.2,
+      13.1,
+      11.6,
+      12,
+      12.8,
+      13.5,
+      13.4,
+      12.3,
+      15.5,
+      16,
+      15.2
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/Scotland_E.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Sunshine": {
+     "months": [
+      43,
+      71,
+      106,
+      144,
+      183,
+      150,
+      152,
+      144,
+      114,
+      82,
+      57,
+      36
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/Scotland_E.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "AirFrost": {
+     "months": [
+      16.4,
+      14.9,
+      12.3,
+      6.8,
+      2.8,
+      0.2,
+      0,
+      0,
+      0.4,
+      3.2,
+      9.3,
+      15.7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/Scotland_E.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  },
+  "Scotland_W": {
+   "name": "Scotland W",
+   "vars": {
+    "Tmean": {
+     "months": [
+      3.5,
+      3.7,
+      4.9,
+      7.1,
+      9.8,
+      12.3,
+      13.9,
+      13.7,
+      11.8,
+      8.8,
+      5.9,
+      3.7
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmean/date/Scotland_W.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmax": {
+     "months": [
+      6.1,
+      6.5,
+      8.2,
+      10.9,
+      14.1,
+      16.3,
+      17.8,
+      17.5,
+      15.3,
+      11.9,
+      8.6,
+      6.5
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmax/date/Scotland_W.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Tmin": {
+     "months": [
+      1,
+      0.9,
+      1.8,
+      3.3,
+      5.6,
+      8.5,
+      10.2,
+      10.2,
+      8.4,
+      5.8,
+      3.2,
+      1.1
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Tmin/date/Scotland_W.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Rainfall": {
+     "months": [
+      205,
+      163,
+      143,
+      103,
+      99,
+      105,
+      122,
+      142,
+      142,
+      194,
+      194,
+      206
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Rainfall/date/Scotland_W.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Raindays1mm": {
+     "months": [
+      19.4,
+      16.5,
+      16.1,
+      13.9,
+      13.3,
+      13.8,
+      15.6,
+      16.5,
+      15.6,
+      18.4,
+      19.1,
+      18.9
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Raindays1mm/date/Scotland_W.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "Sunshine": {
+     "months": [
+      36,
+      64,
+      95,
+      147,
+      188,
+      154,
+      148,
+      141,
+      109,
+      77,
+      50,
+      32
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/Sunshine/date/Scotland_W.txt",
+     "updated": "01-Oct-2026 11:54"
+    },
+    "AirFrost": {
+     "months": [
+      11.7,
+      11,
+      9.1,
+      4.6,
+      1.5,
+      0.1,
+      0,
+      0,
+      0.2,
+      2.1,
+      6.1,
+      11.2
+     ],
+     "url": "https://www.metoffice.gov.uk/pub/data/weather/uk/climate/datasets/AirFrost/date/Scotland_W.txt",
+     "updated": "01-Oct-2026 11:54"
+    }
+   }
+  }
+ }
+}

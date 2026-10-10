@@ -48,7 +48,7 @@ const GROUPS = [
       { label: 'Lightning', path: '/Lightning', icon: CloudLightning, blurb: 'Live strikes across the UK and Europe' },
       { label: 'TCM Outlooks', path: '/TCMOutlooks', icon: Zap, blurb: 'Thunderstorm risk areas by day' },
       { label: 'Weather Patterns', path: '/WeatherPatterns', icon: Layers, blurb: 'Longer-range pattern outlook' },
-      { label: 'Weather Scenarios', path: '/WeatherScenarios', icon: Radar, blurb: 'Alternative model storylines' },
+      { label: 'Weather Scenarios', path: '/WeatherScenarios', icon: Radar, blurb: 'Every season of UK weather' },
     ],
   },
   {

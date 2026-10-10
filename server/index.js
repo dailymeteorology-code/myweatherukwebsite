@@ -33,6 +33,7 @@ import worldWarnings, { worldWarningDetail } from './worldWarnings.js';
 import radarPhase from './radarPhase.js';
 import { mountTcmV5 } from './tcmV5.js';
 import { startAiw } from './aiw/index.js';
+import { mountScenarios } from './scenarios/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(here, '..');
@@ -456,6 +457,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 /* AI lightning warnings: ingestion, nowcast engine and its /api/aiw routes.
    Registered before the SPA fallback below so the routes are reachable. */
 startAiw(app);
+mountScenarios(app);
 
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y' }));
 
