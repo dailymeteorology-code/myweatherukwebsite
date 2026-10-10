@@ -3,7 +3,7 @@
 `/WeatherScenarios` — *Explore every season of UK weather.* A searchable,
 filterable reference to the weather the UK can produce, month by month and
 region by region. It is about **climatology and possibility, not forecasts**;
-the original live-model dashboard is kept as the *Live model scenarios* tab.
+the *Live model scenarios* tab shows a week-ahead ensemble forecast.
 
 ## What is on the page
 
@@ -18,7 +18,7 @@ the original live-model dashboard is kept as the *Live model scenarios* tab.
 | `seasons` | Four overviews composed from their months |
 | `history` | Verified events, filterable by year, month, category, region |
 | `about` | Methodology, frequency definitions, QC checklist, diagrams, all references |
-| `live` | The original TCM ensemble dashboard (a forecast view) |
+| `live` | Week-ahead scenarios from 100 ECMWF, GFS and UKMO ensemble members, downloadable as a JPG (a forecast view) |
 | `admin` | Editors only (role `admin`) |
 
 Any view can open a scenario with `&s=<id>`; every scenario therefore has a shareable link.
@@ -114,4 +114,35 @@ month), never forecast probabilities. Definitions are shown on the page.
 - 85 of the 203 scenarios have no linked historical example yet; none are invented.
 - Regional relevance is a classification with reasons, not a statistical climatology.
 - No verified UK supercell or strong-tornado climatology is cited, so those records give no frequency figure.
-- The *Live model scenarios* tab shows "No model data available" when the TCM ensemble cache is empty, as before.
+
+## Live model scenarios (week ahead)
+
+The *Live model scenarios* tab shows three scenarios for the next seven days,
+one from each deterministic global model: **ECMWF IFS, NOAA GFS and the Met
+Office global model (UKMO 10 km)**, from the Open-Meteo forecast API in a
+single request (225 grid points, 48–62°N, 14°W–7°E).
+
+- **Variables (daily):** max and min temperature, precipitation total, max
+  10 m wind speed (mph), dominant wind direction, and mean sea-level pressure
+  (for isobars, highs/lows and the flow over the UK).
+- **Likelihood** (`server/scenarios/live/ensemble.mjs`): each model's 7-day
+  mean pressure pattern is compared with the other two (RMS difference over
+  the grid; agreement falls to zero at 8 hPa). Weight = 1 + its agreement with
+  each other model, normalised and rounded to 100. The model the others back
+  most is *Most likely*. This is a consensus measure, not a calibrated
+  probability, and the graphic says so.
+- **Each scenario shows:** pressure map with isobars and H/L, 7-day rain
+  shading, headline and summary built from the numbers, average highs/lows
+  with anomaly against UK 1991–2020, UK-average rain, peak wind, a 7-day
+  strip, and agreement with the other two models. The UKMO run is a day
+  shorter, so its last day can show *no data*.
+- **Graphic** (`src/components/scenarios/LiveScenarios.jsx`): 2400×1960
+  canvas with the real logo; *Download JPG* saves exactly that image.
+- **Schedule — works with the PC off:** `.github/workflows/live-scenarios.yml`
+  runs on GitHub at 06:00 UK time daily (two UTC crons; only the one that is
+  06:00 UK time builds) and force-pushes `live-scenarios.json` to the
+  `live-data` branch. Run it by hand from the Actions tab (*Run workflow*).
+- **Self-hosted server** (`server/scenarios/live/index.js`): reads the GitHub
+  copy on start-up and every 30 minutes, builds itself at 06:00 if running,
+  and on start-up if nothing is newer than 24 h. Newest wins.
+  `GET /api/scenarios/live`. Manual build: `node server/scenarios/live/run.mjs`.

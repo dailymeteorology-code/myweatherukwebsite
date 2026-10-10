@@ -72,6 +72,7 @@ export function mountScenarios(app) {
     res.json(rec);
   });
   r.get('/regions.geo.json', (req, res) => sendGzipJson(req, res, geoPayload(), 86400));
+  r.get('/context.geo.json', (req, res) => { res.setHeader('Cache-Control', 'public, max-age=86400'); res.sendFile(path.resolve(here, '../data/scenarios/context.geo.json')); });
   r.get('/tables', (req, res) => {
     const c = catalogue();
     res.json({ version: c.version, ...c.tables, events: c.events.length, sources: c.sources.length });

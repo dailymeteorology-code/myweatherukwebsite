@@ -1,0 +1,58 @@
+# Builds the week-ahead UK weather scenarios (ECMWF, GFS and UKMO ensembles)
+# every day at 06:00 UK time on GitHub's servers, so it runs even when the
+# self-hosted PC is off, and publishes live-scenarios.json to the
+# `live-data` branch. The site reads it from there.
+name: Live weather scenarios
+
+on:
+  schedule:
+    # 05:00 and 06:00 UTC; only the one that is 06:00 UK time (BST or GMT) builds.
+    - cron: '0 5 * * *'
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: live-scenarios
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Only run at 06:00 UK time
+        id: gate
+        run: |
+          # GitHub can start scheduled jobs late, so decide by WHICH schedule
+          # fired: 05:00 UTC is 06:00 during BST (+0100), 06:00 UTC during GMT.
+          OFF=$(TZ=Europe/London date +%z)
+          S="${{ github.event.schedule }}"
+          GO=0
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then GO=1; fi
+          if [ "$S" = "0 5 * * *" ] && [ "$OFF" = "+0100" ]; then GO=1; fi
+          if [ "$S" = "0 6 * * *" ] && [ "$OFF" = "+0000" ]; then GO=1; fi
+          echo "schedule='$S' uk-offset=$OFF go=$GO"
+          echo "go=$GO" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == '1'
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.go == '1'
+        with:
+          node-version: '22'
+      - name: Build scenarios
+        if: steps.gate.outputs.go == '1'
+        run: node server/scenarios/live/run.mjs --out /tmp/live/live-scenarios.json
+      - name: Publish to live-data branch
+        if: steps.gate.outputs.go == '1'
+        run: |
+          cd /tmp/live
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b live-data
+          git add live-scenarios.json
+          git commit -q -m "Live scenarios $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" live-data

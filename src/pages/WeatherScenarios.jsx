@@ -26,7 +26,7 @@ import Library, { EMPTY_FILTERS } from '@/components/scenarios/Library';
 import { MatrixView, RegionView, CompareView, SeasonsView, HistoryView, AboutView } from '@/components/scenarios/Views';
 import ScenarioDetail from '@/components/scenarios/ScenarioDetail';
 
-const LiveEnsemble = lazy(() => import('@/components/scenarios/LiveEnsemble'));
+const LiveScenarios = lazy(() => import('@/components/scenarios/LiveScenarios'));
 const ScenarioAdmin = lazy(() => import('@/components/scenarios/ScenarioAdmin'));
 
 const TABS = [
@@ -99,8 +99,8 @@ export default function WeatherScenarios() {
         {data && view === 'about' && (<><SectionHead icon={BookOpen} title="Methods, definitions and sources" /><AboutView data={data} /></>)}
         {view === 'live' && (
           <>
-            <SectionHead icon={Activity} title="Live model scenarios" sub="This is a FORECAST view: TCM multi-model ensemble output for the next 96 hours — unlike the rest of this page, which describes climatology and history." />
-            <Suspense fallback={<p className="muted">Loading live model data…</p>}><LiveEnsemble /></Suspense>
+            <SectionHead icon={Activity} title="Live model scenarios" sub="A FORECAST view, unlike the rest of this page: the next seven days as three scenarios, one each from the ECMWF, GFS and Met Office (UKMO) global models, ranked by how well each agrees with the others. Rebuilt every day at 06:00 UK time." />
+            <Suspense fallback={<p className="muted">Loading live model data…</p>}><LiveScenarios /></Suspense>
           </>
         )}
         {data && view === 'admin' && isAdmin && (
