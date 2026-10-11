@@ -172,6 +172,88 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
 }
 
+const FONT = 'Inter, system-ui, sans-serif';
+const seeded = (seed) => () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+const darken = (c, k) => { const [r, g, b] = hex(c); return `rgb(${Math.round(r * k)},${Math.round(g * k)},${Math.round(b * k)})`; };
+
+/** The next seven dates, for when the model data hasn't loaded (e.g. the daily quota is used up). */
+function fallbackDays() {
+  return Array.from({ length: 7 }, (_, i) => new Date(Date.now() + i * 86400000).toLocaleDateString('en-CA', { timeZone: 'Europe/London' }));
+}
+
+// --- Drawn-area smoothing, same recipe as the outlook drawing tools ---------
+// Distance-decimate the pointer jitter, three closed Chaikin passes to round
+// every corner, then a closed Catmull-Rom spline through what is left.
+function smoothRing(pts) {
+  if (pts.length < 4) return pts;
+  const dec = [pts[0]];
+  for (const p of pts) { const q = dec[dec.length - 1]; if (Math.hypot(p[0] - q[0], p[1] - q[1]) >= 10) dec.push(p); }
+  if (dec.length < 4) return dec;
+  let ring = dec;
+  for (let it = 0; it < 3; it++) {
+    const n = ring.length, next = [];
+    for (let i = 0; i < n; i++) {
+      const [ax, ay] = ring[i], [bx, by] = ring[(i + 1) % n];
+      next.push([ax + (bx - ax) * 0.25, ay + (by - ay) * 0.25], [ax + (bx - ax) * 0.75, ay + (by - ay) * 0.75]);
+    }
+    ring = next;
+  }
+  return ring;
+}
+function ringPath(s) {
+  const p = new Path2D(), n = s.length;
+  if (n < 3) return p;
+  const pt = (i) => s[((i % n) + n) % n];
+  p.moveTo(pt(0)[0], pt(0)[1]);
+  for (let i = 0; i < n; i++) {
+    const p0 = pt(i - 1), p1 = pt(i), p2 = pt(i + 1), p3 = pt(i + 2);
+    p.bezierCurveTo(p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6,
+      p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6, p2[0], p2[1]);
+  }
+  p.closePath();
+  return p;
+}
+
+/** Diagonal hatch, lines only, so whatever is underneath still shows. */
+function hatchPattern(ctx, color, gap = 18, width = 4) {
+  const t = document.createElement('canvas'); t.width = gap; t.height = gap;
+  const c = t.getContext('2d'); c.fillStyle = color; c.fillRect(0, 0, width, gap);
+  const pat = ctx.createPattern(t, 'repeat');
+  pat.setTransform(new DOMMatrix().rotateSelf(45));
+  return pat;
+}
+
+/** Frosted dark-glass card. */
+function glassCard(ctx, x, y, w, h, r) {
+  ctx.save();
+  roundRect(ctx, x, y, w, h, r);
+  ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = 30; ctx.shadowOffsetY = 8;
+  const g = ctx.createLinearGradient(x, y, x, y + h);
+  g.addColorStop(0, 'rgba(15,28,56,0.84)'); g.addColorStop(1, 'rgba(7,15,34,0.88)');
+  ctx.fillStyle = g; ctx.fill(); ctx.restore();
+  roundRect(ctx, x, y, w, h, r); ctx.strokeStyle = 'rgba(186,230,253,0.28)'; ctx.lineWidth = 1.6; ctx.stroke();
+}
+
+/** Faint glints on whatever is already painted (snow texture). */
+function sparkle(c, rnd) {
+  c.save(); c.globalCompositeOperation = 'source-atop';
+  for (let i = 0; i < 2600; i++) {
+    c.fillStyle = `rgba(255,255,255,${(0.12 + rnd() * 0.3).toFixed(2)})`;
+    c.fillRect(rnd() * c.canvas.width, rnd() * c.canvas.height, 1.6, 1.6);
+  }
+  c.restore();
+}
+
+/** Bilinear sampler for a field on the fine lon/lat grid starting at LON0/LAT0. */
+function gridSampler(field, nx, ny, step) {
+  return (lon, lat) => {
+    const fx = Math.min(nx - 1.001, Math.max(0, (lon - LON0) / step));
+    const fy = Math.min(ny - 1.001, Math.max(0, (lat - LAT0) / step));
+    const i = Math.floor(fx), j = Math.floor(fy), u = fx - i, v = fy - j, k = j * nx + i;
+    return (field[k] * (1 - u) + field[k + 1] * u) * (1 - v) + (field[k + nx] * (1 - u) + field[k + nx + 1] * u) * v;
+  };
+}
+
 const fmtDay = (iso, opts) => new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', opts);
 
 export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLogoUrl = '' }) {
@@ -221,54 +303,97 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
     const ctx = cv.getContext('2d');
     const bg = snowBackground(bgId);
     const [bgImg, logo] = await Promise.all([loadImage(bg.url), loadImage(logoUrl)]);
+    const rnd = seeded(20261011);
+    const dayList = grid?.days?.length ? grid.days : fallbackDays();
 
-    // ── Background photo, cover-fit and darkened ──
+    // ── Background photo, cover-fit, darkened, with falling flakes ──
     ctx.fillStyle = '#07101f'; ctx.fillRect(0, 0, W, H);
     if (bgImg) {
       const s = Math.max(W / bgImg.width, H / bgImg.height);
-      ctx.filter = 'blur(2px) brightness(0.6)';
+      ctx.filter = 'blur(3px) brightness(0.62) saturate(1.1)';
       ctx.drawImage(bgImg, (W - bgImg.width * s) / 2, (H - bgImg.height * s) / 2, bgImg.width * s, bgImg.height * s);
       ctx.filter = 'none';
     }
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, 'rgba(5,10,25,0.72)'); g.addColorStop(0.18, 'rgba(5,10,25,0.38)');
-    g.addColorStop(0.8, 'rgba(5,10,25,0.42)'); g.addColorStop(1, 'rgba(5,10,25,0.82)');
+    g.addColorStop(0, 'rgba(4,10,28,0.78)'); g.addColorStop(0.16, 'rgba(6,14,36,0.40)');
+    g.addColorStop(0.82, 'rgba(6,14,36,0.45)'); g.addColorStop(1, 'rgba(3,8,22,0.9)');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-
-    // ── Header ──
-    let tx = 60;
-    if (logo) { const lh = 120, lw = logo.width * (lh / logo.height); ctx.drawImage(logo, 60, 56, lw, lh); tx = 60 + lw + 28; }
-    ctx.fillStyle = '#ffffff'; ctx.font = '900 72px Inter, system-ui, sans-serif'; ctx.textBaseline = 'alphabetic';
-    const title = isRisk ? 'SNOW RISK' : 'SNOW ACCUMULATION';
-    const tsz = Math.min(72, Math.floor(72 * (W - 60 - tx) / ctx.measureText(title).width));
-    ctx.font = `900 ${tsz}px Inter, system-ui, sans-serif`; ctx.fillText(title, tx, 130);
-    if (grid?.days?.length) {
-      const a = grid.days[fromDay], b = grid.days[Math.max(fromDay, toDay)];
-      const txt = a === b ? fmtDay(a, { weekday: 'long', day: 'numeric', month: 'long' })
-        : `${fmtDay(a, { weekday: 'short', day: 'numeric', month: 'short' })} – ${fmtDay(b, { weekday: 'short', day: 'numeric', month: 'short' })}`;
-      ctx.font = '700 36px Inter, system-ui, sans-serif'; ctx.fillStyle = '#bae6fd';
-      ctx.fillText(txt.toUpperCase(), tx, 182);
+    for (let i = 0; i < 420; i++) {
+      const x = rnd() * W, y = rnd() * (H - 130), r = 0.8 + rnd() * rnd() * 4.2;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255,255,255,${(0.18 + rnd() * 0.55).toFixed(2)})`; ctx.fill();
     }
-    ctx.font = '600 26px Inter, system-ui, sans-serif'; ctx.fillStyle = 'rgba(226,232,240,0.85)';
-    ctx.fillText(isRisk ? 'Where snow falls, settles or mixes with rain' : 'Snow expected to settle on the ground (cm)', 60, 252);
 
-    // ── Map panel ──
-    roundRect(ctx, MAP_X - 14, MAP_Y - 14, MAP_W + 28, MAP_H + 28, 26);
-    ctx.fillStyle = 'rgba(8,16,34,0.55)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(186,230,253,0.25)'; ctx.lineWidth = 2; ctx.stroke();
+    // ── Header: glass card with logo, title, date pill, summary ──
+    glassCard(ctx, 36, 36, W - 72, 232, 30);
+    let tx = 72;
+    if (logo) {
+      const lh = 132, lw = logo.width * (lh / logo.height);
+      ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = 24; ctx.drawImage(logo, 66, 70, lw, lh); ctx.restore();
+      tx = 66 + lw + 30;
+    }
+    const title = isRisk ? 'SNOW RISK' : 'SNOW ACCUMULATION';
+    ctx.textBaseline = 'alphabetic'; ctx.fillStyle = '#ffffff';
+    ctx.font = `900 76px ${FONT}`;
+    const tsz = Math.min(76, Math.floor((76 * (W - 72 - tx)) / ctx.measureText(title).width));
+    ctx.font = `900 ${tsz}px ${FONT}`;
+    ctx.save(); ctx.shadowColor = 'rgba(56,189,248,0.45)'; ctx.shadowBlur = 26; ctx.fillText(title, tx, 140); ctx.restore();
+    {
+      const a = dayList[fromDay], b = dayList[Math.max(fromDay, toDay)];
+      const txt = (a === b ? fmtDay(a, { weekday: 'long', day: 'numeric', month: 'long' })
+        : `${fmtDay(a, { weekday: 'short', day: 'numeric', month: 'short' })} – ${fmtDay(b, { weekday: 'short', day: 'numeric', month: 'short' })}`).toUpperCase();
+      ctx.font = `800 30px ${FONT}`; const pw = ctx.measureText(txt).width + 44;
+      roundRect(ctx, tx, 164, pw, 52, 26);
+      const pg = ctx.createLinearGradient(tx, 0, tx + pw, 0); pg.addColorStop(0, '#0ea5e9'); pg.addColorStop(1, '#6366f1');
+      ctx.fillStyle = pg; ctx.fill();
+      ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.fillText(txt, tx + 22, 191);
+      const sub = isRisk ? 'Settling, falling or mixed with rain' : 'Snow expected to settle (cm)';
+      ctx.font = `700 21px ${FONT}`;
+      const room = W - 72 - (tx + pw + 22), sw = ctx.measureText(sub).width;
+      if (sw > room) ctx.font = `700 ${Math.floor((21 * room) / sw)}px ${FONT}`;
+      ctx.fillStyle = 'rgba(226,232,240,0.9)'; ctx.fillText(sub, tx + pw + 22, 191);
+    }
 
+    // ── Map panel: deep sea gradient, lat/lon graticule ──
     const land = new Path2D();
     for (const d of coast || []) land.addPath(new Path2D(d));
     const project = makeProjector({ bbox: UK_BBOX, viewW: MAP_W, viewH: MAP_H });
+    ctx.save();
+    roundRect(ctx, MAP_X - 16, MAP_Y - 16, MAP_W + 32, MAP_H + 32, 30);
+    ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 12;
+    const sea = ctx.createLinearGradient(0, MAP_Y, 0, MAP_Y + MAP_H);
+    sea.addColorStop(0, 'rgba(10,30,62,0.86)'); sea.addColorStop(1, 'rgba(5,16,38,0.9)');
+    ctx.fillStyle = sea; ctx.fill(); ctx.restore();
+    roundRect(ctx, MAP_X - 16, MAP_Y - 16, MAP_W + 32, MAP_H + 32, 30);
+    ctx.strokeStyle = 'rgba(186,230,253,0.28)'; ctx.lineWidth = 2; ctx.stroke();
 
     ctx.save(); ctx.translate(MAP_X, MAP_Y);
-    ctx.save(); ctx.clip(land);
-    ctx.fillStyle = 'rgba(30,41,59,0.94)'; ctx.fillRect(0, 0, MAP_W, MAP_H);
+    ctx.save(); roundRect(ctx, -16, -16, MAP_W + 32, MAP_H + 32, 30); ctx.clip();
+    ctx.strokeStyle = 'rgba(148,197,255,0.10)'; ctx.lineWidth = 1.2; ctx.beginPath();
+    for (let lon = -10; lon <= 2; lon += 2) { const [x0, y0] = project(lon, UK_BBOX.latMin); const [, y1] = project(lon, UK_BBOX.latMax); ctx.moveTo(x0, y0); ctx.lineTo(x0, y1); }
+    for (let lat = 50; lat <= 60; lat += 2) { const [x0, y0] = project(UK_BBOX.lonMin, lat); const [x1] = project(UK_BBOX.lonMax, lat); ctx.moveTo(x0, y0); ctx.lineTo(x1, y0); }
+    ctx.stroke(); ctx.restore();
 
-    // Field raster: interpolate the values per pixel, THEN band/classify.
-    if (fields && showModel) {
-      const inv = makeInverseProjector({ bbox: UK_BBOX, viewW: MAP_W, viewH: MAP_H });
+    // Land: drop shadow, then a shaded slate fill.
+    ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 28; ctx.shadowOffsetY = 8;
+    ctx.fillStyle = '#1e293b'; ctx.fill(land); ctx.restore();
+    ctx.save(); ctx.clip(land);
+    const lg = ctx.createLinearGradient(0, 0, MAP_W, MAP_H); lg.addColorStop(0, '#3b4a63'); lg.addColorStop(1, '#1c2638');
+    ctx.fillStyle = lg; ctx.fillRect(0, 0, MAP_W, MAP_H);
+
+    // Model fields on a 0.1° grid (for band lines + extent), and a per-pixel raster.
+    const base = fields && showModel;
+    const FS = 0.1, fnx = Math.round((LON1 - LON0) / FS) + 1, fny = Math.round((LAT1 - LAT0) / FS) + 1;
+    let fine = null;
+    if (base) {
       const sAcc = sampler(fields.acc), sP = sampler(fields.precip), sF = sampler(fields.frac);
+      const val = new Float32Array(fnx * fny);
+      for (let j = 0; j < fny; j++) for (let i = 0; i < fnx; i++) {
+        const lon = LON0 + i * FS, lat = LAT0 + j * FS;
+        val[j * fnx + i] = isRisk ? riskCategory(sP(lon, lat), sF(lon, lat), sAcc(lon, lat)) : sAcc(lon, lat);
+      }
+      fine = val;
+      const inv = makeInverseProjector({ bbox: UK_BBOX, viewW: MAP_W, viewH: MAP_H });
       const off = document.createElement('canvas'); off.width = MAP_W; off.height = MAP_H;
       const octx = off.getContext('2d'); const img = octx.createImageData(MAP_W, MAP_H); const px = img.data;
       const lonAt = new Float32Array(MAP_W), latAt = new Float32Array(MAP_H);
@@ -278,39 +403,50 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
       const riskRgb = RISK_CATS.map((c) => (c ? hex(c.color) : null));
       for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
         const lon = lonAt[x], lat = latAt[y];
-        let rgb = null, alpha = 235;
-        if (isRisk) {
-          const cat = riskCategory(sP(lon, lat), sF(lon, lat), sAcc(lon, lat));
-          rgb = riskRgb[cat]; if (cat === 1) alpha = 215;
-        } else {
-          const v = sAcc(lon, lat);
-          for (let k = accRgb.length - 1; k >= 0; k--) if (v >= accRgb[k][0]) { rgb = accRgb[k][1]; break; }
-        }
+        let rgb = null;
+        if (isRisk) rgb = riskRgb[riskCategory(sP(lon, lat), sF(lon, lat), sAcc(lon, lat))];
+        else { const v = sAcc(lon, lat); for (let k = accRgb.length - 1; k >= 0; k--) if (v >= accRgb[k][0]) { rgb = accRgb[k][1]; break; } }
         if (!rgb) continue;
-        const o = (y * MAP_W + x) * 4; px[o] = rgb[0]; px[o + 1] = rgb[1]; px[o + 2] = rgb[2]; px[o + 3] = alpha;
+        const o = (y * MAP_W + x) * 4; px[o] = rgb[0]; px[o + 1] = rgb[1]; px[o + 2] = rgb[2]; px[o + 3] = 240;
       }
       octx.putImageData(img, 0, 0);
-      ctx.drawImage(off, 0, 0);
+      sparkle(octx, rnd);
+      ctx.save(); ctx.filter = 'blur(1.2px)'; ctx.drawImage(off, 0, 0); ctx.restore();
+      // Thin dark lines between bands so the steps read clearly.
+      const levels = isRisk ? [0.5, 1.5, 2.5] : ACC_SCALE.map(([v]) => v);
+      ctx.strokeStyle = 'rgba(15,23,42,0.5)'; ctx.lineWidth = 1.6; ctx.beginPath();
+      for (const lv of levels) for (const [a, b] of contourSegments(val, fnx, fny, LON0, LAT0, FS, lv)) {
+        const p = project(a[0], a[1]), q = project(b[0], b[1]); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]);
+      }
+      ctx.stroke();
     }
+
+    // Hand-drawn areas, smoothed like the other drawing tools, with a darker edge.
+    const toPx = (pts) => pts.map(([lon, lat]) => project(lon, lat));
     for (const sh of shapes) {
       if (sh.brush === 'extent' || sh.pts.length < 3) continue;
-      ctx.beginPath(); sh.pts.forEach(([lon, lat], i) => { const [x, y] = project(lon, lat); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.closePath();
-      ctx.fillStyle = sh.brush === 'erase' ? 'rgb(30,41,59)' : isRisk ? RISK_CATS[sh.brush].color : ACC_SCALE[sh.brush][1];
-      ctx.globalAlpha = sh.brush === 'erase' ? 1 : isRisk && sh.brush === 1 ? 0.85 : 0.93; ctx.fill(); ctx.globalAlpha = 1;
+      const path = ringPath(smoothRing(toPx(sh.pts)));
+      if (sh.brush === 'erase') { ctx.fillStyle = lg; ctx.fill(path); continue; }
+      const col = isRisk ? RISK_CATS[sh.brush].color : ACC_SCALE[sh.brush][1];
+      const sp = document.createElement('canvas'); sp.width = MAP_W; sp.height = MAP_H;
+      const sctx = sp.getContext('2d'); sctx.fillStyle = col; sctx.fill(path); sparkle(sctx, rnd);
+      ctx.globalAlpha = isRisk && sh.brush === 1 ? 0.9 : 0.96; ctx.drawImage(sp, 0, 0); ctx.globalAlpha = 1;
+      ctx.lineWidth = 3.5; ctx.lineJoin = 'round'; ctx.strokeStyle = darken(col, 0.62); ctx.stroke(path);
     }
     ctx.restore();
-    ctx.strokeStyle = 'rgba(226,232,240,0.75)'; ctx.lineWidth = 1.6; ctx.stroke(land);
+    // Coast on top: a crisp light line with a faint glow.
+    ctx.save(); ctx.shadowColor = 'rgba(186,230,253,0.5)'; ctx.shadowBlur = 6;
+    ctx.strokeStyle = 'rgba(241,245,249,0.85)'; ctx.lineWidth = 1.8; ctx.stroke(land); ctx.restore();
 
-    // ── Possible extent (risk only) ──
+    // ── Possible extent: hatched inside + purple outline ──
+    const extPat = hatchPattern(ctx, 'rgba(107,33,168,0.95)');
     let extentLabel = null;
-    if (isRisk && fields && showModel && extentMode !== 'off') {
-      const FS = 0.1, fnx = Math.round((LON1 - LON0) / FS) + 1, fny = Math.round((LAT1 - LAT0) / FS) + 1;
+    if (isRisk && base && extentMode !== 'off') {
       const sSnow = sampler(fields.snow), sAny = sampler(fields.anySnow);
       const rad = (pushDir * Math.PI) / 180;
-      const ext = new Float32Array(fnx * fny), core = new Float32Array(fnx * fny);
+      const ext = new Float32Array(fnx * fny);
       for (let j = 0; j < fny; j++) for (let i = 0; i < fnx; i++) {
         const lon = LON0 + i * FS, lat = LAT0 + j * FS, k = j * fnx + i;
-        core[k] = sSnow(lon, lat);
         if (extentMode === 'models') ext[k] = sAny(lon, lat);
         else {
           // Reachable if snow sits upstream within the push distance.
@@ -321,8 +457,23 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
         }
       }
       const THR = 0.2;
+      // Hatch only the part BEYOND the coloured snow areas: that is the "possible" part.
+      const sExt = gridSampler(ext, fnx, fny, FS), sCat = gridSampler(fine, fnx, fny, FS);
+      const inv = makeInverseProjector({ bbox: UK_BBOX, viewW: MAP_W, viewH: MAP_H });
+      const m = document.createElement('canvas'); m.width = MAP_W; m.height = MAP_H;
+      const mctx = m.getContext('2d'); const mi = mctx.createImageData(MAP_W, MAP_H);
+      for (let y = 0; y < MAP_H; y += 1) {
+        const lat = inv(0, y + 0.5)[1];
+        for (let x = 0; x < MAP_W; x += 1) {
+          const lon = inv(x + 0.5, 0)[0];
+          if (sExt(lon, lat) >= THR && sCat(lon, lat) < 0.5) mi.data[(y * MAP_W + x) * 4 + 3] = 255;
+        }
+      }
+      mctx.putImageData(mi, 0, 0);
+      mctx.globalCompositeOperation = 'source-in'; mctx.fillStyle = extPat; mctx.fillRect(0, 0, MAP_W, MAP_H);
+      ctx.save(); ctx.clip(land); ctx.drawImage(m, 0, 0);
       const segs = contourSegments(ext, fnx, fny, LON0, LAT0, FS, THR);
-      ctx.save(); ctx.clip(land); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       for (const [w, col] of [[12, 'rgba(233,213,255,0.55)'], [6, EXTENT_COLOR]]) {
         ctx.lineWidth = w; ctx.strokeStyle = col; ctx.beginPath();
         for (const [a, b] of segs) { const p = project(a[0], a[1]), q = project(b[0], b[1]); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); }
@@ -335,7 +486,7 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
         const k = j * fnx + i, lon = LON0 + i * FS, lat = LAT0 + j * FS;
         const [x, y] = project(lon, lat);
         if (!ctx.isPointInPath(land, x + MAP_X, y + MAP_Y)) continue;
-        if (core[k] >= THR) { cx += lon; cy += lat; cn++; } else if (ext[k] >= THR) { ex += lon; ey += lat; en++; }
+        if (fine[k] >= 0.5) { cx += lon; cy += lat; cn++; } else if (ext[k] >= THR) { ex += lon; ey += lat; en++; }
       }
       if (cn && en) {
         const c = [cx / cn, cy / cn], e = [ex / en, ey / en];
@@ -345,21 +496,19 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
       }
     }
 
-    // Hand-drawn possible-extent lines (not clipped: the line goes where it's drawn).
-    const drawnExtent = shapes.filter((sh) => sh.brush === 'extent' && sh.pts.length > 1);
-    if (drawnExtent.length) {
-      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      for (const [w, col] of [[12, 'rgba(233,213,255,0.55)'], [6, EXTENT_COLOR]]) {
-        ctx.lineWidth = w; ctx.strokeStyle = col; ctx.beginPath();
-        for (const sh of drawnExtent) sh.pts.forEach(([lon, lat], i) => { const [x, y] = project(lon, lat); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
-        ctx.stroke();
-      }
+    // Hand-drawn possible extent: a smoothed area, hatched inside, purple outline.
+    const drawnExtent = shapes.filter((sh) => sh.brush === 'extent' && sh.pts.length >= 3);
+    for (const sh of drawnExtent) {
+      const path = ringPath(smoothRing(toPx(sh.pts)));
+      ctx.fillStyle = extPat; ctx.fill(path);
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 12; ctx.strokeStyle = 'rgba(233,213,255,0.55)'; ctx.stroke(path);
+      ctx.lineWidth = 6; ctx.strokeStyle = EXTENT_COLOR; ctx.stroke(path);
     }
 
     // ── Cities ──
     const readout = [];
     {
-      const base = fields && showModel;
       const sAcc = base && sampler(fields.acc), sP = base && sampler(fields.precip), sF = base && sampler(fields.frac);
       for (const [name, lon, lat] of CITIES) {
         let acc = base ? sAcc(lon, lat) : 0, cat = base ? riskCategory(sP(lon, lat), sF(lon, lat), acc) : 0, label = null;
@@ -373,13 +522,13 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
       }
     }
     if (showCities) {
-      ctx.font = '700 22px Inter, system-ui, sans-serif'; ctx.textBaseline = 'middle';
+      ctx.font = `800 23px ${FONT}`; ctx.textBaseline = 'middle';
       for (const [name, lon, lat, side] of CITIES) {
         const [x, y] = project(lon, lat);
-        ctx.textAlign = side === 'left' ? 'right' : 'left'; const lx = side === 'left' ? x - 11 : x + 11;
-        ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fillStyle = '#0f172a'; ctx.fill();
-        ctx.lineWidth = 3; ctx.strokeStyle = '#ffffff'; ctx.stroke();
-        ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(2,6,23,0.85)'; ctx.strokeText(name, lx, y);
+        ctx.textAlign = side === 'left' ? 'right' : 'left'; const lx = side === 'left' ? x - 13 : x + 13;
+        ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fillStyle = '#0f172a'; ctx.fill();
+        ctx.lineWidth = 3.5; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+        ctx.lineWidth = 6; ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(2,6,23,0.88)'; ctx.strokeText(name, lx, y);
         ctx.fillStyle = '#ffffff'; ctx.fillText(name, lx, y);
       }
       ctx.textAlign = 'left';
@@ -388,10 +537,11 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
     if (extentLabel) {
       const [x, y] = extentLabel.at;
       const text = `POSSIBLE EXTENT ${extentLabel.dir}`;
-      ctx.font = '900 22px Inter, system-ui, sans-serif'; const tw = ctx.measureText(text).width;
+      ctx.font = `900 22px ${FONT}`; const tw = ctx.measureText(text).width;
       const bx = Math.min(MAP_W - tw - 80, Math.max(10, x - (tw + 70) / 2)), by = Math.min(MAP_H - 60, Math.max(10, y - 25));
-      roundRect(ctx, bx, by, tw + 70, 46, 23); ctx.fillStyle = EXTENT_COLOR; ctx.fill();
-      ctx.strokeStyle = 'rgba(233,213,255,0.8)'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 14;
+      roundRect(ctx, bx, by, tw + 70, 46, 23); ctx.fillStyle = EXTENT_COLOR; ctx.fill(); ctx.restore();
+      roundRect(ctx, bx, by, tw + 70, 46, 23); ctx.strokeStyle = 'rgba(233,213,255,0.8)'; ctx.lineWidth = 2; ctx.stroke();
       ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.fillText(text, bx + 18, by + 24);
       ctx.save(); ctx.translate(bx + tw + 45, by + 23); ctx.rotate((extentLabel.bearing * Math.PI) / 180);
       ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(9, 5); ctx.lineTo(0, 1); ctx.lineTo(-9, 5); ctx.closePath(); ctx.fill(); ctx.restore();
@@ -402,58 +552,65 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
       ? readout.filter((r) => r.cat > 0).sort((a, b) => b.cat - a.cat || b.acc - a.acc).slice(0, 6)
         .map((r) => [r.name, RISK_CATS[r.cat].label, RISK_CATS[r.cat].color])
       : readout.filter((r) => r.acc >= 0.5).sort((a, b) => b.acc - a.acc).slice(0, 6)
-        .map((r) => [r.name, r.label || (r.acc >= 10 ? `${Math.round(r.acc)} cm` : `${r.acc.toFixed(1)} cm`), '#bae6fd']);
-    const cardH = 70 + Math.max(1, rows.length) * 40;
-    roundRect(ctx, 18, 18, 340, cardH, 18); ctx.fillStyle = 'rgba(8,16,34,0.82)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(186,230,253,0.3)'; ctx.lineWidth = 1.5; ctx.stroke();
-    ctx.textBaseline = 'alphabetic'; ctx.font = '900 19px Inter, system-ui, sans-serif'; ctx.fillStyle = '#7dd3fc';
-    ctx.fillText(isRisk ? 'CITIES AT RISK' : 'HIGHEST CITY TOTALS', 38, 56);
-    ctx.font = '700 22px Inter, system-ui, sans-serif';
-    if (!rows.length) { ctx.fillStyle = 'rgba(226,232,240,0.8)'; ctx.fillText(isRisk ? 'No snow at listed cities' : 'Under 0.5 cm everywhere listed', 38, 100); }
+        .map((r) => {
+          const bi = ACC_SCALE.reduce((k, [v], i) => (r.acc >= v ? i : k), 0);
+          return [r.name, r.label || (r.acc >= 10 ? `${Math.round(r.acc)} cm` : `${r.acc.toFixed(1)} cm`), ACC_SCALE[bi][1]];
+        });
+    const cardH = 78 + Math.max(1, rows.length) * 44;
+    glassCard(ctx, 16, 16, 352, cardH, 22);
+    ctx.fillStyle = isRisk ? '#a78bfa' : '#38bdf8'; roundRect(ctx, 16, 16, 352, 8, 4); ctx.fill();
+    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left'; ctx.font = `900 19px ${FONT}`; ctx.fillStyle = '#bae6fd';
+    ctx.fillText(isRisk ? 'CITIES AT RISK' : 'HIGHEST CITY TOTALS', 38, 62);
+    if (!rows.length) { ctx.font = `700 21px ${FONT}`; ctx.fillStyle = 'rgba(226,232,240,0.8)'; ctx.fillText(isRisk ? 'No snow at listed cities' : 'Under 0.5 cm everywhere listed', 38, 106); }
     rows.forEach(([name, val, col], i) => {
-      const y = 100 + i * 40;
-      ctx.fillStyle = '#ffffff'; ctx.textAlign = 'left'; ctx.fillText(name, 38, y);
-      ctx.fillStyle = col; ctx.textAlign = 'right'; ctx.font = isRisk ? '700 15px Inter, system-ui, sans-serif' : '800 22px Inter, system-ui, sans-serif';
-      ctx.fillText(val, 340, y); ctx.font = '700 22px Inter, system-ui, sans-serif';
+      const y = 106 + i * 44;
+      ctx.font = `800 22px ${FONT}`; ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.fillText(name, 38, y - 6);
+      ctx.font = `800 ${isRisk ? 15 : 19}px ${FONT}`; const vw = ctx.measureText(val).width + 22;
+      roundRect(ctx, 346 - vw, y - 22, vw, 32, 16); ctx.fillStyle = col; ctx.fill();
+      ctx.fillStyle = '#0f172a'; ctx.textAlign = 'center'; ctx.fillText(val, 346 - vw / 2, y - 6); ctx.textAlign = 'left';
     });
-    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
     ctx.restore();
 
-    // ── Legend ──
-    const LY = MAP_Y + MAP_H + 34;
-    ctx.textBaseline = 'middle'; ctx.font = '800 22px Inter, system-ui, sans-serif';
+    // ── Legend card ──
+    const LY = MAP_Y + MAP_H + 30;
+    glassCard(ctx, 36, LY, W - 72, 96, 22);
+    ctx.textBaseline = 'middle';
     if (isRisk) {
+      const items = RISK_CATS.slice(1).reverse().map((c) => [c.label, c.color, 'box']);
+      if ((base && extentMode !== 'off') || drawnExtent.length) items.push(['Possible extent', EXTENT_COLOR, 'hatch']);
+      ctx.font = `800 22px ${FONT}`;
+      const widths = items.map(([l]) => ctx.measureText(l).width + 50);
+      const gap = (W - 72 - 48 - widths.reduce((a, b) => a + b, 0)) / Math.max(1, items.length - 1);
       let x = 60;
-      const items = [...RISK_CATS.slice(1).reverse().map((c) => [c.label, c.color, 'box'])];
-      if ((showModel && extentMode !== 'off') || drawnExtent.length) items.push(['Possible extent', EXTENT_COLOR, 'line']);
-      for (const [label, col, kind] of items) {
-        if (kind === 'box') { roundRect(ctx, x, LY - 14, 28, 28, 7); ctx.fillStyle = col; ctx.fill(); }
-        else { ctx.strokeStyle = 'rgba(233,213,255,0.6)'; ctx.lineWidth = 11; ctx.beginPath(); ctx.moveTo(x, LY); ctx.lineTo(x + 36, LY); ctx.stroke();
-          ctx.strokeStyle = col; ctx.lineWidth = 6; ctx.stroke(); }
-        ctx.fillStyle = '#ffffff'; ctx.fillText(label, x + (kind === 'box' ? 38 : 46), LY);
-        x += ctx.measureText(label).width + (kind === 'box' ? 66 : 74);
-      }
-    } else {
-      const bw = 960 / ACC_SCALE.length;
-      ctx.font = '800 18px Inter, system-ui, sans-serif'; ctx.fillStyle = '#ffffff'; ctx.fillText('Settled snow (cm)', 60, LY - 34);
-      ACC_SCALE.forEach(([v, c], i) => {
-        ctx.fillStyle = c; ctx.fillRect(60 + i * bw, LY - 16, bw - 4, 22);
-        ctx.fillStyle = '#ffffff'; ctx.font = '800 20px Inter, system-ui, sans-serif'; ctx.textAlign = 'center';
-        ctx.fillText(i === ACC_SCALE.length - 1 ? `${v}+ cm` : `${v}`, 60 + i * bw + bw / 2 - 2, LY + 26);
+      items.forEach(([label, col, kind], i) => {
+        roundRect(ctx, x, LY + 34, 32, 30, 8);
+        if (kind === 'box') { ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = darken(col, 0.62); ctx.lineWidth = 2; ctx.stroke(); }
+        else { ctx.fillStyle = extPat; ctx.fill(); ctx.strokeStyle = EXTENT_COLOR; ctx.lineWidth = 4; ctx.stroke(); }
+        ctx.fillStyle = '#ffffff'; ctx.fillText(label, x + 42, LY + 50);
+        x += widths[i] + gap;
       });
-      ctx.textAlign = 'left';
+    } else {
+      const lx = 60, lw = W - 120, bw = lw / ACC_SCALE.length;
+      ctx.font = `900 17px ${FONT}`; ctx.fillStyle = '#bae6fd'; ctx.fillText('SETTLED SNOW (CM)', lx, LY + 22);
+      ACC_SCALE.forEach(([v, c], i) => {
+        ctx.fillStyle = c; roundRect(ctx, lx + i * bw, LY + 38, bw - 6, 22, 6); ctx.fill();
+        ctx.fillStyle = '#ffffff'; ctx.font = `800 19px ${FONT}`; ctx.textAlign = 'left';
+        ctx.fillText(i === ACC_SCALE.length - 1 ? `${v}+` : `${v}`, lx + i * bw, LY + 78);
+      });
     }
 
-    // ── Footer ──
-    ctx.textBaseline = 'alphabetic';
-    ctx.font = '900 30px Inter, system-ui, sans-serif'; ctx.fillStyle = '#ffffff'; ctx.fillText(handle, 60, H - 62);
-    ctx.font = '800 18px Inter, system-ui, sans-serif'; ctx.fillStyle = 'rgba(148,163,184,0.95)'; ctx.fillText(version.toUpperCase(), 60, H - 34);
-    ctx.textAlign = 'right'; ctx.font = '600 18px Inter, system-ui, sans-serif'; ctx.fillStyle = 'rgba(226,232,240,0.85)';
+    // ── Footer strip ──
+    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+    ctx.font = `900 32px ${FONT}`; ctx.fillStyle = '#ffffff'; ctx.fillText(handle, 60, H - 60);
+    ctx.font = `800 18px ${FONT}`; ctx.fillStyle = 'rgba(148,163,184,0.95)'; ctx.fillText(version.toUpperCase(), 60, H - 32);
+    ctx.textAlign = 'right'; ctx.font = `700 19px ${FONT}`; ctx.fillStyle = 'rgba(226,232,240,0.92)';
     const issued = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London', hour12: false });
-    ctx.fillText(`Models: ${modelsUsed}  ·  Issued ${issued}`, W - 60, H - 74);
+    ctx.fillText(`${base ? `Models: ${modelsUsed}` : 'MyWeatherUK forecast'}  ·  Issued ${issued}`, W - 60, H - 72);
+    ctx.font = `600 16px ${FONT}`; ctx.fillStyle = 'rgba(203,213,225,0.8)';
     ctx.fillText(isRisk ? 'Settling where snow dominates and the mean temperature is near or below freezing'
-      : 'Model snowfall reduced for melting where the mean temperature is above 0.5 °C', W - 60, H - 50);
-    if (bg.credit) { ctx.font = '500 13px Inter, system-ui, sans-serif'; ctx.fillStyle = 'rgba(203,213,225,0.6)'; ctx.fillText(bg.credit, W - 60, H - 26); }
+      : 'Model snowfall reduced for melting where the mean temperature is above 0.5 °C', W - 60, H - 48);
+    if (bg.credit) { ctx.font = `500 13px ${FONT}`; ctx.fillStyle = 'rgba(203,213,225,0.6)'; ctx.fillText(bg.credit, W - 60, H - 26); }
     ctx.textAlign = 'left';
   }, [bgId, logoUrl, coast, fields, grid, fromDay, toDay, isRisk, showCities, extentMode, pushDir, pushMiles, handle, version, modelsUsed, shapes, showModel]);
 
@@ -470,9 +627,9 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
     const c = cv.getContext('2d'); c.clearRect(0, 0, W, H);
     const st = strokeRef.current; if (!st || st.px.length < 2) return;
     const col = brush === 'extent' ? EXTENT_COLOR : brush === 'erase' ? '#1e293b' : isRisk ? RISK_CATS[brush].color : ACC_SCALE[brush][1];
-    c.beginPath(); st.px.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
-    if (brush !== 'extent') { c.closePath(); c.globalAlpha = 0.6; c.fillStyle = col; c.fill(); c.globalAlpha = 1; }
-    c.lineWidth = 6; c.strokeStyle = brush === 'erase' ? '#f87171' : col; c.lineJoin = 'round'; c.stroke();
+    const path = ringPath(smoothRing(st.px));
+    c.globalAlpha = 0.65; c.fillStyle = brush === 'extent' ? hatchPattern(c, 'rgba(107,33,168,0.95)') : col; c.fill(path); c.globalAlpha = 1;
+    c.lineWidth = 6; c.setLineDash([14, 10]); c.strokeStyle = brush === 'erase' ? '#f87171' : col; c.lineJoin = 'round'; c.stroke(path); c.setLineDash([]);
   };
   const onDown = (e) => {
     if (!penOn) return;
@@ -487,7 +644,7 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
   };
   const onUp = () => {
     const st = strokeRef.current; strokeRef.current = null; paintStroke();
-    if (st && st.pts.length >= (brush === 'extent' ? 2 : 3)) setShapes((p) => [...p, { brush, pts: st.pts }]);
+    if (st && st.pts.length >= 3) setShapes((p) => [...p, { brush, pts: st.pts }]);
   };
 
   const download = () => {
@@ -505,7 +662,7 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
     padding: '6px 10px', borderRadius: 8, fontSize: 12, fontWeight: on ? 800 : 600, cursor: 'pointer', fontFamily: 'inherit',
     background: on ? `${col}2e` : 'rgba(148,163,184,0.06)', border: `1px solid ${on ? `${col}80` : 'rgba(148,163,184,0.15)'}`, color: on ? col : '#94a3b8',
   });
-  const days = grid?.days || [];
+  const days = grid?.days?.length ? grid.days : fallbackDays();
   const Icon = isRisk ? CloudSnow : Snowflake;
 
   return (
@@ -566,7 +723,7 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
           <p style={{ ...label, margin: '0 0 8px' }}>Draw on the map</p>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {(isRisk
-              ? [[3, 'Accumulating snow', RISK_CATS[3].color], [2, 'Falling snow', RISK_CATS[2].color], [1, 'Snow & rain', RISK_CATS[1].color], ['extent', 'Possible extent line', EXTENT_COLOR]]
+              ? [[3, 'Accumulating snow', RISK_CATS[3].color], [2, 'Falling snow', RISK_CATS[2].color], [1, 'Snow & rain', RISK_CATS[1].color], ['extent', 'Possible extent area', EXTENT_COLOR]]
               : ACC_SCALE.map(([, c], i) => [i, accBandLabel(i), c])
             ).concat([['erase', 'Erase (no snow)', '#334155']]).map(([id, l, c]) => (
               <button key={id} type="button" style={{ ...chip(brush === id), display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setBrush(id); setPenOn(true); }}>
@@ -580,7 +737,7 @@ export default function SnowMapGraphicTool({ mode = 'accumulation', myWeatherLog
             <button type="button" style={chip(false, '#f87171')} disabled={!shapes.length} onClick={() => setShapes([])}>Clear drawings</button>
             <button type="button" style={chip(showModel)} onClick={() => setShowModel((v) => !v)}>{showModel ? 'Model layer on' : 'Model layer off'}</button>
           </div>
-          <p style={{ margin: '6px 0 0', fontSize: 11, color: '#64748b' }}>Drag on the preview to draw an area (it closes itself). Drawn areas sit on top of the model layer; turn the model layer off to draw everything by hand.</p>
+          <p style={{ margin: '6px 0 0', fontSize: 11, color: '#64748b' }}>Drag on the preview to draw an area (it closes and smooths itself; the extent brush draws a hatched area). Drawn areas sit on top of the model layer; turn the model layer off to draw everything by hand.</p>
         </div>
 
         <SnowBackgroundPicker value={bgId} onChange={setBgId} labelStyle={label} />
