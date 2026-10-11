@@ -16,7 +16,8 @@
  *   • Text labels      — click to drop, type to edit
  *
  * Any scenario can open FULL SCREEN with the full tool palette docked at the
- * bottom. Liquid-glass theme throughout. Exports a combined 3-up PNG.
+ * bottom. Liquid-glass theme throughout. Exports a combined 3-up JPG at 3× resolution. "Load ECMWF ensemble" fills the three
+ * maps from the real ensemble (ensembleLayer.jsx).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -24,9 +25,10 @@ import {
   Save, FolderOpen, Check, X, MousePointer, Spline, Navigation, Trash2,
   Zap, Waves, CloudLightning, Copy, Layers, Sparkles, PenLine,
 } from 'lucide-react';
-import html2canvas from 'html2canvas';
+import { toJpeg } from 'html-to-image';
 import { base44 } from '@/api/base44Client';
 import NWEuropeMap, { SCN_VIEW_W, SCN_VIEW_H } from './NWEuropeMap';
+import { buildEnsembleOverlay, EnsembleLayer } from './ensembleLayer';
 
 // ── Liquid-glass helper (mirrors StormOutlookGraphicTool) ───────────────────
 const glass = (extra = {}, exportMode = false) => ({
@@ -475,6 +477,7 @@ function ScenarioMap({ scn, state, setState, tool, color, fullscreen, selectedId
       }}
     >
       <NWEuropeMap />
+      <EnsembleLayer auto={state.auto} />
       <ScenarioLayers items={items} draft={draft} tool={tool} draftColor={color} selectedId={isSelectMode ? selectedId : null} />
       {!fullscreen && !hideBadge && (
         <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 5,
@@ -648,6 +651,35 @@ export default function ScenarioForecastTool({ siteLogoUrl = '' }) {
     if (!siteLogoUrl) base44.entities.SiteSettings.list().then(l => { if (l[0]?.logo_url) setLogo(l[0].logo_url); }).catch(() => {});
   }, [siteLogoUrl]);
 
+  // ── ECMWF ensemble: three scenarios with their real share of the 50 members ──
+  const [ensBusy, setEnsBusy] = useState(false);
+  const [ensInfo, setEnsInfo] = useState(null);
+  const [ensError, setEnsError] = useState('');
+  const loadEnsemble = async () => {
+    setEnsBusy(true); setEnsError('');
+    try {
+      const r = await fetch(`/api/pastfuture/ensemble?date=${validDate}&hour=12`);
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+      const next = {};
+      SCENARIO_DEFS.forEach((d, i) => { next[d.id] = j.clusters[i]?.pct ?? 0; });
+      setPcts(next);
+      setScenarios(prev => {
+        const out = { ...prev };
+        SCENARIO_DEFS.forEach((d, i) => { out[d.id] = { ...(prev[d.id] || { items: [] }), auto: j.clusters[i] ? buildEnsembleOverlay(j.clusters[i], j.grid) : null }; });
+        return out;
+      });
+      setEnsInfo({ run: j.run, step: j.step, members: j.members });
+      setSubtitle('ECMWF ensemble: the 50 runs grouped into three outcomes');
+    } catch (e) {
+      setEnsError(e.message || 'Could not load the ensemble');
+    } finally { setEnsBusy(false); }
+  };
+  const clearEnsemble = () => {
+    setScenarios(prev => Object.fromEntries(Object.entries(prev).map(([k, v]) => [k, { ...v, auto: null }])));
+    setEnsInfo(null);
+  };
+
   const setScenarioState = (id, updater) =>
     setScenarios(prev => ({ ...prev, [id]: typeof updater === 'function' ? updater(prev[id]) : updater }));
 
@@ -698,7 +730,7 @@ export default function ScenarioForecastTool({ siteLogoUrl = '' }) {
     catch { return ''; }
   }, []);
 
-  // ── PNG export of the full 3-up board ──
+  // ── JPG export of the full 3-up board, rendered at 3× ──
   const boardRef = useRef(null);
   const GRAPHIC_W = 1280, GRAPHIC_H = 760;
   const handleDownload = async () => {
@@ -717,10 +749,12 @@ export default function ScenarioForecastTool({ siteLogoUrl = '' }) {
       const imgs = Array.from(clone.querySelectorAll('img'));
       await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(res => { img.onload = res; img.onerror = res; setTimeout(res, 2000); })));
       await new Promise(r => requestAnimationFrame(r));
-      const canvas = await html2canvas(clone, { backgroundColor: null, scale: 2, useCORS: true, logging: false, width: GRAPHIC_W, height: GRAPHIC_H, windowWidth: GRAPHIC_W, windowHeight: GRAPHIC_H });
+      // html-to-image renders through the browser itself (SVG foreignObject), so the glass cards,
+      // gradients and rounded clips come out exactly as on screen; html2canvas mangled them.
+      const dataUrl = await toJpeg(clone, { quality: 0.93, pixelRatio: 3, width: GRAPHIC_W, height: GRAPHIC_H, backgroundColor: '#0a1222', cacheBust: true });
       const link = document.createElement('a');
-      link.download = `forecast-scenarios-${validDate}.png`;
-      link.href = canvas.toDataURL('image/png');
+      link.download = `forecast-scenarios-${validDate}.jpg`;
+      link.href = dataUrl;
       link.click();
     } finally {
       document.body.removeChild(sandbox); setExportMode(false); setIsExporting(false);
@@ -739,6 +773,20 @@ export default function ScenarioForecastTool({ siteLogoUrl = '' }) {
           <Field label="Subtitle"><input value={subtitle} onChange={e => setSubtitle(e.target.value)} style={inputCss} /></Field>
           <Field label="Valid date"><input type="date" value={validDate} onChange={e => setValidDate(e.target.value)} style={{ ...inputCss, colorScheme: 'dark' }} /></Field>
           <Field label="Handle"><input value={handle} onChange={e => setHandle(e.target.value)} style={inputCss} /></Field>
+        </div>
+
+        {/* ECMWF ensemble loader */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: 12, borderRadius: 12, background: 'rgba(56,189,248,0.06)', border: '1px solid rgba(56,189,248,0.22)' }}>
+          <button type="button" onClick={loadEnsemble} disabled={ensBusy} style={{ ...btnCss, background: 'linear-gradient(135deg,#0ea5e9,#6366f1)', border: 'none', color: '#fff' }}>
+            {ensBusy ? <Loader2 style={{ width: 14, height: 14, animation: 'spin 0.8s linear infinite' }} /> : <Layers style={{ width: 14, height: 14 }} />}
+            {ensBusy ? 'Reading 50 ensemble runs…' : 'Load ECMWF ensemble for the valid date'}
+          </button>
+          {ensInfo && <button type="button" onClick={clearEnsemble} style={btnCss}><X style={{ width: 13, height: 13 }} /> Remove isobars</button>}
+          <span style={{ fontSize: 11.5, color: ensError ? '#fca5a5' : '#94a3b8' }}>
+            {ensError || (ensInfo
+              ? `${new Date(ensInfo.run).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC run, T+${ensInfo.step} h, ${ensInfo.members} members. Percentages = share of members.`
+              : 'Groups the 50 ECMWF ensemble runs into three outcomes at 12:00 UTC on the valid date (up to 15 days ahead) and draws each one\'s isobars, highs and lows. You can still draw on top.')}
+          </span>
         </div>
 
         {/* Per-scenario likelihood % */}
@@ -776,7 +824,7 @@ export default function ScenarioForecastTool({ siteLogoUrl = '' }) {
             ...btnCss, marginLeft: 'auto', background: isExporting ? 'rgba(148,163,184,0.1)' : 'linear-gradient(135deg, #0ea5e9, #0284c7)', border: 'none', color: '#fff', fontWeight: 700,
           }}>
             {isExporting ? <Loader2 style={{ width: 14, height: 14, animation: 'spin 1s linear infinite' }} /> : <Download style={{ width: 14, height: 14 }} />}
-            {isExporting ? 'Generating PNG…' : 'Download PNG'}
+            {isExporting ? 'Generating JPG…' : 'Download JPG (3840×2280)'}
           </button>
           <button type="button" onClick={() => { setShowSave(v => !v); setShowLoad(false); }} style={{
             ...btnCss, background: showSave ? 'rgba(74,222,128,0.15)' : 'rgba(148,163,184,0.08)', borderColor: showSave ? 'rgba(74,222,128,0.5)' : 'rgba(148,163,184,0.2)', color: showSave ? '#86efac' : '#94a3b8',
@@ -870,6 +918,14 @@ export default function ScenarioForecastTool({ siteLogoUrl = '' }) {
                   <ScenarioMap scn={scn} state={scenarios[scn.id]} setState={(u) => setScenarioState(scn.id, u)}
                     tool={tool} color={color} stormSevere={stormSevere} fullscreen={false} selectedId={selectedId} setSelectedId={setSelectedId} hideBadge />
                 </div>
+                {scenarios[scn.id]?.auto?.summary && (
+                  <div style={{ position: 'relative', zIndex: 1, margin: '-4px 12px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: '#fff' }}>{scenarios[scn.id].auto.summary.head}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(203,213,225,0.85)' }}>
+                      {scenarios[scn.id].auto.summary.feel}{scenarios[scn.id].auto.lwt?.type === 'U' ? '' : ` · ${scenarios[scn.id].auto.summary.wind}`} · {scenarios[scn.id].auto.members} of 50 runs
+                    </span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -888,7 +944,7 @@ export default function ScenarioForecastTool({ siteLogoUrl = '' }) {
               <span style={{ fontSize: 14, fontWeight: 800, color: '#fff' }}>{handle}</span>
             </div>
             <span style={{ fontSize: 10.5, fontWeight: 600, color: 'rgba(203,213,225,0.7)', letterSpacing: '0.04em' }}>
-              Issued {new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London', hour12: false })} {tzAbbr}
+              Issued {new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London', hour12: false })} {tzAbbr}{ensInfo ? ' · Scenarios from the ECMWF ensemble, © ECMWF CC BY 4.0' : ''}
             </span>
           </div>
         </div>

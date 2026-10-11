@@ -35,6 +35,7 @@ import { mountTcmV5 } from './tcmV5.js';
 import { startAiw } from './aiw/index.js';
 import { mountScenarios } from './scenarios/api.js';
 import { startLiveScenarios } from './scenarios/live/index.js';
+import { mountPastFuture } from './pastFuture/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(here, '..');
@@ -459,6 +460,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
    Registered before the SPA fallback below so the routes are reachable. */
 startAiw(app);
 mountScenarios(app);
+mountPastFuture(app);
 startLiveScenarios(app);
 
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y' }));

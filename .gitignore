@@ -32,3 +32,5 @@ server/data/scenarios-local/
 .claude/
 # Trusted-device key hashes for owner auto-login.
 server/data/trusted-devices.json
+# ECMWF ensemble member cache for the scenario graphic.
+server/data/ens-cache/
