@@ -177,13 +177,22 @@ export function createIngest({ providers = [blitzortung], archive = true } = {})
   const health = {};          // provider id -> health
   const stops = [];
 
-  function key(s) { return `${Math.round(s.time / 1000)}_${Math.round(s.lat * 1000)}_${Math.round(s.lon * 1000)}`; }
+  // Whole-second buckets, and a strike also matches the buckets either side:
+  // with rounding alone, two reports of one strike 200 ms apart got different
+  // keys whenever they straddled a bucket boundary and were both kept.
+  const place = (s) => `${Math.round(s.lat * 1000)}_${Math.round(s.lon * 1000)}`;
+  const bucket = (s) => Math.floor(s.time / 1000);
+  function key(s) { return `${bucket(s)}_${place(s)}`; }
+  function seen(s) {
+    const b = bucket(s), p = place(s);
+    return keys.has(`${b}_${p}`) || keys.has(`${b - 1}_${p}`) || keys.has(`${b + 1}_${p}`);
+  }
 
   function add(batch) {
     const fresh = [];
     for (const s of batch) {
+      if (seen(s)) continue;
       const k = key(s);
-      if (keys.has(k)) continue;
       keys.add(k); keyQueue.push([k, s.time]);
       recent.push(s); fresh.push(s);
     }
@@ -253,8 +262,8 @@ export function createIngest({ providers = [blitzortung], archive = true } = {})
     /** Preload history after a restart WITHOUT re-archiving it. */
     seed(batch) {
       for (const s of batch) {
+        if (seen(s)) continue;
         const k = key(s);
-        if (keys.has(k)) continue;
         keys.add(k); keyQueue.push([k, s.time]); recent.push(s);
       }
       recent.sort((x, y) => x.time - y.time);

@@ -319,6 +319,17 @@ test('ingest de-duplicates the same strike from several sockets', () => {
   assert.equal(ing.window(t - 1000).length, 1);
 });
 
+test('ingest de-duplicates across a second boundary, but keeps a later strike at the same spot', () => {
+  const ing = createIngest({ providers: [], archive: false });
+  const t = Math.floor(Date.now() / 1000) * 1000 - 100;   // t and t + 200 ms sit in different seconds
+  const s = { time: t, lat: 50.1234, lon: 8.4321 };
+  // t + 500 / t + 700 straddle a half second, where the old rounded key split them.
+  ing.inject([s, { ...s, time: t + 200 }, { ...s, time: t - 200 }, { ...s, time: t + 500 }, { ...s, time: t + 700 }]);
+  assert.equal(ing.window(t - 5000).length, 1);
+  ing.inject([{ ...s, time: t + 5000 }]);
+  assert.equal(ing.window(t - 5000).length, 2);
+});
+
 test('coverage: good / partial / none', () => {
   assert.equal(coverageAt(52, -1).quality, 'good');
   assert.equal(coverageAt(-25, 135).quality, 'partial');
