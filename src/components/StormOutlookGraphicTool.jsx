@@ -3375,7 +3375,10 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
             onMouseDown={handleDown} onMouseMove={handleMove} onMouseUp={handleUp} onMouseLeave={handleUp}
             onTouchStart={handleDown} onTouchMove={handleMove} onTouchEnd={handleUp}
             style={{
-              position: 'absolute', top: 20, left: '50%', marginLeft: -130, width: 450, height: (!isRadar && outlookRegion !== 'uk') ? 630 : 666,
+              position: 'absolute', top: 20, left: '50%', marginLeft: -130, width: 450, height: 666,
+              // region views stop at the top of the footer band; a clip, not a resize, so the land map
+              // (aspect-fit) and the risk areas (stretched to the box) keep registering exactly
+              clipPath: (!isRadar && outlookRegion !== 'uk') ? 'inset(0 0 36px 0 round 12px)' : undefined,
               zIndex: 3,
               cursor: mapTool === 'text' ? 'text' : mapTool === 'arrow' ? 'crosshair' : mapTool === 'cond' ? 'pointer' : (drawMode ? 'crosshair' : 'default'),
               userSelect: 'none',
