@@ -34,3 +34,8 @@ server/data/scenarios-local/
 server/data/trusted-devices.json
 # ECMWF ensemble member cache for the scenario graphic.
 server/data/ens-cache/
+# Storm-blend pipeline: local venv, downloaded model fields and outputs
+tools/storm-blend/.venv/
+tools/storm-blend/out-*.json
+tools/storm-blend/*.pkl
+tools/storm-blend/*.png

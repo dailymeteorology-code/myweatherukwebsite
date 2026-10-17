@@ -337,7 +337,7 @@ const MAP_BBOX = { lonMin: -10.8, lonMax: 2.5, latMin: 49.5, latMax: 61.0 };
 // --- UK region presets for radar overlay ---
 const UK_REGIONS = [
   { id: 'uk',       label: 'UK Wide',       bbox: { lonMin: -10.8, lonMax: 2.5,  latMin: 49.5, latMax: 61.0 } },
-  { id: 'south',    label: 'South England',  bbox: { lonMin: -5.8,  lonMax: 1.8,  latMin: 50.0, latMax: 52.5 } },
+  { id: 'south',    label: 'South England',  bbox: { lonMin: -5.8,  lonMax: 1.8,  latMin: 50.0, latMax: 52.5 }, mask: '/static-data/south-england.geo.json', neighbours: '/static-data/france-north.geo.json', neighboursOutline: '/static-data/france-north-outline.geo.json' },
   { id: 'midlands', label: 'Midlands',       bbox: { lonMin: -4.0,  lonMax: 0.5,  latMin: 51.8, latMax: 54.0 } },
   { id: 'north',    label: 'North England',  bbox: { lonMin: -4.5,  lonMax: 0.2,  latMin: 53.5, latMax: 56.0 } },
   { id: 'scotland', label: 'Scotland',       bbox: { lonMin: -8.0,  lonMax: -1.5, latMin: 54.5, latMax: 61.0 } },
@@ -367,6 +367,78 @@ const GEO_CACHE_KEY = 'sotg_uk_geo_paths_v3_' + PROJ_SIG;
 
 // A region's projected bbox rectangle (in VIEW space) — used to CLIP the white
 // landmass + county lines to just the selected region so nothing outside it shows.
+/* County-shaped region masks. A region with `mask` (South England) is clipped to
+   the union of its real ceremonial counties instead of a straight-edged box, so
+   the land, the county lines and the town labels stop at the county boundary. */
+const maskCache = new Map();
+function useRegionMask(regionId) {
+  const reg = UK_REGIONS.find((r) => r.id === regionId);
+  const url = reg?.mask || null;
+  const [mask, setMask] = useState(() => (url ? maskCache.get(url) || null : null));
+  useEffect(() => {
+    if (!url) { setMask(null); return undefined; }
+    if (maskCache.has(url)) { setMask(maskCache.get(url)); return undefined; }
+    let live = true;
+    fetch(url).then((r) => r.json()).then((gj) => {
+      const polys = [], paths = [];
+      for (const ft of gj.features || []) {
+        const g = ft.geometry; if (!g) continue;
+        const ps = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+        for (const p of ps) {
+          polys.push(p[0]);
+          paths.push(p.map((ring) => ring.map(([lo, la], i) => { const [x, y] = projectPt(lo, la); return `${i ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)}`; }).join('') + 'Z').join(''));
+        }
+      }
+      const m = { paths, polys };
+      maskCache.set(url, m);
+      if (live) setMask(m);
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [url]);
+  return mask;
+}
+const inMask = (mask, lon, lat) => mask.polys.some((ring) => pointInPolygon([lon, lat], ring));
+
+/* Neighbouring land shown with a region (northern France and its départements
+   for South England), drawn like the UK land: white fill, black coast, faint
+   internal borders. Lives outside the UK map's box, so the SVG overflows. */
+const neighbourCache = new Map();
+function useProjectedGeo(url) {
+  const [paths, setPaths] = useState(() => (url ? neighbourCache.get(url) || null : null));
+  useEffect(() => {
+    if (!url) { setPaths(null); return undefined; }
+    if (neighbourCache.has(url)) { setPaths(neighbourCache.get(url)); return undefined; }
+    let live = true;
+    fetch(url).then((r) => r.json()).then((gj) => {
+      const out = [];
+      for (const ft of gj.features || []) {
+        const g = ft.geometry; if (!g) continue;
+        const ps = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+        out.push(ps.map((p) => p.map((ring) => ring.map(([lo, la], i) => { const [x, y] = projectPt(lo, la); return `${i ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)}`; }).join('') + 'Z').join('')).join(''));
+      }
+      neighbourCache.set(url, out);
+      if (live) setPaths(out);
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [url]);
+  return paths;
+}
+function NeighbourLayer({ regionId }) {
+  const reg = UK_REGIONS.find((r) => r.id === regionId);
+  const paths = useProjectedGeo(reg?.neighbours || null);
+  const outline = useProjectedGeo(reg?.neighboursOutline || null);
+  if (!paths) return null;
+  return (
+    <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} preserveAspectRatio="xMidYMid meet"
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' }}>
+      {/* greyed out: context, not part of the forecast area */}
+      <g>{paths.map((d, i) => <path key={i} d={d} fill="#8b93a1" fillOpacity="0.55" stroke="none" />)}</g>
+      <g fill="none" stroke="#2b3240" strokeOpacity="0.55" strokeWidth="0.45" strokeLinejoin="round">{paths.map((d, i) => <path key={i} d={d} />)}</g>
+      {outline && <g fill="none" stroke="#1f2633" strokeOpacity="0.8" strokeWidth="1.1" strokeLinejoin="round">{outline.map((d, i) => <path key={i} d={d} />)}</g>}
+    </svg>
+  );
+}
+
 function regionClipRect(region) {
   const [rx0, ry0] = projectPt(region.lonMin, region.latMax);
   const [rx1, ry1] = projectPt(region.lonMax, region.latMin);
@@ -550,7 +622,7 @@ function pathProjBBox(d) {
 }
 
 let countyCache = null;
-function CountyLinesLayer({ opacity = 0.5, region = null, zIndex = 1, strokeWidth = 0.5 }) {
+function CountyLinesLayer({ opacity = 0.5, region = null, zIndex = 1, strokeWidth = 0.5, mask = null }) {
   const [paths, setPaths] = useState(() => {
     if (countyCache) return countyCache;
     try { const a = JSON.parse(localStorage.getItem(COUNTY_CACHE_KEY) || 'null');
@@ -601,14 +673,16 @@ function CountyLinesLayer({ opacity = 0.5, region = null, zIndex = 1, strokeWidt
   return (
     <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} preserveAspectRatio="xMidYMid meet"
       style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex }}>
-      <defs><clipPath id="countyLandClip">{land ? land.map((d, i) => <path key={i} d={d} />) : null}</clipPath>{region && (() => { const c = regionClipRect(region); return <clipPath id="countyRegionClip"><rect x={c.x} y={c.y} width={c.w} height={c.h} /></clipPath>; })()}</defs>
+      <defs><clipPath id="countyLandClip">{land ? land.map((d, i) => <path key={i} d={d} />) : null}</clipPath>{region && (mask
+        ? <clipPath id="countyRegionClip">{mask.paths.map((d, i) => <path key={i} d={d} />)}</clipPath>
+        : (() => { const c = regionClipRect(region); return <clipPath id="countyRegionClip"><rect x={c.x} y={c.y} width={c.w} height={c.h} /></clipPath>; })())}</defs>
       <g fill="none" stroke="#000000" strokeWidth={strokeWidth} strokeOpacity={opacity} clipPath="url(#countyLandClip)" strokeLinejoin="round" strokeLinecap="round"><g clipPath={region ? 'url(#countyRegionClip)' : undefined}>{shown.map((d, i) => <path key={i} d={d} />)}</g></g>
     </svg>
   );
 }
 
 let geoCache = null;
-function UKOutlineMap({ region = null }) {
+function UKOutlineMap({ region = null, mask = null }) {
   const [paths, setPaths] = useState(() => {
     if (geoCache) return geoCache;
     // Warm-start from localStorage so a previously-loaded detailed map shows
@@ -677,7 +751,9 @@ function UKOutlineMap({ region = null }) {
           <stop offset="0%" stopColor="#ffffff" />
           <stop offset="100%" stopColor="#eef2f7" />
         </linearGradient>
-        {region && (() => { const clip = regionClipRect(region); return <clipPath id="landRegionClip"><rect x={clip.x} y={clip.y} width={clip.w} height={clip.h} /></clipPath>; })()}
+        {region && (mask
+          ? <clipPath id="landRegionClip">{mask.paths.map((d, i) => <path key={i} d={d} />)}</clipPath>
+          : (() => { const clip = regionClipRect(region); return <clipPath id="landRegionClip"><rect x={clip.x} y={clip.y} width={clip.w} height={clip.h} /></clipPath>; })())}
       </defs>
       {paths && (
         <g filter="url(#landShadow)" clipPath={region ? 'url(#landRegionClip)' : undefined}>
@@ -757,14 +833,15 @@ const CITY_MARKERS = [
   { name: 'Killarney',   lon: -9.52, lat: 52.06, flip: true, regionOnly: true },
 ];
 
-function CityMarkersLayer({ region = null, k = 1 }) {
+function CityMarkersLayer({ region = null, k = 1, mask = null }) {
   // UK-wide shows only the core cities; a region view adds that region's smaller
   // towns (extras are flagged regionOnly).
   const pad = 0.4;
   const pool = region
     ? CITY_MARKERS.filter(c =>
         c.lat >= region.latMin - pad && c.lat <= region.latMax + pad &&
-        c.lon >= region.lonMin - pad && c.lon <= region.lonMax + pad)
+        c.lon >= region.lonMin - pad && c.lon <= region.lonMax + pad &&
+        (!mask || inMask(mask, c.lon, c.lat)))
     : CITY_MARKERS.filter(c => !c.regionOnly);
 
   // Counter-scale marks + labels by the zoom so they stay a constant on-screen
@@ -1267,7 +1344,8 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   };
 
   const isRadar = graphicMode === 'radar';
-  const levels = isRadar ? RADAR_LEVELS : GRAPHIC_LEVELS;
+  const usesSevere = shapes.some((sh) => isSevereId(sh.riskLevel) || isCondSevereId(sh.riskLevel) || sh.cond);
+  const levels = isRadar ? RADAR_LEVELS : GRAPHIC_LEVELS.filter((l) => usesSevere || !(isSevereId(l.id) || isCondSevereId(l.id)));
   const hazardList = isRadar ? RADAR_HAZARDS : HAZARDS;
 
   // --- Lightning overlay (hook) + timeline animation ------------------------
@@ -1849,6 +1927,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   outlookZoomRef.current = outlookZoom;   // ref declared above eventToNormPoint
   // The active region's geographic bbox (null = UK-wide) — used to filter the
   // counties + town labels to the selected region.
+  const regionMask = useRegionMask(!isRadar ? outlookRegion : 'uk');
   const activeRegionBox = (!isRadar && outlookRegion !== 'uk')
     ? (UK_REGIONS.find(r => r.id === outlookRegion)?.bbox || null)
     : null;
@@ -3149,7 +3228,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 position: 'relative', zIndex: 1, display: 'block', marginTop: 8,
                 fontSize: 7.5, fontWeight: 700, letterSpacing: '0.07em',
                 color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase',
-              }}>{isRadar ? 'Source: RainViewer / Blitzortung' : 'SVRE = Severe Tstorm risk · COND = conditional'}</span>
+              }}>{isRadar ? 'Source: RainViewer / Blitzortung' : usesSevere ? 'SVRE = Severe Tstorm risk · COND = conditional' : null}</span>
             </div>
 
             {/* Hazards card — hidden while the lightning overlay is active, since
@@ -3166,7 +3245,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
               const customSz = compact ? 13 : 15;
               const labelSz  = compact ? 9.5 : 10;
               return (
-              <div style={{ ...glass({ padding: compact ? '10px 11px' : '8px 10px', borderRadius: 14, alignSelf: 'flex-start', width: 170 }, exportMode) }}>
+              <div style={{ ...glass({ padding: compact ? '10px 11px' : '8px 10px', borderRadius: 14, alignSelf: 'flex-start', width: visibleHazards.some(h => hazardPct[h.id] != null) ? 200 : 170 }, exportMode) }}>
                 <GlassSheen />
                 <span style={{
                   position: 'relative', zIndex: 1, display: 'block', marginBottom: compact ? 7 : 9, paddingBottom: 7,
@@ -3296,7 +3375,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
             onMouseDown={handleDown} onMouseMove={handleMove} onMouseUp={handleUp} onMouseLeave={handleUp}
             onTouchStart={handleDown} onTouchMove={handleMove} onTouchEnd={handleUp}
             style={{
-              position: 'absolute', top: 20, left: '50%', marginLeft: -130, width: 450, height: 666,
+              position: 'absolute', top: 20, left: '50%', marginLeft: -130, width: 450, height: (!isRadar && outlookRegion !== 'uk') ? 630 : 666,
               zIndex: 3,
               cursor: mapTool === 'text' ? 'text' : mapTool === 'arrow' ? 'crosshair' : mapTool === 'cond' ? 'pointer' : (drawMode ? 'crosshair' : 'default'),
               userSelect: 'none',
@@ -3309,13 +3388,14 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
              transform: outlookZoom.transform, transformOrigin: '0 0',
              transition: 'transform 0.25s ease',
            }}>
-            <UKOutlineMap region={activeRegionBox} />
-            <CountyLinesLayer opacity={0.5} region={activeRegionBox} />
+            {!isRadar && <NeighbourLayer regionId={outlookRegion} />}
+            <UKOutlineMap region={activeRegionBox} mask={regionMask} />
+            <CountyLinesLayer opacity={0.5} region={activeRegionBox} mask={regionMask} />
             {isRadar && <RadarOverlayLayer opacity={0.88} bbox={(UK_REGIONS.find(r => r.id === radarRegion) || UK_REGIONS[0]).bbox} />}
             {isRadar && <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 2, backgroundImage: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.07) 0px, rgba(0,0,0,0.07) 1px, transparent 1px, transparent 3px)' }} />}
             {showShapes && (
               <svg viewBox="0 0 1000 1000" preserveAspectRatio="none"
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 3 }}>
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 3, overflow: 'visible' }}>
                 <defs>
                   {/* Severe hatch — diagonal lines only, transparent background so
                       underlying shapes/map are NOT obscured. */}
@@ -3353,10 +3433,10 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
               </svg>
             )}
             {!isRadar && <UKVRainLayer enabled={showUKVRain} validDate={validDate} timelineGran={timelineGran} playhead={playhead} region={activeRegionBox} />}
-            {showCities && <CityMarkersLayer region={activeRegionBox} k={outlookZoom.k} />}
+            {showCities && <CityMarkersLayer region={activeRegionBox} k={outlookZoom.k} mask={regionMask} />}
             {showLightning && strikes && <LightningLayer strikes={strikes} color={lightningColor} outline={lightningOutline} outlineColor={lightningOutlineColor} />}
             {/* County outlines drawn ON TOP of the lightning dots so the borders stay visible over the strike overlay. */}
-            {showLightning && <CountyLinesLayer opacity={0.8} region={activeRegionBox} zIndex={5.5} strokeWidth={1.1} />}
+            {showLightning && <CountyLinesLayer opacity={0.8} region={activeRegionBox} zIndex={5.5} strokeWidth={1.1} mask={regionMask} />}
             {showShapes && showLightning && shapes.length > 0 && (
               <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 6 }}>
                 {shapes.map((s, i) => {
