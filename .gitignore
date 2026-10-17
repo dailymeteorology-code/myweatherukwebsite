@@ -40,3 +40,4 @@ tools/storm-blend/out-*.json
 tools/storm-blend/*.pkl
 tools/storm-blend/*.png
 tools/storm-blend/*.npz
+tools/storm-blend/videobase-*.jpg

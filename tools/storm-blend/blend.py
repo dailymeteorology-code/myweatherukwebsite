@@ -12,7 +12,7 @@ MODELS (all read straight from their AWS buckets, newest run that covers the day
 OUTLOOK DAY: 06:00 to 06:00 UK time (the graphic's timeline), sampled hourly for the
 hourly models and 3-hourly for ECMWF.
 
-THUNDER SIGNAL per model and hour, on one 0.05° UK grid:
+THUNDER SIGNAL per model and hour, on one UK grid (0.05° by default, bilinear regridding):
     proxy  = s(MU CAPE; 150→800 J/kg) × s(precip rate; 0.5→4 mm/h) × CIN factor
     UKV also forecasts lightning explicitly (flashes per km² per hour); there the signal is
     the larger of the proxy and the lightning. (DMI's HARMONIE files carry a local category-17
@@ -43,9 +43,13 @@ from scipy.ndimage import gaussian_filter, maximum_filter
 from scipy.spatial import cKDTree
 
 UA = {'User-Agent': 'MyWeatherUK-storm-blend/1.0'}
-# wider than the UK map so zoomed region views (South England) have data to their edges
-LAT = np.arange(48.0, 61.5001, 0.05)
-LON = np.arange(-11.5, 4.0001, 0.05)
+# wider than the UK map so zoomed region views (South England) have data to their edges.
+# BLEND_GRID="latMin,latMax,lonMin,lonMax,step" overrides it (mwuk.py uses ~2 km over its view).
+import os as _os
+_g = [float(v) for v in _os.environ.get('BLEND_GRID', '48.0,61.5,-11.5,4.0,0.05').split(',')]
+STEP = _g[4]
+LAT = np.arange(_g[0], _g[1] + STEP / 2, STEP)
+LON = np.arange(_g[2], _g[3] + STEP / 2, STEP)
 GLON, GLAT = np.meshgrid(LON, LAT)            # row 0 = south
 WEIGHTS = {'ukv': 0.30, 'harmonie': 0.24, 'ecmwf': 0.20, 'mo_global': 0.13, 'gfs': 0.13}
 LABELS = {'ukv': 'UKV 2 km', 'harmonie': 'HARMONIE-AROME', 'ecmwf': 'ECMWF IFS', 'mo_global': 'Met Office Global', 'gfs': 'GFS'}
@@ -102,13 +106,32 @@ def uk_hours(day):
     return [start + timedelta(hours=h) for h in range(25)]
 
 
-# ── regridding helpers (nearest source cell for every target point) ──────────
+# ── regridding helpers (bilinear onto the target grid) ───────────────────────
+
+class Bilinear:
+    """Bilinear sampler for fractional source indices (fy, fx); `wrap_x` for global longitudes."""
+    def __init__(self, fy, fx, ny, nx, wrap_x=False):
+        fy = np.clip(fy, 0, ny - 1.000001)
+        self.y0 = np.floor(fy).astype(int); self.ty = (fy - self.y0).astype(np.float32)
+        if wrap_x:
+            fx = np.mod(fx, nx)
+            self.x0 = np.floor(fx).astype(int) % nx; self.x1 = (self.x0 + 1) % nx
+        else:
+            fx = np.clip(fx, 0, nx - 1.000001)
+            self.x0 = np.floor(fx).astype(int); self.x1 = self.x0 + 1
+        self.tx = (fx - np.floor(fx)).astype(np.float32)
+
+    def __call__(self, a):
+        y0, y1, x0, x1, ty, tx = self.y0, self.y0 + 1, self.x0, self.x1, self.ty, self.tx
+        return ((a[y0, x0] * (1 - tx) + a[y0, x1] * tx) * (1 - ty) + (a[y1, x0] * (1 - tx) + a[y1, x1] * tx) * ty).astype(np.float32)
+
 
 def idx_regular(lat_axis, lon_axis, lon360=False):
+    lat_axis, lon_axis = np.asarray(lat_axis, float), np.asarray(lon_axis, float)
     lons = np.where(GLON < 0, GLON + 360, GLON) if lon360 else GLON
-    iy = np.abs(lat_axis[:, None] - GLAT.ravel()[None, :]).argmin(0)
-    ix = np.abs(lon_axis[:, None] - lons.ravel()[None, :]).argmin(0)
-    return iy.reshape(GLAT.shape), ix.reshape(GLAT.shape)
+    fy = (GLAT - lat_axis[0]) / (lat_axis[1] - lat_axis[0])
+    fx = (lons - lon_axis[0]) / (lon_axis[1] - lon_axis[0])
+    return Bilinear(fy, fx, len(lat_axis), len(lon_axis), wrap_x=abs(len(lon_axis) * (lon_axis[1] - lon_axis[0]) - 360) < 1)
 
 
 # ── UKV ──────────────────────────────────────────────────────────────────────
@@ -147,8 +170,7 @@ def load_ukv(hours):
                               f'+a={gm.semi_major_axis} +b={gm.semi_minor_axis} +units=m', always_xy=True)
     x, y = tr.transform(GLON, GLAT)
     xs, ys = ds.variables['projection_x_coordinate'][:], ds.variables['projection_y_coordinate'][:]
-    ix = np.clip(np.round((x - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
-    iy = np.clip(np.round((y - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
+    R = Bilinear((y - ys[0]) / (ys[1] - ys[0]), (x - xs[0]) / (xs[1] - xs[0]), len(ys), len(xs))
 
     def one(vt):
         f = {}
@@ -157,7 +179,7 @@ def load_ukv(hours):
                      ('gust', 'wind_gust_at_10m_max-PT01H')]:
             try:
                 _, a = mo_field(model, run, vt, n)
-                a = a[iy, ix]
+                a = R(a)
                 # UKV NetCDF units: precipitation and hail in metres, lightning in flashes per m²
                 f[k] = a * 1000 if k in ('precip', 'hail') else a * 1e6 if k == 'lightning' else a
             except Exception:
@@ -173,7 +195,7 @@ def load_mo_global(hours):
     run = mo_runs(model, hours)
     log(f'MO Global run {run:%Y-%m-%d %HZ}')
     ds, _ = mo_field(model, run, hours[0], 'CAPE_most_unstable_below_500hPa')
-    iy, ix = idx_regular(ds.variables['latitude'][:], ds.variables['longitude'][:])
+    R = idx_regular(ds.variables['latitude'][:], ds.variables['longitude'][:])
     sample = hours[::3]
 
     def one(vt):
@@ -181,7 +203,7 @@ def load_mo_global(hours):
         for k, n in [('cape', 'CAPE_most_unstable_below_500hPa'), ('precip', 'precipitation_accumulation-PT01H'), ('gust', 'wind_gust_at_10m_max-PT01H')]:
             try:
                 _, a = mo_field(model, run, vt, n)
-                f[k] = a[iy, ix] * 1000 if k == 'precip' else a[iy, ix]
+                f[k] = R(a) * 1000 if k == 'precip' else R(a)
             except Exception:
                 pass
         return vt, f
@@ -227,7 +249,7 @@ def load_gfs(hours):
         if exists(f'{GFS}/gfs.{run:%Y%m%d}/{run:%H}/atmos/gfs.t{run:%H}z.pgrb2.0p25.f{f:03d}.idx'):
             break
     log(f'GFS run {run:%Y-%m-%d %HZ}')
-    iy, ix = idx_regular(np.arange(90, -90.001, -0.25), np.arange(0, 360, 0.25), lon360=True)
+    R = idx_regular(np.arange(90, -90.001, -0.25), np.arange(0, 360, 0.25), lon360=True)
     want = {'cape': ('CAPE', '180-0 mb above ground'), 'cin': ('CIN', '180-0 mb above ground'), 'precip': ('PRATE', 'surface'), 'gust': ('GUST', 'surface')}
 
     def one(vt):
@@ -240,7 +262,7 @@ def load_gfs(hours):
             if not r:
                 continue
             vals, meta = decode(get(base, (r[1], r[2])))
-            a = vals.reshape(meta['Nj'], meta['Ni'])[iy, ix].astype(np.float32)
+            a = R(vals.reshape(meta['Nj'], meta['Ni']))
             out[k] = a * 3600 if k == 'precip' else a
         return vt, out
     with cf.ThreadPoolExecutor(6) as ex:
@@ -261,7 +283,7 @@ def load_ecmwf(hours):
         if exists(f'{ECM}/{run:%Y%m%d}/{run:%H}z/ifs/0p25/oper/{run:%Y%m%d%H}0000-{step}h-oper-fc.index'):
             break
     log(f'ECMWF run {run:%Y-%m-%d %HZ}')
-    iy, ix = idx_regular(np.arange(90, -90.001, -0.25), np.arange(-180, 180, 0.25))
+    R = idx_regular(np.arange(90, -90.001, -0.25), np.arange(-180, 180, 0.25))
 
     idx_cache, field_cache = {}, {}
 
@@ -277,7 +299,7 @@ def load_ecmwf(hours):
         out = None
         if r:
             vals, meta = decode(get(base + '.grib2', (r['_offset'], r['_offset'] + r['_length'] - 1)))
-            out = vals.reshape(meta['Nj'], meta['Ni'])[iy, ix].astype(np.float32)
+            out = R(vals.reshape(meta['Nj'], meta['Ni']))
             time.sleep(0.5)
         field_cache[(step, param)] = out
         return out
@@ -318,8 +340,11 @@ def load_harmonie(hours):
             sel = np.where((lats > 47) & (lats < 62.5) & (lons > -13) & (lons < 5.5))[0]
             tree['sel'] = sel
             tree['t'] = cKDTree(np.c_[lats[sel], lons[sel] * math.cos(math.radians(55))])
-            _, tree['nn'] = tree['t'].query(np.c_[GLAT.ravel(), GLON.ravel() * math.cos(math.radians(55))])
-        return vals[tree['sel']][tree['nn']].reshape(GLAT.shape).astype(np.float32)
+            d, tree['nn'] = tree['t'].query(np.c_[GLAT.ravel(), GLON.ravel() * math.cos(math.radians(55))], k=4)
+            w = 1 / np.maximum(d, 1e-6) ** 2
+            tree['w'] = w / w.sum(1, keepdims=True)
+        v = vals[tree['sel']][tree['nn']]
+        return (v * tree['w']).sum(1).reshape(GLAT.shape).astype(np.float32)
 
     def fetch(vt):
         base = f'{DMI}HARMONIE_DINI_SF_{run:%Y-%m-%dT%H%M%S}Z_{vt:%Y-%m-%dT%H%M%S}Z.grib'
@@ -355,7 +380,7 @@ def load_harmonie(hours):
 
 # ── thunder signal + blend ───────────────────────────────────────────────────
 
-DISK = (lambda r: (np.add.outer(np.arange(-r, r + 1) ** 2, np.arange(-r, r + 1) ** 2) <= r * r))(4)
+DISK = (lambda r: (np.add.outer(np.arange(-r, r + 1) ** 2, np.arange(-r, r + 1) ** 2) <= r * r))(max(1, round(0.2 / STEP)))
 
 
 def signal(f, model):
@@ -367,7 +392,7 @@ def signal(f, model):
         p = p * np.clip(1 + f['cin'] / 250.0, 0.3, 1.0)          # CIN is negative
     if 'lightning' in f and model == 'ukv':
         p = np.maximum(p, s(f['lightning'], 0.005, 0.1))       # flashes per km² per hour
-    return gaussian_filter(maximum_filter(p, footprint=DISK), 1.2)
+    return gaussian_filter(maximum_filter(p, footprint=DISK), 1.2 * 0.05 / STEP)
 
 
 def main():
@@ -428,7 +453,7 @@ def main():
                      'peak_where': [round(float(GLAT.ravel()[day_p[m].argmax()]), 2), round(float(GLON.ravel()[day_p[m].argmax()]), 2)]} for m in day_p}
     res = {
         'day': day, 'window_utc': [hours[0].isoformat(), hours[-1].isoformat()],
-        'grid': {'lat0': float(LAT[0]), 'lon0': float(LON[0]), 'd': 0.05, 'ny': len(LAT), 'nx': len(LON)},
+        'grid': {'lat0': float(LAT[0]), 'lon0': float(LON[0]), 'd': STEP, 'ny': len(LAT), 'nx': len(LON)},
         'blend': np.round(blend, 1).ravel().tolist(),
         'stamps': [st.isoformat() for st in stamps], 'stamp_peak': [round(v, 1) for v in stamp_blend],
         'models': per_model, 'errors': errors, 'weights': WEIGHTS,

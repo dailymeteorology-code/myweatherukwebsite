@@ -13,6 +13,11 @@ Strikes on the animation are drawn at random positions in proportion to that den
 (a fixed seed, so the same run always gives the same picture): they show where the
 model puts lightning, not observed strikes.
 
+RESOLUTION: MWUK is computed on a 0.02° grid (≈2.2 km north-south, 1.4 km east-west) over the
+view, from fields regridded bilinearly. It is scale-aware: the broad pattern (≳12 km) is the
+weighted blend of all five models, the fine detail below that comes only from UKV and HARMONIE,
+the two models that actually resolve 2 km — interpolating a 25 km model onto 2 km adds no detail.
+
 The model is saved as <out>-mwuk.npz (rain, lightning, times, grid).
 """
 import json
@@ -31,6 +36,11 @@ from scipy.ndimage import gaussian_filter
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+import concurrent.futures as cf
+import os
+
+# MWUK runs on a ~2 km grid (0.02°) over the South England view; blend.py reads this on import
+os.environ.setdefault('BLEND_GRID', '47.9,52.9,-7.0,4.0,0.02')
 import blend as B
 
 GW, GH = 640, 760                         # the graphic's own units
@@ -62,8 +72,24 @@ def zoom():
     return k, 450 * (0.5 - (x0 + x1) / 2 * k), 666 * (0.5 - (y0 + y1) / 2 * k)
 
 
+def load_fields(pkl, hours):
+    if os.path.exists(pkl):
+        return pickle.load(open(pkl, 'rb'))
+    loaders = {'ukv': B.load_ukv, 'harmonie': B.load_harmonie, 'ecmwf': B.load_ecmwf, 'mo_global': B.load_mo_global, 'gfs': B.load_gfs}
+    data = {}
+    with cf.ThreadPoolExecutor(5) as ex:
+        futs = {ex.submit(fn, hours): m for m, fn in loaders.items()}
+        for fu in cf.as_completed(futs):
+            try:
+                data[futs[fu]] = fu.result()
+            except Exception as e:
+                print(futs[fu], 'FAILED', e)
+    pickle.dump(data, open(pkl, 'wb'))
+    return data
+
+
 def build_model(pkl, hours):
-    data = pickle.load(open(pkl, 'rb'))
+    data = load_fields(pkl, hours)
     ny, nx = B.GLAT.shape
     rain = np.zeros((len(hours), ny, nx), np.float32)
     light = np.zeros((len(hours), ny, nx), np.float32)
@@ -81,8 +107,11 @@ def build_model(pkl, hours):
         w = (vt - before) / (after - before)
         return steps[before][key] * (1 - w) + steps[after][key] * w
 
+    HI = ('ukv', 'harmonie')                       # the models that resolve 2 km
+    sig_large = 0.11 / B.STEP                      # ≈12 km: the scale that splits "pattern" from "detail"
     for i, vt in enumerate(hours):
         sw, sr, sl = 0.0, 0, 0
+        hw, hr, hl = 0.0, 0, 0
         for m, d in data.items():
             pr, cape = at(d['steps'], vt, 'precip'), at(d['steps'], vt, 'cape')
             if pr is None or cape is None:
@@ -96,9 +125,16 @@ def build_model(pkl, hours):
                     dens = np.maximum(dens, lt)
             w = B.WEIGHTS[m]
             sw += w; sr = sr + w * pr; sl = sl + w * dens
+            if m in HI:
+                hw += w; hr = hr + w * pr; hl = hl + w * dens
         if sw:
-            # the coarser models sit on 25 km cells: smooth so the blend reads as rain, not tiles
-            rain[i], light[i] = gaussian_filter(sr / sw, 1.6), gaussian_filter(sl / sw, 1.2)
+            all_r, all_l = sr / sw, sl / sw
+            if hw:
+                # scale-aware: all-model pattern + the 2 km models' own detail on top
+                hi_r, hi_l = hr / hw, hl / hw
+                all_r = gaussian_filter(all_r, sig_large) + (hi_r - gaussian_filter(hi_r, sig_large))
+                all_l = gaussian_filter(all_l, sig_large) + (hi_l - gaussian_filter(hi_l, sig_large))
+            rain[i], light[i] = np.maximum(0, gaussian_filter(all_r, 0.6)), np.maximum(0, gaussian_filter(all_l, 0.6))
     return rain, light
 
 
@@ -127,6 +163,31 @@ def visible_mask(lon, lat, sel):
     return ok
 
 
+LEVEL_COLOURS = {'Very Low': (96, 165, 250), 'Low': (134, 239, 172), 'Marginal': (250, 204, 21), 'Slight': (251, 146, 60),
+                 'Moderate': (248, 113, 113), 'High': (167, 139, 250)}
+
+
+def chaikin(p, iters=3):
+    for _ in range(iters):
+        q = []
+        for i in range(len(p)):
+            a, b = p[i], p[(i + 1) % len(p)]
+            q += [(a[0] * .75 + b[0] * .25, a[1] * .75 + b[1] * .25), (a[0] * .25 + b[0] * .75, a[1] * .25 + b[1] * .75)]
+        p = q
+    return p
+
+
+def saved_shapes(day):
+    """The outlook's own risk areas, from the saved graphic."""
+    api = 'http://localhost:8787'
+    tok = json.loads(urllib.request.urlopen(urllib.request.Request(f'{api}/api/auth/auto-login', data=b'{}', headers={'Content-Type': 'application/json'}, method='POST')).read())['access_token']
+    lst = json.loads(urllib.request.urlopen(urllib.request.Request(f'{api}/api/entities/WeatherGraphic', headers={'Authorization': f'Bearer {tok}'})).read())
+    from datetime import date
+    want = f"Thunderstorm Outlook {date.fromisoformat(day):%a %d %b} (5-model AWS blend)"
+    g = next((g for g in (lst if isinstance(lst, list) else lst.get('items', [])) if g.get('title') == want), None)
+    return (g or {}).get('graphic_tool_state', {}).get('shapes', [])
+
+
 def palette(v):
     rgb = np.zeros(v.shape + (3,), np.float32)
     xs = np.array([s[0] for s in STOPS]); cs = np.array([s[1] for s in STOPS], np.float32)
@@ -140,7 +201,7 @@ def main():
     out_json, base_img, out_mp4 = sys.argv[1], sys.argv[2], sys.argv[3]
     res = json.load(open(out_json))
     hours = B.uk_hours(res['day'])
-    rain, light = build_model(out_json + '.fields.pkl', hours)
+    rain, light = build_model(out_json.replace('.json', '-mwuk-fields.pkl'), hours)
     np.savez_compressed(out_json.replace('.json', '-mwuk.npz'), rain=rain, lightning=light,
                         times=np.array([h.isoformat() for h in hours]), lat=B.LAT, lon=B.LON)
     print(f'MWUK: rain max {rain.max():.1f} mm/h, lightning max {light.max():.2f} /km²/h')
@@ -154,7 +215,7 @@ def main():
     nx_, ny_ = (X - WRAP[0] - tx) / (k * 450), (Y - WRAP[1] - ty) / (k * 666)
     lon = MAP['lonMin'] + nx_ * (MAP['lonMax'] - MAP['lonMin'])
     lat = inv_merc(Y_TOP - ny_ * (Y_TOP - Y_BOT))
-    fi, fj = (lat - B.LAT[0]) / 0.05, (lon - B.LON[0]) / 0.05
+    fi, fj = (lat - B.LAT[0]) / B.STEP, (lon - B.LON[0]) / B.STEP
     inside &= (fi >= 0) & (fi < len(B.LAT) - 1) & (fj >= 0) & (fj < len(B.LON) - 1)
     inside &= visible_mask(lon, lat, inside)
     i0, j0 = np.clip(fi.astype(int), 0, len(B.LAT) - 2), np.clip(fj.astype(int), 0, len(B.LON) - 2)
@@ -170,13 +231,13 @@ def main():
 
     # strikes: Poisson per grid cell and hour, each with a time inside its hour
     rng = np.random.default_rng(20261018)
-    cell_km2 = (5.56 * 5.56 * np.cos(np.radians(B.GLAT)))
+    cell_km2 = (B.STEP * 111.2) ** 2 * np.cos(np.radians(B.GLAT))
     strikes = []
     for h in range(len(hours)):
         n = rng.poisson(np.minimum(light[h] * cell_km2 * 0.3, 8))
         for jj, ii in zip(*np.nonzero(n)):
             for _ in range(n[jj, ii]):
-                la = B.LAT[jj] + rng.uniform(-0.025, 0.025); lo = B.LON[ii] + rng.uniform(-0.025, 0.025)
+                la = B.LAT[jj] + rng.uniform(-B.STEP / 2, B.STEP / 2); lo = B.LON[ii] + rng.uniform(-B.STEP / 2, B.STEP / 2)
                 px, py = to_px(lo, la)
                 gx, gy = px / S, py / S
                 if not (WRAP[0] <= gx < WRAP[0] + WRAP[2] and WRAP[1] <= gy < WRAP[1] + WRAP[3]):
@@ -190,6 +251,17 @@ def main():
     print(f'{len(strikes)} modelled strikes')
 
     base = Image.open(base_img).convert('RGB').resize((OUT_W, OUT_H), Image.LANCZOS).convert('RGBA')
+
+    # the risk-area outlines, once, clipped to what the map shows — composited above the rain
+    ol = Image.new('RGBA', (OUT_W, OUT_H), (0, 0, 0, 0)); od = ImageDraw.Draw(ol)
+    for sh in saved_shapes(res['day']):
+        pts = chaikin([((WRAP[0] + tx + k * 450 * x) * S, (WRAP[1] + ty + k * 666 * y) * S) for x, y in sh['points']])
+        col = LEVEL_COLOURS.get(sh['riskLevel'], (255, 255, 255))
+        od.line(pts + [pts[0]], fill=(10, 14, 32, 200), width=int(5.5 * S), joint='curve')
+        od.line(pts + [pts[0]], fill=col + (255,), width=int(3 * S), joint='curve')
+    a = np.asarray(ol).copy()
+    a[..., 3] = np.where(inside | (np.asarray(base)[..., 3] < 0), a[..., 3], 0)
+    outline_layer = Image.fromarray(a, 'RGBA')
     fb = ImageFont.truetype('C:/Windows/Fonts/arialbd.ttf', int(15 * S))
     fs = ImageFont.truetype('C:/Windows/Fonts/arialbd.ttf', int(9 * S))
     tz = ZoneInfo('Europe/London')
@@ -218,6 +290,7 @@ def main():
                 gd.ellipse([px - rad * 3, py - rad * 3, px + rad * 3, py + rad * 3], fill=(255, 220, 90, int(110 * a)))
                 col = (255, 255, 255, int(255 * a)) if age < 0.12 else (255, 214, 64, int(240 * a))
                 dd.ellipse([px - rad, py - rad, px + rad, py + rad], fill=col, outline=(40, 25, 0, int(200 * a)))
+        frame = Image.alpha_composite(frame, outline_layer)
         frame = Image.alpha_composite(frame, glow.filter(ImageFilter.GaussianBlur(4 * S)))
         frame = Image.alpha_composite(frame, dots)
         # model + time chip and a small key, top right of the map
@@ -240,8 +313,30 @@ def main():
         d.text((bx1 - 40 * S, ky + 5 * S), 'STRIKES', font=fs, fill=(226, 232, 240, 255))
         d.text((bx1 - 40 * S, ky + 16 * S), '(model)', font=fs, fill=(148, 163, 184, 255))
         proc.stdin.write(np.asarray(frame.convert('RGB')).tobytes())
+    # closing card
+    logo_path = next((p for p in [os.path.join('../../server/uploads', n) for n in sorted(os.listdir('../../server/uploads'), reverse=True) if n.endswith('logo.png')]), None)
+    logo = Image.open(logo_path).convert('RGBA').resize((int(150 * S), int(150 * S)), Image.LANCZOS) if logo_path else None
+    ft = ImageFont.truetype('C:/Windows/Fonts/arialbd.ttf', int(24 * S))
+    fm = ImageFont.truetype('C:/Windows/Fonts/arialbd.ttf', int(62 * S))
+    fsm = ImageFont.truetype('C:/Windows/Fonts/arial.ttf', int(13 * S))
+    last = frame.convert('RGB')
+    for f in range(int(4.5 * FPS)):
+        a = min(1, f / (0.8 * FPS))
+        card = Image.new('RGBA', (OUT_W, OUT_H), (6, 4, 15, 255))
+        cd = ImageDraw.Draw(card)
+        cx, cy = OUT_W / 2, OUT_H / 2
+        if logo:
+            card.alpha_composite(logo, (int(cx - logo.width / 2), int(cy - 230 * S)))
+        for txt, font, y, col in [("Outlook made with MyWeatherUK's", ft, cy - 40 * S, (226, 232, 240)),
+                                  ('New Weather Model', ft, cy - 8 * S, (226, 232, 240)),
+                                  ('MWUK', fm, cy + 34 * S, (125, 211, 252)),
+                                  ('UKV · HARMONIE · ECMWF · MET OFFICE GLOBAL · GFS', fsm, cy + 122 * S, (148, 163, 184))]:
+            w = cd.textlength(txt, font=font)
+            cd.text((cx - w / 2, y), txt, font=font, fill=col + (255,))
+        out = Image.blend(last, card.convert('RGB'), a)
+        proc.stdin.write(np.asarray(out).tobytes())
     proc.stdin.close(); proc.wait()
-    print('wrote', out_mp4, f'{(total + HOLD) / FPS:.1f}s')
+    print('wrote', out_mp4, f'{(total + HOLD) / FPS + 4.5:.1f}s')
 
 
 if __name__ == '__main__':
