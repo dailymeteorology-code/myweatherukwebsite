@@ -24,6 +24,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter, maximum_filter
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
 
 LEVELS = [(5, 'Very Low'), (12, 'Low'), (22, 'Marginal'), (35, 'Slight'), (50, 'Moderate'), (65, 'High')]
 REGION = 'south'          # South England view: land cut to the real southern counties
@@ -109,6 +111,94 @@ def clip_rect(ring, r):
     return [[round(x, 5), round(y, 5)] for x, y in out]
 
 
+def tidy_outer(rings):
+    """The outermost (TSTM) band: drop stray blobs over France and join small blobs that sit
+    close to the main area onto it with a smooth bridge, so the band reads as one area."""
+    polys = [Polygon(r).buffer(0) for r in rings]
+    if not polys:
+        return rings
+    main = max(polys, key=lambda p: p.area)
+    keep = [main]
+    for p in polys:
+        if p is main:
+            continue
+        c = p.centroid
+        if p.area < 0.3 and c.y < 49.4:                    # a small blob over northern France
+            continue
+        if p.area < 0.3 and p.distance(main) < 0.6:        # small blob near the main area: bridge it on
+            near = main.intersection(p.buffer(p.distance(main) + 0.25))
+            main = unary_union([main, unary_union([p, near]).convex_hull]).buffer(0.05).buffer(-0.05)
+            keep[0] = main
+            continue
+        keep.append(p)
+    out = []
+    for p in keep:
+        for g in getattr(p, 'geoms', [p]):
+            out.append([(float(x), float(y)) for x, y in g.exterior.coords])
+    return out
+
+
+GFS = 'https://noaa-gfs-bdp-pds.s3.amazonaws.com'
+
+
+def steering_wind(day_iso, mask, lat, lon):
+    """Mean 700 hPa wind (u, v m/s) over the risk area, 09-21 UTC on the day, from the latest GFS on AWS."""
+    import eccodes
+    from datetime import timezone
+    day = datetime.fromisoformat(day_iso).replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    for k in range(0, 48, 6):
+        t = now - timedelta(hours=k)
+        run = t.replace(hour=(t.hour // 6) * 6, minute=0, second=0, microsecond=0)
+        f_last = int((day.replace(hour=21) - run).total_seconds() // 3600)
+        try:
+            urllib.request.urlopen(f'{GFS}/gfs.{run:%Y%m%d}/{run:%H}/atmos/gfs.t{run:%H}z.pgrb2.0p25.f{f_last:03d}.idx', timeout=30)
+            break
+        except Exception:
+            continue
+    jj, ii = np.where(mask)
+    us, vs = [], []
+    for hh in (9, 12, 15, 18, 21):
+        fh = int((day.replace(hour=hh) - run).total_seconds() // 3600)
+        base = f'{GFS}/gfs.{run:%Y%m%d}/{run:%H}/atmos/gfs.t{run:%H}z.pgrb2.0p25.f{fh:03d}'
+        lines = urllib.request.urlopen(base + '.idx', timeout=60).read().decode().splitlines()
+        for var, acc in (('UGRD', us), ('VGRD', vs)):
+            i = next(i for i, l in enumerate(lines) if f':{var}:700 mb:' in l)
+            a, z = int(lines[i].split(':')[1]), int(lines[i + 1].split(':')[1]) - 1
+            msg = urllib.request.urlopen(urllib.request.Request(base, headers={'Range': f'bytes={a}-{z}'}), timeout=60).read()
+            h = eccodes.codes_new_from_message(msg)
+            vals = eccodes.codes_get_values(h).reshape(eccodes.codes_get(h, 'Nj'), eccodes.codes_get(h, 'Ni'))
+            eccodes.codes_release(h)
+            iy = np.round((90 - lat[jj]) / 0.25).astype(int)
+            ix = np.round((np.where(lon[ii] < 0, lon[ii] + 360, lon[ii])) / 0.25).astype(int) % 1440
+            acc.append(float(vals[iy, ix].mean()))
+    return float(np.mean(us)), float(np.mean(vs)), run
+
+
+def motion_arrows(u, v, rings_by_level, length=0.075):
+    """One arrow on each of the main risk areas (highest bands first), pointing the way the storms move."""
+    import math as m
+    picks = []
+    for name in ('Slight', 'Marginal', 'Low'):
+        for r in sorted(rings_by_level.get(name, []), key=polygon_area, reverse=True):
+            c = Polygon(r).representative_point()
+            if all(m.hypot(c.x - p.x, c.y - p.y) > 1.2 for p in picks):
+                picks.append(c)
+        if len(picks) >= 3:
+            break
+    arrows = []
+    for i, c in enumerate(picks[:3]):
+        # one hour of motion in degrees, then as a direction in the map's own coordinates
+        dlon, dlat = u * 3600 / (111e3 * m.cos(m.radians(c.y))), v * 3600 / 111e3
+        x0, y0 = to_norm(c.x, c.y); x1, y1 = to_norm(c.x + dlon, c.y + dlat)
+        dx, dy = x1 - x0, y1 - y0
+        n = m.hypot(dx, dy) or 1
+        dx, dy = dx / n * length, dy / n * length
+        arrows.append({'id': f'ar-blend-{i}', 'x1': round(x0 - dx / 2, 5), 'y1': round(y0 - dy / 2, 5),
+                       'x2': round(x0 + dx / 2, 5), 'y2': round(y0 + dy / 2, 5), 'color': '#ffffff'})
+    return arrows
+
+
 def polygon_area(p):
     x, y = np.array(p).T
     return 0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
@@ -136,21 +226,32 @@ def main():
     pad = np.pad(b, 1)
     plat = np.r_[lat[0] - g['d'], lat, lat[-1] + g['d']]
     plon = np.r_[lon[0] - g['d'], lon, lon[-1] + g['d']]
-    shapes = []
+    shapes, rings_by_level = [], {}
     for t, name in LEVELS:
         if b.max() < t:
             continue
         cs = plt.contour(plon, plat, pad, levels=[t])
-        for seg in cs.allsegs[0]:
-            ring = [(float(x), float(y)) for x, y in seg]
-            if len(ring) < 4 or polygon_area(ring) < 0.04:            # ~300 km²
-                continue
+        rings = [[(float(x), float(y)) for x, y in seg] for seg in cs.allsegs[0]]
+        rings = [r for r in rings if len(r) >= 4 and polygon_area(r) >= 0.04]       # ~300 km²
+        plt.close('all')
+        if name == 'Very Low':
+            rings = tidy_outer(rings)
+        rings_by_level[name] = rings
+        for ring in rings:
             ring = rdp_closed(ring, 0.02)
             if len(ring) >= 4:
                 pts = clip_rect([to_norm(x, y) for x, y in ring], visible_norm_rect(REGION))
                 if len(pts) >= 3:
                     shapes.append({'riskLevel': name, 'points': pts})
-        plt.close('all')
+
+    # ── motion arrows from the 700 hPa steering wind over the risk area
+    try:
+        u, v, srun = steering_wind(res['day'], b >= 12, lat, lon)
+        arrows = motion_arrows(u, v, rings_by_level)
+        print(f'steering 700 hPa (GFS {srun:%d %HZ}): u={u:.1f} v={v:.1f} m/s -> {len(arrows)} arrows')
+    except Exception as e:
+        arrows = []
+        print('steering wind unavailable:', e)
 
     # ── timeline (9 stamps, 06 → 06)
     stamp_risks = [level_of(v) for v in res['stamp_peak']]
@@ -203,7 +304,7 @@ def main():
         'drawOpacity': 0.7, 'shapes': shapes, 'showShapes': True, 'showCities': True, 'graphicMode': 'outlook',
         'timelineGran': '3h', 'confidence': confidence,
         'validUntil': (day + timedelta(days=1)).strftime('%Y-%m-%dT06:00'),
-        'discussionEnabled': True, 'discussionText': text, 'outlookRegion': region, 'annotations': [], 'arrows': [],
+        'discussionEnabled': True, 'discussionText': text, 'outlookRegion': region, 'annotations': [], 'arrows': arrows,
         'blendSource': {'models': res['models'], 'weights': res['weights'], 'window_utc': res['window_utc']},
     }
     print(json.dumps({k: state[k] for k in ('hazards', 'hazardPct', 'stampRisks', 'confidence', 'validUntil', 'discussionText')}, indent=1))
