@@ -39,3 +39,4 @@ tools/storm-blend/.venv/
 tools/storm-blend/out-*.json
 tools/storm-blend/*.pkl
 tools/storm-blend/*.png
+tools/storm-blend/*.npz
