@@ -13,18 +13,14 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { db } from './db.js';
 import { isDirectLocalRequest } from './auth.js';
+import { releaseAssets } from './githubReleases.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = process.env.NOVA_REPO || 'dailymeteorology-code/myweatherukwebsite';
 const DIR = process.env.TCM_V3_DATA || (fs.existsSync('D:/') ? 'D:/TCM-NOVA/tcm-v3' : path.join(here, 'data', 'tcm-v3'));
 let state = { last: null, error: null, run: null };
 
-async function assets() {
-  const r = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/tcm-v3`, { headers: { 'User-Agent': 'MyWeatherUK-TCM-V3' } });
-  if (r.status === 404) return [];
-  if (!r.ok) throw new Error(`GitHub ${r.status}`);
-  return (await r.json()).assets || [];
-}
+const assets = () => releaseAssets('tcm-v3');
 
 async function download(a) {
   const r = await fetch(a.browser_download_url, { headers: { 'User-Agent': 'MyWeatherUK-TCM-V3' } });

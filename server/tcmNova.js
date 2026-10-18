@@ -17,6 +17,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { requireAdmin } from './auth.js';
+import { releaseAssets } from './githubReleases.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TOOL = path.resolve(here, '..', 'tools', 'tcm-nova');
@@ -140,13 +141,6 @@ function manifest(product, id) {
 const REPO = process.env.NOVA_REPO || 'dailymeteorology-code/myweatherukwebsite';
 const MODE = process.env.NOVA_MODE || 'cloud';
 let syncState = { last: null, error: null, downloaded: [] };
-
-async function releaseAssets(tag) {
-  const r = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`, { headers: { 'User-Agent': 'MyWeatherUK-NOVA', Accept: 'application/vnd.github+json' } });
-  if (r.status === 404) return [];
-  if (!r.ok) throw new Error(`GitHub ${tag}: ${r.status}`);
-  return (await r.json()).assets || [];
-}
 
 async function fetchTo(url, file) {
   const r = await fetch(url, { headers: { 'User-Agent': 'MyWeatherUK-NOVA' } });
