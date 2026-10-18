@@ -21,6 +21,13 @@ def tmp_data(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, 'DATA', tmp_path)
     monkeypatch.setattr(st, 'DATA', tmp_path)
     monkeypatch.setattr(W, 'SKILL_FILE', tmp_path / 'skill.json')
+    import nova.calibrate as cal
+    import nova.learn as learn
+    monkeypatch.setattr(cal, 'DATA', tmp_path)
+    monkeypatch.setattr(cal, 'CAL_FILE', tmp_path / 'calibration.json')
+    monkeypatch.setattr(learn, 'DATA', tmp_path)
+    monkeypatch.setattr(learn, 'LDIR', tmp_path / 'learning')
+    cal._CACHE.clear()
     return tmp_path
 
 
@@ -340,3 +347,43 @@ def test_terrain_lee_reduces_probability():
     up = hz.compute({'conv_10m': z}, D, {}, {'w_oro': z + 0.5}, {'gfs': z + 0.3}, {}, {'gfs': z + 1}, {}, 2000, 3)
     dn = hz.compute({'conv_10m': z}, D, {}, {'w_oro': z - 0.5}, {'gfs': z + 0.3}, {}, {'gfs': z + 1}, {}, 2000, 3)
     assert up['p_thunder'].mean() > dn['p_thunder'].mean()
+
+
+# nightly learning ------------------------------------------------------------
+def test_learning_scores():
+    from nova.learn import score
+    p = np.array([0.9, 0.8, 0.1, 0.0, 0.5])
+    o = np.array([True, False, True, False, True])
+    s = score(p, o)
+    assert s['hits'] == 2 and s['false_alarms'] == 1 and s['misses'] == 1
+    assert 0 <= s['brier'] <= 1
+
+
+def test_live_pairs_roundtrip_into_calibration(tmp_data):
+    from nova import calibrate
+    (tmp_data / 'learning' / 'pairs').mkdir(parents=True)
+    rng = np.random.default_rng(3)
+    from datetime import date
+    for d in range(10):
+        day = (datetime.now(timezone.utc).date() - timedelta(days=d + 1)).isoformat()
+        p = rng.random(4000).astype(np.float32)
+        o = (rng.random(4000) < 0.5 * p).astype(np.float32)               # model over-forecasts by 2x
+        np.savez_compressed(tmp_data / 'learning' / 'pairs' / f'main-{day}.npz', **{'0_1_p': p, '0_1_o': o})
+    monkey = calibrate.collect
+    calibrate.collect = lambda: {}
+    try:
+        out = calibrate.fit(live_days=60)
+    finally:
+        calibrate.collect = monkey
+    c = out['p_thunder']['1']
+    assert c['n_days'] == 10 and c['applied'] and c['brier_calibrated_cv'] < c['brier_raw_cv']
+    assert abs(calibrate.apply_curve(np.array([0.8]), c)[0] - 0.4) < 0.08
+
+
+def test_rule_based_analysis_runs():
+    from nova.learn import rule_based_explanation
+    rep = {'products': {'main': {'scores_by_window': {'1': {'event_rate': 0.1, 'mean_p': 0.3, 'pod': 0.8, 'far': 0.6}},
+                                 'diagnosis': {'false_alarm': {'ml_cin': -180, 'w_oro': 0.3}, 'hit': {'mu_cape': 900}, 'miss': {'mu_cape': 100}},
+                                 'peak_timing_error_h': {'mean': 2.0, 'n_runs': 3}}}}
+    t = rule_based_explanation(rep)
+    assert 'over-forecast' in t and 'cap held' in t and 'windward' in t and 'under-did instability' in t

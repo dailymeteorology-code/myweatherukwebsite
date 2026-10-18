@@ -37,7 +37,7 @@ MAIN = {
     'name': 'TCM Main Run',
     'grid': 'gb2km',
     'cycles_local': ['03:00', '09:00', '15:00', '21:00'],      # Europe/London wall clock
-    'horizon_h': int(os.environ.get('NOVA_MAIN_HORIZON_H', 120)),
+    'horizon_h': int(os.environ.get('NOVA_MAIN_HORIZON_H', 96)),       # 4 days
     'step_h': 3,
     'method': 'deterministic multi-model blend + deterministic downscaling (no AI/ML)',
 }

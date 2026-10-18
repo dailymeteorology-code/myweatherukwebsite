@@ -104,7 +104,7 @@ def column_diagnostics(C, shape):
     ebwd_t = np.where(out['ebwd'] < 10, 0, np.minimum(out['ebwd'] / 20, 1.5))
     out['scp'] = (np.maximum(mu['cape'], 0) / 1000 * np.maximum(out['esrh'], 0) / 50 * ebwd_t).astype(np.float32)
     lcl_t = np.clip((2000 - ml['lcl_z']) / 1000, 0, 1)
-    cin_t = np.clip((ml['cin'] + 200) / 150, 0, 1)
+    cin_t = np.clip((np.nan_to_num(ml['cin']) + 200) / 150, 0, 1)
     ebwd_s = np.where(out['ebwd'] < 12.5, 0, np.minimum(out['ebwd'] / 20, 1.5))
     out['stp'] = (np.maximum(ml['cape'], 0) / 1500 * np.maximum(out['esrh'], 0) / 150 * ebwd_s * lcl_t * cin_t).astype(np.float32)
     out['ehi_0_1km'] = (sb['cape'] * out['srh_0_1km'] / 160000).astype(np.float32)

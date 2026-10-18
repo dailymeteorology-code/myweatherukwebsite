@@ -39,6 +39,7 @@ from .weights import WINDOWS, window_index
 
 CAL_FILE = DATA / 'calibration.json'
 THIN = 4
+MIN_DAYS = 8
 CORE_MMH = 25.0
 
 
@@ -88,17 +89,22 @@ def calibrate_field(p, lead_h, field='p_thunder'):
         except Exception:
             _CACHE['cal'] = {}
     cur = _CACHE['cal'].get(field, {}).get(str(window_index(lead_h)))
+    if cur is None and field == 'hyper_p_thunder':
+        return p, False
     return apply_curve(p, cur), bool(cur and cur.get('applied'))
 
 
 # ── hindcast ──────────────────────────────────────────────────────────────────
 
-def hindcast(days, local_hour=9, horizon=24):
+HINDCAST_LEADS = list(range(0, 25, 3)) + list(range(30, 97, 6))     # 3-hourly day 1, 6-hourly days 2-4
+
+
+def hindcast(days, local_hour=9, horizon=96):
     from .main_run import run
     for d in days:
         init = datetime(d.year, d.month, d.day, local_hour, tzinfo=ZoneInfo('Europe/London')).astimezone(timezone.utc)
         try:
-            run(init, horizon, product='hindcast',
+            run(init, horizon, product='hindcast', leads=[l for l in HINDCAST_LEADS if l <= horizon],
                 sources=['ukv', 'mo_global', 'ifs', 'ifs_ens', 'aifs', 'aifs_ens', 'gfs', 'gefs'])
         except FileExistsError:
             log(f'hindcast {d}: exists')
@@ -153,12 +159,26 @@ def local_strikes():
 
 
 def collect():
+    """Hindcast (p_raw, event) pairs. Each run's pairs are computed once and cached under
+    learning/pairs/, so the nightly refit does not re-read months of radar."""
     grid = Grid.get('gb2km')
     strikes = local_strikes()
     samples = {}
+    cache_dir = DATA / 'learning' / 'pairs'
+    cache_dir.mkdir(parents=True, exist_ok=True)
     for rd in sorted((DATA / 'hindcast').glob('hindcast-*')):
         if rd.name.endswith('.partial'):
             continue
+        cf_ = cache_dir / f'{rd.name}.npz'
+        if cf_.exists():
+            z = np.load(cf_)
+            day = rd.name.split('-')[1][:8]
+            for k in z.files:
+                field, wi, i, kind = k.split('|')
+                if kind == 'p':
+                    samples.setdefault(field, {}).setdefault(wi, []).append((day, z[k], z[k.replace('|p', '|o')]))
+            continue
+        fresh = {}
         m = json.loads((rd / 'manifest.json').read_text())
         day = m['init_utc'][:10]
         for fr in m['frames']:
@@ -175,13 +195,80 @@ def collect():
                 p = store.read_frame('hindcast', rd.name, fr['lead_min'], name, grid.shape).astype(np.float32)
                 pp, oo = p[::THIN, ::THIN].ravel(), ev[::THIN, ::THIN].ravel().astype(np.float32)
                 ok = np.isfinite(pp)
-                samples.setdefault(field, {}).setdefault(str(window_index(fr['lead_h'])), []).append((day, pp[ok], oo[ok]))
+                wi = str(window_index(fr['lead_h']))
+                samples.setdefault(field, {}).setdefault(wi, []).append((day, pp[ok], oo[ok]))
+                i = len(fresh) // 2
+                fresh[f'{field}|{wi}|{i}|p'] = pp[ok]
+                fresh[f'{field}|{wi}|{i}|o'] = oo[ok]
+        np.savez_compressed(cf_, **fresh)
         log(f'collected {rd.name}')
     return samples
 
 
-def fit():
+def live_samples(days=60):
+    """Pairs stored by the nightly learning job (learn.py) for the last `days` days."""
+    out = {}
+    cut = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+    for f in sorted((DATA / 'learning' / 'pairs').glob('*-20??-??-??.npz')):
+        product, day = f.stem.split('-', 1)
+        if day < cut or product not in ('main', 'hyper'):
+            continue
+        field = 'p_thunder' if product == 'main' else 'hyper_p_thunder'
+        z = np.load(f)
+        for k in z.files:
+            if k.endswith('_p'):
+                i, wi, _ = k.split('_')
+                out.setdefault(field, {}).setdefault(wi, []).append((day, z[k], z[f'{i}_{wi}_o']))
+    return out
+
+
+def train_skill(products=('hindcast', 'main')):
+    """Per-source FSS (radar, 1 mm/h, 30 km) by lead window from every stored run's
+    saved source fields -> skill.json. This is what moves the dynamic model weights."""
+    from .verify import COARSE, fss, radar_on
+    from .grid import block_mean
+    from .weights import SKILL_FILE
+    import zlib
+    grid = Grid.get('gb2km')
+    acc = {}
+    radar_cache = {}
+    for prod in products:
+        for rd in sorted((DATA / prod).glob(f'{prod}-*')):
+            if rd.name.endswith('.partial') or not (rd / 'sources').exists():
+                continue
+            m = json.loads((rd / 'manifest.json').read_text())
+            for fr in m['frames']:
+                if not fr.get('valid'):
+                    continue
+                vt = datetime.fromisoformat(fr['valid'])
+                if vt > datetime.now(timezone.utc) - timedelta(minutes=30):
+                    continue
+                if vt not in radar_cache:
+                    try:
+                        radar_cache[vt] = block_mean(np.nan_to_num(radar_on(grid, vt)), COARSE)
+                    except Exception:
+                        radar_cache[vt] = None
+                oc = radar_cache[vt]
+                if oc is None:
+                    continue
+                wi = str(window_index(fr['lead_h']))
+                for f in (rd / 'sources' / str(fr['lead_min'])).glob('*.bin'):
+                    a = np.frombuffer(zlib.decompress(f.read_bytes()), np.float16).astype(np.float32).reshape(oc.shape)
+                    v = fss(a, oc, 1.0, 3)
+                    if v is not None:
+                        acc.setdefault(wi, {}).setdefault(f.stem, []).append(v)
+            log(f'skill: {rd.name}')
+    skill = {'thunder': {wi: {m: {'n': len(v), 'fss': float(np.mean(v))} for m, v in d.items()} for wi, d in acc.items()},
+             'trained_utc': datetime.now(timezone.utc).isoformat(), 'metric': 'FSS, radar >= 1 mm/h, 30 km neighbourhood'}
+    store._write_json(SKILL_FILE, skill)
+    return skill
+
+
+def fit(live_days=60):
     samples = collect()
+    for field, by_win in live_samples(live_days).items():
+        for wi, rows in by_win.items():
+            samples.setdefault(field, {}).setdefault(wi, []).extend(rows)
     out = {'event_definition': f'radar >= {CORE_MMH} mm/h (convective-core proxy) or archived lightning, within the forecast neighbourhood, ±90 min',
            'method': 'isotonic (pool-adjacent-violators) reliability mapping, binned; leave-one-day-out cross-validation',
            'fitted_utc': datetime.now(timezone.utc).isoformat(), 'thinning': THIN}
@@ -206,7 +293,7 @@ def fit():
                 bs_cv.append(np.mean((apply_curve(ep, {'applied': True, 'x': cx.tolist(), 'y': cy.tolist()}) - eo) ** 2))
             clim = float(O.mean())
             br, bc = (float(np.mean(bs_raw)), float(np.mean(bs_cv))) if bs_raw else (None, None)
-            applied = bool(br is not None and bc < br and len(days) >= 8)
+            applied = bool(br is not None and bc < br and len(days) >= MIN_DAYS)
             out[field][wi] = {
                 'window': f'{WINDOWS[int(wi)][0]}-{WINDOWS[int(wi)][1]} h', 'x': xs.round(4).tolist(), 'y': ys.round(4).tolist(),
                 'n_samples': int(P.size), 'n_days': len(days), 'event_rate': round(clim, 4),
@@ -214,7 +301,7 @@ def fit():
                 'bss_vs_climatology_cv': None if bc is None or clim in (0, 1) else round(1 - bc / (clim * (1 - clim)), 4),
                 'reliability_bins': {'p': bx.round(3).tolist(), 'obs': by_.round(4).tolist(), 'n': bn.tolist()},
                 'applied': applied,
-                'why_not_applied': None if applied else ('fewer than 8 days' if len(days) < 8 else 'did not improve cross-validated Brier'),
+                'why_not_applied': None if applied else (f'fewer than {MIN_DAYS} days' if len(days) < MIN_DAYS else 'did not improve cross-validated Brier'),
             }
     store._write_json(CAL_FILE, out)
     return out
@@ -222,7 +309,7 @@ def fit():
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['hindcast', 'fit'])
+    ap.add_argument('cmd', choices=['hindcast', 'fit', 'skill', 'train'])
     ap.add_argument('start', nargs='?')
     ap.add_argument('end', nargs='?')
     ap.add_argument('--every', type=int, default=4)
@@ -231,6 +318,13 @@ if __name__ == '__main__':
         d0, d1 = datetime.fromisoformat(a.start).date(), datetime.fromisoformat(a.end).date()
         days = [d0 + timedelta(days=i) for i in range(0, (d1 - d0).days + 1, a.every)]
         hindcast(days)
+    elif a.cmd == 'skill':
+        print(json.dumps(train_skill(), indent=1)[:3000])
+    elif a.cmd == 'train':                                   # hindcast range -> skill -> calibration
+        d0, d1 = datetime.fromisoformat(a.start).date(), datetime.fromisoformat(a.end).date()
+        hindcast([d0 + timedelta(days=i) for i in range(0, (d1 - d0).days + 1, a.every)])
+        train_skill()
+        fit()
     else:
         r = fit()
         print(json.dumps({f: {w: {k: v[k] for k in ('n_days', 'event_rate', 'brier_raw_cv', 'brier_calibrated_cv', 'applied')}

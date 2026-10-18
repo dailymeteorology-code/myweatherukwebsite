@@ -29,3 +29,20 @@ The website (`server/tcmNova.js`) schedules the jobs and serves `/api/nova/{main
 
 - Python: `PYTHONPATH=. ../../../ukv-platform/.venv/Scripts/python.exe -m pytest -q tests`
 - Node: `node --test server/tcmNova.test.js` (run from the site root)
+
+## Training and nightly learning
+
+**Historical training:** `python -m nova.calibrate train 2026-07-01 2026-10-12 --every 10`
+
+- Runs 4-day hindcasts from archived AWS forecasts into `hindcast/`, with every source's fields saved.
+- Trains per-source skill (FSS against radar), which drives the dynamic model weights.
+- Fits isotonic calibration curves per lead window, validated leave-one-day-out.
+
+**Nightly learning:** `python -m nova.learn`. The server runs it at 00:00 Europe/London.
+
+1. Verifies the day's Main Run and Hyper-Short frames against radar convective cores and LEELA lightning.
+2. Diagnoses hits, misses and false alarms by environment and terrain, plus peak timing error.
+3. Retrains skill, then refits calibration on the hindcasts plus the last 60 days of live pairs. A curve is only applied if the cross-validated Brier score improves.
+4. Writes `learning/reports/<day>.json`, which the page shows on its Learning tab.
+
+Claude writes the narrative analysis when `ANTHROPIC_API_KEY` is set. It never changes model settings; only the statistics do.

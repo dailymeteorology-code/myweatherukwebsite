@@ -189,7 +189,7 @@ def wmean(items, shape):
         return np.where(den > 0, num / den, np.nan).astype(np.float32)
 
 
-def run(init=None, horizon_h=None, grid_name=None, sources=None, product='main'):
+def run(init=None, horizon_h=None, grid_name=None, sources=None, product='main', leads=None):
     init = init or cycle_init()
     horizon_h = horizon_h or MAIN['horizon_h']
     grid = Grid.get(grid_name or MAIN['grid'])
@@ -235,9 +235,9 @@ def run(init=None, horizon_h=None, grid_name=None, sources=None, product='main')
     prev_p = None
     peak = {}
     degraded = []
-    n_frames = horizon_h // MAIN['step_h'] + 1
-    for i in range(n_frames):
-        lead = i * MAIN['step_h']
+    leads = leads or list(range(0, horizon_h + 1, MAIN['step_h']))
+    n_frames = len(leads)
+    for lead in leads:
         vt = init + timedelta(hours=lead)
         with cf.ThreadPoolExecutor(len(caches) or 1) as ex:
             got = dict(zip(caches, ex.map(lambda c: c.at(vt), caches.values())))
@@ -258,7 +258,7 @@ def run(init=None, horizon_h=None, grid_name=None, sources=None, product='main')
             peak.setdefault(k, np.zeros(grid.shape, np.float32))
             peak[k] = np.maximum(peak[k], fields[k])
         writer.frame(lead * 60, vt.isoformat(), {k: fields[k] for k in STORE_FIELDS if k in fields}, meta)
-        if lead <= 24 and product == 'main':
+        if (lead <= 24 and product == 'main') or product == 'hindcast':
             verify.save_source_fields(writer.dir, lead * 60, got, grid)
         log(f'T+{lead:3d} {vt:%a %HZ} sources={sorted(got)} pmax={fields["p_thunder"].max():.2f}')
     # run-level hazard timing: arrival, duration, footprint

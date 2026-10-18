@@ -29,8 +29,11 @@ const PY = process.env.NOVA_PYTHON || (() => {
 export const PRODUCTS = {
   main: { module: 'nova.main_run', cycles: ['03:00', '09:00', '15:00', '21:00'], timeoutMin: 300 },
   hyper: { module: 'nova.hyper.run', everyMinutes: 60, timeoutMin: 58 },
+  /* nightly learning: verify the day just ended, retrain weights, recalibrate, write the report */
+  learning: { module: 'nova.learn', cycles: ['00:00'], timeoutMin: 240, noInit: true },
 };
 const SAFE_ID = /^(main|hyper)-\d{8}T\d{4}Z$/;
+const SAFE_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const SAFE_FIELD = /^[a-z0-9_]{1,40}$/;
 
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
@@ -79,7 +82,7 @@ function startJob(product, init) {
   const iso = init.toISOString().slice(0, 16);
   const local = londonParts(init);
   const localIso = `${local.y}-${String(local.mo).padStart(2, '0')}-${String(local.d).padStart(2, '0')}T${String(local.h).padStart(2, '0')}:${String(local.mi).padStart(2, '0')}`;
-  const args = ['-m', PRODUCTS[product].module, '--init', localIso];
+  const args = PRODUCTS[product].noInit ? ['-m', PRODUCTS[product].module] : ['-m', PRODUCTS[product].module, '--init', localIso];
   const child = spawn(PY, args, { cwd: TOOL, env: { ...process.env, PYTHONPATH: TOOL, NOVA_DATA: DATA }, windowsHide: true });
   running[product] = { pid: child.pid, init: iso, started: new Date().toISOString() };
   const logFile = path.join(DATA, product, 'job.log');
@@ -130,9 +133,30 @@ function manifest(product, id) {
 }
 
 export function mountTcmNova(app, { schedule = process.env.NOVA_SCHEDULE !== 'off' } = {}) {
+  /* learning reports — registered before the /:product routes so 'learning' is not read as a product */
+  app.get('/api/nova/learning/latest', (req, res) => {
+    const l = readJson(path.join(DATA, 'learning', 'latest.json'));
+    const r = l && readJson(path.join(DATA, 'learning', 'reports', `${l.day}.json`));
+    if (!r) return res.status(404).json({ error: 'no learning report yet', status: readJson(path.join(DATA, 'learning', 'status.json')) });
+    res.json(r);
+  });
+  app.get('/api/nova/learning/days', (req, res) => {
+    let files = [];
+    try { files = fs.readdirSync(path.join(DATA, 'learning', 'reports')); } catch { /* none yet */ }
+    res.json({ days: files.map((f) => f.replace('.json', '')).filter((d) => SAFE_DAY.test(d)).sort().reverse() });
+  });
+  app.get('/api/nova/learning/report/:day', (req, res) => {
+    if (!SAFE_DAY.test(req.params.day)) return res.status(400).end();
+    const r = readJson(path.join(DATA, 'learning', 'reports', `${req.params.day}.json`));
+    return r ? res.json(r) : res.status(404).json({ error: 'no report for that day' });
+  });
+  app.get('/api/nova/calibration', (req, res) => {
+    res.json({ calibration: readJson(path.join(DATA, 'calibration.json')), skill: readJson(path.join(DATA, 'skill.json')) });
+  });
+
   const prod = (req, res) => {
     const p = req.params.product;
-    if (!PRODUCTS[p]) { res.status(400).json({ error: 'product must be "main" or "hyper"' }); return null; }
+    if (p !== 'main' && p !== 'hyper') { res.status(400).json({ error: 'product must be "main" or "hyper"' }); return null; }
     return p;
   };
 
@@ -192,6 +216,7 @@ export function mountTcmNova(app, { schedule = process.env.NOVA_SCHEDULE !== 'of
   if (schedule) {
     scheduleLoop('main', nextMainCycle);
     scheduleLoop('hyper', nextHyperCycle);
-    console.log(`[nova] scheduler armed: main next ${nextMainCycle()?.toISOString()}, hyper next ${nextHyperCycle()?.toISOString()} (data ${DATA})`);
+    scheduleLoop('learning', (from) => nextMainCycle(from, PRODUCTS.learning.cycles));
+    console.log(`[nova] scheduler armed: main next ${nextMainCycle()?.toISOString()}, hyper next ${nextHyperCycle()?.toISOString()}, learning next ${nextMainCycle(new Date(), PRODUCTS.learning.cycles)?.toISOString()} (data ${DATA})`);
   }
 }

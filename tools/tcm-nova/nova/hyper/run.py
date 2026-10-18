@@ -15,6 +15,7 @@ import numpy as np
 from pyproj import Transformer
 
 from .. import store
+from ..calibrate import calibrate_field
 from ..config import ANALYSIS_VERSION, HYPER, HYPER_ENGINE_VERSION
 from ..grid import Grid, coarsen_sampler
 from ..io_aws import log
@@ -135,6 +136,8 @@ def run(init=None):
             out.update(precip=rain, flash_density=light, p_thunder=P['p_thunder'], p_lightning=P['p_lightning'],
                        p_heavy_rain=P['p_heavy_rain'])
             conf = float(np.exp(-lead / 180))
+        out['p_thunder_uncal'] = out['p_thunder']
+        out['p_thunder'], cal_t = calibrate_field(out['p_thunder'], lead / 60, 'hyper_p_thunder')
         acc = acc + 0.25 * (prev + out['precip']) if lead else acc          # trapezoid over 30 min, mm
         prev = out['precip']
         pk = [k for k in out if k.startswith('p_')]
@@ -142,7 +145,7 @@ def run(init=None):
             'checks': {'prob_out_of_range': int(sum(((out[k] < 0) | (out[k] > 1)).sum() for k in pk)),
                        'negative_precip': int((out['precip'] < 0).sum()), 'nan_frac_core': float(np.isnan(out['precip']).mean())},
             'confidence': round(conf, 3), 'neighbourhood_km': round(P['neighbourhood_km'], 1),
-            'nowcast_weight': round(wn, 3), 'ukv_environment': bool(E)})
+            'nowcast_weight': round(wn, 3), 'ukv_environment': bool(E), 'calibrated': cal_t})
         log(f'hyper T+{lead / 60:4.1f} h  nowcast w={wn:.2f}  ukv={bool(E)}  pmax={out["p_thunder"].max():.2f}')
     store.set_status('hyper', state='validating', run_id=rid)
     fr = writer.manifest['frames']

@@ -27,6 +27,11 @@ test('main cycles across both DST transitions', () => {
   assert.equal(nextMainCycle(new Date('2026-10-25T00:30:00Z')).toISOString(), '2026-10-25T03:00:00.000Z'); // 03:00 GMT
 });
 
+test('learning runs at 00:00 London time in BST and GMT', () => {
+  assert.equal(nextMainCycle(new Date('2026-07-01T12:00:00Z'), ['00:00']).toISOString(), '2026-07-01T23:00:00.000Z');
+  assert.equal(nextMainCycle(new Date('2026-12-01T12:00:00Z'), ['00:00']).toISOString(), '2026-12-02T00:00:00.000Z');
+});
+
 test('hyper runs at the top of every London hour, 24 a day even on DST days', () => {
   let t = new Date('2026-10-25T00:10:00Z'); const runs = [];
   while (runs.length < 25) { t = nextHyperCycle(t); runs.push(t); }

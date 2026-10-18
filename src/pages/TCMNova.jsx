@@ -17,7 +17,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   CloudLightning, Zap, CloudRain, Wind, Tornado, Snowflake, AlertTriangle, Play, Pause,
-  ChevronLeft, ChevronRight, Layers, Clock, Database, Activity, Map as MapIcon, Info, RefreshCw,
+  ChevronLeft, ChevronRight, Layers, Clock, Database, Activity, Map as MapIcon, Info, RefreshCw, TrendingUp,
 } from 'lucide-react';
 
 /* ── look (V3 light card style) ───────────────────────────────────────────── */
@@ -459,7 +459,7 @@ export default function TCMNova({ engineSwitcher = null }) {
           {/* right column */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
             <div style={{ ...card, padding: 6, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-              {[['map', 'Map', MapIcon], ['overview', 'Sources & method', Database], ['status', 'Run status', Activity]].map(([k, l, I]) => (
+              {[['map', 'Map', MapIcon], ['overview', 'Sources & method', Database], ['learning', 'Learning', TrendingUp], ['status', 'Run status', Activity]].map(([k, l, I]) => (
                 <button key={k} type="button" onClick={() => setTab(k)}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '9px 14px', borderRadius: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700, fontSize: '0.8rem',
                     border: 'none', background: tab === k ? '#e0f2fe' : 'transparent', color: tab === k ? T.sky : T.mid }}>
@@ -550,6 +550,7 @@ export default function TCMNova({ engineSwitcher = null }) {
 
             {manifest && tab === 'overview' && <Overview manifest={manifest} frame={frame} product={product} />}
             {tab === 'status' && <StatusPanel manifest={manifest} status={status} />}
+            {tab === 'learning' && <LearningPanel />}
           </div>
         </div>
       </div>
@@ -626,6 +627,72 @@ function StatusPanel({ manifest, status }) {
       {status?.history?.length > 0 && (
         <><h4 style={{ color: T.text, marginBottom: 4 }}>Recent job history</h4>
           <ul style={{ marginTop: 0, fontFamily: MONO, fontSize: '0.68rem' }}>{status.history.slice(-10).reverse().map((h, i) => <li key={i}>{h.at?.slice(0, 16)} {h.state} {h.run_id || ''}</li>)}</ul></>
+      )}
+    </div>
+  );
+}
+
+const WIN = { 0: '0–6 h', 1: '6–24 h', 2: '24–72 h', 3: '72–96 h' };
+const pct = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`);
+
+function LearningPanel() {
+  const [days, setDays] = useState([]);
+  const [day, setDay] = useState(null);
+  const [rep, setRep] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => { fetch('/api/nova/learning/days').then((r) => r.json()).then((d) => { setDays(d.days || []); setDay((d.days || [])[0] || null); }); }, []);
+  useEffect(() => {
+    if (!day) return;
+    fetch(`/api/nova/learning/report/${day}`).then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then(setRep).catch((e) => setErr(String(e)));
+  }, [day]);
+  return (
+    <div style={{ ...card, padding: 16, fontSize: '0.78rem', color: T.mid, lineHeight: 1.6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <h3 style={{ margin: 0, color: T.text }}>Nightly learning</h3>
+        <select value={day || ''} onChange={(e) => setDay(e.target.value)} aria-label="Learning day" style={{ ...pill(T.soft, T.text), padding: '6px 10px' }}>
+          {days.map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <span style={{ fontSize: '0.7rem' }}>Every night at 00:00 the day's runs are checked against radar and lightning, then weights and calibration are retrained.</span>
+      </div>
+      {!days.length && <p>No learning report yet — the first one is written at midnight.</p>}
+      {err && <p>Could not load that report.</p>}
+      {rep && (
+        <>
+          <h4 style={{ color: T.text, marginBottom: 4 }}>Analysis</h4>
+          <p style={{ marginTop: 0, whiteSpace: 'pre-wrap', color: T.text }}>{rep.ai_analysis || rep.rule_based_analysis || 'Nothing to analyse for this day.'}</p>
+          <p style={{ fontSize: '0.68rem', marginTop: -6 }}>{rep.ai_analysis ? 'Written by Claude from the verification numbers below — it cannot change model settings.' : 'Rule-based summary (' + rep.ai_analysis_status + ').'}</p>
+          {Object.entries(rep.products || {}).map(([prod, r]) => (
+            <div key={prod} style={{ marginTop: 12 }}>
+              <h4 style={{ color: T.text, margin: '0 0 4px' }}>{prod === 'main' ? 'TCM Main Run' : 'TCM Hyper-Short'}</h4>
+              {Object.keys(r.scores_by_window || {}).length === 0 ? <p style={{ margin: 0 }}>No frames from this product could be verified for this day.</p> : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem', fontFamily: MONO }}>
+                  <thead><tr style={{ textAlign: 'left', color: T.faint }}><th>Lead</th><th>Brier</th><th>BSS</th><th>Mean p</th><th>Observed</th><th>POD</th><th>FAR</th><th>CSI</th></tr></thead>
+                  <tbody>{Object.entries(r.scores_by_window).map(([w, sc]) => (
+                    <tr key={w} style={{ borderTop: `1px solid ${T.border}` }}>
+                      <td>{WIN[w] || w}</td><td>{sc.brier.toFixed(4)}</td><td>{sc.bss == null ? '—' : sc.bss.toFixed(3)}</td>
+                      <td>{pct(sc.mean_p)}</td><td>{pct(sc.event_rate)}</td><td>{pct(sc.pod)}</td><td>{pct(sc.far)}</td><td>{pct(sc.csi)}</td>
+                    </tr>))}</tbody>
+                </table>
+              )}
+              {r.diagnosis && Object.keys(r.diagnosis).length > 0 && (
+                <div style={{ fontSize: '0.7rem', marginTop: 6 }}>
+                  {Object.entries(r.diagnosis).map(([g, d]) => (
+                    <div key={g}><b>{g.replace('_', ' ')}</b> ({d.n} cells): MUCAPE {d.mu_cape ?? '—'} J/kg · MLCIN {d.ml_cin ?? '—'} · 0–6 km shear {d.shear_0_6km ?? '—'} m/s · terrain ascent {d.w_oro ?? '—'} m/s · lead {d.lead_h ?? '—'} h</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          <h4 style={{ color: T.text, marginBottom: 4 }}>What the model learned</h4>
+          <ul style={{ marginTop: 0, fontSize: '0.72rem' }}>
+            {typeof rep.calibration_update === 'object' && Object.entries(rep.calibration_update).map(([k, c]) => (
+              <li key={k}>{k}: calibration {c.applied ? 'applied' : 'not applied'} ({c.n_days} days; cross-validated Brier {c.brier_cv_raw?.toFixed?.(4) ?? '—'} → {c.brier_cv_calibrated?.toFixed?.(4) ?? '—'})</li>
+            ))}
+            {typeof rep.skill_update === 'object' && Object.entries(rep.skill_update).map(([w, m]) => (
+              <li key={w}>Model skill {WIN[w] || w}: {Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' · ')}</li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );

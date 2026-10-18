@@ -260,7 +260,7 @@ def lift(C, p0, T0, Td0, z0=None):
     T_mid = 0.5 * (Tenv[1:] + Tenv[:-1])
     cape_mp = np.where(in_cape & (T_mid <= 263.15) & (T_mid >= 233.15), pos, 0).sum(0)
     return {
-        'cape': cape.astype(np.float32), 'cin': np.where(has, cin, np.minimum(cin, 0)).astype(np.float32),
+        'cape': cape.astype(np.float32), 'cin': np.where(has & (cape > 0), cin, np.nan).astype(np.float32),        # undefined without an LFC
         'lcl_z': lcl_z, 'lcl_p': pL.astype(np.float32), 'lfc_z': lfc.astype(np.float32), 'el_z': el.astype(np.float32),
         'cape_0_3km': cape03.astype(np.float32), 'cape_mixed_phase': cape_mp.astype(np.float32),
         'bmax': np.nanmax(np.where(np.isfinite(B), B, -9), 0).astype(np.float32), 'Tvp': Tvp, 'B': B,
