@@ -12,6 +12,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { db } from './db.js';
+import { isDirectLocalRequest } from './auth.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = process.env.NOVA_REPO || 'dailymeteorology-code/myweatherukwebsite';
@@ -70,6 +71,21 @@ export function mountTcmV3(app, { sync = true } = {}) {
     if (!fs.existsSync(f)) return res.status(404).json({ error: 'no TCM V3 AWS run synced yet', sync: state });
     res.set('Cache-Control', 'no-cache');
     res.type('application/json').send(fs.readFileSync(f));
+  });
+  /* Install a run built on this PC (tools/tcm-v3/publish-local.mjs). Goes through this
+     server so the in-memory DB stays authoritative; only accepted from this machine. */
+  app.post('/api/tcm-v3/install-local', (req, res) => {
+    if (!isDirectLocalRequest(req)) return res.status(403).json({ error: 'local only' });
+    const dir = String(req.query.dir || '');
+    try {
+      const payload = zlib.gunzipSync(fs.readFileSync(path.join(dir, 'payload.json.gz')));
+      const rows = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(dir, 'db-rows.json.gz'))).toString());
+      fs.mkdirSync(DIR, { recursive: true });
+      fs.writeFileSync(path.join(DIR, 'latest.json'), payload);
+      upsertRows(rows);
+      state = { ...state, run: JSON.parse(payload.toString()).run, last: new Date().toISOString(), error: null };
+      res.json({ ok: true, rows: rows.map((r) => r.cache_key) });
+    } catch (e) { res.status(400).json({ error: e.message }); }
   });
   app.get('/api/tcm-v3/status', (req, res) => res.json({ ...state, schedule: '03:00 and 15:00 Europe/London, GitHub Actions, AWS data' }));
   if (sync) {
