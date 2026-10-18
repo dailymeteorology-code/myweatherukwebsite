@@ -47,7 +47,12 @@ def to_fine(a, coarse: Grid, fine: Grid):
     fy = ((yy + 0.5) * fine.dx) / coarse.dx - 0.5
     if a.dtype.kind in 'iu':
         return ndimage.map_coordinates(a, [fy, fx], order=0, mode='nearest')
-    return ndimage.map_coordinates(np.nan_to_num(a), [fy, fx], order=1, mode='nearest').astype(np.float32)
+    ok = np.isfinite(a)
+    out = ndimage.map_coordinates(np.where(ok, a, 0), [fy, fx], order=1, mode='nearest').astype(np.float32)
+    if not ok.all():                                    # keep 'undefined' undefined (e.g. CIN with no LFC)
+        m = ndimage.map_coordinates(ok.astype(np.float32), [fy, fx], order=1, mode='nearest')
+        out = np.where(m >= 0.5, out / np.maximum(m, 1e-6), np.nan).astype(np.float32)
+    return out
 
 
 class UKVEnvironment:

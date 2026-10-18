@@ -156,6 +156,14 @@ def local_strikes():
                 rows.append(a)
         except Exception:
             pass
+    for f in (DATA / 'lightning').glob('20??-??-??.json'):          # NOVA's own lightning archive (cloud)
+        try:
+            a = np.asarray(json.loads(f.read_text())['strikes'], float)
+            if a.size:
+                a[:, 0] /= 1000.0
+                rows.append(a)
+        except Exception:
+            pass
     return np.concatenate(rows) if rows else None
 
 

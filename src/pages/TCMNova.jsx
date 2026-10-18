@@ -248,9 +248,58 @@ function useRuns(product) {
   return { runs, latest, status, error, reload: load };
 }
 
+/* ── lightning strikes: one canvas, redrawn only when the map moves ─────── */
+const StrikeLayer = L.Layer.extend({
+  initialize(strikes) { this.strikes = strikes; },
+  onAdd(map) {
+    this._map = map;
+    this._c = L.DomUtil.create('canvas', 'leaflet-zoom-hide');
+    this._c.style.position = 'absolute'; this._c.style.pointerEvents = 'none';
+    map.getPanes().overlayPane.appendChild(this._c);
+    map.on('moveend zoomend resize', this._draw, this);
+    this._draw();
+  },
+  onRemove(map) { map.off('moveend zoomend resize', this._draw, this); this._c.remove(); },
+  setStrikes(s) { this.strikes = s; this._draw(); },
+  _draw() {
+    const map = this._map; if (!map) return;
+    const size = map.getSize(), dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const tl = map.containerPointToLayerPoint([0, 0]);
+    L.DomUtil.setPosition(this._c, tl);
+    this._c.width = size.x * dpr; this._c.height = size.y * dpr;
+    this._c.style.width = `${size.x}px`; this._c.style.height = `${size.y}px`;
+    const ctx = this._c.getContext('2d'); ctx.scale(dpr, dpr);
+    const st = this.strikes || []; if (!st.length) return;
+    const t0 = st[0][0], t1 = st[st.length - 1][0], span = Math.max(t1 - t0, 1);
+    const r = map.getZoom() >= 8 ? 2.6 : map.getZoom() >= 6 ? 2 : 1.5;
+    const b = map.getBounds().pad(0.05);
+    for (const [t, lat, lon] of st) {
+      if (!b.contains([lat, lon])) continue;
+      const a = (t - t0) / span;                                   // 0 oldest … 1 newest
+      const p = map.latLngToContainerPoint([lat, lon]);
+      ctx.fillStyle = a > 0.85 ? '#fffbe6' : a > 0.6 ? '#facc15' : a > 0.3 ? '#f97316' : '#b91c1c';
+      ctx.globalAlpha = 0.55 + 0.45 * a;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 2 * Math.PI); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  },
+});
+
+function useLightningToday(on) {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    if (!on) return undefined;
+    const load = () => fetch('/api/nova/lightning/day').then((r) => r.json()).then(setD).catch(() => setD({ count: 0, strikes: [], source: 'unavailable' }));
+    load();
+    const t = setInterval(load, 3 * 60000);
+    return () => clearInterval(t);
+  }, [on]);
+  return d;
+}
+
 /* ── map ─────────────────────────────────────────────────────────────────── */
-function NovaMap({ product, manifest, lead, layerKey, onHover }) {
-  const el = useRef(null), map = useRef(null), overlay = useRef(null), dataRef = useRef(null);
+function NovaMap({ product, manifest, lead, layerKey, onHover, strikes }) {
+  const el = useRef(null), map = useRef(null), overlay = useRef(null), dataRef = useRef(null), strikeLayer = useRef(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   useEffect(() => {
@@ -268,6 +317,13 @@ function NovaMap({ product, manifest, lead, layerKey, onHover }) {
     });
     map.current = m;
   }, [onHover]);
+  useEffect(() => {
+    if (!map.current) return;
+    if (strikes && strikes.length) {
+      if (strikeLayer.current) strikeLayer.current.setStrikes(strikes);
+      else strikeLayer.current = new StrikeLayer(strikes).addTo(map.current);
+    } else if (strikeLayer.current) { map.current.removeLayer(strikeLayer.current); strikeLayer.current = null; }
+  }, [strikes]);
   useEffect(() => {
     if (!manifest || lead == null) return undefined;
     let alive = true;
@@ -327,6 +383,9 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   const [layerKey, setLayerKey] = useState('p_thunder');
   const [hover, setHover] = useState(null);
   const [ended, setEnded] = useState(false);
+  const [showLightning, setShowLightning] = useState(() => { try { return localStorage.getItem('nova_lightning') === '1'; } catch { return false; } });
+  const lightning = useLightningToday(showLightning);
+  useEffect(() => { try { localStorage.setItem('nova_lightning', showLightning ? '1' : '0'); } catch { /* blocked */ } }, [showLightning]);
 
   useEffect(() => { setPinned(null); setIdx(0); setEnded(false); setLayerKey('p_thunder'); }, [product]);
   /* follow the newest run unless the user is examining an older one */
@@ -372,8 +431,13 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   return (
     <div style={{ minHeight: '100vh', background: T.bg, color: T.text, fontFamily: 'inherit' }}>
       {/* header bar */}
-      <div style={{ position: 'sticky', top: 0, zIndex: 50, background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', borderBottom: `1px solid ${T.border}` }}>
-        <div style={{ maxWidth: 1360, margin: '0 auto', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      {/* Docks under the site's own sticky nav (56 px on desktop) and stays beneath its
+          menus (z 45); on phones the site has a floating menu button top-right, so the
+          bar leaves room for it rather than sliding under it. */}
+      <style>{`.nova-bar{position:sticky;top:56px;z-index:40}.nova-bar-inner{padding:10px 16px}
+        @media (max-width:767px){.nova-bar{top:0}.nova-bar-inner{padding:10px 56px 10px 12px}}`}</style>
+      <div className="nova-bar" style={{ background: 'rgba(255,255,255,0.94)', backdropFilter: 'blur(8px)', borderBottom: `1px solid ${T.border}` }}>
+        <div className="nova-bar-inner" style={{ maxWidth: 1360, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ width: 34, height: 34, borderRadius: 10, background: 'linear-gradient(135deg,#0ea5e9,#6366f1)', display: 'grid', placeItems: 'center' }}>
             <CloudLightning style={{ width: 18, height: 18, color: '#fff' }} />
           </div>
@@ -530,6 +594,12 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
                         <optgroup key={g} label={g}>{ks.filter((k) => manifest.fields?.[k]).map((k) => <option key={k} value={k}>{LAYERS[k].label}</option>)}</optgroup>
                       ))}
                     </select>
+                    <button type="button" onClick={() => setShowLightning((v) => !v)} aria-pressed={showLightning}
+                      style={{ ...pill(showLightning ? '#fef9c3' : '#fff', showLightning ? '#854d0e' : T.mid), cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5,
+                        borderColor: showLightning ? '#facc15' : T.border }}>
+                      <Zap style={{ width: 13, height: 13 }} /> Lightning today
+                      {showLightning && lightning && <span style={{ fontFamily: MONO }}>· {lightning.count.toLocaleString()} strikes</span>}
+                    </button>
                     {hover && Number.isFinite(hover.v) && (
                       <span style={{ ...pill(T.soft, T.text), fontFamily: MONO }}>
                         {LAYERS[layerKey].pct ? `${Math.round(hover.v * 100)}%` : `${(hover.v * (LAYERS[layerKey].mul || 1)).toFixed(1)} ${LAYERS[layerKey].unit}`} · {hover.lat.toFixed(2)}, {hover.lon.toFixed(2)}
@@ -537,9 +607,24 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
                     )}
                   </div>
                   <Legend layerKey={layerKey} />
+                  {frame?.stats?.[layerKey] && frame.stats[layerKey].max != null && frame.stats[layerKey].max * (LAYERS[layerKey].pct ? 1 : (LAYERS[layerKey].mul || 1)) < LAYERS[layerKey].stops[0][0] && (
+                    <div style={{ fontSize: '0.72rem', color: T.mid }}>
+                      Nothing to show for this frame: {LAYERS[layerKey].pct ? `the highest value anywhere is ${Math.round((frame.stats[layerKey].max || 0) * 100)}%` : 'the field stays below the lowest colour band everywhere'}. The layer is working; there is simply no {LAYERS[layerKey].label.toLowerCase()} signal at this time.
+                    </div>
+                  )}
+                  {showLightning && lightning && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.68rem', color: T.mid, flexWrap: 'wrap' }}>
+                      <b style={{ color: T.text }}>Lightning since 00:00</b>
+                      {[['#b91c1c', 'earliest'], ['#f97316', ''], ['#facc15', ''], ['#fffbe6', 'latest']].map(([c, l], i) => (
+                        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 9, height: 9, borderRadius: 9, background: c, border: '1px solid rgba(0,0,0,0.25)' }} />{l}</span>
+                      ))}
+                      <span>· {lightning.source}</span>
+                    </div>
+                  )}
                 </div>
                 <div style={{ ...card, padding: 8, position: 'relative' }}>
-                  <NovaMap product={product} manifest={manifest} lead={frame?.lead_min} layerKey={layerKey} onHover={setHover} />
+                  <NovaMap product={product} manifest={manifest} lead={frame?.lead_min} layerKey={layerKey} onHover={setHover}
+                    strikes={showLightning ? lightning?.strikes : null} />
                   {ended && (
                     <div style={{ position: 'absolute', inset: 8, zIndex: 800, borderRadius: 14, background: 'rgba(15,23,42,0.72)', display: 'grid', placeItems: 'center', color: '#fff', textAlign: 'center', padding: 20 }}>
                       <div>

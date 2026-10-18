@@ -1,0 +1,11 @@
+numpy>=2.0
+scipy>=1.13
+pyproj>=3.6
+eccodes>=2.38
+eccodeslib
+netCDF4>=1.7
+h5py>=3.11
+tifffile>=2024.5.22
+imagecodecs>=2024.6.1
+matplotlib>=3.9
+pytest>=8

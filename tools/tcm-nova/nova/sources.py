@@ -202,7 +202,20 @@ class UKV(MetOffice):
             return None
         lev_hpa = lev / 100.0 if lev.max() > 2000 else lev
         u, v = _uv(got['ws'], got['wd'])
-        pl = {'t': got['t'], 'rh': got['rh'], 'u': u, 'v': v, 'z': got['z'], 'levels': lev_hpa}
+        # UKV publishes RH as a FRACTION (units "1"), relative to ICE below 0 °C and to water
+        # above (values up to ~1.5 over ice). Convert to specific humidity directly so nothing
+        # downstream mistakes it for a percentage or for RH over water.
+        T = got['t']
+        rh = np.clip(np.nan_to_num(got['rh']), 0, 1.6)
+        Tc = T - 273.15
+        es_w = 6.112 * np.exp(17.67 * Tc / (Tc + 243.5))
+        es_i = 6.112 * np.exp(22.46 * Tc / (Tc + 272.62))
+        e = rh * np.where(T < 273.15, es_i, es_w)
+        e = np.minimum(e, es_w)                                    # never supersaturated w.r.t. water
+        p3 = lev_hpa[:, None, None]
+        r = 0.622 * e / np.maximum(p3 - e, 1e-3)
+        q = (r / (1 + r)).astype(np.float32)
+        pl = {'t': T, 'q': q, 'u': u, 'v': v, 'z': got['z'], 'levels': lev_hpa}
         return _order_levels(pl)
 
 

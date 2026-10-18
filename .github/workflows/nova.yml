@@ -1,0 +1,167 @@
+# TCM NOVA on GitHub's servers, so the forecasts keep running when the PC is off.
+#
+#   hyper      every hour             TCM Hyper-Short (radar + lightning + latest UKV)
+#   main       03/09/15/21 UK time    TCM Main Run (4 days, 10 models)
+#   learning   00:00 UK time          verify yesterday, retrain weights + calibration + NOVA-AI
+#   lightning  every 6 hours          archive every UK & Ireland strike per UK day
+#   train      on demand              historical training, one parallel job per day
+#
+# Results are published as GitHub Release assets (nova-main, nova-hyper, nova-state,
+# nova-lightning); the self-hosted site syncs them to D:/TCM-NOVA when it is running.
+# All inputs are public (AWS open data, DWD open data, Met Office radar/LEELA) — no secrets.
+name: TCM NOVA
+
+on:
+  schedule:
+    - cron: '7 * * * *'                       # hyper, every hour
+    - cron: '12 2,8,14,20 * * *'              # main during BST (03/09/15/21 UK)
+    - cron: '12 3,9,15,21 * * *'              # main during GMT
+    - cron: '20 23 * * *'                     # learning during BST (00:20 UK)
+    - cron: '20 0 * * *'                      # learning during GMT
+    - cron: '40 */6 * * *'                    # lightning archive
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'hyper | main | learning | lightning | train'
+        required: true
+        default: hyper
+      train_start: { description: 'train: first day (YYYY-MM-DD)', required: false, default: '2026-06-01' }
+      train_end:   { description: 'train: last day', required: false, default: '2026-10-12' }
+      train_every: { description: 'train: every N days', required: false, default: '4' }
+
+permissions:
+  contents: write
+
+env:
+  NOVA_DATA: /tmp/nova/data
+  NOVA_CACHE: /tmp/nova/cache
+  PYTHONPATH: tools/tcm-nova
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    outputs:
+      job: ${{ steps.r.outputs.job }}
+      days: ${{ steps.r.outputs.days }}
+    steps:
+      - id: r
+        run: |
+          S="${{ github.event.schedule }}"; OFF=$(TZ=Europe/London date +%z); J=none
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then J="${{ inputs.job }}"; fi
+          [ "$S" = "7 * * * *" ] && J=hyper
+          [ "$S" = "12 2,8,14,20 * * *" ] && [ "$OFF" = "+0100" ] && J=main
+          [ "$S" = "12 3,9,15,21 * * *" ] && [ "$OFF" = "+0000" ] && J=main
+          [ "$S" = "20 23 * * *" ] && [ "$OFF" = "+0100" ] && J=learning
+          [ "$S" = "20 0 * * *" ] && [ "$OFF" = "+0000" ] && J=learning
+          [ "$S" = "40 */6 * * *" ] && J=lightning
+          echo "schedule='$S' uk-offset=$OFF job=$J"
+          echo "job=$J" >> "$GITHUB_OUTPUT"
+          if [ "$J" = "train" ]; then
+            python3 -c "
+          import json,datetime as d
+          a=d.date.fromisoformat('${{ inputs.train_start }}'); b=d.date.fromisoformat('${{ inputs.train_end }}'); n=int('${{ inputs.train_every }}')
+          print('days='+json.dumps([(a+d.timedelta(days=i)).isoformat() for i in range(0,(b-a).days+1,n)]))" >> "$GITHUB_OUTPUT"
+          else echo 'days=[]' >> "$GITHUB_OUTPUT"; fi
+
+  forecast:
+    needs: route
+    if: needs.route.outputs.job == 'hyper' || needs.route.outputs.job == 'main' || needs.route.outputs.job == 'lightning'
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    concurrency:
+      group: nova-${{ needs.route.outputs.job }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
+      - run: pip install -r tools/tcm-nova/requirements.txt
+      - name: Static data (terrain etc.)
+        if: needs.route.outputs.job != 'lightning'
+        run: python -m nova.cloud fetch-static
+      - name: Learning state (weights, calibration, NOVA-AI)
+        if: needs.route.outputs.job != 'lightning'
+        run: python -m nova.cloud fetch-state
+      - name: Hyper-Short
+        if: needs.route.outputs.job == 'hyper'
+        run: python -m nova.hyper.run && python -m nova.cloud publish hyper
+      - name: Main Run
+        if: needs.route.outputs.job == 'main'
+        run: python -m nova.main_run && python -m nova.cloud publish main
+      - name: Lightning archive
+        if: needs.route.outputs.job == 'lightning'
+        run: python -m nova.cloud lightning
+
+  learning:
+    needs: route
+    if: needs.route.outputs.job == 'learning'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    concurrency: { group: nova-learning, cancel-in-progress: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
+      - run: pip install -r tools/tcm-nova/requirements.txt
+      - run: python -m nova.cloud fetch-static && python -m nova.cloud fetch-state && python -m nova.cloud lightning
+      - name: Yesterday's runs
+        run: |
+          DAY=$(TZ=Europe/London date -d yesterday +%F)
+          python -m nova.cloud fetch-runs main --day "$DAY"
+          python -m nova.cloud fetch-runs hyper --day "$DAY"
+          echo "DAY=$DAY" >> "$GITHUB_ENV"
+      - run: python -m nova.learn --day "$DAY"
+        env: { ANTHROPIC_API_KEY: '${{ secrets.ANTHROPIC_API_KEY }}' }
+      - run: python -m nova.cloud publish-state
+
+  train-day:
+    needs: route
+    if: needs.route.outputs.job == 'train'
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: { day: '${{ fromJson(needs.route.outputs.days) }}' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
+      - run: pip install -r tools/tcm-nova/requirements.txt
+      - run: python -m nova.cloud fetch-static
+      - name: Hindcast ${{ matrix.day }}
+        run: python -c "from datetime import date; from nova.calibrate import hindcast; hindcast([date.fromisoformat('${{ matrix.day }}')])"
+      - name: Turn the hindcast into training pairs (radar + lightning verification)
+        run: python -c "from nova.calibrate import collect; collect()"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: train-${{ matrix.day }}
+          path: |
+            ${{ env.NOVA_DATA }}/learning/pairs
+            ${{ env.NOVA_DATA }}/hindcast/*/sources
+            ${{ env.NOVA_DATA }}/hindcast/*/manifest.json
+          retention-days: 7
+
+  train-fit:
+    needs: [route, train-day]
+    if: always() && needs.route.outputs.job == 'train'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
+      - run: pip install -r tools/tcm-nova/requirements.txt
+      - run: python -m nova.cloud fetch-static && python -m nova.cloud fetch-state
+      - uses: actions/download-artifact@v4
+        with: { pattern: 'train-*', path: /tmp/nova/train, merge-multiple: true }
+      - name: Merge day results
+        run: |
+          mkdir -p $NOVA_DATA/learning/pairs $NOVA_DATA/hindcast
+          cp -rn /tmp/nova/train/learning/pairs/. $NOVA_DATA/learning/pairs/ 2>/dev/null || cp -rn /tmp/nova/train/pairs/. $NOVA_DATA/learning/pairs/ || true
+          cp -rn /tmp/nova/train/hindcast/. $NOVA_DATA/hindcast/ 2>/dev/null || true
+          ls $NOVA_DATA/learning/pairs | wc -l
+      - name: Train weights, calibration and NOVA-AI
+        run: python -c "from nova.calibrate import train_skill, fit; train_skill(('hindcast',)); fit()"
+      - run: python -m nova.cloud publish-state
