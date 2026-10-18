@@ -41,3 +41,8 @@ tools/storm-blend/*.pkl
 tools/storm-blend/*.png
 tools/storm-blend/*.npz
 tools/storm-blend/videobase-*.jpg
+# TCM NOVA: model data lives on D:/TCM-NOVA; never commit runs, caches or terrain
+server/data/tcm-nova/
+tools/tcm-nova/.cache/
+tools/tcm-nova/.terrain.log
+tools/tcm-nova/**/__pycache__/

@@ -44,7 +44,7 @@ export const DEFAULT_SUB_CONFIG = {
     { id: 'p_asi',          name: 'Atmospheric Similarity Index', cells: { free: no(),  starter: no(),  plus: no(),   pro: yes(), enterprise: yes() } },
     { id: 'p_replay',       name: 'Historical Replay',            cells: { free: no(),  starter: no(),  plus: no(),   pro: yes(), enterprise: yes() } },
     { id: 'p_tci',          name: 'TCI Sentinel',                 cells: { free: no(),  starter: no(),  plus: no(),   pro: yes(), enterprise: yes() } },
-    { id: 'p_tcm5',         name: 'TCM V5 Nova',                  cells: { free: no(),  starter: no(),  plus: yes(),  pro: yes(), enterprise: yes() } },
+    { id: 'p_tcm5',         name: 'TCM NOVA',                  cells: { free: no(),  starter: no(),  plus: yes(),  pro: yes(), enterprise: yes() } },
     { id: 'p_tcm6',         name: 'TCM V6 Genesis',               cells: { free: no(),  starter: no(),  plus: no(),   pro: no(),  enterprise: text('Application Only') } },
   ],
 };

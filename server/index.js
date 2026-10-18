@@ -32,6 +32,7 @@ import ukCityConditions from './ukCityConditions.js';
 import worldWarnings, { worldWarningDetail } from './worldWarnings.js';
 import radarPhase from './radarPhase.js';
 import { mountTcmV5 } from './tcmV5.js';
+import { mountTcmNova } from './tcmNova.js';
 import { startAiw } from './aiw/index.js';
 import { mountScenarios } from './scenarios/api.js';
 import { startLiveScenarios } from './scenarios/live/index.js';
@@ -437,6 +438,7 @@ app.get('/api/radar/phase', async (req, res) => {
    server/data/tcm-v5. Read from disk; nothing here talks to the Python
    service. See tcmV5.js. */
 mountTcmV5(app);
+mountTcmNova(app);
 
 /* ── uploads ────────────────────────────────────────────────────────────── */
 

@@ -3400,7 +3400,7 @@ function TcmVersionSwitcher() {
           <div aria-disabled="true" style={{ ...rowBase, marginTop: 5, opacity: 0.8, cursor: 'not-allowed', background: 'rgba(148,163,184,0.06)', border: `1px solid ${t.cardBorder}` }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', marginTop: 5, background: t.textMuted, flexShrink: 0 }} />
             <span style={{ flex: 1 }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', fontWeight: 800, color: t.textSecondary }}>TCM V5
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', fontWeight: 800, color: t.textSecondary }}>TCM NOVA
                 <span style={{ fontSize: '0.52rem', fontWeight: 800, letterSpacing: '0.06em', color: '#f59e0b', background: 'rgba(245,158,11,0.14)', border: '1px solid rgba(245,158,11,0.35)', padding: '1px 6px', borderRadius: 99 }}>SOON</span>
               </span>
               <span style={{ display: 'block', fontSize: '0.66rem', color: t.textMuted, marginTop: 3, lineHeight: 1.45 }}>

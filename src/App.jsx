@@ -76,7 +76,7 @@ function routeIndex(pathname) {
 
 const PAGE_LABELS = {
   '/': 'Home', '/Home': 'Home', '/News': 'News', '/Lightning': 'Lightning',
-  '/TCMOutlooks': 'TCM Outlooks', '/TCMV5': 'TCM V5', '/WeatherPatterns': 'TCM Outlooks', '/Graphics': 'Graphics',
+  '/TCMOutlooks': 'TCM Outlooks', '/TCMNova': 'TCM NOVA', '/TCMV5': 'TCM NOVA', '/WeatherPatterns': 'TCM Outlooks', '/Graphics': 'Graphics',
   '/Settings': 'Settings', '/AdminSettings': 'Admin',
   '/TCMArchive': 'Archive', '/MyWeatherArchive': 'Archive',
   '/LocationWeather': 'Location', '/WeatherCriteria': 'Criteria', '/ForecastVerification': 'Verification', '/WeatherScenarios': 'Scenarios',
@@ -529,7 +529,9 @@ const AuthenticatedApp = () => {
                   resolves to the same page — every existing link keeps
                   working — but the engine you are looking at is now in the
                   URL rather than implied by a remembered preference. */}
-              <Route path="/TCMV5" element={<LayoutWrapper currentPageName="TCMV5"><TCMOutlooks forceEngine="v5" /></LayoutWrapper>} />
+              <Route path="/TCMNova" element={<LayoutWrapper currentPageName="TCMNova"><TCMOutlooks forceEngine="nova" /></LayoutWrapper>} />
+              {/* TCM NOVA replaced TCM V5; the old address keeps working */}
+              <Route path="/TCMV5" element={<LayoutWrapper currentPageName="TCMNova"><TCMOutlooks forceEngine="nova" /></LayoutWrapper>} />
               <Route path="/TCMOutlooks" element={<LayoutWrapper currentPageName="TCMOutlooks"><TCMOutlooks /></LayoutWrapper>} />
               <Route path="/WeatherPatterns" element={<LayoutWrapper currentPageName="WeatherPatterns"><WeatherPatterns /></LayoutWrapper>} />
               <Route path="/TCMArchive" element={<LayoutWrapper currentPageName="TCMArchive"><TCMArchive /></LayoutWrapper>} />
