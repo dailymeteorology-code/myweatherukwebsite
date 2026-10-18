@@ -27,6 +27,7 @@ import { buildOutlookLayers, buildHiResOutlookLayers } from '@/lib/tcmOutlookLay
 import { loadLatestTCMFromDB } from '@/lib/tcmForecastCache';
 import TimelinePill from '@/components/tcm/StormOutlookTimelinePill';
 import { SnowBackgroundPicker, snowBackground, readSnowBgId } from '@/lib/snowBackgrounds';
+import { variantOf } from '@/lib/graphicVariants';
 
 // --- Conditional Severe -----------------------------------------------------
 // A risk tier that sits BETWEEN High and Severe. Like Severe it flags the
@@ -108,7 +109,7 @@ const GRAPHIC_LEVELS_BASE = RISK_META
 // Insert Conditional Severe immediately before Severe (so the ordering is
 // ... High -> Conditional Severe -> Severe). If Severe is absent for any
 // reason, append Conditional Severe at the end.
-const GRAPHIC_LEVELS = (() => {
+let GRAPHIC_LEVELS = (() => {
   const out = [];
   let inserted = false;
   for (const lvl of GRAPHIC_LEVELS_BASE) {
@@ -118,7 +119,7 @@ const GRAPHIC_LEVELS = (() => {
   if (!inserted) out.push(COND_SEVERE);
   return out;
 })();
-const RISK_BY_ID = Object.fromEntries(GRAPHIC_LEVELS.map(l => [l.id, l]));
+let RISK_BY_ID = Object.fromEntries(GRAPHIC_LEVELS.map(l => [l.id, l]));
 
 // Helpers so every render site treats both special tiers consistently.
 const isSevereId = (id) => id === 'Severe';
@@ -159,7 +160,7 @@ const RADAR_LEVELS = [
   { id: 'HailCore',    short: 'HAIL',       range: 'Hail / extreme', dbz: '55+ dBZ', color: '#ff77ff' },
 ].map(l => ({ ...l, fill: `${l.color}66`, border: l.color }));
 const RADAR_BY_ID = Object.fromEntries(RADAR_LEVELS.map(l => [l.id, l]));
-const LEVEL_LOOKUP = { ...RADAR_BY_ID, ...RISK_BY_ID };
+let LEVEL_LOOKUP = { ...RADAR_BY_ID, ...RISK_BY_ID };
 
 const RADAR_HAZARDS = [
   { id: 'heavysnow',    label: 'Heavy Snow',    Icon: Snowflake,            color: '#e0f2fe', hatched: false },
@@ -237,7 +238,7 @@ function latLonToNorm(lat, lon) {
   return [x / VIEW_W, y / VIEW_H];
 }
 
-const HAZARDS = [
+let HAZARDS = [
   { id: 'heavysnow',    label: 'Heavy Snow',           Icon: Snowflake,            color: '#e0f2fe', hatched: false },
   { id: 'blizzard',     label: 'Blizzards / Drifting', Icon: Wind,                 color: '#93c5fd', hatched: false },
   { id: 'ice',          label: 'Ice',                  Icon: ThermometerSnowflake, color: '#67e8f9', hatched: false },
@@ -705,6 +706,20 @@ function UKOutlineMap({ region = null }) {
   );
 }
 
+// --- Variant switch ---
+// One studio renders Snow Chance, Snow Accumulation, Snow Risk and Wind. The variant only
+// changes labels, colours, hazards, photos and titles; level ids stay the same, so every
+// drawing/timeline/save path below is untouched. Only one studio is mounted at a time and
+// AdminSettings keys it by variant, so these module bindings are set once per mount.
+function applyVariant(V) {
+  const sev = GRAPHIC_LEVELS.find((l) => l.id === 'Severe');
+  GRAPHIC_LEVELS = [...V.levels, COND_SEVERE, { ...(sev || { id: 'Severe', color: '#a5b4fc', fill: 'rgba(165,180,252,0.30)', border: '#a5b4fc' }), ...V.severe }];
+  RISK_BY_ID = Object.fromEntries(GRAPHIC_LEVELS.map((l) => [l.id, l]));
+  LEVEL_LOOKUP = { ...RADAR_BY_ID, ...RISK_BY_ID };
+  HAZARDS = V.hazards;
+}
+const variantBg = (V, id) => V.backgrounds.find((b) => b.id === id) || V.backgrounds[0];
+
 // --- Real thunderstorm photo background ---
 // Photo backgrounds live in lib/snowBackgrounds.
 
@@ -1090,8 +1105,10 @@ const btnCss = {
 };
 
 // --- Main component ---
-export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
-  const [bgId, setBgId] = useState(readSnowBgId);
+export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant = 'chance' }) {
+  const V = variantOf(variant);
+  applyVariant(V);
+  const [bgId, setBgId] = useState(() => (V.backgrounds === undefined || variant === 'wind' ? V.backgrounds[0].id : readSnowBgId()));
   const [siteLogoUrl, setSiteLogoUrl] = useState(myWeatherLogoUrl || null);
   useEffect(() => {
     if (!myWeatherLogoUrl) {
@@ -1115,7 +1132,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   const [timelineEnd, setTimelineEnd]     = useState('06:00');
   const timelineStamps = useMemo(() => buildStamps(timelineGran, timelineStart, timelineEnd), [timelineGran, timelineStart, timelineEnd]);
   const [stampRisks, setStampRisks]     = useState(() => Array(TIMELINE_STAMPS.length).fill(null)); const [stampOverlays, setStampOverlays] = useState(() => Array(TIMELINE_STAMPS.length).fill(null));
-  const [footerText, setFooterText]     = useState('Risk of snow settling within a 15 mile radius');
+  const [footerText, setFooterText]     = useState(V.footer);
   const [handle, setHandle]             = useState('@MyWeatherUK');
   const [version, setVersion]           = useState('v6.00');
   // Issue type: 'initial' = Initial Forecast, 'update' = Update #N
@@ -1201,7 +1218,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     drawOpacity, shapes, showShapes, showCities, graphicMode, radarRegion, showUKVRain,
     lightningColor, lightningOutline, lightningOutlineColor, lightningWindow, windowMinutes,
     timelineGran, confidence, validUntil, discussionEnabled, discussionText,
-    outlookRegion, annotations, arrows, tool: 'snow',
+    outlookRegion, annotations, arrows, tool: V.tool,
   });
 
   // Save current state to database
@@ -1231,7 +1248,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     setLoadingGraphics(true);
     try {
       const list = await base44.entities.WeatherGraphic.filter({}, '-created_date', 50);
-      setSavedGraphics(list.filter(g => g.graphic_tool_state?.tool === 'snow'));
+      setSavedGraphics(list.filter(g => g.graphic_tool_state?.tool === V.tool));
     } finally {
       setLoadingGraphics(false);
     }
@@ -1392,7 +1409,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     const blob = new Blob(chunks, { type: 'video/webm' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `snow-chance-${validDate}.webm`; a.click();
+    a.href = url; a.download = `${V.file}-${validDate}.webm`; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     setIsRecording(false); setExportMode(false); setIsExporting(false); setPlayhead(null);
     if (wasAnimating) setIsAnimating(true);
@@ -1824,7 +1841,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
 
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.download = `snow-chance-${validDate}.jpg`;
+      link.download = `${V.file}-${validDate}.jpg`;
       link.href = url;
       link.click();
       // Give the download a moment to take the URL before it is released.
@@ -1909,7 +1926,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     return Math.round((out - today) / 86400000);
   }, [validDate]);
   const isExtended = leadDays >= 3;
-  const outlookTitle = isExtended ? 'Extended Snow Chance' : 'Snow Chance';
+  const outlookTitle = isExtended ? `Extended ${V.title}` : V.title;
 
   // --- Forecast / Update label ---------------------------------------------
   const forecastLabel = forecastType === 'update'
@@ -2378,7 +2395,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
               </div>
             </div>
 
-            <SnowBackgroundPicker value={bgId} onChange={setBgId} labelStyle={labelCss} />
+            {V.backgrounds.length > 1 && <SnowBackgroundPicker value={bgId} onChange={setBgId} labelStyle={labelCss} />}
 
             {/* Outlook region zoom */}
             <div>
@@ -2702,7 +2719,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
           }}>
             <FolderOpen style={{ width: 13, height: 13 }} /> Load Saved
           </button>
-          {!isRadar && (
+          {!isRadar && V.auto && (
             <button type="button" onClick={() => { showTcmPanel ? setShowTcmPanel(false) : openTcmPanel(); setShowSavePanel(false); setShowLoadPanel(false); }} style={{
               ...btnCss,
               background: showTcmPanel ? 'rgba(129,140,248,0.18)' : 'rgba(148,163,184,0.08)',
@@ -2881,7 +2898,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
             </>
           ) : (
             <>
-              <img src={snowBackground(bgId).url} alt="" crossOrigin="anonymous" style={{
+              <img src={variantBg(V, bgId).url} alt="" crossOrigin="anonymous" style={{
                 position: 'absolute', inset: 0, width: '100%', height: '100%',
                 objectFit: 'cover', pointerEvents: 'none',
                 filter: 'blur(0.8px) brightness(0.62)',
@@ -2948,7 +2965,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                   }}>{isRadar
                     ? <><Radar style={{ width: 28, height: 28, color: '#7dd3fc' }} strokeWidth={2.2} /> Radar</>
                     : showLightning ? 'Outlook Lightning Verification'
-                    : <>{isExtended ? 'Extended ' : ''}<Snowflake style={{ width: 28, height: 28, color: '#ffffff' }} strokeWidth={2.4} /> Snow Chance</>}</span>
+                    : <>{isExtended ? 'Extended ' : ''}<V.Icon style={{ width: 28, height: 28, color: '#ffffff' }} strokeWidth={2.4} /> {V.title}</>}</span>
 
                   {/* Outlook: forecast-type + extended badges under the title */}
                   {!isRadar && (
@@ -3133,7 +3150,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 position: 'relative', zIndex: 1, display: 'block', marginTop: 8,
                 fontSize: 7.5, fontWeight: 700, letterSpacing: '0.07em',
                 color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase',
-              }}>{isRadar ? 'Source: RainViewer / Blitzortung' : 'SVRE = Severe snow risk · COND = conditional'}</span>
+              }}>{isRadar ? 'Source: RainViewer / Blitzortung' : `${V.keyNote} · COND = conditional`}</span>
             </div>
 
             {/* Hazards card — hidden while the lightning overlay is active, since
@@ -3280,7 +3297,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
             onMouseDown={handleDown} onMouseMove={handleMove} onMouseUp={handleUp} onMouseLeave={handleUp}
             onTouchStart={handleDown} onTouchMove={handleMove} onTouchEnd={handleUp}
             style={{
-              position: 'absolute', top: 20, left: '50%', marginLeft: -130, width: 450, height: 666,
+              position: 'absolute', top: 2, left: '50%', marginLeft: -130, width: 450, height: 666,
               zIndex: 3,
               cursor: mapTool === 'text' ? 'text' : mapTool === 'arrow' ? 'crosshair' : mapTool === 'cond' ? 'pointer' : (drawMode ? 'crosshair' : 'default'),
               userSelect: 'none',
@@ -3490,7 +3507,6 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                   letterSpacing: '0.04em', lineHeight: 1.45, textAlign: 'right',
                 }}>{footerText}</span>
               )}
-              {!isRadar && snowBackground(bgId).credit && <span style={{ fontSize: 6.5, color: 'rgba(203,213,225,0.55)' }}>{snowBackground(bgId).credit}</span>}
               {!isRadar && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 8, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase',

@@ -30,8 +30,8 @@ import TCMAdmin from '@/components/TCMAdmin';
 import AnnouncementsAdmin from '@/components/AnnouncementsAdmin';
 import UpdatesTab from '@/components/UpdatesTab';
 import StormOutlookGraphicTool from '@/components/StormOutlookGraphicTool';
+import { Wind as WindIcon } from 'lucide-react';
 import SnowOutlookGraphicTool from '@/components/SnowOutlookGraphicTool';
-import SnowMapGraphicTool from '@/components/SnowMapGraphicTool';
 import TrafficLightGraphicTool from '@/components/TrafficLightGraphicTool';
 import TemperatureMapTool from '@/components/TemperatureMapTool';
 import SolarEclipseGraphicTool from '@/components/SolarEclipseGraphicTool';
@@ -1743,8 +1743,9 @@ function StormGraphicTab({ logoUrl }) {
   const SUBS = [
     { id: 'outlook',  label: 'Thunderstorm Outlook', icon: CloudLightning, color: '#facc15', desc: 'Full risk map with timeline & drawing' },
     { id: 'snow',     label: 'Snow Chance',          icon: Snowflake,      color: '#7dd3fc', desc: 'Snow chance map with timeline, drawing & model snowfall' },
-    { id: 'snowacc',  label: 'Snow Accumulation',    icon: Layers,         color: '#93c5fd', desc: 'Model-consensus snow totals in cm' },
-    { id: 'snowrisk', label: 'Snow Risk',            icon: CloudSnow,      color: '#a78bfa', desc: 'Falling, settling and snow-and-rain areas with possible extent' },
+    { id: 'snowacc',  label: 'Snow Accumulation',    icon: Layers,         color: '#93c5fd', desc: 'Snow depth (cm) map with timeline & drawing' },
+    { id: 'snowrisk', label: 'Snow Risk',            icon: CloudSnow,      color: '#a78bfa', desc: 'Snow disruption risk map with timeline & drawing' },
+    { id: 'wind',     label: 'Wind',                 icon: WindIcon,       color: '#fb923c', desc: 'Gust map (mph) with timeline & drawing' },
     { id: 'temp',     label: 'Temperature Map',      icon: Thermometer,    color: '#f59e0b', desc: 'Live UK temperature surface' },
     { id: 'mapdraw',  label: 'Map Drawing',          icon: Pen,            color: '#5b6ee8', desc: 'Synoptic charts & weather-type areas' },
     { id: 'pastfut',  label: 'Past & Future',        icon: History,        color: '#22d3ee', desc: 'Climate anomalies, likelihood & scenarios' },
@@ -1817,9 +1818,10 @@ function StormGraphicTab({ logoUrl }) {
         </div>
         <div style={{ background: C.bgAlt, padding: '22px 20px' }}>
           {sub === 'outlook' && <StormOutlookGraphicTool myWeatherLogoUrl={logoUrl} />}
-          {sub === 'snow'    && <SnowOutlookGraphicTool myWeatherLogoUrl={logoUrl} />}
-          {sub === 'snowacc' && <SnowMapGraphicTool key="acc" mode="accumulation" myWeatherLogoUrl={logoUrl} />}
-          {sub === 'snowrisk' && <SnowMapGraphicTool key="risk" mode="risk" myWeatherLogoUrl={logoUrl} />}
+          {sub === 'snow'     && <SnowOutlookGraphicTool key="chance" variant="chance" myWeatherLogoUrl={logoUrl} />}
+          {sub === 'snowacc'  && <SnowOutlookGraphicTool key="accumulation" variant="accumulation" myWeatherLogoUrl={logoUrl} />}
+          {sub === 'snowrisk' && <SnowOutlookGraphicTool key="risk" variant="risk" myWeatherLogoUrl={logoUrl} />}
+          {sub === 'wind'     && <SnowOutlookGraphicTool key="wind" variant="wind" myWeatherLogoUrl={logoUrl} />}
           {sub === 'temp'    && <TemperatureMapTool />}
           {sub === 'mapdraw' && <MapDrawingSection logoUrl={logoUrl} />}
           {/* Nested, so it keeps its own three tools but drops the hero banner
