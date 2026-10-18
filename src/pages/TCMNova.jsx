@@ -16,6 +16,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import NovaGlobe from '@/components/tcm/NovaGlobe';
+import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
+import { Lock as LockIcon } from 'lucide-react';
+
+/* NOVA's data API is admin-only; send the session token with every request. */
+const authHeaders = () => {
+  try { const t = localStorage.getItem('base44_access_token'); return t ? { Authorization: `Bearer ${t}` } : {}; } catch { return {}; }
+};
+const novaFetch = (url) => fetch(url, { headers: authHeaders() });
 import {
   CloudLightning, Zap, CloudRain, Wind, Tornado, Snowflake, AlertTriangle, Play, Pause,
   ChevronLeft, ChevronRight, Layers, Clock, Database, Activity, Map as MapIcon, Info, RefreshCw, TrendingUp,
@@ -31,7 +39,7 @@ const card = { background: T.card, border: `1px solid ${T.border}`, borderRadius
 
 const PRODUCTS = {
   main: { label: 'TCM Main Run', res: '2 km', blurb: 'Four runs a day · AWS multi-model blend · deterministic downscaling' },
-  hyper: { label: 'TCM Hyper-Short', res: '1.5 km', blurb: 'Hourly · 24 h at 30 min · observations only, TCM engine' },
+  hyper: { label: 'TCM Hyper-Short', res: '1.5 km', blurb: 'Hourly · 24 h at 30 min · radar & lightning nowcast blended with the latest UKV' },
 };
 
 /* hazards shown in the left column: field, label, icon */
@@ -126,7 +134,7 @@ function f16(u) {
   return s * 2 ** (e - 15) * (1 + f / 1024);
 }
 async function fetchField(product, runId, lead, field) {
-  const r = await fetch(`/api/nova/${product}/runs/${runId}/frame/${lead}/${field}`);
+  const r = await novaFetch(`/api/nova/${product}/runs/${runId}/frame/${lead}/${field}`);
   if (!r.ok) throw new Error(`${field}: ${r.status}`);
   const dtype = r.headers.get('X-Nova-Dtype');
   const ds = r.body.pipeThrough(new DecompressionStream('deflate'));
@@ -237,9 +245,9 @@ function useRuns(product) {
   const load = useCallback(async () => {
     try {
       const [r, l, s] = await Promise.all([
-        fetch(`/api/nova/${product}/runs`).then((x) => x.json()),
-        fetch(`/api/nova/${product}/latest`).then((x) => (x.ok ? x.json() : null)),
-        fetch(`/api/nova/${product}/status`).then((x) => x.json()),
+        novaFetch(`/api/nova/${product}/runs`).then((x) => x.json()),
+        novaFetch(`/api/nova/${product}/latest`).then((x) => (x.ok ? x.json() : null)),
+        novaFetch(`/api/nova/${product}/status`).then((x) => x.json()),
       ]);
       setRuns(r.runs || []); setLatest(l); setStatus(s); setError(null);
     } catch (e) { setError(String(e)); }
@@ -340,7 +348,8 @@ function NovaMap({ product, manifest, lead, layerKey, onHover, strikes }) {
   }, [product, manifest, lead, layerKey]);
   return (
     <div style={{ position: 'relative' }}>
-      <div ref={el} style={{ height: 'min(72vh, 760px)', minHeight: 460, borderRadius: 14, overflow: 'hidden', background: '#e5e7eb' }} />
+      {/* isolation: Leaflet's panes use z-index up to 1000; keep them inside the map so they never cover the sticky bars */}
+      <div ref={el} style={{ height: 'min(72vh, 760px)', minHeight: 460, borderRadius: 14, overflow: 'hidden', background: '#e5e7eb', isolation: 'isolate', zIndex: 0, position: 'relative' }} />
       {busy && <div style={{ position: 'absolute', top: 10, left: 54, zIndex: 700, ...pill('#fff', T.mid) }}>Loading field…</div>}
       {err && <div style={{ position: 'absolute', top: 10, left: 54, zIndex: 700, ...pill('#fef2f2', '#b91c1c') }}>Not in this run: {LAYERS[layerKey].label}</div>}
     </div>
@@ -364,7 +373,40 @@ function Legend({ layerKey }) {
 }
 
 /* ── page ────────────────────────────────────────────────────────────────── */
-export default function TCMNova({ engineSwitcher = null }) {
+export default function TCMNova({ engineSwitcher = null, onUseV3 = null }) {
+  /* NOVA is admin-only until launch: everyone else sees a locked "coming soon". */
+  const [admin, setAdmin] = useState(null);
+  useEffect(() => { isCurrentUserAdmin().then((a) => setAdmin(!!a)).catch(() => setAdmin(false)); }, []);
+  if (admin === null) return <div style={{ minHeight: '60vh', display: 'grid', placeItems: 'center', color: '#64748b' }}>Loading…</div>;
+  if (!admin) return <NovaComingSoon onUseV3={onUseV3} />;
+  return <NovaForAdmin engineSwitcher={engineSwitcher} />;
+}
+
+function NovaComingSoon({ onUseV3 }) {
+  return (
+    <div style={{ minHeight: 'calc(100vh - 60px)', display: 'grid', placeItems: 'center', padding: 24,
+      background: 'radial-gradient(ellipse at 50% 35%, #0b1f3a 0%, #030712 70%)', color: '#e2e8f0', textAlign: 'center' }}>
+      <div style={{ maxWidth: 460 }}>
+        <div style={{ width: 64, height: 64, borderRadius: 18, margin: '0 auto 16px', display: 'grid', placeItems: 'center',
+          background: 'rgba(148,163,184,0.12)', border: '1px solid rgba(148,163,184,0.3)' }}>
+          <LockIcon style={{ width: 28, height: 28, color: '#94a3b8' }} />
+        </div>
+        <div style={{ fontSize: '0.7rem', letterSpacing: '0.2em', color: '#7dd3fc', fontWeight: 800 }}>TCM NOVA</div>
+        <h1 style={{ margin: '8px 0', fontSize: '2rem', fontWeight: 900, color: '#fff' }}>Coming soon</h1>
+        <p style={{ color: '#94a3b8', lineHeight: 1.6 }}>
+          TCM NOVA, MyWeatherUK's next-generation thunderstorm model, is in final testing and isn't open to the public yet.
+          The TCM V3 outlook is available in the meantime.
+        </p>
+        {onUseV3 && (
+          <button type="button" onClick={onUseV3} style={{ marginTop: 10, padding: '10px 18px', borderRadius: 99, border: 'none', cursor: 'pointer',
+            fontWeight: 800, background: 'linear-gradient(135deg,#0ea5e9,#6366f1)', color: '#fff' }}>Open TCM V3</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NovaForAdmin({ engineSwitcher }) {
   /* Every visit starts on the globe; the model opens once a region is picked. */
   const [region, setRegion] = useState(null);
   if (!region) return <NovaGlobe onSelect={setRegion} />;
@@ -391,7 +433,7 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   /* follow the newest run unless the user is examining an older one */
   useEffect(() => {
     if (pinned) {
-      fetch(`/api/nova/${product}/runs/${pinned}`).then((r) => (r.ok ? r.json() : null)).then(setManifest);
+      novaFetch(`/api/nova/${product}/runs/${pinned}`).then((r) => (r.ok ? r.json() : null)).then(setManifest);
     } else {
       setManifest((m) => (latest && (!m || m.run_id !== latest.run_id) ? latest : m || latest));
     }
@@ -766,10 +808,10 @@ function LearningPanel() {
   const [day, setDay] = useState(null);
   const [rep, setRep] = useState(null);
   const [err, setErr] = useState(null);
-  useEffect(() => { fetch('/api/nova/learning/days').then((r) => r.json()).then((d) => { setDays(d.days || []); setDay((d.days || [])[0] || null); }); }, []);
+  useEffect(() => { novaFetch('/api/nova/learning/days').then((r) => r.json()).then((d) => { setDays(d.days || []); setDay((d.days || [])[0] || null); }); }, []);
   useEffect(() => {
     if (!day) return;
-    fetch(`/api/nova/learning/report/${day}`).then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then(setRep).catch((e) => setErr(String(e)));
+    novaFetch(`/api/nova/learning/report/${day}`).then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then(setRep).catch((e) => setErr(String(e)));
   }, [day]);
   return (
     <div style={{ ...card, padding: 16, fontSize: '0.78rem', color: T.mid, lineHeight: 1.6 }}>

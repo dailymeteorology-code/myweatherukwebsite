@@ -574,18 +574,18 @@ async function doFetch({ region, run, onProgress, fastMode, maxDay = 3 }) {
       force:      true,
       maxDay,
     });
-  } catch (omErr) {
-    console.error('[TCM] Open-Meteo fetch failed:', omErr?.message);
-    throw new Error(`Open-Meteo unavailable: ${omErr?.message || 'unknown error'}`);
+  } catch (awsErr) {
+    console.error('[TCM] AWS run unavailable:', awsErr?.message);
+    throw new Error(`TCM V3 run unavailable: ${awsErr?.message || 'unknown error'}`);
   }
 
   if (!payload?.grid?.length) {
-    throw new Error('Open-Meteo returned no grid data');
+    throw new Error('TCM V3 run has no grid data');
   }
-  console.info(`[TCM] Open-Meteo ensemble — ${payload.grid.length} pts`);
+  console.info(`[TCM] AWS model run — ${payload.grid.length} pts`);
 
   payload.region = region;
-  payload.run = run.toISOString();
+  payload.run = payload.run || run.toISOString();
 
   // NOTE: we intentionally do NOT strip non-UK/IE grid points from payload.grid here.
   // The buildContourRiskLayers / buildFineGrid pipeline needs neighbouring grid points
@@ -3250,6 +3250,18 @@ function MainMapSection({ data, region, riskType, dayIdx, run, onClickPoint, sum
 }
 
 /* Tiny overlay that renders today's lightning strikes on top of any map */
+// ── Today's UK & Ireland strikes from the Met Office LEELA feed (same source as TCM NOVA).
+// Covers the whole UK day since 00:00 regardless of whether anyone had the page open;
+// merged with the live Blitzortung stream for the newest seconds.
+async function fetchLeelaToday() {
+  const r = await fetch('/api/nova/lightning/day', { cache: 'no-store' });
+  if (!r.ok) return [];
+  const d = await r.json();
+  return (d.strikes || []).map(([t, lat, lon]) => ({
+    time: t, lat, lon, provider: 'metoffice-leela', dedup_key: `${Math.round(t / 1000)}_${lat.toFixed(3)}_${lon.toFixed(3)}`,
+  }));
+}
+
 function LightningOverlay({ projector, bbox, containerW, containerH, strikeColour = 'age', strikeStroke = 'none' }) {
   const [strikes, setStrikes] = useState([]);
   const [now, setNow] = useState(Date.now());
@@ -3282,16 +3294,18 @@ function LightningOverlay({ projector, bbox, containerW, containerH, strikeColou
     // 1. Load from localStorage immediately
     reload();
 
-    // 2. Fetch from DB so we get ALL today's strikes even if TCM was never opened
+    // 2. Every UK & Ireland strike since 00:00 from the Met Office feed (as TCM NOVA), plus
+    //    the server's own archive for other regions; refreshed every 3 minutes.
     let cancelled = false;
     const region = bbox && bbox.lonMax < 10 ? 'uk' : 'europe';
-    base44.functions.invoke('historicalLightning', { region, daysBack: 0 })
-      .then(res => {
-        if (cancelled) return;
-        const srv = res?.data?.strikes || res?.strikes || [];
-        mergeServerStrikes(srv);
-      })
-      .catch(() => {});
+    const pullServer = () => {
+      if (region === 'uk') fetchLeelaToday().then((srv) => { if (!cancelled) mergeServerStrikes(srv); }).catch(() => {});
+      base44.functions.invoke('historicalLightning', { region, daysBack: 0 })
+        .then(res => { if (!cancelled) mergeServerStrikes(res?.data?.strikes || res?.strikes || []); })
+        .catch(() => {});
+    };
+    pullServer();
+    const ivServer = setInterval(pullServer, 3 * 60_000);
 
     // 3. Poll localStorage every 10s to pick up TCM live WS strikes
     const iv = setInterval(reload, 10_000);
@@ -3306,6 +3320,7 @@ function LightningOverlay({ projector, bbox, containerW, containerH, strikeColou
     return () => {
       cancelled = true;
       clearInterval(iv);
+      clearInterval(ivServer);
       window.removeEventListener('storage', onStorage);
     };
   }, [reload, mergeServerStrikes, bbox]);
@@ -3522,11 +3537,16 @@ function DayOverview(props) {
 const STRIKE_CACHE_KEY = 'tcm_lightning_strikes_today';
 const STRIKE_HARD_CAP  = 100_000; // no artificial cap — plots every strike
 
+function ukMidnightMs(now = Date.now()) {
+  const f = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(now));
+  const g = (k) => Number(f.find((x) => x.type === k).value);
+  return now - ((g('hour') * 60 + g('minute')) * 60 + g('second')) * 1000 - (now % 1000);
+}
+
 function loadTodayStrikes(bbox = null) {
   try {
-    const todayDate = new Date().toISOString().slice(0, 10);
-    // Use UTC midnight so it's consistent regardless of local timezone
-    const todayStartMs = new Date(todayDate + 'T00:00:00Z').getTime();
+    // UK midnight (Europe/London, BST/GMT-aware) — the same "today" TCM NOVA uses.
+    const todayStartMs = ukMidnightMs();
 
     const allRaw = [];
 
@@ -3737,7 +3757,7 @@ function TCMLightningVerification({ data, region, dayIdx, riskType, captureRef, 
     freshRef.current.add(s.time);
     setTimeout(() => freshRef.current.delete(s.time), 90_000);
     setStrikes((prev) => {
-      const todayStart = new Date(); todayStart.setUTCHours(0, 0, 0, 0);
+      const todayStart = new Date(ukMidnightMs());
       const dedup = (x) => x.dedup_key || `${Math.round(x.time / 1000)}_${x.lat.toFixed(3)}_${x.lon.toFixed(3)}`;
       const sKey  = dedup(s);
       const seen  = new Set(prev.map(dedup));
@@ -3759,8 +3779,9 @@ function TCMLightningVerification({ data, region, dayIdx, riskType, captureRef, 
     const pull = async () => {
       if (cancelled) return;
       try {
-        const res = await base44.functions.invoke('historicalLightning', { region: region === 'eu' ? 'europe' : 'uk' });
-        const serverStrikes = res?.data?.strikes || [];
+        const res = await base44.functions.invoke('historicalLightning', { region: region === 'eu' ? 'europe' : 'uk' }).catch(() => null);
+        const leela = region === 'eu' ? [] : await fetchLeelaToday().catch(() => []);
+        const serverStrikes = [...(res?.data?.strikes || []), ...leela];
         if (cancelled || !serverStrikes.length) return;
         setStrikes((prev) => {
           const merged = new Map();
@@ -3775,7 +3796,7 @@ function TCMLightningVerification({ data, region, dayIdx, riskType, captureRef, 
       } catch (e) { console.warn('[historicalLightning] failed:', e?.message); }
     };
     pull();
-    const id = setInterval(pull, 5 * 60_000);
+    const id = setInterval(pull, 3 * 60_000);
     return () => { cancelled = true; clearInterval(id); };
   }, [region]);
 

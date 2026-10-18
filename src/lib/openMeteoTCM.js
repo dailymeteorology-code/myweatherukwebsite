@@ -190,7 +190,14 @@ const MODELS = [
   { id: 'cmc_gem_geps_ensemble_mean',        weight: 1.4, physics: false, maxDay: 2 }, // Canadian GEM-GEPS
   { id: 'ncep_gefs_ensemble_mean_seamless',  weight: 1.2, physics: false, maxDay: 2 }, // NCEP GEFS (seamless)
 ];
-const DEFAULT_MODEL_WEIGHTS = Object.fromEntries(MODELS.map(m => [m.id, m.weight]));
+// AWS-sourced models (built by tools/tcm-nova/nova/v3_points.py on GitHub). These are what
+// TCM V3 runs on now; the Open-Meteo ids above are kept only so old archived runs still parse.
+export const AWS_MODELS = [
+  { id: 'ukv_aws', weight: 4.0 }, { id: 'mo_global_aws', weight: 3.0 }, { id: 'ifs_aws', weight: 2.4 },
+  { id: 'ifs_ens_aws', weight: 2.2 }, { id: 'aifs_aws', weight: 1.6 }, { id: 'gfs_aws', weight: 1.4 },
+  { id: 'aifs_ens_aws', weight: 1.2 }, { id: 'gefs_aws', weight: 1.2 },
+];
+const DEFAULT_MODEL_WEIGHTS = Object.fromEntries([...MODELS, ...AWS_MODELS].map(m => [m.id, m.weight]));
 
 // A run to `maxDay` (0..2) issues one request per distinct (physics, forecast-
 // days) group: every model appears once, fetched for exactly min(maxDay, its
@@ -308,7 +315,7 @@ function pointInUKIreland(lat, lon) {
   if (lat >= 49.30 && lat < 51.15 && lon > 1.0 && lon <= 2.55) return true; // N-France Channel strip
   return true;
 }
-function buildCoords(bbox, step) {
+export function buildCoords(bbox, step) {
   // Process ALL points inside the ACTIVE REGION's bbox (fills the box, incl. the
   // surrounding seas) rather than clipping to a ragged coastline. Each region's
   // bbox IS its tight data/display box — see REGIONS in pages/WeatherPatterns.jsx
@@ -1176,7 +1183,27 @@ async function assignMetOfficeTemps(grid, lastDay) {
   return assigned;
 }
 
-export async function fetchOpenMeteoTCM({ bbox, gridStep, run, onProgress, fastMode = false, force = false, maxDay = 2 }) {
+/* ── TCM V3 now runs on AWS data ─────────────────────────────────────────────
+   GitHub Actions builds each run at 03:00 and 15:00 UK time from AWS open data
+   (.github/workflows/tcm-v3.yml) with this same engine (buildTCMFromPoints), and the
+   site serves the newest one at /api/tcm-v3/latest. "Run Model" and the page's own
+   due-checks now load that run; nothing calls Open-Meteo any more. The name is kept so
+   every existing caller keeps working unchanged. */
+export async function fetchOpenMeteoTCM({ onProgress } = {}) {
+  onProgress?.(0.1);
+  const r = await fetch('/api/tcm-v3/latest', { cache: 'no-store' });
+  if (!r.ok) {
+    const e = new Error(r.status === 404 ? 'FETCH_NOT_DUE: no AWS run published yet (runs at 03:00 and 15:00 UK)' : `TCM V3 run unavailable (${r.status})`);
+    e.code = r.status === 404 ? 'FETCH_NOT_DUE' : 'FETCH_FAILED';
+    throw e;
+  }
+  const payload = await r.json();
+  onProgress?.(1);
+  return payload;
+}
+
+/** Legacy Open-Meteo pipeline — no longer called by the site. */
+export async function fetchOpenMeteoTCMLegacy({ bbox, gridStep, run, onProgress, fastMode = false, force = false, maxDay = 2 }) {
   const now = Date.now();
   const plan = requestPlan(maxDay);
 
@@ -1298,6 +1325,10 @@ export async function fetchOpenMeteoTCM({ bbox, gridStep, run, onProgress, fastM
 // ─────────────────────────────────────────────────────────────────────────────
 export async function continueTCM({ payload, toDay, onProgress }) {
   if (!payload || typeof payload !== 'object') throw new Error('continueTCM: no payload');
+  if (payload.source === 'aws') {                // AWS runs are built with all days up front
+    const fresh = await fetchOpenMeteoTCM({ onProgress });
+    return { ...fresh, region: payload.region, run: fresh.run ?? payload.run };
+  }
   const target = clamp(Math.round(num(toDay, 2)), 0, 2);
   const already = clamp(Math.round(num(payload.maxDay, 2)), 0, 2);
   if (target <= already) return payload;
@@ -1309,7 +1340,7 @@ export async function continueTCM({ payload, toDay, onProgress }) {
     err.code = 'NO_RAW';
     throw err;
   }
-  const extended = await fetchOpenMeteoTCM({
+  const extended = await fetchOpenMeteoTCMLegacy({
     bbox,
     gridStep: payload.gridStep || FETCH_STEP,
     run: new Date(runStartMs),
@@ -1319,3 +1350,30 @@ export async function continueTCM({ payload, toDay, onProgress }) {
   });
   return { ...extended, region: payload.region, run: payload.run ?? new Date(runStartMs).toISOString() };
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// buildTCMFromPoints — the same scoring as the live pipeline, from pre-built point
+// series (AWS). Runs on GitHub (tools/tcm-v3/build.mjs); no network calls.
+// ─────────────────────────────────────────────────────────────────────────────
+export function buildTCMFromPoints({ input, bbox, gridStep = FETCH_STEP, maxDay = 2 }) {
+  const runStartMs = Date.parse(input.init_utc);
+  const lastDay = clamp(Math.round(num(maxDay, 2)), 0, 2);
+  const grid = [];
+  for (const pt of input.points) {
+    if (!pointInUKIreland(pt.lat, pt.lon)) continue;
+    const p = buildPointFromJSON(pt.lat, pt.lon, { hourly: pt.hourly, daily: pt.daily }, runStartMs, lastDay);
+    if (p) grid.push(p);
+  }
+  applyConvergenceEnhancement(grid, gridStep);
+  applyNEP(grid, gridStep);
+  return {
+    grid, summary: buildSummary(grid), builtAt: Date.now(), source: 'aws',
+    tempSource: 'aws-model-blend (UKV-weighted)', cellCount: grid.length, realCellCount: grid.length,
+    models: input.models, modelRuns: input.model_runs, requestedCells: input.points.length,
+    coveragePct: Math.round(100 * grid.length / Math.max(1, input.points.length)),
+    gridStep, fineGridStep: gridStep, maxDay: lastDay, daysAvailable: lastDay + 1,
+    runStartMs, run: new Date(runStartMs).toISOString(), bbox,
+  };
+}
+export { pointInUKIreland, FETCH_STEP };

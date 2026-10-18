@@ -46,3 +46,4 @@ server/data/tcm-nova/
 tools/tcm-nova/.cache/
 tools/tcm-nova/.terrain.log
 tools/tcm-nova/**/__pycache__/
+tools/tcm-v3/.bundle.mjs

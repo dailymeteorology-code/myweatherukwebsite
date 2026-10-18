@@ -52,8 +52,8 @@ test('API keeps products apart and enforces the horizon', async () => {
   fakeRun('main', 'main-20261018T1400Z', 120);
   fakeRun('hyper', 'hyper-20261018T1500Z', 24);
   const routes = {};
-  const app = { get: (p, h) => { routes[p] = h; } };
-  mountTcmNova(app, { schedule: false });
+  const app = { get: (p, h) => { routes[p] = h; }, use: () => {} };
+  mountTcmNova(app, { schedule: false, adminOnly: false });
   const call = (route, params) => new Promise((resolve) => {
     const res = { code: 200, headers: {}, status(c) { this.code = c; return this; }, set(h) { Object.assign(this.headers, h); return this; },
       json(b) { resolve({ code: this.code, body: b }); }, end() { resolve({ code: this.code }); }, on() {}, once() {}, emit() {}, write() {} };

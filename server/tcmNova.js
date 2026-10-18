@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { requireAdmin } from './auth.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TOOL = path.resolve(here, '..', 'tools', 'tcm-nova');
@@ -233,7 +234,12 @@ function londonDayBounds(day) {
   return [start, end - off(end)];
 }
 
-export function mountTcmNova(app, { schedule = process.env.NOVA_SCHEDULE !== 'off' } = {}) {
+export function mountTcmNova(app, { schedule = process.env.NOVA_SCHEDULE !== 'off', adminOnly = true } = {}) {
+  /* TCM NOVA is not public yet: every NOVA data route needs an admin session. The
+     lightning feed stays open because TCM V3 (public) draws the same overlay. */
+  if (adminOnly) {
+    app.use('/api/nova', (req, res, next) => (req.path.startsWith('/lightning') ? next() : requireAdmin(req, res, next)));
+  }
   app.get('/api/nova/lightning/day', async (req, res) => {
     const p = londonParts(new Date());
     const today = `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;

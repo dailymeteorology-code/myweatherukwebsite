@@ -25,31 +25,37 @@
 
 import { base44 } from '@/api/base44Client';
 
-// The four standard synoptic model-run hours (UTC).
-export const RUN_HOURS_UTC = [0, 6, 12, 18];
+// TCM V3 runs twice a day, at 03:00 and 15:00 UK time (Europe/London, so it follows
+// BST/GMT). The runs are made on GitHub from AWS data (.github/workflows/tcm-v3.yml).
+export const RUN_HOURS_LOCAL = [3, 15];
+export const RUN_HOURS_UTC = RUN_HOURS_LOCAL;   // legacy export name; values are UK local hours now
 
-// A run stays valid for its full 6-hour cycle (00–06Z, 06–12Z, 12–18Z, 18–00Z).
-const WINDOW_MS = 6 * 60 * 60 * 1000;
+// A run stays current until the next one (12 hours).
+const WINDOW_MS = 12 * 60 * 60 * 1000;
 
-// Per-region localStorage key for the last-fetch timestamp. Bumped to v5 for the
-// UTC-based policy so stale v4 entries (BST-shifted timestamps) can't poison a
-// cold-start lookup.
-export const policyKey = (region) => `tcm_policy_v5_${region}`;
+// Per-region localStorage key for the last-fetch timestamp. v6: UK-local 03/15 schedule.
+export const policyKey = (region) => `tcm_policy_v6_${region}`;
 
-// UTC ms of the most recent run hour that has passed (falls back to yesterday's
-// 18Z before today's 00Z window opens).
-export function lastRunStartMs(now = Date.now()) {
-  const d = new Date(now);
-  const h = d.getUTCHours();
-  let runHour = -1;
-  for (const hr of RUN_HOURS_UTC) if (hr <= h) runHour = hr;
-  if (runHour < 0) {
-    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - 1, 18);
-  }
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), runHour);
+function londonOffsetMs(t) {
+  const f = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(t));
+  const g = (k) => Number(f.find((x) => x.type === k).value);
+  return Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute')) - Math.floor(t / 60000) * 60000;
+}
+// UTC instant of HH:00 UK time on the UK calendar day containing `dayRef` (+ dayShift days).
+function londonHourMs(dayRef, hour, dayShift = 0) {
+  const local = new Date(dayRef + londonOffsetMs(dayRef));
+  const guess = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + dayShift, hour);
+  return guess - londonOffsetMs(guess);
 }
 
-// True if `now` sits inside the current run's 6-hour validity window.
+// UTC ms of the most recent 03:00/15:00 UK run that has passed.
+export function lastRunStartMs(now = Date.now()) {
+  const cands = [];
+  for (const shift of [-1, 0]) for (const h of RUN_HOURS_LOCAL) cands.push(londonHourMs(now, h, shift));
+  return Math.max(...cands.filter((t) => t <= now));
+}
+
+// True if `now` sits inside the current run's validity window.
 export function isInRunWindow(now = Date.now()) {
   const elapsed = now - lastRunStartMs(now);
   return elapsed >= 0 && elapsed <= WINDOW_MS;
@@ -74,17 +80,12 @@ export function isFetchDue(region) {
   return getLastFetch(region) < lastRunStartMs(now);
 }
 
-// Time remaining (ms) until the NEXT scheduled UTC run window opens.
+// Time remaining (ms) until the next 03:00 / 15:00 UK run.
 export function msUntilNextFetch(region) { // eslint-disable-line no-unused-vars
   const now = Date.now();
-  const d = new Date(now);
-  const h = d.getUTCHours();
-  let nextHour = -1;
-  for (const hr of RUN_HOURS_UTC) { if (hr > h) { nextHour = hr; break; } }
-  const next = nextHour < 0
-    ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1, RUN_HOURS_UTC[0])
-    : Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), nextHour);
-  return Math.max(0, next - now);
+  const cands = [];
+  for (const shift of [0, 1]) for (const h of RUN_HOURS_LOCAL) cands.push(londonHourMs(now, h, shift));
+  return Math.max(0, Math.min(...cands.filter((t) => t > now)) - now);
 }
 
 // Format ms remaining as "Xh Ym" (or "now").

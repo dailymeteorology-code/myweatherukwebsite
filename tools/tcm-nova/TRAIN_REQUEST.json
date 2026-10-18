@@ -1,0 +1,6 @@
+{
+  "start": "2026-06-01",
+  "end": "2026-10-14",
+  "every": 3,
+  "why": "Initial NOVA training: hindcasts every 3rd day Jun-Oct 2026 (45 days), UK & Ireland grid, fixed UKV humidity + netCDF thread safety"
+}

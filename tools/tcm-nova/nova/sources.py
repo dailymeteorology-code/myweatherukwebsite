@@ -21,6 +21,9 @@ import numpy as np
 from .grid import projected_sampler, regular_sampler
 from .io_aws import BUCKETS, decode_grib, ecmwf_index, exists, fetch_ranges, get, grib_axes, log, open_nc, wgrib_index
 
+import threading
+NC_LOCK = threading.Lock()
+
 PL_KEEP = [1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200]
 
 
@@ -91,13 +94,20 @@ class MetOffice(Source):
         return s
 
     def field(self, run, vt, name, grid):
-        ds, var = self.nc(run, vt, name)
-        S = self.sampler(ds, grid)
-        a = np.ma.filled(var[:].astype(np.float32), np.nan)
-        lev = None
-        for c in ('pressure', 'height'):
-            if c in ds.variables and a.ndim == 3:
-                lev = np.asarray(ds.variables[c][:], float)
+        # Download in parallel, but DECODE one file at a time: netCDF4/HDF5 is not thread-safe,
+        # and concurrent decodes were returning another file's array (found 18 Oct 2026: UKV 2 m
+        # temperature repeated across hours).
+        blob = get(self.key_for(run, vt, name))
+        with NC_LOCK:
+            ds = open_nc(blob)
+            var = next(v for v in ds.variables.values() if v.ndim >= 2 and 'bnds' not in v.name)
+            S = self.sampler(ds, grid)
+            a = np.ma.filled(var[:].astype(np.float32), np.nan)
+            lev = None
+            for c in ('pressure', 'height'):
+                if c in ds.variables and a.ndim == 3:
+                    lev = np.asarray(ds.variables[c][:], float)
+            ds.close()
         return S(a), lev, S.valid
 
     def accum_rate(self, run, vt, grid, dt_h, name='precipitation_accumulation-PT01H'):

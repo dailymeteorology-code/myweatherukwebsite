@@ -1,0 +1,70 @@
+# TCM V3 on GitHub's servers from AWS open data (never Open-Meteo), twice a day at
+# 03:00 and 15:00 UK time, so it runs with the PC off. Publishes to the `tcm-v3` release:
+#   payload.json.gz   the full V3 run (served by the site at /api/tcm-v3/latest)
+#   db-rows.json.gz   the RiskGridCache rows V3's own saveTCMRunToDB writes (synced into the site DB)
+name: TCM V3
+
+on:
+  schedule:
+    - cron: '5 2,14 * * *'      # 03:05 / 15:05 UK during BST
+    - cron: '5 3,15 * * *'      # 03:05 / 15:05 UK during GMT
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tcm-v3
+  cancel-in-progress: false
+
+env:
+  NOVA_DATA: /tmp/nova/data
+  NOVA_CACHE: /tmp/nova/cache
+  PYTHONPATH: tools/tcm-nova
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Only at 03:00 / 15:00 UK time
+        id: gate
+        run: |
+          OFF=$(TZ=Europe/London date +%z); S="${{ github.event.schedule }}"; GO=0
+          [ "${{ github.event_name }}" = "workflow_dispatch" ] && GO=1
+          [ "$S" = "5 2,14 * * *" ] && [ "$OFF" = "+0100" ] && GO=1
+          [ "$S" = "5 3,15 * * *" ] && [ "$OFF" = "+0000" ] && GO=1
+          echo "schedule='$S' uk-offset=$OFF go=$GO"; echo "go=$GO" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == '1'
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == '1'
+        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.go == '1'
+        with: { node-version: '22', cache: npm }
+      - name: Install
+        if: steps.gate.outputs.go == '1'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libeccodes0 libeccodes-data >/dev/null
+          pip install -r tools/tcm-nova/requirements.txt
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: V3 nodes
+        if: steps.gate.outputs.go == '1'
+        run: node tools/tcm-v3/build.mjs coords /tmp/v3/coords.json
+      - name: AWS model series (UKV, MO Global, IFS, IFS ENS, AIFS, AIFS ENS, GFS, GEFS)
+        if: steps.gate.outputs.go == '1'
+        run: python -m nova.v3_points /tmp/v3/coords.json /tmp/v3/points.json.gz --days 3
+      - name: Score with V3's engine
+        if: steps.gate.outputs.go == '1'
+        run: node tools/tcm-v3/build.mjs score /tmp/v3/points.json.gz /tmp/v3/out
+      - name: Publish
+        if: steps.gate.outputs.go == '1'
+        run: |
+          gh release view tcm-v3 >/dev/null 2>&1 || gh release create tcm-v3 --title "TCM V3 runs" --notes "TCM V3 from AWS open data, published automatically." --latest=false
+          STAMP=$(date -u +%Y%m%dT%H%MZ)
+          cp /tmp/v3/out/payload.json.gz "/tmp/v3/out/payload-$STAMP.json.gz"
+          gh release upload tcm-v3 /tmp/v3/out/payload.json.gz /tmp/v3/out/db-rows.json.gz "/tmp/v3/out/payload-$STAMP.json.gz" --clobber
+          # keep the latest 14 dated runs (one week)
+          gh release view tcm-v3 --json assets -q '.assets[].name' | grep '^payload-' | sort | head -n -14 | while read n; do gh release delete-asset tcm-v3 "$n" --yes; done

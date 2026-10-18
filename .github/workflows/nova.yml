@@ -19,6 +19,8 @@ on:
     - cron: '20 23 * * *'                     # learning during BST (00:20 UK)
     - cron: '20 0 * * *'                      # learning during GMT
     - cron: '40 */6 * * *'                    # lightning archive
+  push:
+    paths: ['tools/tcm-nova/TRAIN_REQUEST.json']   # editing this file starts a training run
   workflow_dispatch:
     inputs:
       job:
@@ -49,6 +51,14 @@ jobs:
         run: |
           S="${{ github.event.schedule }}"; OFF=$(TZ=Europe/London date +%z); J=none
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then J="${{ inputs.job }}"; fi
+          TS="${{ inputs.train_start }}"; TE="${{ inputs.train_end }}"; TN="${{ inputs.train_every }}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            J=train
+            curl -s "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/tools/tcm-nova/TRAIN_REQUEST.json" -o /tmp/req.json
+            TS=$(python3 -c "import json;print(json.load(open('/tmp/req.json'))['start'])")
+            TE=$(python3 -c "import json;print(json.load(open('/tmp/req.json'))['end'])")
+            TN=$(python3 -c "import json;print(json.load(open('/tmp/req.json'))['every'])")
+          fi
           [ "$S" = "7 * * * *" ] && J=hyper
           [ "$S" = "12 2,8,14,20 * * *" ] && [ "$OFF" = "+0100" ] && J=main
           [ "$S" = "12 3,9,15,21 * * *" ] && [ "$OFF" = "+0000" ] && J=main
@@ -60,7 +70,7 @@ jobs:
           if [ "$J" = "train" ]; then
             python3 -c "
           import json,datetime as d
-          a=d.date.fromisoformat('${{ inputs.train_start }}'); b=d.date.fromisoformat('${{ inputs.train_end }}'); n=int('${{ inputs.train_every }}')
+          a=d.date.fromisoformat('$TS'); b=d.date.fromisoformat('$TE'); n=int('$TN')
           print('days='+json.dumps([(a+d.timedelta(days=i)).isoformat() for i in range(0,(b-a).days+1,n)]))" >> "$GITHUB_OUTPUT"
           else echo 'days=[]' >> "$GITHUB_OUTPUT"; fi
 
