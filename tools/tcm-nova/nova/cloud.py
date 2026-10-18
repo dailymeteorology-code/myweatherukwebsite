@@ -38,8 +38,14 @@ def gh(*args, check=True, capture=False):
 
 
 def ensure_release(tag, title):
-    if gh('release', 'view', tag, check=False, capture=False) != 0:
-        gh('release', 'create', tag, '--title', title, '--notes', f'{title} — published automatically by the TCM NOVA workflow.', '--latest=false')
+    """Create the release if missing. Parallel jobs may race to create it: a failed create is
+    fine as long as the release exists afterwards."""
+    if gh('release', 'view', tag, check=False) == 0:
+        return
+    gh('release', 'create', tag, '--title', title, '--notes', f'{title} — published automatically by the TCM NOVA workflow.',
+       '--latest=false', check=False)
+    if gh('release', 'view', tag, check=False) != 0:
+        raise RuntimeError(f'could not create release {tag}')
 
 
 def assets(tag):
@@ -55,8 +61,10 @@ def download(tag, pattern, dest):
     return gh('release', 'download', tag, '--pattern', pattern, '--dir', str(dest), '--clobber', check=False) == 0
 
 
-def upload(tag, *files):
-    gh('release', 'upload', tag, *map(str, files), '--clobber')
+def upload(tag, *files, required=True):
+    rc = gh('release', 'upload', tag, *map(str, files), '--clobber', check=False)
+    if rc != 0 and required:
+        raise RuntimeError(f'upload to {tag} failed: {[str(f) for f in files]}')
 
 
 def fetch_static():
@@ -69,12 +77,12 @@ def fetch_static():
     for g in need:
         log(f'cloud: building terrain {g}')
         p = terrain.build(g)
-        upload('nova-static', p, p.with_suffix('.json'))
+        upload('nova-static', p, p.with_suffix('.json'), required=False)     # a parallel job may have uploaded it
     from . import thermo
     thermo._table()
     for f in CACHE.glob('pseudoadiabat_*.npy'):
         if not ok:
-            upload('nova-static', f)
+            upload('nova-static', f, required=False)
 
 
 def publish(product):
