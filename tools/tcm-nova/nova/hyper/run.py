@@ -27,6 +27,19 @@ UNAVAILABLE = {
 }
 
 
+_STATIC = {}
+
+
+def hyper_static():
+    if 's' not in _STATIC:
+        from .. import ai_cal, terrain
+        from ..regions import region_map
+        g = Grid.get(HYPER['grid'])
+        t = terrain.load(g.name)
+        _STATIC['s'] = ai_cal.static_fields(t, region_map(g, t['land_frac']))
+    return _STATIC['s']
+
+
 def hour_init(now=None):
     now = now or datetime.now(timezone.utc)
     return now.replace(minute=0, second=0, microsecond=0)
@@ -138,6 +151,12 @@ def run(init=None):
             conf = float(np.exp(-lead / 180))
         out['p_thunder_uncal'] = out['p_thunder']
         out['p_thunder'], cal_t = calibrate_field(out['p_thunder'], lead / 60, 'hyper_p_thunder')
+        if E is not None:
+            from .. import ai_cal
+            p_ai, used = ai_cal.apply_grid(out['p_thunder_uncal'], lead / 60, {k: out[k] for k in ai_cal.ENV_FIELDS if k in out},
+                                           hyper_static(), 'hyper')
+            if used:
+                out['p_thunder'], cal_t = p_ai, 'nova-ai'
         acc = acc + 0.25 * (prev + out['precip']) if lead else acc          # trapezoid over 30 min, mm
         prev = out['precip']
         pk = [k for k in out if k.startswith('p_')]

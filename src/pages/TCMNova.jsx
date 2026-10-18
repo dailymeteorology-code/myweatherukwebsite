@@ -15,6 +15,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import NovaGlobe from '@/components/tcm/NovaGlobe';
 import {
   CloudLightning, Zap, CloudRain, Wind, Tornado, Snowflake, AlertTriangle, Play, Pause,
   ChevronLeft, ChevronRight, Layers, Clock, Database, Activity, Map as MapIcon, Info, RefreshCw, TrendingUp,
@@ -46,8 +47,11 @@ const HAZARDS = [
 ];
 
 /* palettes: [value, rgba] stops; kind 'p' = probability 0..1 */
-const PROB = [[0.02, [56, 189, 248, 0]], [0.05, [56, 189, 248, 120]], [0.15, [74, 222, 128, 160]], [0.3, [250, 204, 21, 180]],
-  [0.45, [249, 115, 22, 195]], [0.6, [239, 68, 68, 205]], [0.8, [168, 85, 247, 215]]];
+/* One continuous ramp with opacity that levels off: high values deepen in hue instead of
+   turning into an opaque block, so the basemap and the surrounding bands stay readable and
+   the top band blends out of the red rather than jumping to a flat purple. */
+const PROB = [[0.02, [56, 189, 248, 0]], [0.05, [56, 189, 248, 95]], [0.15, [74, 222, 128, 135]], [0.3, [250, 204, 21, 155]],
+  [0.45, [249, 115, 22, 168]], [0.6, [239, 68, 68, 176]], [0.75, [219, 39, 119, 182]], [0.9, [192, 38, 211, 186]]];
 const LAYERS = {
   p_thunder: { label: 'Thunderstorm probability', unit: '%', stops: PROB, pct: true },
   p_lightning: { label: 'Lightning probability', unit: '%', stops: PROB, pct: true },
@@ -150,8 +154,8 @@ function toBNG(lat, lon) {
   return [E0 + IV * dl + V * dl ** 3 + VI * dl ** 5, I + II * dl ** 2 + III * dl ** 4 + IIIA * dl ** 6];
 }
 
-const BOUNDS = [[49.7, -8.9], [61.0, 2.1]];
-const OUT_W = 560, OUT_H = 900;
+const BOUNDS = [[49.5, -11.6], [61.2, 2.4]];
+const OUT_W = 760, OUT_H = 1000;
 /* per output pixel (uniform in Web Mercator) -> BNG coordinates, computed once */
 const PIXEL_BNG = (() => {
   let cache = null;
@@ -193,10 +197,20 @@ function renderField(data, grid, layer) {
   const ctx = cv.getContext('2d');
   const img = ctx.createImageData(OUT_W, OUT_H);
   const mul = layer.mul || 1;
+  const cat = layer.categorical;
   for (let k = 0; k < xs.length; k += 1) {
-    const ix = Math.floor((xs[k] - grid.x0) / grid.dx_m), iy = Math.floor((ys[k] - grid.y0) / grid.dx_m);
-    if (ix < 0 || iy < 0 || ix >= grid.nx || iy >= grid.ny) continue;
-    const c = colourAt(layer.stops, data[iy * grid.nx + ix] * (layer.pct ? 1 : mul));
+    const fx = (xs[k] - grid.x0) / grid.dx_m - 0.5, fy = (ys[k] - grid.y0) / grid.dx_m - 0.5;
+    const ix = Math.floor(fx), iy = Math.floor(fy);
+    if (ix < 0 || iy < 0 || ix >= grid.nx - 1 || iy >= grid.ny - 1) continue;
+    let v;
+    if (cat) v = data[Math.round(fy) * grid.nx + Math.round(fx)];
+    else {
+      const tx = fx - ix, ty = fy - iy, i0 = iy * grid.nx + ix, i1 = i0 + grid.nx;
+      const a = data[i0], b = data[i0 + 1], c2 = data[i1], d = data[i1 + 1];
+      if (!Number.isFinite(a + b + c2 + d)) v = data[Math.round(fy) * grid.nx + Math.round(fx)];
+      else v = (a * (1 - tx) + b * tx) * (1 - ty) + (c2 * (1 - tx) + d * tx) * ty;
+    }
+    const c = colourAt(layer.stops, v * (layer.pct ? 1 : mul));
     if (!c) continue;
     img.data[k * 4] = c[0]; img.data[k * 4 + 1] = c[1]; img.data[k * 4 + 2] = c[2]; img.data[k * 4 + 3] = c[3];
   }
@@ -241,8 +255,8 @@ function NovaMap({ product, manifest, lead, layerKey, onHover }) {
   const [err, setErr] = useState(null);
   useEffect(() => {
     if (map.current) return;
-    const m = L.map(el.current, { zoomControl: true, attributionControl: true, minZoom: 5, maxZoom: 10, zoomSnap: 0.25, scrollWheelZoom: 'center' }).setView([54.7, -3.0], 6);
-    setTimeout(() => m.invalidateSize(), 200);
+    const m = L.map(el.current, { zoomControl: true, attributionControl: true, minZoom: 5, maxZoom: 10, zoomSnap: 0.25, scrollWheelZoom: 'center' }).fitBounds([[50.0, -10.6], [58.9, 1.9]]);
+    setTimeout(() => { m.invalidateSize(); m.fitBounds([[50.0, -10.6], [58.9, 1.9]]); }, 250);
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', { attribution: '© Esri' }).addTo(m);
     m.createPane('labels'); m.getPane('labels').style.zIndex = 650; m.getPane('labels').style.pointerEvents = 'none';
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', { pane: 'labels' }).addTo(m);
@@ -295,6 +309,13 @@ function Legend({ layerKey }) {
 
 /* ── page ────────────────────────────────────────────────────────────────── */
 export default function TCMNova({ engineSwitcher = null }) {
+  /* Every visit starts on the globe; the model opens once a region is picked. */
+  const [region, setRegion] = useState(null);
+  if (!region) return <NovaGlobe onSelect={setRegion} />;
+  return <NovaModel engineSwitcher={engineSwitcher} region={region} onChangeRegion={() => setRegion(null)} />;
+}
+
+function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   const [product, setProductState] = useState(() => { try { return localStorage.getItem('nova_product') === 'hyper' ? 'hyper' : 'main'; } catch { return 'main'; } });
   const setProduct = (p) => { setProductState(p); try { localStorage.setItem('nova_product', p); } catch { /* blocked */ } };
   const { runs, latest, status, reload } = useRuns(product);
@@ -381,16 +402,36 @@ export default function TCMNova({ engineSwitcher = null }) {
             {runs.map((r) => <option key={r.run_id} value={r.run_id}>{r.init_local} · {r.status}</option>)}
           </select>
           <button type="button" onClick={reload} style={{ ...pill(T.soft, T.mid), cursor: 'pointer' }} title="Check for new runs"><RefreshCw style={{ width: 13, height: 13 }} /></button>
+          <button type="button" onClick={onChangeRegion} style={{ ...pill(T.soft, T.text), cursor: 'pointer' }} title="Pick another region on the globe">🌍 {region.name}</button>
           {engineSwitcher}
         </div>
       </div>
 
+      {product === 'main' && days.length > 0 && (
+        <div style={{ background: '#fff', borderBottom: `1px solid ${T.border}` }}>
+          <div role="tablist" aria-label="Forecast day" style={{ maxWidth: 1360, margin: '0 auto', padding: '8px 16px', display: 'flex', gap: 6, overflowX: 'auto' }}>
+            {days.slice(0, 4).map((d, i) => {
+              const [w, c] = riskWord(d.max);
+              const on = d.key === curDay;
+              return (
+                <button key={d.key} type="button" role="tab" aria-selected={on} onClick={() => { setIdx(d.first); setEnded(false); }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+                    border: `1px solid ${on ? '#0f172a' : T.border}`, background: on ? '#0f172a' : T.soft, color: on ? '#fff' : T.text }}>
+                  <span style={{ fontFamily: MONO, fontSize: '0.62rem', opacity: 0.75 }}>DAY {i + 1}</span>
+                  <span style={{ fontWeight: 800, fontSize: '0.8rem' }}>{d.label}</span>
+                  <span style={{ width: 8, height: 8, borderRadius: 99, background: c }} title={w} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div style={{ maxWidth: 1360, margin: '0 auto', padding: '16px' }}>
         {/* hero */}
         <div style={{ ...card, padding: '18px 22px', marginBottom: 16, background: `linear-gradient(120deg, ${colour}1f, #ffffff 60%)`, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 260 }}>
             <div style={{ fontSize: '0.66rem', fontFamily: MONO, letterSpacing: '0.12em', color: T.faint }}>
-              GREAT BRITAIN · {P.label.toUpperCase()} · {frame ? dayName(frame.valid).toUpperCase() : '—'}
+              {region.name.toUpperCase()} · {P.label.toUpperCase()} · {frame ? dayName(frame.valid).toUpperCase() : '—'}
             </div>
             <h1 style={{ margin: '4px 0 2px', fontSize: '1.9rem', fontWeight: 900, display: 'flex', alignItems: 'center', gap: 10 }}>
               <CloudLightning style={{ color: colour, width: 28, height: 28 }} />

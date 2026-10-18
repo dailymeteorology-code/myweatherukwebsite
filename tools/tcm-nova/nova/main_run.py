@@ -206,7 +206,9 @@ def run(init=None, horizon_h=None, grid_name=None, sources=None, product='main',
     readers = {k: READERS[k]() for k in (sources or READERS)}
     runs, unavailable = {}, {}
     for k, r in readers.items():
-        rr = r.find_run(init)
+        # prefer a cycle that reaches as far as possible (UKV alternates short and long runs)
+        rr = r.find_run(init, need_lead_h=min(horizon_h, 54)) if k in ('ukv', 'icon_eu') else None
+        rr = rr or r.find_run(init)
         if rr:
             runs[k] = rr
         else:
@@ -282,8 +284,14 @@ def run(init=None, horizon_h=None, grid_name=None, sources=None, product='main',
     if product == 'hindcast':
         writer.manifest['hindcast'] = True
     cal = [f.get('calibrated') for f in writer.manifest['frames'] if f.get('valid')]
-    writer.manifest['calibration'] = ('isotonic reliability calibration from hindcasts (see calibration.json); '
-                                      f'{sum(1 for c in cal if c)}/{len(cal)} frames calibrated') if any(cal) else 'uncalibrated'
+    if any(c == 'nova-ai' for c in cal):
+        writer.manifest['calibration'] = ('NOVA-AI: region- and terrain-aware neural calibration trained on hindcasts + nightly '
+                                          f'verification (see nova_ai.json); {sum(1 for c in cal if c)}/{len(cal)} frames calibrated')
+    elif any(cal):
+        writer.manifest['calibration'] = ('isotonic reliability calibration from hindcasts (see calibration.json); '
+                                          f'{sum(1 for c in cal if c)}/{len(cal)} frames calibrated')
+    else:
+        writer.manifest['calibration'] = 'uncalibrated'
     path = writer.publish(status)
     store.set_status(product, state=status, run_id=rid, last_published=rid)
     store.prune(product, keep=8 if product == 'main' else 400)
@@ -369,6 +377,13 @@ def frame(grid, terr, lat, got, lead, vt, acc, prev_p):
     from .calibrate import calibrate_field
     H['p_thunder_uncal'], H['p_lightning_uncal'] = H['p_thunder'], H['p_lightning']
     H['p_thunder'], cal_t = calibrate_field(H['p_thunder'], lead, 'p_thunder')
+    from . import ai_cal
+    from .regions import region_map
+    p_ai, used_ai = ai_cal.apply_grid(H['p_thunder_uncal'], lead, {k: D[k] if k in D else flow.get(k, H.get(k)) for k in ai_cal.ENV_FIELDS
+                                                                    if k in D or k in flow or k in H},
+                                      ai_cal.static_fields(terr, region_map(grid, terr['land_frac'])), 'main')
+    if used_ai:
+        H['p_thunder'], cal_t = p_ai, 'nova-ai'
     H['p_lightning'], _ = calibrate_field(H['p_lightning'], lead, 'p_lightning')
     out = dict(D, **G, **flow, **H, **M)
     if 'lpi' in sfc:

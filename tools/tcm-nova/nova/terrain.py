@@ -35,9 +35,9 @@ from .config import CACHE, DATA
 from .grid import Grid
 from .io_aws import BUCKETS, get, log
 
-TERRAIN_VERSION = 'terrain-1.0.0'
-LAT_RANGE = (49, 61)          # tile south edges 49..60
-LON_RANGE = (-9, 2)           # tile west edges -9..1
+TERRAIN_VERSION = 'terrain-1.1.0'          # 1.1: grid extended west to cover all of Ireland
+LAT_RANGE = (49, 61)          # tile south edges 49..60 (Ireland's south is ~51.4)
+LON_RANGE = (-11, 2)          # tile west edges -11..1 (Ireland's west coast is at -10.5)
 TPI_SCALES_KM = (6, 20, 50)   # neighbourhood, valley/ridge, barrier/regional
 
 

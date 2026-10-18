@@ -35,6 +35,7 @@ from .config import DATA
 from .grid import Grid, coarsen_sampler
 from .hyper import obs
 from .io_aws import log
+from . import ai_cal
 from .weights import WINDOWS, window_index
 
 CAL_FILE = DATA / 'calibration.json'
@@ -166,17 +167,20 @@ def collect():
     samples = {}
     cache_dir = DATA / 'learning' / 'pairs'
     cache_dir.mkdir(parents=True, exist_ok=True)
+    static = static_thinned(grid)
     for rd in sorted((DATA / 'hindcast').glob('hindcast-*')):
-        if rd.name.endswith('.partial'):
+        if rd.name.endswith('.partial') or not same_grid(rd, grid):
             continue
-        cf_ = cache_dir / f'{rd.name}.npz'
+        cf_ = cache_dir / f'{rd.name}.v2.npz'
         if cf_.exists():
             z = np.load(cf_)
             day = rd.name.split('-')[1][:8]
             for k in z.files:
                 field, wi, i, kind = k.split('|')
                 if kind == 'p':
-                    samples.setdefault(field, {}).setdefault(wi, []).append((day, z[k], z[k.replace('|p', '|o')]))
+                    samples.setdefault(field, {}).setdefault(wi, []).append((day, z[k], z[k[:-1] + 'o']))
+                if kind == 'X' and field == 'p_thunder':
+                    AI_ROWS.append((day, z[k], z[k[:-1] + 'o']))
             continue
         fresh = {}
         m = json.loads((rd / 'manifest.json').read_text())
@@ -197,12 +201,38 @@ def collect():
                 ok = np.isfinite(pp)
                 wi = str(window_index(fr['lead_h']))
                 samples.setdefault(field, {}).setdefault(wi, []).append((day, pp[ok], oo[ok]))
-                i = len(fresh) // 2
+                i = len(fresh) // 3
                 fresh[f'{field}|{wi}|{i}|p'] = pp[ok]
                 fresh[f'{field}|{wi}|{i}|o'] = oo[ok]
+                if field == 'p_thunder':
+                    env = {f: store.read_frame('hindcast', rd.name, fr['lead_min'], f, grid.shape).astype(np.float32)[::THIN, ::THIN].ravel()
+                           for f in ai_cal.ENV_FIELDS if f in m['fields']}
+                    X = ai_cal.features(pp, fr['lead_h'], env, static, 'main')[ok]
+                    fresh[f'{field}|{wi}|{i}|X'] = X.astype(np.float16)
+                    AI_ROWS.append((day, X, oo[ok]))
         np.savez_compressed(cf_, **fresh)
         log(f'collected {rd.name}')
     return samples
+
+
+AI_ROWS = []          # (day, X, y) for NOVA-AI, filled by collect() and live_samples()
+
+
+def same_grid(rd, grid):
+    try:
+        g = json.loads((rd / 'manifest.json').read_text())['grid']
+        return g['nx'] == grid.nx and g['ny'] == grid.ny and g['x0'] == grid.x0
+    except Exception:
+        return False
+
+
+def static_thinned(grid):
+    from . import terrain
+    from .regions import region_map
+    terr = terrain.load(grid.name)
+    reg = region_map(grid, terr['land_frac'])
+    st = ai_cal.static_fields(terr, reg)
+    return {k: np.asarray(v)[::THIN, ::THIN].ravel() for k, v in st.items()}
 
 
 def live_samples(days=60):
@@ -219,6 +249,8 @@ def live_samples(days=60):
             if k.endswith('_p'):
                 i, wi, _ = k.split('_')
                 out.setdefault(field, {}).setdefault(wi, []).append((day, z[k], z[f'{i}_{wi}_o']))
+                if f'{i}_{wi}_X' in z.files:
+                    AI_ROWS.append((day, z[f'{i}_{wi}_X'].astype(np.float32), z[f'{i}_{wi}_o']))
     return out
 
 
@@ -265,6 +297,7 @@ def train_skill(products=('hindcast', 'main')):
 
 
 def fit(live_days=60):
+    AI_ROWS.clear()
     samples = collect()
     for field, by_win in live_samples(live_days).items():
         for wi, rows in by_win.items():
@@ -303,6 +336,19 @@ def fit(live_days=60):
                 'applied': applied,
                 'why_not_applied': None if applied else (f'fewer than {MIN_DAYS} days' if len(days) < MIN_DAYS else 'did not improve cross-validated Brier'),
             }
+    # NOVA-AI: must beat both the raw forecast and the isotonic curves on day-held-out data
+    iso_cv = [(v['brier_calibrated_cv'], v['n_samples']) for v in out.get('p_thunder', {}).values() if v.get('brier_calibrated_cv') is not None]
+    ai = ai_cal.fit([(d, np.asarray(X, np.float32), np.asarray(y, np.float32)) for d, X, y in AI_ROWS])
+    if iso_cv and ai.get('brier_ai_cv') is not None:
+        iso_tot = sum(b * n for b, n in iso_cv) / sum(n for _, n in iso_cv)
+        ai['brier_isotonic_cv'] = iso_tot
+        if ai['applied'] and ai['brier_ai_cv'] >= iso_tot:
+            ai['applied'] = False
+            ai['why_not_applied'] = 'did not beat the isotonic curves on day-held-out Brier'
+            ai.pop('model', None)
+    store._write_json(ai_cal.MODEL_FILE, ai)
+    ai_cal._LOADED.clear()
+    out['nova_ai'] = {k: v for k, v in ai.items() if k != 'model'}
     store._write_json(CAL_FILE, out)
     return out
 

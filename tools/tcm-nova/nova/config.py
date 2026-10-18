@@ -24,11 +24,13 @@ TZ = 'Europe/London'
 # ── grids ────────────────────────────────────────────────────────────────────
 # British National Grid (EPSG:27700): metres, so grid spacing is a real 2 000 m /
 # 1 500 m and cell edges are identical from cycle to cycle. Domain covers Great
-# Britain incl. Scilly, Shetland and the surrounding sea (cells over sea are kept:
-# storms form there too). Europe will get its own LAEA (EPSG:3035) grid entry.
+# Britain AND Ireland (x from -230 km reaches Dunmore Head, -180 km) incl. Scilly, Shetland
+# and the surrounding sea (cells over sea are kept: storms form there too). Europe will get
+# its own LAEA (EPSG:3035) grid entry. Grid names are unchanged so URLs stay stable; the
+# terrain version records the extent.
 GRIDS = {
-    'gb2km':   {'crs': 'EPSG:27700', 'x0': 0.0, 'y0': 0.0, 'dx': 2000.0, 'nx': 350, 'ny': 625},
-    'gb1p5km': {'crs': 'EPSG:27700', 'x0': 0.0, 'y0': 0.0, 'dx': 1500.0, 'nx': 467, 'ny': 834},
+    'gb2km':   {'crs': 'EPSG:27700', 'x0': -230000.0, 'y0': 0.0, 'dx': 2000.0, 'nx': 465, 'ny': 625},
+    'gb1p5km': {'crs': 'EPSG:27700', 'x0': -230000.0, 'y0': 0.0, 'dx': 1500.0, 'nx': 620, 'ny': 834},
 }
 
 # ── products ─────────────────────────────────────────────────────────────────

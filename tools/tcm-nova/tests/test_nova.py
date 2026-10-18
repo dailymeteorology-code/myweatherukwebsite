@@ -53,7 +53,7 @@ def test_grid_lonlat_hits_known_point():
     g = Grid.get('gb2km')
     lon, lat = g.lonlat
     # BNG (530000, 180000) is central London
-    iy, ix = 180000 // 2000, 530000 // 2000
+    iy, ix = int((180000 - g.y0) // g.dx), int((530000 - g.x0) // g.dx)
     assert abs(lat[iy, ix] - 51.50) < 0.05 and abs(lon[iy, ix] + 0.13) < 0.08
 
 
@@ -309,7 +309,7 @@ def test_flat_terrain_gives_no_terrain_signal():
 def test_terrain_tiles_have_no_seams():
     """Built terrain (if present) must not jump at 1° tile edges."""
     import nova.config as cfg
-    p = pathlib.Path('D:/TCM-NOVA/data/terrain/gb2km-terrain-1.0.0.npz')
+    p = pathlib.Path('D:/TCM-NOVA/data/terrain/gb2km-terrain-1.1.0.npz')
     if not p.exists():
         pytest.skip('terrain not built on this machine')
     h = np.load(p)['h_mean']
@@ -387,3 +387,59 @@ def test_rule_based_analysis_runs():
                                  'peak_timing_error_h': {'mean': 2.0, 'n_runs': 3}}}}
     t = rule_based_explanation(rep)
     assert 'over-forecast' in t and 'cap held' in t and 'windward' in t and 'under-did instability' in t
+
+
+# NOVA-AI and regions ---------------------------------------------------------
+def test_nova_ai_learns_region_specific_bias():
+    """Synthetic truth: the raw forecast is right in England but 2x too high in Wales.
+    The network must learn to correct Wales and leave England alone; isotonic cannot."""
+    from nova import ai_cal
+    from nova.regions import REGIONS
+    rng = np.random.default_rng(0)
+    rows = []
+    for d in range(12):
+        n = 6000
+        p = rng.random(n).astype(np.float32) * 0.8
+        reg = rng.choice([0, 1], n)                                          # england / wales
+        truth = np.where(reg == 1, p * 0.5, p)
+        y = (rng.random(n) < truth).astype(np.float32)
+        st = {'h': np.zeros(n), 'slope': np.zeros(n), 'coast': np.full(n, 20.0), 'landform': np.zeros(n), 'region': reg}
+        rows.append((f'2026-07-{d + 1:02d}', ai_cal.features(p, 12, {}, st), y))
+    res = ai_cal.fit(rows)
+    assert res['applied'] and res['brier_ai_cv'] < res['brier_raw_cv']
+    net = ai_cal.Net.from_json(res['model'])
+    st = lambda r: {'h': np.zeros(1), 'slope': np.zeros(1), 'coast': np.full(1, 20.0), 'landform': np.zeros(1), 'region': np.array([r])}
+    pe = net.predict(ai_cal.features(np.array([0.6], np.float32), 12, {}, st(0)))[0]
+    pw = net.predict(ai_cal.features(np.array([0.6], np.float32), 12, {}, st(1)))[0]
+    assert abs(pe - 0.6) < 0.08 and abs(pw - 0.3) < 0.08
+
+
+def test_nova_ai_refuses_with_too_little_data():
+    from nova import ai_cal
+    assert ai_cal.fit([('2026-07-01', np.zeros((10, len(ai_cal.FEATURES)), np.float32), np.zeros(10, np.float32))])['applied'] is False
+
+
+def test_region_map_known_places():
+    from nova.grid import Grid
+    from nova.regions import REGIONS, region_map
+    from pyproj import Transformer
+    g = Grid.get('gb2km')
+    land = np.ones(g.shape, np.float32)
+    reg = region_map(g, land)
+    tr = Transformer.from_crs('EPSG:4326', g.crs, always_xy=True)
+    for name, lon, lat, want in [('London', -0.13, 51.5, 'england'), ('Cardiff', -3.18, 51.48, 'wales'), ('Snowdon', -4.08, 53.07, 'wales'),
+                                 ('Edinburgh', -3.19, 55.95, 'scotland'), ('Inverness', -4.22, 57.48, 'scotland'),
+                                 ('Belfast', -5.93, 54.6, 'ireland'), ('Dublin', -6.26, 53.35, 'ireland'), ('Galway', -9.05, 53.27, 'ireland'),
+                                 ('Cork', -8.47, 51.9, 'ireland'), ('Carlisle', -2.93, 54.89, 'england'), ('Chester', -2.89, 53.19, 'england'),
+                                 ('Stranraer', -5.03, 54.9, 'scotland')]:
+        x, y = tr.transform(lon, lat)
+        assert REGIONS[reg[int((y - g.y0) // g.dx), int((x - g.x0) // g.dx)]] == want, name
+
+
+def test_grid_covers_all_of_ireland():
+    from nova.grid import Grid
+    from pyproj import Transformer
+    g = Grid.get('gb2km')
+    tr = Transformer.from_crs('EPSG:4326', g.crs, always_xy=True)
+    x, y = tr.transform(-10.48, 52.11)                                       # Dunmore Head
+    assert g.x0 < x and g.y0 < y

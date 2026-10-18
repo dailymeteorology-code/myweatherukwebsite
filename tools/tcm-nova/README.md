@@ -46,3 +46,19 @@ The website (`server/tcmNova.js`) schedules the jobs and serves `/api/nova/{main
 4. Writes `learning/reports/<day>.json`, which the page shows on its Learning tab.
 
 Claude writes the narrative analysis when `ANTHROPIC_API_KEY` is set. It never changes model settings; only the statistics do.
+
+## NOVA-AI (the calibration network)
+
+`nova/ai_cal.py` is TCM NOVA's own small neural network, written in numpy. No outside AI service is involved.
+
+**What it does.** It learns the probability that a thunderstorm is observed, given:
+- the raw forecast and its lead time
+- the environment: CAPE, CIN, shear, orographic ascent and how much the models disagree
+- the topography: height, slope, distance to the coast and landform
+- the **region** (England, Wales, Scotland, Ireland or sea), so each nation's terrain and climate gets its own correction
+
+**Training.** It's trained on hindcasts plus the nightly verification record, and validated on whole held-out days.
+
+**When it's used.** Only when it beats both the raw forecast and the isotonic curves. It then takes priority in both the Main Run and Hyper-Short. Every report lists its Brier score per region.
+
+**Grids.** These now cover all of Ireland (x0 = −230 km), with terrain version 1.1.0.

@@ -210,7 +210,7 @@ export function mountTcmNova(app, { schedule = process.env.NOVA_SCHEDULE !== 'of
 
   app.get('/api/nova/terrain/:grid', (req, res) => {
     if (!/^gb(2km|1p5km)$/.test(req.params.grid)) return res.status(404).end();
-    res.json(readJson(path.join(DATA, 'terrain', `${req.params.grid}-terrain-1.0.0.json`)) || {});
+    res.json(readJson(path.join(DATA, 'terrain', `${req.params.grid}-terrain-1.1.0.json`)) || {});
   });
 
   if (schedule) {

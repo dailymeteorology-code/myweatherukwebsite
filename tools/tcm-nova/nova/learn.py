@@ -32,7 +32,8 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
-from . import calibrate, store, terrain
+from . import ai_cal, calibrate, store, terrain
+from .regions import REGIONS, region_map
 from .config import DATA, REPO
 from .grid import Grid
 from .hyper import obs
@@ -78,10 +79,14 @@ def analyse_product(product, day, strikes, now):
     grid = Grid.get(GRIDS[product])
     terr = terrain.load(grid.name)
     land = terr['landform_class'][::calibrate.THIN, ::calibrate.THIN].ravel()
+    reg_full = region_map(grid, terr['land_frac'])
+    static = {k: np.asarray(v)[::calibrate.THIN, ::calibrate.THIN].ravel() for k, v in ai_cal.static_fields(terr, reg_full).items()}
+    regs = static['region']
     by_win, pairs, groups = {}, [], {'hit': {}, 'miss': {}, 'false_alarm': {}}
+    by_region = {}
     peak_fc, peak_ob = {}, {}
     for rd in sorted((DATA / product).glob(f'{product}-*')):
-        if rd.name.endswith('.partial'):
+        if rd.name.endswith('.partial') or not calibrate.same_grid(rd, grid):
             continue
         m = json.loads((rd / 'manifest.json').read_text())
         raw_name = 'p_thunder_uncal' if 'p_thunder_uncal' in m['fields'] else 'p_thunder'
@@ -105,7 +110,15 @@ def analyse_product(product, day, strikes, now):
             wi = str(window_index(fr['lead_h']))
             by_win.setdefault(wi, {'p': [], 'o': []})
             by_win[wi]['p'].append(pp[ok]); by_win[wi]['o'].append(oo[ok])
-            pairs.append((wi, pr[ok], oo[ok].astype(np.float32)))
+            env = {f: store.read_frame(product, rd.name, fr['lead_min'], f, grid.shape).astype(np.float32)[::T, ::T].ravel()
+                   for f in ai_cal.ENV_FIELDS if f in m['fields']}
+            X = ai_cal.features(pr, fr['lead_h'], env, static, product)[ok]
+            pairs.append((wi, pr[ok], oo[ok].astype(np.float32), X))
+            for ri, rn in enumerate(REGIONS):
+                sel = ok & (regs == ri)
+                if sel.any():
+                    by_region.setdefault(rn, {'p': [], 'o': []})
+                    by_region[rn]['p'].append(pp[sel]); by_region[rn]['o'].append(oo[sel])
             peak_fc.setdefault(rd.name, []).append((vt, float(pp[ok].mean())))
             peak_ob.setdefault(vt, float(oo.mean()))
             # environment at hits / misses / false alarms
@@ -141,7 +154,8 @@ def analyse_product(product, day, strikes, now):
         for rid, seq in peak_fc.items():
             fpk = max(seq, key=lambda x: x[1])[0]
             timing.append((fpk - ob_peak).total_seconds() / 3600)
-    return {'scores_by_window': scores, 'diagnosis': diag,
+    region_scores = {rn: score(np.concatenate(d['p']), np.concatenate(d['o']).astype(bool)) for rn, d in by_region.items()}
+    return {'scores_by_window': scores, 'scores_by_region': region_scores, 'diagnosis': diag,
             'peak_timing_error_h': {'mean': float(np.mean(timing)), 'n_runs': len(timing)} if timing else None,
             'observed_peak_utc': max(peak_ob, key=peak_ob.get).isoformat() if peak_ob else None}, pairs
 
@@ -165,6 +179,13 @@ def rule_based_explanation(rep):
             lines.append(f'{prod}: false alarms sat under strong inhibition (MLCIN {d["false_alarm"]["ml_cin"]:.0f} J/kg) — the cap held.')
         if 'false_alarm' in d and 'w_oro' in d['false_alarm'] and d['false_alarm']['w_oro'] > 0.1:
             lines.append(f'{prod}: false alarms clustered on windward slopes (mean orographic ascent {d["false_alarm"]["w_oro"]:.2f} m/s) — terrain lift was over-weighted.')
+        rs = r.get('scores_by_region') or {}
+        worst = sorted(((k, v) for k, v in rs.items() if v['event_rate'] > 0 or v['mean_p'] > 0.02),
+                       key=lambda kv: -abs(kv[1]['mean_p'] - kv[1]['event_rate']))
+        for k, v in worst[:2]:
+            b = v['mean_p'] - v['event_rate']
+            if abs(b) > 0.02:
+                lines.append(f"{prod}: largest regional bias over {k} ({'over' if b > 0 else 'under'}-forecast by {abs(b) * 100:.0f} points).")
         if r.get('peak_timing_error_h'):
             lines.append(f"{prod}: forecast peak activity was {r['peak_timing_error_h']['mean']:+.1f} h from the observed peak on average.")
     return ' '.join(lines)
@@ -218,8 +239,9 @@ def run(day=None):
         rep['products'][product] = res
         if pairs:
             np.savez_compressed(LDIR / 'pairs' / f'{product}-{day}.npz',
-                                **{f'{i}_{wi}_p': p for i, (wi, p, o) in enumerate(pairs)},
-                                **{f'{i}_{wi}_o': o for i, (wi, p, o) in enumerate(pairs)})
+                                **{f'{i}_{wi}_p': p for i, (wi, p, o, X) in enumerate(pairs)},
+                                **{f'{i}_{wi}_o': o for i, (wi, p, o, X) in enumerate(pairs)},
+                                **{f'{i}_{wi}_X': X.astype(np.float16) for i, (wi, p, o, X) in enumerate(pairs)})
     # learning: weights from skill, calibration from hindcasts + live pairs
     before = _read(DATA / 'calibration.json')
     try:
@@ -232,6 +254,11 @@ def run(day=None):
         rep['calibration_update'] = _cal_summary(before, cal)
     except Exception as e:
         rep['calibration_update'] = f'failed: {e}'
+    try:
+        rep['nova_ai'] = json.loads((DATA / 'nova_ai.json').read_text())
+        rep['nova_ai'].pop('model', None)
+    except Exception:
+        rep['nova_ai'] = None
     rep['rule_based_analysis'] = rule_based_explanation(rep)
     rep['ai_analysis'] = ai_explanation(rep)
     rep['ai_analysis_status'] = 'written by Claude from the verification numbers' if rep['ai_analysis'] else \
