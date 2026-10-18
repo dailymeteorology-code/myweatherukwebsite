@@ -1,5 +1,13 @@
 # TCM Hyper-Short: what exists, what doesn't, and the staged plan
 
+> **Update 18 Oct 2026, by the user's instruction:** Hyper-Short now also uses the **latest UKV run**, and only UKV, for everything observations can't provide. The rest of this document describes the observation part.
+>
+> `hyper/ukv_env.py` computes the 3-D environment (CAPE/CIN/LCL/LFC/shear/SRH/DCAPE/freezing levels) and UKV hazard probabilities:
+> - on UKV's own ~2 km columns, through the same code as the Main Run, then remapped to 1.5 km
+> - hourly to T+12 and 3-hourly to T+24, time-interpolated between
+>
+> The observation nowcast and UKV are blended with nowcast weight exp(−lead/90 min). `test_hyper_lineage_is_obs_plus_ukv_only` enforces "observations + UKV, nothing else".
+
 ## Implemented (stage 1): `nova/hyper`
 
 - **Schedule.** Every London clock hour, from `server/tcmNova.js`. DST-safe and tested; 24 runs a day including transition days.

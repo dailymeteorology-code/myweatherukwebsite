@@ -28,6 +28,7 @@ import numpy as np
 from scipy import ndimage
 
 from . import diagnostics as dg
+from . import microphysics as mp
 from . import hazards as hz
 from . import store, terrain, verify
 from . import thermo as th
@@ -37,7 +38,7 @@ from .grid import Grid, earth_to_grid_wind
 from .io_aws import log
 from .sources import READERS
 
-NATIVE_STEP = {'ukv': 1, 'mo_global': 1, 'ifs': 3, 'aifs': 6, 'ifs_ens': 3, 'aifs_ens': 6, 'gfs': 1, 'gefs': 3}
+NATIVE_STEP = {'icon_eu': 1, 'icon_eps': 3, 'ukv': 1, 'mo_global': 1, 'ifs': 3, 'aifs': 6, 'ifs_ens': 3, 'aifs_ens': 6, 'gfs': 1, 'gefs': 3}
 RANGES = {'t': (170, 335), 'q': (0, 0.04), 'rh': (0, 110), 'u': (-150, 150), 'v': (-150, 150), 'z': (-700, 17000),
           't2': (220, 325), 'td2': (210, 310), 'precip': (0, 500), 'gust': (0, 90), 'mslp': (87000, 109000)}
 STORE_FIELDS = [
@@ -49,6 +50,9 @@ STORE_FIELDS = [
     'srh_0_1km', 'srh_0_3km', 'esrh', 'scp', 'stp', 'storm_u', 'storm_v', 't2', 'td2', 'u10', 'v10', 'mslp',
     'conv_10m', 'mfc_sfc', 'w_oro', 'upslope_wind', 'windward_exposure', 'froude', 'terrain_modulation',
     'pbl_height', 'source_disagreement', 'frontogenesis_850', 'tadv_850', 'qvec_conv_700', 'llj_speed', 'omega_700',
+    'qc_path', 'qi_path', 'qr_path', 'qs_path', 'qg_path', 'qc_max_gm3', 'qi_max_gm3', 'qg_max_gm3', 'slw_max_gm3', 'slw_path',
+    'droplet_re_um', 'ice_re_um', 'rain_fall_speed_max', 'charging_index', 'lpi', 'htop_con', 'hbas_con', 'tcc', 'cbh',
+    'p_thunder_raw', 'p_thunder_uncal', 'p_lightning_uncal', 'mixed_phase_depth',
 ]
 
 
@@ -157,7 +161,7 @@ def vertical_interp(pl):
     order = np.argsort(src)                                # ascending p for np.interp-like logic
     lp_src = np.log(src[order])
     out = {}
-    for k in ('t', 'q', 'u', 'v', 'z', 'w'):
+    for k in ('t', 'q', 'u', 'v', 'z', 'w', 'qc', 'qi', 'qr', 'qs', 'qg'):
         if k not in pl:
             continue
         a = pl[k][order]
@@ -185,17 +189,18 @@ def wmean(items, shape):
         return np.where(den > 0, num / den, np.nan).astype(np.float32)
 
 
-def run(init=None, horizon_h=None, grid_name=None, sources=None):
+def run(init=None, horizon_h=None, grid_name=None, sources=None, product='main'):
     init = init or cycle_init()
     horizon_h = horizon_h or MAIN['horizon_h']
     grid = Grid.get(grid_name or MAIN['grid'])
-    rid = store.run_id('main', init)
-    store.set_status('main', state='collecting', run_id=rid, init_utc=init.isoformat())
+    rid = store.run_id(product, init)
+    store.set_status(product, state='collecting', run_id=rid, init_utc=init.isoformat())
     t_start = time.time()
-    try:                                     # score older runs first so this run's weights use the newest skill
-        verify.run_verification(init)
-    except Exception as e:
-        log(f'verification skipped: {e}')
+    if product == 'main':
+        try:                                 # score older runs first so this run's weights use the newest skill
+            verify.run_verification(init)
+        except Exception as e:
+            log(f'verification skipped: {e}')
     terr = terrain.load(grid.name)
     lon, lat = grid.lonlat
     readers = {k: READERS[k]() for k in (sources or READERS)}
@@ -221,11 +226,11 @@ def run(init=None, horizon_h=None, grid_name=None, sources=None):
                    'convection-permitting integration: only UKV resolves ~2 km scales; other sources are remapped.'),
         'sources': {k: {'label': MODELS[k]['label'], 'cycle_utc': v.isoformat(), 'kind': MODELS[k]['kind'],
                         'aws': MODELS[k]['aws']} for k, v in runs.items()},
-        'unavailable': unavailable, 'calibration': 'uncalibrated', 'terrain': terrain.TERRAIN_VERSION,
+        'unavailable': unavailable, 'calibration': 'pending', 'terrain': terrain.TERRAIN_VERSION,
         'bias_correction': 'none applied (no verification record of sufficient length yet)',
     }
-    writer = store.RunWriter('main', init, manifest)
-    store.set_status('main', state='running', run_id=rid)
+    writer = store.RunWriter(product, init, manifest)
+    store.set_status(product, state='running', run_id=rid)
     acc = np.zeros(grid.shape, np.float32)
     prev_p = None
     peak = {}
@@ -253,7 +258,7 @@ def run(init=None, horizon_h=None, grid_name=None, sources=None):
             peak.setdefault(k, np.zeros(grid.shape, np.float32))
             peak[k] = np.maximum(peak[k], fields[k])
         writer.frame(lead * 60, vt.isoformat(), {k: fields[k] for k in STORE_FIELDS if k in fields}, meta)
-        if lead <= 24:
+        if lead <= 24 and product == 'main':
             verify.save_source_fields(writer.dir, lead * 60, got, grid)
         log(f'T+{lead:3d} {vt:%a %HZ} sources={sorted(got)} pmax={fields["p_thunder"].max():.2f}')
     # run-level hazard timing: arrival, duration, footprint
@@ -263,7 +268,7 @@ def run(init=None, horizon_h=None, grid_name=None, sources=None):
         import zlib
         for k, a in peak.items():
             (d / f'max_{k}.bin').write_bytes(zlib.compress(a.astype(np.float16).tobytes(), 6))
-    store.set_status('main', state='validating', run_id=rid)
+    store.set_status(product, state='validating', run_id=rid)
     ok, checks = validate(writer.manifest, n_frames)
     writer.manifest['validation'] = checks
     writer.manifest['degraded_because'] = degraded + [f'{k}: {v}' for k, v in unavailable.items() if MODELS[k]['aws']]
@@ -271,12 +276,17 @@ def run(init=None, horizon_h=None, grid_name=None, sources=None):
     writer.manifest['peaks'] = {k: round(float(a.max()), 3) for k, a in peak.items()}
     if not ok:
         writer.abandon('; '.join(c['detail'] for c in checks if not c['ok']))
-        store.set_status('main', state='failed', run_id=rid, detail=checks)
+        store.set_status(product, state='failed', run_id=rid, detail=checks)
         return None
     status = 'degraded' if degraded or len(runs) < 4 else 'published'
+    if product == 'hindcast':
+        writer.manifest['hindcast'] = True
+    cal = [f.get('calibrated') for f in writer.manifest['frames'] if f.get('valid')]
+    writer.manifest['calibration'] = ('isotonic reliability calibration from hindcasts (see calibration.json); '
+                                      f'{sum(1 for c in cal if c)}/{len(cal)} frames calibrated') if any(cal) else 'uncalibrated'
     path = writer.publish(status)
-    store.set_status('main', state=status, run_id=rid, last_published=rid)
-    store.prune('main', keep=8)
+    store.set_status(product, state=status, run_id=rid, last_published=rid)
+    store.prune(product, keep=8 if product == 'main' else 400)
     return path
 
 
@@ -292,12 +302,13 @@ def frame(grid, terr, lat, got, lead, vt, acc, prev_p):
     cw_pr = W.cell_weights(w_pr, valid)
     # blended profile on LEVELS
     prof = {}
-    for var in ('t', 'q', 'u', 'v', 'z', 'w'):
+    for var in ('t', 'q', 'u', 'v', 'z', 'w', 'qc', 'qi', 'qr', 'qs', 'qg'):
         items = [(cw_env[k][None], got[k]['pl'][var]) for k in cw_env if var in got[k]['pl']]
         if items:
             prof[var] = wmean(items, (len(LEVELS),) + shape)
     sfc = {}
-    for var in ('t2', 'td2', 'u10', 'v10', 'gust', 'mslp', 'skt', 'soilw', 'shf', 'swdown', 'cbh', 'tcc', 'pw_src'):
+    for var in ('t2', 'td2', 'u10', 'v10', 'gust', 'mslp', 'skt', 'soilw', 'shf', 'lhf', 'swdown', 'lwdown', 'cbh', 'tcc', 'pw_src',
+                'tqc', 'tqi', 'tqr', 'tqs', 'htop_con', 'hbas_con'):
         items = [(cw_sfc[k], got[k]['sfc'][var]) for k in cw_sfc if var in got[k].get('sfc', {})]
         if items:
             sfc[var] = wmean(items, shape)
@@ -308,6 +319,8 @@ def frame(grid, terr, lat, got, lead, vt, acc, prev_p):
     for var in ('lightning', 'hail'):                   # UKV-only explicit fields, inside UKV's domain
         if 'ukv' in got and var in got['ukv']['sfc']:
             sfc[var] = np.where(valid['ukv'], got['ukv']['sfc'][var], np.nan)
+    if 'icon_eu' in got and 'lightning_lpi' in got['icon_eu']['sfc']:
+        sfc['lpi'] = got['icon_eu']['sfc']['lightning_lpi']
     # surface pressure on NOVA terrain from the blended 3-D state (hypsometric), never extrapolating the profile
     h = terr['h_mean']
     z = prof['z']
@@ -326,13 +339,7 @@ def frame(grid, terr, lat, got, lead, vt, acc, prev_p):
     t2 = sfc.get('t2', prof['t'][0])
     td2 = np.minimum(sfc.get('td2', t2 - 5), t2)
     q2 = th.q_from_rh(100 * th.es_hpa(td2) / th.es_hpa(t2), t2, ps)
-    N = shape[0] * shape[1]
-    R = lambda a: a.reshape(len(LEVELS), N)
-    C = th.build_columns(np.asarray(LEVELS, float), R(prof['t']), R(prof['q']), R(prof['u']), R(prof['v']), R(prof['z']),
-                         ps.ravel(), t2.ravel(), q2.ravel(), h.ravel(), sfc['u10'].ravel(), sfc['v10'].ravel(),
-                         w=R(prof['w']) if 'w' in prof else None)
-    D = dg.column_diagnostics(C, shape)
-    del C
+    D = env_columns(prof, ps, t2, q2, h, sfc['u10'], sfc['v10'], shape)
     lev = {p: LEVELS.index(p) for p in (925, 850, 700, 500, 300, 250)}
     G = dg.grid_diagnostics({
         'u10': sfc['u10'], 'v10': sfc['v10'], 'q2': q2,
@@ -352,11 +359,23 @@ def frame(grid, terr, lat, got, lead, vt, acc, prev_p):
             sig = hz.model_signal(v['sfc'], D['mu_cape'])
             if sig is not None:
                 signals[k] = np.where(valid[k], sig, np.nan)
+    M = mp.compute(prof, LEVELS, terr['land_frac'], sfc)
     F = dict(sfc, conv_10m=G['conv_10m'], q2=q2)
+    if 'charging_index' in M:
+        F['charging_index'] = M['charging_index']
     H = hz.compute(F, D, terr, flow, {k: np.nan_to_num(v) for k, v in signals.items()}, ens,
                    cw_init, cw_pr, grid.dx, lead, prev_p)
     pr = np.nan_to_num(np.clip(sfc['precip'], 0, None))
-    out = dict(D, **G, **flow, **H)
+    from .calibrate import calibrate_field
+    H['p_thunder_uncal'], H['p_lightning_uncal'] = H['p_thunder'], H['p_lightning']
+    H['p_thunder'], cal_t = calibrate_field(H['p_thunder'], lead, 'p_thunder')
+    H['p_lightning'], _ = calibrate_field(H['p_lightning'], lead, 'p_lightning')
+    out = dict(D, **G, **flow, **H, **M)
+    if 'lpi' in sfc:
+        out['lpi'] = sfc['lpi']
+    for k in ('htop_con', 'hbas_con', 'tcc', 'cbh'):
+        if k in sfc:
+            out[k] = sfc[k]
     out.update(t2=t2, td2=td2, u10=sfc['u10'], v10=sfc['v10'], mslp=sfc.get('mslp', ps * 100) / 100.0, precip=pr,  # mslp in hPa
                precip_3h=pr * 3, precip_accum=acc + pr * 3)
     # physical-consistency checks on the frame
@@ -372,8 +391,47 @@ def frame(grid, terr, lat, got, lead, vt, acc, prev_p):
         prof['q'] = np.minimum(prof['q'], 1.05 * qs)
     meta = {'sources': sorted(got), 'weights_environment': prov_env, 'weights_initiation': prov_init.get('final'),
             'source_flags': {k: v.get('flags', []) for k, v in got.items() if v.get('flags')},
-            'ensembles': sorted(ens), 'checks': checks, 'field_state': 'blended + terrain-adjusted'}
+            'ensembles': sorted(ens), 'checks': checks, 'field_state': 'blended + terrain-adjusted', 'calibrated': cal_t}
     return out, meta
+
+
+def env_columns(prof, ps, t2, q2, h, u10, v10, shape, chunk_rows=80):
+    """Column diagnostics in row chunks so memory stays bounded on a 16 GB machine."""
+    parts = []
+    for r0 in range(0, shape[0], chunk_rows):
+        r1 = min(shape[0], r0 + chunk_rows)
+        sub = (r1 - r0, shape[1])
+        n = sub[0] * sub[1]
+        R = lambda a: a[:, r0:r1].reshape(len(LEVELS), n)
+        S = lambda a: a[r0:r1].ravel()
+        C = th.build_columns(np.asarray(LEVELS, float), R(prof['t']), R(prof['q']), R(prof['u']), R(prof['v']), R(prof['z']),
+                             S(ps), S(t2), S(q2), S(h), S(u10), S(v10), w=R(prof['w']) if 'w' in prof else None)
+        parts.append(dg.column_diagnostics(C, sub))
+        del C
+    return {k: np.concatenate([p[k] for p in parts], 0) for k in parts[0]}
+
+
+def environment(prof, sfc, terr, grid):
+    """Surface pressure on NOVA terrain + screen-level moisture + column diagnostics.
+    Shared by the Main Run and Hyper-Short (UKV environment)."""
+    h = terr['h_mean']
+    z = prof['z']
+    lnp = np.log(np.asarray(LEVELS, float))
+    ps = np.full(grid.shape, np.nan, np.float32)
+    for k in range(len(LEVELS) - 1):
+        z0, z1 = z[k], z[k + 1]
+        hit = np.isnan(ps) & np.isfinite(z0) & np.isfinite(z1) & (z0 <= h) & (z1 > h)
+        f = np.where(hit, (h - z0) / np.where(z1 == z0, 1, z1 - z0), 0)
+        ps = np.where(hit, np.exp(lnp[k] + f * (lnp[k + 1] - lnp[k])), ps)
+    below = np.isnan(ps) & np.isfinite(z[0]) & (h < z[0])
+    ps = np.where(below, 1000 * np.exp(9.80665 * (z[0] - h) / (287.04 * np.nan_to_num(prof['t'][0], nan=285))), ps)
+    if 'mslp' in sfc:
+        ps = np.where(np.isnan(ps), sfc['mslp'] / 100 * np.exp(-9.80665 * h / (287.04 * 285)), ps)
+    t2 = sfc.get('t2', prof['t'][0])
+    td2 = np.minimum(sfc.get('td2', t2 - 5), t2)
+    q2 = th.q_from_rh(100 * th.es_hpa(td2) / th.es_hpa(t2), t2, ps)
+    D = env_columns(prof, ps, t2, q2, h, sfc['u10'], sfc['v10'], grid.shape)
+    return D, ps, t2, td2, q2
 
 
 def validate(manifest, n_expected):

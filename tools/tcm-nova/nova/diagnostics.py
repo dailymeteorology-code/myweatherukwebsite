@@ -22,7 +22,7 @@ def column_diagnostics(C, shape):
     dc, dc_src = th.dcape(C)
     u, v = th.winds_on_heights(C)
     rmu, rmv, mwu, mwv = th.bunkers(u, v)
-    eb, et = th.effective_layer(C)
+    eb, et = th.effective_layer(C, mucape=mu['cape'])
     out = {}
     for name, P in (('sb', sb), ('ml', ml), ('mu', mu)):
         for k in ('cape', 'cin', 'lcl_z', 'lfc_z', 'el_z', 'cape_0_3km', 'cape_mixed_phase', 'bmax'):

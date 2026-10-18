@@ -42,6 +42,8 @@ def model_signal(sfc, cape_env):
         sig = sig * np.clip(1 + sfc['cin_mu_src'] / 250.0, 0.3, 1.0)
     if 'conv_rain' in sfc:                                   # MO Global's own convective rain
         sig = np.maximum(sig, s(cape, 100, 600) * s(sfc['conv_rain'] * 3600, 0.3, 2.0))
+    if 'lightning_lpi' in sfc:                               # ICON-EU lightning potential index (J/kg)
+        sig = np.maximum(sig, s(sfc['lightning_lpi'], 1.0, 8.0))
     if 'lightning' in sfc:                                   # UKV explicit lightning (flashes/km²/h)
         sig = np.maximum(sig, s(sfc['lightning'], 0.003, 0.08))
     return np.nan_to_num(sig).astype(np.float32)
@@ -86,6 +88,7 @@ def compute(F, D, terr, flow, signals, ens, w_init, w_haz, dx_m, lead_h, prev=No
             den += w_init[m]
     p_models = np.where(den > 0, num / np.maximum(den, 1e-6), 0)
     out['p_thunder_models'] = p_models
+    out['p_thunder_raw'] = p_models
     # 2. physical modulation by lift, inhibition and terrain — both signs
     env = s(cape, 50, 600) * s(cin, -250, -25)
     lift_syn = s(-np.nan_to_num(D.get('omega_700', np.zeros_like(cape))), 0.05, 0.6)
@@ -112,7 +115,11 @@ def compute(F, D, terr, flow, signals, ens, w_init, w_haz, dx_m, lead_h, prev=No
     out['p_initiation'] = np.clip(p_ts - (prev if prev is not None else 0), 0, 1).astype(np.float32) if prev is not None else (p_ts * lift).astype(np.float32)
     # 4. lightning: mixed-phase depth and buoyancy there, UKV explicit lightning where present
     mp = s(D['mu_cape_mixed_phase'], 50, 500)
+    if 'charging_index' in F:                                # graupel–ice–SLW collisions present in the model
+        mp = np.maximum(mp, nb_max(s(np.nan_to_num(F['charging_index']), 0.5, 20), rc))
     p_lt = p_ts * (0.55 + 0.45 * mp)
+    if 'lpi' in F:                                           # ICON-EU lightning potential index
+        p_lt = np.maximum(p_lt, nb_max(s(np.nan_to_num(F['lpi']), 1.0, 8.0), rc) * 0.8)
     if 'lightning' in F:
         p_lt = np.maximum(p_lt, nb_max(s(np.nan_to_num(F['lightning']), 0.003, 0.08), rc) * 0.9)
     out['p_lightning'] = np.clip(p_lt, 0, 1).astype(np.float32)

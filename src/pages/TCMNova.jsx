@@ -82,16 +82,31 @@ const LAYERS = {
   windward_exposure: { label: 'Windward (+) / lee (−) exposure', unit: '', stops: [[-1, [59, 130, 246, 180]], [-0.2, [147, 197, 253, 80]], [0, [255, 255, 255, 0]], [0.2, [250, 204, 21, 80]], [1, [234, 88, 12, 190]]] },
   terrain_modulation: { label: 'Terrain modulation factor', unit: '×', stops: [[0.6, [59, 130, 246, 190]], [0.95, [147, 197, 253, 60]], [1, [255, 255, 255, 0]], [1.05, [250, 204, 21, 60]], [1.5, [234, 88, 12, 200]]] },
   confidence: { label: 'Forecast confidence', unit: '%', pct: true, stops: [[0, [239, 68, 68, 140]], [0.4, [250, 204, 21, 110]], [0.7, [74, 222, 128, 90]], [1, [74, 222, 128, 0]]] },
+  qc_path: { label: 'Cloud liquid water path', unit: 'kg/m²', stops: [[0.01, [186, 230, 253, 0]], [0.05, [125, 211, 252, 150]], [0.2, [59, 130, 246, 185]], [0.5, [99, 102, 241, 205]], [1, [168, 85, 247, 220]], [2, [219, 39, 119, 230]]] },
+  qi_path: { label: 'Cloud ice water path', unit: 'kg/m²', stops: [[0.01, [186, 230, 253, 0]], [0.05, [125, 211, 252, 150]], [0.2, [59, 130, 246, 185]], [0.5, [99, 102, 241, 205]], [1, [168, 85, 247, 220]], [2, [219, 39, 119, 230]]] },
+  qg_path: { label: 'Graupel water path (GFS)', unit: 'kg/m²', stops: [[0.01, [186, 230, 253, 0]], [0.05, [125, 211, 252, 150]], [0.2, [59, 130, 246, 185]], [0.5, [99, 102, 241, 205]], [1, [168, 85, 247, 220]], [2, [219, 39, 119, 230]]] },
+  qr_path: { label: 'Rain water path', unit: 'kg/m²', stops: [[0.01, [186, 230, 253, 0]], [0.05, [125, 211, 252, 150]], [0.2, [59, 130, 246, 185]], [0.5, [99, 102, 241, 205]], [1, [168, 85, 247, 220]], [2, [219, 39, 119, 230]]] },
+  slw_max_gm3: { label: 'Max supercooled liquid water', unit: 'g/m³', stops: [[0.01, [186, 230, 253, 0]], [0.05, [125, 211, 252, 150]], [0.2, [59, 130, 246, 185]], [0.5, [99, 102, 241, 205]], [1, [168, 85, 247, 220]], [2, [219, 39, 119, 230]]] },
+  droplet_re_um: { label: 'Cloud droplet effective radius (assumed Nd)', unit: 'µm', stops: [[4, [186, 230, 253, 120]], [8, [125, 211, 252, 160]], [12, [74, 222, 128, 180]], [16, [250, 204, 21, 200]], [22, [249, 115, 22, 215]]] },
+  ice_re_um: { label: 'Ice effective radius', unit: 'µm', stops: [[10, [186, 230, 253, 120]], [25, [125, 211, 252, 160]], [40, [167, 139, 250, 190]], [60, [168, 85, 247, 215]]] },
+  charging_index: { label: 'Graupel–ice charging index (relative)', unit: '', stops: [[0.5, [254, 240, 138, 0]], [2, [250, 204, 21, 160]], [8, [249, 115, 22, 200]], [20, [220, 38, 38, 225]]] },
+  lpi: { label: 'ICON-EU lightning potential index', unit: 'J/kg', stops: [[0.5, [254, 240, 138, 0]], [1, [250, 204, 21, 160]], [4, [249, 115, 22, 200]], [10, [220, 38, 38, 225]]] },
+  htop_con: { label: 'Convective cloud top (ICON-EU)', unit: 'm', stops: [[2000, [203, 213, 225, 110]], [5000, [125, 211, 252, 150]], [8000, [250, 204, 21, 190]], [11000, [220, 38, 38, 220]]] },
+  p_thunder_uncal: { label: 'Thunderstorm probability (raw, before calibration)', unit: '%', stops: PROB, pct: true },
   conv_10m: { label: '10 m convergence', unit: '10⁻⁵/s', mul: 1e5, stops: [[0, [255, 255, 255, 0]], [3, [250, 204, 21, 140]], [8, [249, 115, 22, 200]], [15, [220, 38, 38, 220]]] },
 };
 const MAIN_LAYER_GROUPS = [
   ['Hazards', ['p_thunder', 'p_lightning', 'p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_supercell', 'p_tornado_env', 'p_heavy_rain', 'p_training', 'p_severe', 'p_initiation', 'confidence']],
   ['Estimates', ['precip', 'precip_accum', 'flash_density', 'hail_size_max_cm', 'gust_max']],
   ['Environment', ['mu_cape', 'ml_cin', 'dcape', 'shear_0_6km', 'srh_0_1km', 'scp', 'stp', 'lapse_700_500', 'pw', 'wbz', 'conv_10m']],
+  ['Cloud microphysics', ['qc_path', 'qi_path', 'qr_path', 'qg_path', 'slw_max_gm3', 'droplet_re_um', 'ice_re_um', 'charging_index', 'lpi', 'htop_con']],
   ['Terrain diagnostics', ['w_oro', 'windward_exposure', 'p_ci_orographic', 'terrain_modulation']],
+  ['Calibration', ['p_thunder_uncal']],
 ];
 const HYPER_LAYER_GROUPS = [
-  ['Observation-driven', ['p_thunder', 'p_lightning', 'p_rain', 'p_heavy_rain', 'precip', 'precip_accum', 'flash_density']],
+  ['Nowcast + UKV', ['p_thunder', 'p_lightning', 'p_rain', 'p_heavy_rain', 'precip', 'precip_accum', 'flash_density']],
+  ['UKV hazards', ['p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_supercell', 'p_tornado_env', 'p_severe', 'hail_size_max_cm', 'gust_max']],
+  ['UKV environment', ['mu_cape', 'ml_cin', 'dcape', 'shear_0_6km', 'srh_0_1km', 'scp', 'stp', 'lapse_700_500', 'pw', 'wbz']],
 ];
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -515,17 +530,18 @@ export default function TCMNova({ engineSwitcher = null }) {
                     <span>{product === 'hyper' ? 'ends T+24:00 · every 30 min' : `every ${manifest.step_h} h to T+${manifest.horizon_h}`}</span>
                     <span>{frames.length > 0 && `${dayName(frames[frames.length - 1].valid)} ${hhmm(frames[frames.length - 1].valid)}`}</span>
                   </div>
-                  {frame?.beyond_skill_horizon && (
-                    <div style={{ marginTop: 8, fontSize: '0.72rem', color: '#b45309' }}>
-                      Beyond the engine's skill horizon: this frame only shows existing echoes decaying — the Hyper-Short stage-1 engine does not start new storms.
+                  {product === 'hyper' && frame?.nowcast_weight != null && (
+                    <div style={{ marginTop: 8, fontSize: '0.72rem', color: T.mid }}>
+                      This frame: {Math.round(frame.nowcast_weight * 100)}% observation nowcast, {100 - Math.round(frame.nowcast_weight * 100)}% latest UKV{frame.ukv_environment ? '' : ' (UKV not available for this time)'}.
                     </div>
                   )}
                 </div>
                 <div style={{ ...card, padding: 12, fontSize: '0.72rem', color: T.mid, lineHeight: 1.6, display: 'flex', gap: 8 }}>
                   <Info style={{ width: 15, height: 15, flexShrink: 0, color: T.sky }} />
                   <span>
-                    Probabilities are <b>uncalibrated</b> until enough runs have been verified against radar and lightning; risk words (TSTM…HIGH) are
-                    banded from them. Probabilities mean “a thunderstorm within about {Math.round(product === 'main' ? 10 + 0.35 * (frame?.lead_h || 0) : frame?.neighbourhood_km || 3)} km”.
+                    {String(manifest.calibration || '').startsWith('isotonic')
+                      ? <>Thunderstorm and lightning probabilities are <b>calibrated</b> against observed storms (radar cores and lightning) from hindcasts; other hazards are not yet.</>
+                      : <>Probabilities are <b>uncalibrated</b>{manifest.calibration === 'pending' ? ' (calibration from hindcasts is being built)' : ''}; risk words (TSTM…HIGH) are banded from them.</>} Probabilities mean “a thunderstorm within about {Math.round(product === 'main' ? 10 + 0.35 * (frame?.lead_h || 0) : frame?.neighbourhood_km || 3)} km”.
                     Tornado layers describe a favourable <b>environment</b>, not a tornado forecast.
                   </span>
                 </div>
@@ -577,7 +593,9 @@ function Overview({ manifest, frame, product }) {
         </>
       ) : (
         <>
-          <h4 style={{ color: T.text, marginBottom: 4 }}>Inputs (observations only — no model forecasts)</h4>
+          <h4 style={{ color: T.text, marginBottom: 4 }}>Inputs</h4>
+          <p style={{ marginTop: 0 }}>Observations (radar, lightning) drive the first hours; the latest UKV run ({manifest.ukv_cycle_utc ? manifest.ukv_cycle_utc.slice(0, 16).replace('T', ' ') + ' UTC' : 'not available'}) supplies the 3-D environment and takes over with lead time. Nowcast weight this frame: {frame?.nowcast_weight != null ? Math.round(frame.nowcast_weight * 100) + '%' : '—'}.</p>
+          <h4 style={{ color: T.text, marginBottom: 4 }}>Sources</h4>
           <ul style={{ marginTop: 0 }}>{Object.entries(manifest.inputs || {}).map(([k, v]) => <li key={k}><b>{k}</b>: {v}</li>)}</ul>
           <h4 style={{ color: T.text, marginBottom: 4 }}>Not produced by this engine yet</h4>
           <ul style={{ marginTop: 0 }}>{Object.entries(manifest.unavailable || {}).map(([k, why]) => <li key={k}><b>{k}</b>: {why}</li>)}</ul>

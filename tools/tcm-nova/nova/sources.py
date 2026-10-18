@@ -246,7 +246,7 @@ def _tp_metres(a, meta):
 class GFS(GribLatLon):
     key = 'gfs'
     latency_h = 4
-    PL = ['TMP', 'RH', 'UGRD', 'VGRD', 'HGT', 'VVEL']
+    PL = ['TMP', 'RH', 'UGRD', 'VGRD', 'HGT', 'VVEL', 'CLMR', 'ICMR', 'RWMR', 'SNMR', 'GRLE']
     SFC = {('TMP', '2 m above ground'): 't2', ('DPT', '2 m above ground'): 'td2', ('PRES', 'surface'): 'sp',
            ('PRMSL', 'mean sea level'): 'mslp', ('UGRD', '10 m above ground'): 'u10', ('VGRD', '10 m above ground'): 'v10',
            ('GUST', 'surface'): 'gust', ('CAPE', '180-0 mb above ground'): 'cape_mu_src', ('CIN', '180-0 mb above ground'): 'cin_mu_src',
@@ -307,6 +307,10 @@ class GFS(GribLatLon):
                     'levels': np.array(levs, float)}
             if 'VVEL' in pl:
                 prof['w'] = stack('VVEL')
+            # GFS hydrometeor mixing ratios (kg/kg): cloud water, ice, rain, snow, graupel
+            for g, k in (('CLMR', 'qc'), ('ICMR', 'qi'), ('RWMR', 'qr'), ('SNMR', 'qs'), ('GRLE', 'qg')):
+                if g in pl:
+                    prof[k] = stack(g)
         else:
             prof = None
         out = {'sfc': sfc, 'valid': valid if valid is not None else np.ones(grid.shape, bool)}
@@ -535,3 +539,12 @@ class GEFS(GribLatLon):
 
 READERS = {'ukv': UKV, 'mo_global': MOGlobal, 'ifs': ECMWF, 'aifs': AIFS, 'ifs_ens': ECMWFEns,
            'aifs_ens': AIFSEns, 'gfs': GFS, 'gefs': GEFS}
+
+
+def _register_external():
+    """Non-AWS readers (never Open-Meteo): DWD open data."""
+    from .sources_dwd import ICONEU, ICONEUEPS
+    READERS.update({'icon_eu': ICONEU, 'icon_eps': ICONEUEPS})
+
+
+_register_external()

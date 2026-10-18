@@ -21,7 +21,7 @@
 | 9 | ICON Global | 13 km | 4×/day | full | ✘ not on AWS (DWD opendata) | — |
 | 10 | ICON-EU | 6.5 km | 8×/day to 120 h | full | ✘ not on AWS | renormalised away |
 | 11 | ICON-D2 | 2.2 km | 8×/day to 48 h | **does not cover most of GB** (central Europe domain) | ✘ | Europe expansion only |
-| 12 | ICON-EPS / EU nest | 40 members, 26.5 / 13.2 km | | full | ✘ not on AWS | renormalised away |
+| 12 | **ICON-EU-EPS** | 40 members, 13.2 km icosahedral | 4×/day to 120 h | full | ✔ **opendata.dwd.de**, tot_prec + cape_ml per member, IDW from the icosahedral grid | probabilities |
 | 13 | ICON-D2-EPS | 20 members, 2.2 km | | no GB coverage | ✘ | Europe expansion only |
 | 14 | AROME (France) | 1.3 km | hourly | edges of SE England only | ✘ | France profile |
 | 15 | PEAROME | 25 members, 2.5 km *(verify)* | | France | ✘ | France profile |
@@ -35,7 +35,14 @@
 | 25 | COSMO | superseded by ICON at DWD (2021–23) | — | — | — | **zero weight**: obsolete or duplicate |
 | 26 | WRF | a framework, not a forecast | — | — | — | **zero weight** until a defined, verified configuration exists |
 
-**Data rule.** The user's rule is AWS only, never Open-Meteo. Of the 14 rows in the baseline table, **8 are reachable**: UKV, MO Global, IFS, IFS ENS, AIFS, AIFS ENS, GFS and GEFS.
+**Data rule (updated 18 Oct 2026).** The user widened the rule to "any source except Open-Meteo" for models AWS doesn't carry. ICON-EU and ICON-EU-EPS now come from DWD's open-data server, so **10 of 14** baseline sources are live.
+
+The remaining four need accounts the user must create; NOVA can't create accounts for them:
+- **MOGREPS-UK and MOGREPS-G**: Met Office Weather DataHub *Atmospheric Models* plan. The current key returns 403 on that API: it's subscribed to site-specific only.
+- **ARPEGE and PEARP**: Météo-France public API portal (`portail-api.meteofrance.fr`, free registration). The data.gouv.fr object-storage mirror stopped updating in May 2026.
+
+The original rule, kept for history:
+ The user's rule is AWS only, never Open-Meteo. Of the 14 rows in the baseline table, **8 are reachable**: UKV, MO Global, IFS, IFS ENS, AIFS, AIFS ENS, GFS and GEFS.
 
 The other 6 (MOGREPS-UK, MOGREPS-G, ICON-EU, ICON-EPS, ARPEGE and PEARP) aren't published on AWS. They're excluded and their weight renormalised, exactly as the table's own rule requires for unavailable models.
 

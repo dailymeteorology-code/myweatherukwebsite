@@ -19,13 +19,10 @@ from ..config import ANALYSIS_VERSION, HYPER, HYPER_ENGINE_VERSION
 from ..grid import Grid, coarsen_sampler
 from ..io_aws import log
 from . import engine, obs
+from .ukv_env import ENV_FIELDS, UKVEnvironment, blend_weight
 
 UNAVAILABLE = {
-    'temperature / humidity / dew point (3-D)': 'no keyless real-time upper-air or surface-station feed is wired; never filled from a model',
-    'three-dimensional wind, vertical velocity, pressure': 'needs a dynamical core and upper-air observations (stage 2)',
-    'CAPE / CIN / LCL / LFC / shear / storm-relative diagnostics': 'require temperature, humidity and wind profiles not observed',
-    'cloud water and precipitation species, cloud base/top': 'radar gives surface rain rate only in this feed',
-    'hail and damaging-wind probabilities': 'no observed updraft/downdraft proxy; not produced rather than guessed',
+    'hydrometeor mixing ratios': 'UKV does not publish them on AWS, and Hyper-Short may only use UKV',
 }
 
 
@@ -100,30 +97,61 @@ def run(init=None):
         'nwp_inputs': [], 'analysis': analysis, 'unavailable': UNAVAILABLE, 'calibration': 'uncalibrated',
         'skill_horizon': 'useful mainly to ~T+3 h; later frames show only decaying existing echoes',
     }
+    env = UKVEnvironment(init)
+    manifest['nwp_inputs'] = ['ukv'] if env.run else []
+    manifest['ukv_cycle_utc'] = env.run.isoformat() if env.run else None
+    manifest['inputs']['ukv'] = 'latest UKV run (s3://met-office-atmospheric-model-data/uk-deterministic-2km): 3-D environment and UKV hazards'
+    manifest['method'] = ('Observation nowcast (radar + lightning analysis, phase-correlation motion, semi-Lagrangian advection '
+                          'with scale-dependent decay) blended with the latest UKV run; nowcast weight exp(-lead/90 min). '
+                          'Environment diagnostics (CAPE, CIN, shear, SRH, LCL, freezing levels) from UKV 3-D fields on its '
+                          '~2 km columns, remapped to 1.5 km. No other model is used.')
+    manifest['skill_horizon'] = 'nowcast dominates to about T+2 h; later frames are mainly UKV'
     writer = store.RunWriter('hyper', init, manifest)
     store.set_status('hyper', state='running', run_id=rid)
     acc = np.zeros(grid.shape, np.float32)
-    prev = rain0
+    prev = None
     for lead, rain, light in engine.integrate(rain0, lt, u, v, grid.dx, 24 * 60, 30):
-        acc = acc + 0.25 * (prev + rain) if lead else acc          # trapezoid over 30 min, mm
-        prev = rain
         P = engine.probabilities(rain, light, lead, grid.dx, speed)
         vt = init + timedelta(minutes=lead)
-        conf = float(np.exp(-lead / 180))
-        writer.frame(lead, vt.isoformat(), {
-            'precip': rain, 'precip_accum': acc, 'flash_density': light, 'p_thunder': P['p_thunder'],
-            'p_lightning': P['p_lightning'], 'p_rain': P['p_rain'], 'p_heavy_rain': P['p_heavy_rain'],
-            'motion_u': (u * grid.dx).astype(np.float32), 'motion_v': (v * grid.dx).astype(np.float32),
-        }, {'checks': {'prob_out_of_range': int(sum(((P[k] < 0) | (P[k] > 1)).sum() for k in P if k.startswith('p_'))),
-                       'negative_precip': int((rain < 0).sum()), 'nan_frac_core': float(np.isnan(rain).mean())},
+        E = env.at(vt)
+        wn = blend_weight(lead)
+        out = {'p_rain': P['p_rain'], 'motion_u': (u * grid.dx).astype(np.float32), 'motion_v': (v * grid.dx).astype(np.float32)}
+        if E:
+            def mix(now, mod):
+                return np.clip(wn * now + (1 - wn) * mod, 0, None).astype(np.float32)
+            out.update(precip=mix(rain, E['ukv_precip']), flash_density=mix(light, E['ukv_flash_density']),
+                       p_thunder=np.clip(mix(P['p_thunder'], E['ukv_p_thunder']), 0, 1),
+                       p_lightning=np.clip(mix(P['p_lightning'], E['ukv_p_lightning']), 0, 1),
+                       p_heavy_rain=np.clip(mix(P['p_heavy_rain'], E['ukv_p_heavy_rain']), 0, 1))
+            for k in ('p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_supercell', 'p_tornado_env', 'p_severe'):
+                out[k] = np.clip(E['ukv_' + k], 0, 1).astype(np.float32)
+            out['hail_size_max_cm'] = E['ukv_hail_size_max_cm']
+            out['gust_max'] = E['ukv_gust_max']
+            for k in ENV_FIELDS + ['t2', 'td2', 'u10', 'v10']:
+                if k in E:
+                    out[k] = E[k]
+            conf = float(0.5 + 0.5 * np.exp(-lead / 360))
+        else:
+            out.update(precip=rain, flash_density=light, p_thunder=P['p_thunder'], p_lightning=P['p_lightning'],
+                       p_heavy_rain=P['p_heavy_rain'])
+            conf = float(np.exp(-lead / 180))
+        acc = acc + 0.25 * (prev + out['precip']) if lead else acc          # trapezoid over 30 min, mm
+        prev = out['precip']
+        pk = [k for k in out if k.startswith('p_')]
+        writer.frame(lead, vt.isoformat(), dict(out, precip_accum=acc), {
+            'checks': {'prob_out_of_range': int(sum(((out[k] < 0) | (out[k] > 1)).sum() for k in pk)),
+                       'negative_precip': int((out['precip'] < 0).sum()), 'nan_frac_core': float(np.isnan(out['precip']).mean())},
             'confidence': round(conf, 3), 'neighbourhood_km': round(P['neighbourhood_km'], 1),
-            'beyond_skill_horizon': lead > 180})
+            'nowcast_weight': round(wn, 3), 'ukv_environment': bool(E)})
+        log(f'hyper T+{lead / 60:4.1f} h  nowcast w={wn:.2f}  ukv={bool(E)}  pmax={out["p_thunder"].max():.2f}')
     store.set_status('hyper', state='validating', run_id=rid)
     fr = writer.manifest['frames']
     leads = [f['lead_min'] for f in fr]
     checks = [
         {'name': 'frames', 'ok': leads == list(range(0, 24 * 60 + 1, 30)), 'detail': f'{len(leads)} frames (49 expected)'},
         {'name': 'grid', 'ok': grid.dx == 1500.0, 'detail': f'dx={grid.dx}'},
+        {'name': 'ukv_environment', 'ok': True,
+         'detail': f"{sum(1 for f in fr if f.get('ukv_environment'))}/{len(fr)} frames with UKV environment"},
         {'name': 'bounded', 'ok': all(f['checks']['prob_out_of_range'] == 0 and f['checks']['negative_precip'] == 0 for f in fr), 'detail': 'p in [0,1], rain >= 0'},
         {'name': 'fresh_obs', 'ok': age_min <= HYPER['max_obs_age_min'], 'detail': f'radar {age_min:.0f} min old'},
     ]
@@ -133,7 +161,7 @@ def run(init=None):
         writer.abandon('; '.join(c['detail'] for c in checks if not c['ok']))
         store.set_status('hyper', state='failed', run_id=rid, detail=checks)
         return None
-    status = 'published' if lt_ok else 'degraded'
+    status = 'published' if lt_ok and env.run else 'degraded'
     p = writer.publish(status)
     store.set_status('hyper', state=status, run_id=rid, last_published=rid)
     store.prune('hyper', keep=48)

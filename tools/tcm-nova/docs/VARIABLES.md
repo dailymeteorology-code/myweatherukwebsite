@@ -50,7 +50,23 @@ Main Run has no integration time step because it's a blend. The Hyper engine's i
 
 ✘ n/a: an evaporation rate separate from the latent heat flux, and plant transpiration as its own field. No AWS source splits these.
 
-## 4–5 Cloud microphysics (liquid, ice, hail)
+## 4–5 Cloud microphysics (liquid, ice, hail): updated 18 Oct 2026
+
+Now ✔ via `microphysics.py`:
+- **GFS hydrometeor mixing ratios** (cloud water QCLOUD, ice QICE, rain QRAIN, snow QSNOW, graupel QGRAUP) on pressure levels, plus **ICON-EU** column TQC/TQI/TQR/TQS.
+- Derived from those:
+  - liquid, ice, rain, snow and graupel paths and maximum water contents
+  - supercooled LWC (max and path)
+  - droplet mean-volume and effective radius, with **assumed** droplet number (300 / 100 cm⁻³)
+  - ice effective radius (Ou & Liou)
+  - rain terminal fall speed (Klemp & Wilhelmson)
+  - graupel–ice charging index, which feeds lightning probability
+- ICON-EU convective cloud base and top, and the lightning potential index.
+
+Still ✘: predicted number concentrations and size distributions, process rates, CCN/INP/aerosol, hail mixing ratio and electric fields. No open source publishes them.
+
+The original assessment follows.
+
 QCLOUD, QRAIN, QICE, QSNOW, QGRAUP, hail mixing ratio, and every number concentration, size distribution, effective radius, CCN/INP/aerosol, nucleation, deposition, sublimation, freezing, melting, riming, aggregation, accretion, autoconversion, collision-coalescence, sedimentation and fall-speed term: **✘ n/a**.
 
 None of the AWS-published models (UKV, MO Global, IFS, AIFS, GFS, GEFS) put hydrometeor mixing ratios or microphysical process rates in their open-data files. NOVA's Main Run doesn't integrate microphysics, so it can't produce them honestly. They're the core of Hyper-Short stage 3 (docs/HYPER_SHORT.md).
@@ -183,7 +199,7 @@ What *is* used instead, and labelled as such:
 - **Hyper**: radar and lightning inputs ✔, observation QC flags (range, freshness, coverage) ✔, uncertainty notes ✔. No background field, by rule.
 - Analysis increments and 3-D initial fields: ✘ (stage 2 of HYPER_SHORT.md).
 
-## 23 Ensemble and uncertainty
+## 23 Ensemble and uncertainty (ICON-EU-EPS added: 40 members)
 - ✔ ensemble mean precip and CAPE, spread, and thunder / heavy-rain probabilities from IFS ENS (50), AIFS ENS (50) and GEFS (30).
 - ✔ source disagreement, confidence, and probability of exceeding thresholds.
 - Ensemble T, q and wind means: ✘. Only surface precip and CAPE members are downloaded, to keep each run tractable; more can be added in `sources.ECMWFEns.params`.
@@ -200,7 +216,9 @@ Everything in the list is ✔ except:
 - "Flash-flood potential": ✘, withheld pending hydrology.
 - Hazard arrival, duration and footprint are visible via the frame series. The run-maximum fields are stored under `summary/`.
 
-## 26 Verification
+## 26 Verification and calibration
+
+Calibration (`calibrate.py`, 18 Oct 2026): hindcasts from archived AWS forecasts, scored against radar convective cores (≥25 mm/h) and archived lightning. Isotonic reliability mapping per lead window, leave-one-day-out cross-validated, and applied only if it lowers the cross-validated Brier score. Applied to p_thunder and p_lightning; other hazards stay uncalibrated, with no ground truth wired yet.
 verify.py computes:
 - FSS per source
 - Brier, BSS, POD, FAR and CSI for p_thunder against lightning

@@ -68,8 +68,8 @@ MODELS = {
     'ifs_ens':    dict(label='ECMWF IFS ENS',                   family='ecmwf',     kind='ens', res_km=9.0,  aws='ecmwf-forecasts/ifs/0p25/enfo', max_lead_h=360, members=50),
     'aifs':       dict(label='ECMWF AIFS Single',               family='ecmwf',     kind='det', res_km=28.0, aws='ecmwf-forecasts/aifs-single/0p25/oper', max_lead_h=360, profile=True, ai=True),
     'aifs_ens':   dict(label='ECMWF AIFS ENS',                  family='ecmwf',     kind='ens', res_km=31.0, aws='ecmwf-forecasts/aifs-ens/0p25/enfo', max_lead_h=360, members=50, ai=True),
-    'icon_eu':    dict(label='DWD ICON-EU deterministic',       family='dwd',       kind='det', res_km=6.5,  aws=None, max_lead_h=120),
-    'icon_eps':   dict(label='DWD ICON-EPS (EU nest)',          family='dwd',       kind='ens', res_km=13.2, aws=None, max_lead_h=120),
+    'icon_eu':    dict(label='DWD ICON-EU deterministic',       family='dwd',       kind='det', res_km=6.5,  aws='opendata.dwd.de/weather/nwp/icon-eu', max_lead_h=120, profile=True),
+    'icon_eps':   dict(label='DWD ICON-EU-EPS (EU nest)',       family='dwd',       kind='ens', res_km=13.2, aws='opendata.dwd.de/weather/nwp/icon-eu-eps', max_lead_h=120, members=40),
     'gfs':        dict(label='NOAA GFS deterministic',          family='noaa',      kind='det', res_km=13.0, aws='noaa-gfs-bdp-pds', max_lead_h=384, profile=True),
     'gefs':       dict(label='NOAA GEFS ensemble',              family='noaa',      kind='ens', res_km=25.0, aws='noaa-gefs-pds/pgrb2ap5', max_lead_h=384, members=30),
     'arpege':     dict(label='Météo-France ARPEGE',             family='mf',        kind='det', res_km=10.0, aws=None, max_lead_h=102),
@@ -107,9 +107,9 @@ SKILL_MIN_SAMPLES = 3
 
 # Hazard-specific emphasis on top of the lead-window weights (multipliers, renormalised).
 HAZARD_EMPHASIS = {
-    'initiation':  {'ukv': 1.4, 'ifs_ens': 1.1, 'gefs': 0.8, 'aifs': 0.6, 'aifs_ens': 0.7},
+    'initiation':  {'icon_eu': 1.1, 'ukv': 1.4, 'ifs_ens': 1.1, 'gefs': 0.8, 'aifs': 0.6, 'aifs_ens': 0.7},
     'precip':      {'ukv': 1.5, 'mo_global': 0.9, 'aifs': 0.7, 'aifs_ens': 0.7},
-    'lightning':   {'ukv': 1.6},                       # UKV is the only explicit-lightning source
+    'lightning':   {'ukv': 1.6, 'icon_eu': 1.3},        # explicit lightning (UKV) and LPI (ICON-EU)
     'hail':        {'ukv': 1.4, 'aifs': 0.5, 'aifs_ens': 0.5},
     'wind':        {'ukv': 1.2, 'ifs': 1.1},
     'supercell':   {'ifs': 1.1, 'ifs_ens': 1.2, 'aifs': 0.6},

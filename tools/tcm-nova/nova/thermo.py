@@ -77,7 +77,7 @@ def theta_e_sat(T, p):
     return theta_e(T, T, p)
 
 
-def moist_t(the, p, guess=None, iters=10):
+def _moist_t_newton(the, p, guess=None, iters=10):
     """Temperature on the pseudo-adiabat with equivalent potential temperature `the` at p."""
     T = np.where(np.isfinite(guess), guess, 280.0) if guess is not None else np.full(np.broadcast(the, p).shape, 280.0)
     T = np.clip(T, 150, 330)
@@ -86,6 +86,40 @@ def moist_t(the, p, guess=None, iters=10):
         d = (theta_e_sat(T + 0.1, p) - theta_e_sat(T - 0.1, p)) / 0.2
         T = np.clip(T - f / np.where(np.abs(d) < 1e-6, 1e-6, d), 150, 340)
     return T
+
+
+# Pseudo-adiabat lookup table: T(θe, ln p), built once by Newton iteration, then bilinear
+# lookup — identical physics, ~50x faster than iterating on every column and level.
+_TH = np.arange(200.0, 450.01, 0.25)
+_LP = np.linspace(np.log(50.0), np.log(1100.0), 400)
+_TAB = None
+
+
+def _table():
+    global _TAB
+    if _TAB is None:
+        from .config import CACHE
+        f = CACHE / 'pseudoadiabat_v1.npy'
+        if f.exists():
+            _TAB = np.load(f)
+        else:
+            TH, LP = np.meshgrid(_TH, _LP, indexing='ij')
+            _TAB = _moist_t_newton(TH, np.exp(LP), guess=np.full(TH.shape, 260.0), iters=40).astype(np.float32)
+            f.parent.mkdir(parents=True, exist_ok=True)
+            np.save(f, _TAB)
+    return _TAB
+
+
+def moist_t(the, p, guess=None, iters=None):
+    """Pseudo-adiabat temperature for equivalent potential temperature `the` at pressure p (hPa)."""
+    tab = _table()
+    the, p = np.broadcast_arrays(np.asarray(the, np.float64), np.asarray(p, np.float64))
+    fi = np.clip((np.nan_to_num(the, nan=300.0) - _TH[0]) / (_TH[1] - _TH[0]), 0, len(_TH) - 1.0001)
+    fj = np.clip((np.log(np.nan_to_num(np.maximum(p, 1e-3), nan=500.0)) - _LP[0]) / (_LP[1] - _LP[0]), 0, len(_LP) - 1.0001)
+    i, j = fi.astype(np.int64), fj.astype(np.int64)
+    a, b = fi - i, fj - j
+    out = (tab[i, j] * (1 - a) * (1 - b) + tab[i + 1, j] * a * (1 - b) + tab[i, j + 1] * (1 - a) * b + tab[i + 1, j + 1] * a * b)
+    return np.where(np.isfinite(the) & np.isfinite(p), out, np.nan).astype(np.float32)
 
 
 def wet_bulb(T, Td, p):
@@ -352,7 +386,21 @@ def interp_heights(a, h):
     return a[i, cols] * (1 - f) + a[i + 1, cols] * f
 
 
-def effective_layer(C, max_parcels=8):
+def effective_layer(C, max_parcels=8, mucape=None):
+    """Wrapper: only columns with MUCAPE >= 100 J/kg can have an effective layer."""
+    N = C['p'].shape[1]
+    bot = np.full(N, np.nan, np.float32)
+    top = np.full(N, np.nan, np.float32)
+    idx = np.arange(N) if mucape is None else np.where(mucape >= 100)[0]
+    if idx.size == 0:
+        return bot, top
+    sub = {k: (v[:, idx] if isinstance(v, np.ndarray) and v.ndim == 2 else v) for k, v in C.items()}
+    b, t = _effective_layer(sub, max_parcels)
+    bot[idx], top[idx] = b, t
+    return bot, top
+
+
+def _effective_layer(C, max_parcels=8):
     """Effective inflow layer (Thompson et al. 2007): contiguous lowest levels whose parcels
     have CAPE >= 100 J/kg and CIN >= -250 J/kg. Returns bottom/top heights AGL (NaN = none)."""
     P = C['p']

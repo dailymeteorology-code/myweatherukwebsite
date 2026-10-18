@@ -28,7 +28,7 @@ const PY = process.env.NOVA_PYTHON || (() => {
 
 export const PRODUCTS = {
   main: { module: 'nova.main_run', cycles: ['03:00', '09:00', '15:00', '21:00'], timeoutMin: 300 },
-  hyper: { module: 'nova.hyper.run', everyMinutes: 60, timeoutMin: 50 },
+  hyper: { module: 'nova.hyper.run', everyMinutes: 60, timeoutMin: 58 },
 };
 const SAFE_ID = /^(main|hyper)-\d{8}T\d{4}Z$/;
 const SAFE_FIELD = /^[a-z0-9_]{1,40}$/;

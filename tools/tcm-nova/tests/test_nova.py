@@ -136,22 +136,29 @@ def test_frame_roundtrip(tmp_data):
     assert np.allclose(a, b.astype(np.float32), atol=1e-3)
 
 
-# 12 lineage: Hyper-Short never touches model data -----------------------------
-def test_hyper_has_no_nwp_lineage():
-    banned = {'nova.sources', 'sources', 'main_run', 'nova.main_run', 'weights'}
-    banned_strings = ('met-office-atmospheric-model-data', 'ecmwf-forecasts', 'noaa-gfs', 'noaa-gefs', 'open-meteo', 'BUCKETS["mo"]',
-                      "BUCKETS['mo']", 'BUCKETS["ecm"]', 'BUCKETS["gfs"]', 'BUCKETS["gefs"]')
+# 12 lineage: Hyper-Short uses observations + the latest UKV, and NO other model --------
+def test_hyper_lineage_is_obs_plus_ukv_only():
+    allowed = {'sources': {'UKV'}, 'main_run': {'environment', 'prepare'}}
+    banned_strings = ('ecmwf-forecasts', 'noaa-gfs', 'noaa-gefs', 'open-meteo', 'opendata.dwd.de', 'global-deterministic',
+                      'READERS', 'ICONEU', 'GFS(', 'ECMWF(', 'GEFS(', 'MOGlobal')
     for f in (ROOT / 'nova' / 'hyper').glob('*.py'):
         src = f.read_text(encoding='utf8')
-        tree = ast.parse(src)
-        for node in ast.walk(tree):
+        for node in ast.walk(ast.parse(src)):
             if isinstance(node, ast.ImportFrom):
-                mod = (node.module or '')
-                assert mod.split('.')[-1] not in banned, f'{f.name} imports {mod}'
-                assert not any(a.name in ('sources', 'main_run', 'weights') for a in node.names), f'{f.name} imports model code'
+                mod = (node.module or '').split('.')[-1]
+                if mod in allowed:
+                    names = {a.name for a in node.names}
+                    assert names <= allowed[mod], f'{f.name} imports {names - allowed[mod]} from {mod}'
+                assert mod not in ('sources_dwd', 'weights'), f'{f.name} imports {mod}'
         code = '\n'.join(l for l in src.splitlines() if not l.strip().startswith('#'))
         for b in banned_strings:
             assert b not in code, f'{f.name} references {b}'
+
+
+def test_blend_weight_hands_over_to_ukv():
+    from nova.hyper.ukv_env import blend_weight, env_hours
+    assert blend_weight(0) == 1.0 and blend_weight(90) < 0.4 and blend_weight(360) < 0.02
+    assert env_hours()[0] == 0 and env_hours()[-1] == 24
 
 
 # 15 no AI / ML anywhere in the downscaling and engines -------------------------
