@@ -29,42 +29,65 @@ const runLabel = (iso) => new Date(iso).toLocaleString('en-GB', { timeZone: 'UTC
 const imgCache = {};
 const loadImage = (src) => (imgCache[src] ||= new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; }));
 
-/* ── liquid glass ── */
-const glass = {
-  background: 'linear-gradient(140deg, rgba(255,255,255,0.15), rgba(255,255,255,0.05) 55%, rgba(255,255,255,0.09))',
-  backdropFilter: 'blur(26px) saturate(185%)', WebkitBackdropFilter: 'blur(26px) saturate(185%)',
-  border: '1px solid rgba(255,255,255,0.16)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.32), inset 0 -1px 0 rgba(255,255,255,0.05), 0 12px 32px rgba(0,0,0,0.38)',
-  color: '#f5f7fa',
-};
-const capsule = { ...glass, borderRadius: 999 };
-const ink2 = 'rgba(240,244,250,0.62)';
+/* ── liquid glass, in two tints: the bars follow the map underneath, so text on them stays
+   readable (dark glass over the dark, satellite and real-time maps; light glass over the
+   light map) ── */
+const BLUR = { backdropFilter: 'blur(26px) saturate(185%)', WebkitBackdropFilter: 'blur(26px) saturate(185%)' };
+function mkTheme(light) {
+  const glass = light ? {
+    ...BLUR,
+    background: 'linear-gradient(140deg, rgba(255,255,255,0.8), rgba(255,255,255,0.62) 55%, rgba(255,255,255,0.74))',
+    border: '1px solid rgba(255,255,255,0.9)',
+    boxShadow: 'inset 0 1px 0 #ffffff, inset 0 -1px 0 rgba(15,23,34,0.04), 0 10px 30px rgba(15,23,34,0.18)',
+    color: '#0f1722',
+  } : {
+    ...BLUR,
+    background: 'linear-gradient(140deg, rgba(58,72,96,0.5), rgba(18,26,40,0.48) 55%, rgba(36,48,68,0.52))',
+    border: '1px solid rgba(255,255,255,0.16)',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3), inset 0 -1px 0 rgba(255,255,255,0.05), 0 12px 32px rgba(0,0,0,0.38)',
+    color: '#f5f7fa',
+  };
+  return light ? {
+    light, glass, capsule: { ...glass, borderRadius: 999 }, ink: '#0f1722', ink2: 'rgba(15,23,34,0.58)', ink3: 'rgba(15,23,34,0.84)',
+    track: 'rgba(15,23,34,0.07)', trackShadow: 'inset 0 1px 2px rgba(15,23,34,0.12)', idle: 'rgba(15,23,34,0.06)',
+    on: 'linear-gradient(180deg, #ffffff, #eef2f7)', onShadow: '0 1px 3px rgba(15,23,34,0.2), inset 0 1px 0 #ffffff',
+    chip: 'rgba(15,23,34,0.06)', chipShadow: 'inset 0 1px 0 rgba(255,255,255,0.6)', btn: 'rgba(15,23,34,0.09)', line: 'rgba(15,23,34,0.1)',
+  } : {
+    light, glass, capsule: { ...glass, borderRadius: 999 }, ink: '#f5f7fa', ink2: 'rgba(240,244,250,0.64)', ink3: 'rgba(240,244,250,0.86)',
+    track: 'rgba(0,0,0,0.24)', trackShadow: 'inset 0 1px 2px rgba(0,0,0,0.35)', idle: 'rgba(0,0,0,0.2)',
+    on: 'linear-gradient(180deg, rgba(255,255,255,0.3), rgba(255,255,255,0.14))', onShadow: 'inset 0 1px 0 rgba(255,255,255,0.45), 0 2px 8px rgba(0,0,0,0.25)',
+    chip: 'rgba(255,255,255,0.08)', chipShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)', btn: 'rgba(255,255,255,0.18)', line: 'rgba(255,255,255,0.12)',
+  };
+}
+const THEMES = { dark: mkTheme(false), light: mkTheme(true) };
+const ThemeCtx = React.createContext(THEMES.dark);
 
 function Seg({ items, value, onChange, small }) {
+  const t = React.useContext(ThemeCtx);
   return (
-    <div style={{ display: 'inline-flex', padding: 3, gap: 2, borderRadius: 999, background: 'rgba(0,0,0,0.22)', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.35)' }}>
+    <div style={{ display: 'inline-flex', padding: 3, gap: 2, borderRadius: 999, background: t.track, boxShadow: t.trackShadow }}>
       {items.map(([k, label]) => {
         const on = k === value;
         return (
           <button key={k} onClick={() => onChange(k)} style={{
             border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: small ? 11.5 : 12.5, fontWeight: 650, letterSpacing: '-0.01em',
             padding: small ? '5px 9px' : '6px 12px', borderRadius: 999, whiteSpace: 'nowrap', transition: 'all .18s ease',
-            color: on ? '#fff' : ink2,
-            background: on ? 'linear-gradient(180deg, rgba(255,255,255,0.3), rgba(255,255,255,0.14))' : 'transparent',
-            boxShadow: on ? 'inset 0 1px 0 rgba(255,255,255,0.45), 0 2px 8px rgba(0,0,0,0.25)' : 'none',
+            color: on ? t.ink : t.ink2, background: on ? t.on : 'transparent', boxShadow: on ? t.onShadow : 'none',
           }}>{label}</button>
         );
       })}
     </div>
   );
 }
-const IconBtn = ({ on, title, onClick, children, style }) => (
-  <button title={title} aria-label={title} onClick={onClick} style={{
-    border: 'none', cursor: 'pointer', width: 32, height: 32, borderRadius: 999, display: 'grid', placeItems: 'center',
-    color: on ? '#fff' : ink2, background: on ? 'linear-gradient(180deg, rgba(255,255,255,0.3), rgba(255,255,255,0.12))' : 'rgba(0,0,0,0.18)',
-    boxShadow: on ? 'inset 0 1px 0 rgba(255,255,255,0.45)' : 'inset 0 1px 2px rgba(0,0,0,0.3)', ...style,
-  }}>{children}</button>
-);
+function IconBtn({ on, title, onClick, children, style }) {
+  const t = React.useContext(ThemeCtx);
+  return (
+    <button title={title} aria-label={title} onClick={onClick} style={{
+      border: 'none', cursor: 'pointer', width: 32, height: 32, borderRadius: 999, display: 'grid', placeItems: 'center',
+      color: on ? t.ink : t.ink2, background: on ? t.on : t.idle, boxShadow: on ? t.onShadow : t.trackShadow, ...style,
+    }}>{children}</button>
+  );
+}
 
 export default function ModelData() {
   const [cat, setCat] = useState(null);
@@ -82,6 +105,7 @@ export default function ModelData() {
   const [showCities, setShowCities] = useState(true);
   const [showStar, setShowStar] = useState(false);
   const [style, setStyle] = useState('dark');
+  const T = THEMES[style === 'light' ? 'light' : 'dark'];
   const [frameKey, setFrameKey] = useState('screen');
   const [view, setView] = useState(null);
   const [size, setSize] = useState(0);
@@ -439,11 +463,11 @@ export default function ModelData() {
     return GROUP_ORDER.filter((n) => g[n]).map((n) => [n, g[n]]);
   }, [model, cat, q]);
   const pending = status && status.state !== 'complete' ? Math.max(0, steps.length - loadedCount) : 0;
-  const sel = { ...glass, appearance: 'none', borderRadius: 999, padding: '7px 30px 7px 12px', fontSize: 12.5, fontWeight: 600, fontFamily: FONT, cursor: 'pointer', color: '#fff', background: 'rgba(0,0,0,0.22)', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.3)' };
+  const sel = { ...T.glass, appearance: 'none', borderRadius: 999, padding: '7px 30px 7px 12px', fontSize: 12.5, fontWeight: 600, fontFamily: FONT, cursor: 'pointer', color: T.ink, background: T.track, boxShadow: T.trackShadow };
   const validLabel = frame ? new Date(frame.head.valid).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 
   const varButton = (
-    <button onClick={() => setVarOpen((o) => !o)} style={{ ...sel, padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0, background: varOpen ? 'rgba(255,255,255,0.22)' : sel.background }}>
+    <button onClick={() => setVarOpen((o) => !o)} style={{ ...sel, padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0, background: varOpen ? T.btn : sel.background }}>
       {vmeta?.label || 'Variable'} <ChevronDown style={{ width: 14, height: 14, opacity: 0.7, transform: varOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
     </button>
   );
@@ -461,7 +485,8 @@ export default function ModelData() {
   );
 
   return (
-    <div ref={shellRef} style={{ height: shellH, position: 'relative', overflow: 'hidden', fontFamily: FONT, color: '#f5f7fa',
+    <ThemeCtx.Provider value={T}>
+    <div ref={shellRef} style={{ height: shellH, position: 'relative', overflow: 'hidden', fontFamily: FONT, color: T.ink,
       background: 'radial-gradient(120% 80% at 50% 0%, #142238 0%, #070c16 60%, #04070d 100%)' }}>
       <div ref={stageRef} style={{ position: 'absolute', inset: 0 }}>
         <canvas ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
@@ -471,7 +496,7 @@ export default function ModelData() {
 
       {/* top bar */}
       <div ref={topRef} style={{ position: 'absolute', top: 10, left: 10, right: 10, display: 'flex', gap: 8, alignItems: 'center', pointerEvents: 'none' }}>
-        <div className="md-noscroll" style={{ ...capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', overflowX: 'auto', minWidth: 0, maxWidth: '100%', pointerEvents: 'auto' }}>
+        <div className="md-noscroll" style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', overflowX: 'auto', minWidth: 0, maxWidth: '100%', pointerEvents: 'auto' }}>
           {cat ? (
             <>
               {narrow && varButton}
@@ -488,68 +513,68 @@ export default function ModelData() {
               {!narrow && varButton}
             </>
           ) : (
-            <span style={{ padding: '6px 10px', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', color: err ? '#fca5a5' : ink2 }}>
+            <span style={{ padding: '6px 10px', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', color: err ? '#fca5a5' : T.ink2 }}>
               {!err && <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />}{err || 'Finding the latest runs…'}
             </span>
           )}
         </div>
         <div style={{ flex: 1 }} />
         {narrow
-          ? <div style={{ ...capsule, padding: 5, pointerEvents: 'auto', flexShrink: 0 }}><IconBtn on={mapOpen} title="Map, frame and layers" onClick={() => setMapOpen((o) => !o)}><Layers size={15} /></IconBtn></div>
-          : <div style={{ ...capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{mapControls}</div>}
+          ? <div style={{ ...T.capsule, padding: 5, pointerEvents: 'auto', flexShrink: 0 }}><IconBtn on={mapOpen} title="Map, frame and layers" onClick={() => setMapOpen((o) => !o)}><Layers size={15} /></IconBtn></div>
+          : <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{mapControls}</div>}
       </div>
       {narrow && mapOpen && (
-        <div style={{ ...glass, borderRadius: 24, position: 'absolute', right: 10, top: (topRef.current?.offsetHeight || 46) + 18, padding: 12, display: 'grid', gap: 10, zIndex: 6, maxWidth: 'calc(100% - 20px)' }}>
+        <div style={{ ...T.glass, borderRadius: 24, position: 'absolute', right: 10, top: (topRef.current?.offsetHeight || 46) + 18, padding: 12, display: 'grid', gap: 10, zIndex: 6, maxWidth: 'calc(100% - 20px)' }}>
           {mapControls}
         </div>
       )}
 
       {/* variable picker */}
       {varOpen && cat && (
-        <div style={{ ...glass, borderRadius: 24, position: 'absolute', left: 10, top: (topRef.current?.offsetHeight || 46) + 18, width: 'min(560px, calc(100% - 20px))',
+        <div style={{ ...T.glass, borderRadius: 24, position: 'absolute', left: 10, top: (topRef.current?.offsetHeight || 46) + 18, width: 'min(560px, calc(100% - 20px))',
           maxHeight: '62%', overflowY: 'auto', padding: 14, zIndex: 5 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderRadius: 999, background: 'rgba(0,0,0,0.25)' }}>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderRadius: 999, background: T.track }}>
               <Search size={14} style={{ opacity: 0.6 }} />
               <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search variables"
-                style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontFamily: FONT, fontSize: 13 }} />
+                style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: T.ink, fontFamily: FONT, fontSize: 13 }} />
             </div>
             <IconBtn title="Close" onClick={() => setVarOpen(false)}><X size={15} /></IconBtn>
           </div>
           {groups.map(([g, list]) => (
             <div key={g} style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, color: ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '2px 4px 6px' }}>{g}</div>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '2px 4px 6px' }}>{g}</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {list.map(([k, v]) => (
                   <button key={k} onClick={() => { setVarKey(k); setVarOpen(false); }} style={{
                     border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 999,
-                    color: k === varKey ? '#fff' : 'rgba(240,244,250,0.82)',
-                    background: k === varKey ? 'linear-gradient(180deg, rgba(110,180,255,0.55), rgba(60,130,240,0.4))' : 'rgba(255,255,255,0.07)',
-                    boxShadow: k === varKey ? 'inset 0 1px 0 rgba(255,255,255,0.5)' : 'inset 0 1px 0 rgba(255,255,255,0.08)',
+                    color: k === varKey ? '#fff' : T.ink3,
+                    background: k === varKey ? (T.light ? 'linear-gradient(180deg, #4b95ff, #1f6fe0)' : 'linear-gradient(180deg, rgba(110,180,255,0.55), rgba(60,130,240,0.4))') : T.chip,
+                    boxShadow: k === varKey ? 'inset 0 1px 0 rgba(255,255,255,0.5)' : T.chipShadow,
                   }}>{v.label}</button>
                 ))}
               </div>
             </div>
           ))}
-          {model && <div style={{ fontSize: 11, color: ink2, margin: '4px 4px 0' }}>{model.source}</div>}
+          {model && <div style={{ fontSize: 11, color: T.ink2, margin: '4px 4px 0' }}>{model.source}</div>}
         </div>
       )}
 
       <style>{'.md-noscroll::-webkit-scrollbar{display:none}.md-noscroll{scrollbar-width:none}'}</style>
       {/* zoom */}
-      <div className="hidden sm:flex" style={{ ...capsule, position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', padding: 5, flexDirection: 'column', gap: 5 }}>
+      <div className="hidden sm:flex" style={{ ...T.capsule, position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', padding: 5, flexDirection: 'column', gap: 5 }}>
         <IconBtn title="Zoom in" onClick={() => zoomBy(1.35)}><ZoomIn size={15} /></IconBtn>
         <IconBtn title="Zoom out" onClick={() => zoomBy(1 / 1.35)}><ZoomOut size={15} /></IconBtn>
         <IconBtn title="UK & Ireland" onClick={() => fit(REGIONS.uk.box)}><Maximize size={14} /></IconBtn>
       </div>
 
       {hover && vmeta && (
-        <div style={{ ...capsule, position: 'absolute', left: hover.x + 14, top: hover.y + 12, pointerEvents: 'none', padding: '5px 11px', fontSize: 12.5, fontWeight: 700 }}>
+        <div style={{ ...T.capsule, position: 'absolute', left: hover.x + 14, top: hover.y + 12, pointerEvents: 'none', padding: '5px 11px', fontSize: 12.5, fontWeight: 700 }}>
           {fmtValue(hover.v, vmeta.unit)}
         </div>
       )}
       {(!frame || pending > 0) && key && (
-        <div style={{ ...capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: (topRef.current?.offsetHeight || 46) + 18, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: (topRef.current?.offsetHeight || 46) + 18, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
           <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />
           {!status ? 'Starting…' : `Fetching from AWS · ${loadedCount}/${steps.length}`}
         </div>
@@ -557,36 +582,36 @@ export default function ModelData() {
 
       {/* export sheet */}
       {exp.open && (
-        <div style={{ ...glass, borderRadius: 24, position: 'absolute', right: 10, bottom: (botRef.current?.offsetHeight || 56) + 18, width: 'min(380px, calc(100% - 20px))', padding: 14, display: 'grid', gap: 12, fontSize: 12.5 }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5 }}>Export <span style={{ color: ink2, fontWeight: 500 }}>· {FRAMES[frameKey].a ? FRAMES[frameKey].label : 'as framed'} · exactly as previewed</span></div>
+        <div style={{ ...T.glass, borderRadius: 24, position: 'absolute', right: 10, bottom: (botRef.current?.offsetHeight || 56) + 18, width: 'min(380px, calc(100% - 20px))', padding: 14, display: 'grid', gap: 12, fontSize: 12.5 }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5 }}>Export <span style={{ color: T.ink2, fontWeight: 500 }}>· {FRAMES[frameKey].a ? FRAMES[frameKey].label : 'as framed'} · exactly as previewed</span></div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
             <Seg small items={[[1080, '1080p'], [2160, '4K']]} value={exp.png} onChange={(v) => setExp((x) => ({ ...x, png: v }))} />
-            <button onClick={exportPng} disabled={!frame} style={{ ...sel, padding: '7px 14px', display: 'flex', gap: 6, alignItems: 'center', background: 'rgba(255,255,255,0.18)' }}><ImageIcon size={14} />PNG of this step</button>
+            <button onClick={exportPng} disabled={!frame} style={{ ...sel, padding: '7px 14px', display: 'flex', gap: 6, alignItems: 'center', background: T.btn }}><ImageIcon size={14} />PNG of this step</button>
           </div>
-          <div style={{ height: 1, background: 'rgba(255,255,255,0.12)' }} />
+          <div style={{ height: 1, background: T.line }} />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <span style={{ color: ink2 }}>From</span>
+            <span style={{ color: T.ink2 }}>From</span>
             <select value={exp.from} onChange={(e) => setExp((x) => ({ ...x, from: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }}>
               {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>T+{s}</option>)}
             </select>
-            <span style={{ color: ink2 }}>to</span>
+            <span style={{ color: T.ink2 }}>to</span>
             <select value={exp.to ?? steps.length - 1} onChange={(e) => setExp((x) => ({ ...x, to: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }}>
               {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>T+{s}</option>)}
             </select>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <span style={{ color: ink2 }}>Frame</span>
+            <span style={{ color: T.ink2 }}>Frame</span>
             <input type="number" min={40} max={5000} step={10} value={speed} onChange={(e) => setSpeed(Math.max(40, Math.min(5000, Number(e.target.value) || 450)))}
               style={{ ...sel, width: 84, padding: '6px 10px', cursor: 'text' }} />
-            <span style={{ color: ink2 }}>ms</span>
+            <span style={{ color: T.ink2 }}>ms</span>
             <Seg small items={[[540, '540p'], [720, '720p'], [1080, '1080p']]} value={exp.gif} onChange={(v) => setExp((x) => ({ ...x, gif: v }))} />
           </div>
           {exp.busy == null
-            ? <button onClick={exportGif} disabled={pending > 0} style={{ ...sel, justifySelf: 'stretch', padding: '9px 14px', display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', background: pending > 0 ? 'rgba(255,255,255,0.08)' : 'linear-gradient(180deg, rgba(110,180,255,0.6), rgba(60,130,240,0.45))' }}>
+            ? <button onClick={exportGif} disabled={pending > 0} style={{ ...sel, justifySelf: 'stretch', padding: '9px 14px', display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', color: pending > 0 ? T.ink2 : '#fff', background: pending > 0 ? T.chip : 'linear-gradient(180deg, rgba(110,180,255,0.75), rgba(60,130,240,0.65))' }}>
                 <Film size={14} />{pending > 0 ? `GIF — waiting for ${pending} frames` : 'GIF of the run'}
               </button>
             : <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.14)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${Math.round(exp.busy * 100)}%`, background: 'linear-gradient(90deg,#7cc8ff,#3d8bff)' }} /></div>
+                <div style={{ flex: 1, height: 6, borderRadius: 3, background: T.line, overflow: 'hidden' }}><div style={{ height: '100%', width: `${Math.round(exp.busy * 100)}%`, background: 'linear-gradient(90deg,#7cc8ff,#3d8bff)' }} /></div>
                 {Math.round(exp.busy * 100)}%
                 <button onClick={() => { gifCancel.current = true; }} style={{ ...sel, padding: '5px 10px' }}>Cancel</button>
               </div>}
@@ -594,14 +619,14 @@ export default function ModelData() {
       )}
 
       {/* timeline */}
-      <div ref={botRef} style={{ ...capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'min(980px, calc(100% - 20px))', padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'min(980px, calc(100% - 20px))', padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
         <IconBtn title="Previous step" onClick={() => setIdx((i) => Math.max(0, i - 1))}><ChevronLeft size={16} /></IconBtn>
         <IconBtn on={playing} title={playing ? 'Pause' : 'Play'} onClick={() => setPlaying((p) => !p)} style={{ width: 38, height: 38 }}>{playing ? <Pause size={16} /> : <Play size={16} />}</IconBtn>
         <IconBtn title="Next step" onClick={() => setIdx((i) => Math.min(steps.length - 1, i + 1))}><ChevronRight size={16} /></IconBtn>
         <input type="range" min={0} max={Math.max(0, steps.length - 1)} value={Math.min(idx, Math.max(0, steps.length - 1))}
           onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} style={{ flex: 1, minWidth: 80, accentColor: '#7cc8ff' }} aria-label="Forecast step" />
         <span style={{ fontSize: 12.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', padding: '0 4px' }}>
-          {validLabel}<span style={{ color: ink2, fontWeight: 600 }}>{step != null ? ` · T+${step}` : ''}</span>
+          {validLabel}<span style={{ color: T.ink2, fontWeight: 600 }}>{step != null ? ` · T+${step}` : ''}</span>
         </span>
         <div style={{ position: 'relative' }} className="hidden sm:block">
           <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} style={{ ...sel, padding: '7px 26px 7px 10px' }} title="Playback and GIF speed">
@@ -612,5 +637,6 @@ export default function ModelData() {
         <IconBtn on={exp.open} title="Export PNG / GIF" onClick={() => setExp((e) => ({ ...e, open: !e.open }))} style={{ width: 38, height: 38 }}><Download size={16} /></IconBtn>
       </div>
     </div>
+    </ThemeCtx.Provider>
   );
 }

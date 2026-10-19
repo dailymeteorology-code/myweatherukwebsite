@@ -88,7 +88,9 @@ export function defaultRun(m) {
 }
 
 /* warmed in the background (one job at a time) for each model's default run, most-used first */
-const PREFETCH = ['precip_rate', 'precip_total', 't2', 'gust10', 'wind10', 'mslp', 'refc', 'tcc', 'cape_mu', 'cape_sb', 't850', 'z500', 'feels', 'snow_rate'];
+const PREFETCH = ['precip_rate', 'precip_total', 't2', 'gust10', 'mslp', 'refc', 'cape_mu'];
+/* Met Office Global files are whole-globe downloads (~7 MB a field a step): warm only the top three */
+const PREFETCH_LIMIT = { mo_global: 3 };
 
 function refreshCatalog() {
   if (catalogBusy) return;
@@ -101,7 +103,7 @@ function refreshCatalog() {
       const r = m.runs?.length ? defaultRun(m) : null;
       if (!r) continue;
       const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';
-      for (const v of PREFETCH.filter((x) => m.variables?.includes(x))) ensureJob(m.id, tag, v, true);
+      for (const v of PREFETCH.filter((x) => m.variables?.includes(x)).slice(0, PREFETCH_LIMIT[m.id] ?? 99)) ensureJob(m.id, tag, v, true);
     }
   });
 }
