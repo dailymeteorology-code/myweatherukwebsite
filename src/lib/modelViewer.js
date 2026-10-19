@@ -110,6 +110,10 @@ const SCALES = {
   lw_down: { stops: [[200, '#1f2f5c', 180], [260, '#3d5fd0', 170], [300, '#5aa7e8', 160], [340, '#efd23a', 180], [380, '#f08b2c', 200], [420, '#dc3a3a', 220]], ticks: [220, 260, 300, 340, 380, 420] },
   uv_down: { stops: RAD.map(([v, c, a]) => [v / 15, c, a]), ticks: [3, 13, 27, 47, 67] },
   shf: { stops: DIVERGE(-150, 450), ticks: [-150, -75, 0, 150, 300, 450] },
+  /* chance (%) from an ensemble: quiet below 5 %, warm from 50 % */
+  prob: { stops: [[5, '#8fd0f5', 140], [10, '#56acec', 175], [20, '#2f80d8', 195], [30, '#1f9f8a', 205], [40, '#7cc243', 212],
+    [50, '#efd23a', 222], [60, '#f3a43a', 230], [70, '#ea6a32', 236], [80, '#d93838', 242], [90, '#a3247e', 248]],
+  floor: 5, discrete: true, ticks: [5, 10, 20, 30, 40, 50, 60, 70, 80, 90], contours: [20, 50, 80], label: true, line: 'rgba(236,243,250,0.85)', pct: true },
 };
 export const scaleFor = (key) => SCALES[key] || { stops: TEMP, ticks: [] };
 
@@ -152,15 +156,48 @@ export async function loadFrame(model, runTag, v, step, signal) {
   const buf = await r.arrayBuffer();
   const n = new DataView(buf).getUint32(0, true);
   const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
-  const q = new Uint8Array(buf, 4 + n, head.nx * head.ny);
+  const q = new Uint8Array(buf, 4 + n, head.nx * head.ny * (head.members || 1));
   return { head, q, table: decodeTable(head) };
 }
 
 export const runTag = (iso) => iso.replace(/[-:]/g, '').slice(0, 13) + 'Z';
 
+/* the chance (0-100 %) that the value is past a threshold, from every ensemble member:
+   members are compared in their encoded bytes, so this takes a millisecond or two */
+const PROB_TABLE = (() => { const t = new Float32Array(256); for (let q = 0; q < 255; q++) t[q] = (q / 254) * 100; t[255] = NaN; return t; })();
+const probCache = new WeakMap();
+export function probFrame(ef, thr, dir) {
+  const key = `${thr}|${dir}`;
+  const c = probCache.get(ef);
+  if (c && c.key === key) return c.f;
+  const { nx, ny, members } = ef.head;
+  const n = nx * ny, t = ef.table;
+  let qa = 255, qb = -1;                                 // members >= thr (above) / <= thr (below)
+  for (let q = 0; q < 255; q++) {
+    if (qa === 255 && t[q] >= thr - 1e-6) qa = q;
+    if (t[q] <= thr + 1e-6) qb = q;
+  }
+  const cnt = new Uint16Array(n), seen = new Uint16Array(n);
+  for (let m = 0; m < members; m++) {
+    const o = m * n;
+    for (let i = 0; i < n; i++) {
+      const v = ef.q[o + i];
+      if (v === 255) continue;
+      seen[i]++;
+      if (dir === 'below' ? v <= qb : v >= qa) cnt[i]++;
+    }
+  }
+  const q = new Uint8Array(n);
+  for (let i = 0; i < n; i++) q[i] = seen[i] ? Math.round((cnt[i] / seen[i]) * 254) : 255;
+  const f = { head: ef.head, q, table: PROB_TABLE, nx, ny, k: ef.head.k || 8, prob: true };
+  probCache.set(ef, { key, f });
+  return f;
+}
+
 /* the frame's colours as an NX x NY canvas (one pixel per grid cell) */
 export function frameCanvas(frame, varKey, cache) {
   if (cache?.has(frame)) return cache.get(frame);
+  if (frame.nx) return coarseCanvas(frame, varKey, cache);
   const sc = scaleFor(varKey);
   const lut = new Uint8ClampedArray(256 * 4);
   for (let q = 0; q < 256; q++) {
@@ -183,11 +220,54 @@ export function frameCanvas(frame, varKey, cache) {
   return cv;
 }
 
+const UP = 4;
+function coarseCanvas(frame, varKey, cache) {
+  const sc = scaleFor(varKey);
+  const { nx, ny } = frame;
+  const W = nx * UP, H = ny * UP;
+  const lut = [];
+  for (let v = 0; v <= 1000; v++) lut.push(colourAt(sc, v / 10) || [0, 0, 0, 0]);
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const d = img.data, q = frame.q, t = frame.table;
+  const val = (i, j) => { const v = t[q[Math.min(ny - 1, Math.max(0, j)) * nx + Math.min(nx - 1, Math.max(0, i))]]; return Number.isNaN(v) ? 0 : v; };
+  for (let y = 0; y < H; y++) {
+    const fy = (y + 0.5) / UP - 0.5, j0 = Math.floor(fy), ty = fy - j0;
+    for (let x = 0; x < W; x++) {
+      const fx = (x + 0.5) / UP - 0.5, i0 = Math.floor(fx), tx = fx - i0;
+      const v = (val(i0, j0) * (1 - tx) + val(i0 + 1, j0) * tx) * (1 - ty) + (val(i0, j0 + 1) * (1 - tx) + val(i0 + 1, j0 + 1) * tx) * ty;
+      const c = lut[Math.max(0, Math.min(1000, Math.round(v * 10)))];
+      const p = (y * W + x) * 4;
+      d[p] = c[0]; d[p + 1] = c[1]; d[p + 2] = c[2]; d[p + 3] = c[3];
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  cv.dataK = (frame.k || 8) / UP;                       // display cells per canvas pixel
+  if (cache) {
+    cache.set(frame, cv);
+    if (cache.size > 14) cache.delete(cache.keys().next().value);
+  }
+  return cv;
+}
+
 /* contour lines (grid coordinates), on a lightly smoothed half-resolution field */
 export function frameContours(frame, varKey, resKm, cache) {
   const sc = scaleFor(varKey);
   if (!sc.contours) return null;
   if (cache?.has(frame)) return cache.get(frame);
+  if (frame.nx) {                                       // coarse (probability) grid: contour it directly
+    const { nx, ny } = frame, K = frame.k || 8;
+    let vals = new Float64Array(nx * ny);
+    for (let i = 0; i < vals.length; i++) { const v = frame.table[frame.q[i]]; vals[i] = Number.isNaN(v) ? 0 : v; }
+    vals = boxBlur(vals, nx, ny, 1);
+    const line = sc.line || 'rgba(8,14,24,0.8)';
+    const out = d3contours().size([nx, ny]).smooth(true).thresholds(sc.contours)(Array.from(vals))
+      .map((c) => ({ value: c.value, rings: c.coordinates.flatMap((p) => p).filter((r) => r.length >= 8).map((r) => r.map(([x, y]) => [x * K, y * K])), line, pct: !!sc.pct }));
+    if (cache) cache.set(frame, out);
+    return out;
+  }
   const S = 2, w = Math.floor(NX / S), h = Math.floor(NY / S);
   let vals = new Float64Array(w * h);
   let lo = Infinity, hi = -Infinity;
@@ -406,8 +486,9 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   ctx.imageSmoothingQuality = 'high';
   if (L.basemap) ctx.drawImage(L.basemap, X(0), Y(0), NX * s, NY * s);
   if (L.data) {
-    ctx.imageSmoothingEnabled = !!L.smooth;
-    ctx.drawImage(L.data, X(0), Y(0), NX * s, NY * s);
+    const dk = L.data.dataK;
+    ctx.imageSmoothingEnabled = dk ? true : !!L.smooth;
+    ctx.drawImage(L.data, X(0), Y(0), dk ? L.data.width * dk * s : NX * s, dk ? L.data.height * dk * s : NY * s);
     ctx.imageSmoothingEnabled = true;
   }
   if (L.contours) {
@@ -478,8 +559,9 @@ function strokeLines(ctx, lines, X, Y) {
    cell nearest their middle (so a flat-topped maximum gets its star in the middle of it) */
 const maxCache = new WeakMap();
 export function frameMax(frame, gx0, gy0, gx1, gy1) {
-  const x0 = Math.max(0, Math.floor(gx0)), x1 = Math.min(NX - 1, Math.ceil(gx1));
-  const y0 = Math.max(0, Math.floor(gy0)), y1 = Math.min(NY - 1, Math.ceil(gy1));
+  const K = frame.nx ? frame.k || 8 : 1, W = frame.nx || NX, Hh = frame.ny || NY;
+  const x0 = Math.max(0, Math.floor(gx0 / K)), x1 = Math.min(W - 1, Math.ceil(gx1 / K) - 1);
+  const y0 = Math.max(0, Math.floor(gy0 / K)), y1 = Math.min(Hh - 1, Math.ceil(gy1 / K) - 1);
   if (x1 <= x0 || y1 <= y0) return null;
   const k = `${x0},${y0},${x1},${y1}`;
   const c = maxCache.get(frame);
@@ -487,7 +569,7 @@ export function frameMax(frame, gx0, gy0, gx1, gy1) {
   const q = frame.q;
   let best = -1, n = 0, sx = 0, sy = 0;
   for (let y = y0; y <= y1; y++) {
-    const row = y * NX;
+    const row = y * W;
     for (let x = x0; x <= x1; x++) {
       const v = q[row + x];
       if (v === 255 || v < best) continue;
@@ -501,12 +583,12 @@ export function frameMax(frame, gx0, gy0, gx1, gy1) {
     let bd = Infinity, bx = 0, by = 0;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
-        if (q[y * NX + x] !== best) continue;
+        if (q[y * W + x] !== best) continue;
         const d = (x - mx) ** 2 + (y - my) ** 2;
         if (d < bd) { bd = d; bx = x; by = y; }
       }
     }
-    m = { gx: bx + 0.5, gy: by + 0.5, v: frame.table[best] };
+    m = { gx: (bx + 0.5) * K, gy: (by + 0.5) * K, v: frame.table[best] };
   }
   maxCache.set(frame, { k, m });
   return m;
@@ -568,7 +650,7 @@ function drawContourLabels(ctx, contours, X, Y, R, u, st) {
         if (x < R.x + 40 * u || y < R.y + 170 * u || x > R.x + R.w - 40 * u || y > R.y + R.h - 140 * u) continue;
         if (placed.some(([px, py]) => Math.hypot(px - x, py - y) < 110 * u)) continue;
         placed.push([x, y]);
-        haloText(ctx, Number.isInteger(c.value) ? String(c.value) : c.value.toFixed(0), x, y, st, 4 * u);
+        haloText(ctx, (Number.isInteger(c.value) ? String(c.value) : c.value.toFixed(0)) + (c.pct ? '%' : ''), x, y, st, 4 * u);
       }
     }
   }

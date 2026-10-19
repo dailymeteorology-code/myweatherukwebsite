@@ -14,12 +14,44 @@ import {
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, frameCanvas, frameContours, drawScene,
-  realtimeBasemap, fmtValue, download, makeGif,
+  realtimeBasemap, fmtValue, download, makeGif, probFrame,
 } from '@/lib/modelViewer';
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Fit', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS' };
+const SHORT_NAMES = { ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', ecmwf_ens: 'ECMWF ENS', gefs: 'GEFS' };
+
+/* Probability products: [group, key, label, ensemble field, above|below, default, min, max, step]. The chance is the
+   share of ensemble members past the threshold; the threshold and direction can be changed freely. */
+const PRESETS = [
+  ['Wind', 'gust', 'Wind gusts', 'gust', 'above', 50, 20, 110, 1],
+  ['Wind', 'gust_dmg', 'Damaging gusts', 'gust', 'above', 60, 20, 110, 1],
+  ['Wind', 'gust_sev', 'Severe, destructive gusts', 'gust', 'above', 75, 20, 110, 1],
+  ['Wind', 'gale', 'Gale-force wind (mean)', 'wind', 'above', 39, 10, 90, 1],
+  ['Rain & flooding', 'rain24', 'Rain (24 h)', 'precip_24h', 'above', 10, 0.5, 120, 0.5],
+  ['Rain & flooding', 'rain6', 'Rain (6 h)', 'precip_6h', 'above', 5, 0.5, 80, 0.5],
+  ['Rain & flooding', 'heavy', 'Heavy rain (24 h)', 'precip_24h', 'above', 25, 0.5, 120, 0.5],
+  ['Rain & flooding', 'flood_rain', 'Flooding risk: very heavy rain', 'precip_24h', 'above', 40, 5, 150, 1],
+  ['Rain & flooding', 'flood_runoff', 'Flooding risk: runoff', 'runoff_24h', 'above', 20, 1, 120, 1],
+  ['Rain & flooding', 'dry', 'Dry (24 h)', 'precip_24h', 'below', 0.5, 0.1, 5, 0.1],
+  ['Snow & ice', 'snow24', 'Snowfall (24 h)', 'snow_24h', 'above', 1, 0.5, 40, 0.5],
+  ['Snow & ice', 'snow_heavy', 'Heavy snow (24 h)', 'snow_24h', 'above', 10, 0.5, 60, 0.5],
+  ['Snow & ice', 'snowdepth', 'Lying snow', 'snow_depth', 'above', 1, 1, 60, 1],
+  ['Snow & ice', 'snowing', 'Snow falling (6 h)', 'snowing', 'above', 0.05, 0.05, 1, 0.05],
+  ['Snow & ice', 'frzr', 'Freezing rain (6 h)', 'frzr', 'above', 0.05, 0.05, 1, 0.05],
+  ['Temperature', 'frost', 'Air frost', 't2', 'below', 0, -15, 10, 0.5],
+  ['Temperature', 'hardfrost', 'Hard frost', 't2', 'below', -5, -20, 5, 0.5],
+  ['Temperature', 'tbelow', 'Temperature below', 't2', 'below', 5, -20, 30, 0.5],
+  ['Temperature', 'tabove', 'Temperature above', 't2', 'above', 20, -10, 40, 0.5],
+  ['Temperature', 'heat', 'Heat', 't2', 'above', 28, 15, 40, 0.5],
+  ['Storms', 'thunder', 'Thunderstorm potential (CAPE)', 'cape', 'above', 500, 50, 3000, 50],
+  ['Storms', 'deeplow', 'Deep low (pressure)', 'mslp', 'below', 980, 940, 1015, 1],
+  ['Sky & visibility', 'fog', 'Fog (visibility)', 'vis', 'below', 1, 0.2, 10, 0.1],
+  ['Sky & visibility', 'clear', 'Clear skies', 'tcc', 'below', 25, 5, 80, 5],
+  ['Sky & visibility', 'overcast', 'Overcast', 'tcc', 'above', 85, 50, 100, 5],
+].map(([group, key, label, field, dir, thr, min, max, step]) => ({ group, key, label, field, dir, thr, min, max, step }));
+const PRESET = Object.fromEntries(PRESETS.map((x) => [x.key, x]));
+const fmtThr = (v) => (Math.abs(v) >= 10 || Number.isInteger(v) ? String(Math.round(v * 10) / 10) : v.toFixed(v < 1 ? 2 : 1));
 
 function defaultRun(m) {
   const most = Math.max(0, ...m.runs.map((r) => r.steps.length));
@@ -104,6 +136,14 @@ export default function ModelData() {
   const [showContours, setShowContours] = useState(true);
   const [showCities, setShowCities] = useState(true);
   const [showStar, setShowStar] = useState(false);
+  const [mode, setMode] = useState('forecast');              // forecast | prob
+  const [ensId, setEnsId] = useState('ecmwf_ens');
+  const [ensRunIso, setEnsRunIso] = useState(null);
+  const [presetKey, setPresetKey] = useState('gust');
+  const [thr, setThr] = useState(50);
+  const [dir, setDir] = useState('above');
+  const isProb = mode === 'prob';
+  const preset = PRESET[presetKey];
   const [style, setStyle] = useState('dark');
   const T = THEMES[style === 'light' ? 'light' : 'dark'];
   const [frameKey, setFrameKey] = useState('screen');
@@ -177,16 +217,27 @@ export default function ModelData() {
       .catch(() => { delete imgCache[`${API}/static/${f}`]; setTimeout(() => setImgs((o) => ({ ...o })), 5000); }));
   }, [style, imgs]);
 
-  const model = cat?.models?.find((m) => m.id === modelId);
-  const run = model?.runs?.find((r) => r.run === runIso) || (model?.runs?.length ? defaultRun(model) : null);
-  const vmeta = cat?.variables?.[varKey];
+  const model = isProb ? cat?.ensembles?.find((m) => m.id === ensId) : cat?.models?.find((m) => m.id === modelId);
+  const curRunIso = isProb ? ensRunIso : runIso;
+  const run = model?.runs?.find((r) => r.run === curRunIso) || (model?.runs?.length ? defaultRun(model) : null);
+  const fieldKey = isProb ? preset.field : varKey;
+  const fmeta = isProb ? cat?.ens_fields?.[preset.field] : null;
+  const vmeta = isProb
+    ? { label: `Chance of ${preset.label.toLowerCase()} ${dir === 'below' ? '≤' : '≥'} ${fmtThr(thr)}${fmeta?.unit ? ` ${fmeta.unit}` : ''}`, unit: '%', group: preset.group }
+    : cat?.variables?.[varKey];
+  const scaleKey = isProb ? 'prob' : varKey;
 
   useEffect(() => {
-    if (model && !model.variables.includes(varKey)) setVarKey(model.variables.includes('precip_rate') ? 'precip_rate' : model.variables[0]);
-  }, [model, varKey]);
+    if (!isProb && model && !model.variables.includes(varKey)) setVarKey(model.variables.includes('precip_rate') ? 'precip_rate' : model.variables[0]);
+    if (isProb && model && !model.fields.includes(preset.field)) {
+      const p = PRESETS.find((x) => model.fields.includes(x.field));
+      if (p) { setPresetKey(p.key); setThr(p.thr); setDir(p.dir); }
+    }
+  }, [isProb, model, varKey, preset]);
+  const choosePreset = (k) => { const p = PRESET[k]; setPresetKey(k); setThr(p.thr); setDir(p.dir); };
 
   /* frames for this model / run / variable (made on demand on the server) */
-  const key = run && model ? `${model.id}/${runTag(run.run)}/${varKey}` : null;
+  const key = run && model ? `${model.id}/${runTag(run.run)}/${fieldKey}` : null;
   /* switching variable, model or run keeps the same valid time: remember it before the
      switch, then land on that time (or the nearest the new run has) once its steps are known */
   const lastValid = useRef(null);
@@ -306,19 +357,26 @@ export default function ModelData() {
     return imgs[MAP_STYLES[style].base] || null;
   }, [style, imgs]);
 
+  const disp = useCallback((f) => (isProb && f ? probFrame(f, thr, dir) : f), [isProb, thr, dir]);
+  const credit = !model ? '' : isProb
+    ? `${model.label} · ${model.members} members · ${model.id === 'gefs' ? 'NOAA via AWS' : 'ECMWF open data'}`
+    : model.id === 'ukv' ? 'UKV 2 km native grid · Met Office via AWS' : `${model.label} · ${model.id === 'mo_global' ? '10 km' : '0.25°'} · via AWS`;
   const chromeFor = useCallback((f) => (f && model && vmeta ? {
     variable: vmeta.label, unit: vmeta.unit, valid: f.head.valid, step: f.head.step, model: model.label,
-    runLabel: runLabel(run.run), scale: scaleFor(varKey), logo: statics?.logo,
-    credit: model.id === 'ukv' ? 'UKV 2 km native grid · Met Office via AWS' : `${model.label} · ${model.id === 'mo_global' ? '10 km' : '0.25°'} · via AWS`,
-  } : null), [model, vmeta, run, varKey, statics]);
+    runLabel: runLabel(run.run), scale: scaleFor(scaleKey), logo: statics?.logo, credit,
+  } : null), [model, vmeta, run, scaleKey, statics, credit]);
 
-  const layersFor = useCallback((f) => ({
-    style, basemap: basemapFor(f), lines: statics?.lines, cities: showCities ? statics?.cities : null,
-    data: f ? frameCanvas(f, varKey, colourCache.current) : null, smooth,
-    contours: f && showContours ? frameContours(f, varKey, model?.res_km, contourCache.current) : null,
-    contourLabels: true, chrome: chromeFor(f), star: showStar && f ? { frame: f, unit: vmeta?.unit } : null,
+  const layersFor = useCallback((raw) => {
+    const f = disp(raw);
+    return {
+      style, basemap: basemapFor(raw), lines: statics?.lines, cities: showCities ? statics?.cities : null,
+      data: f ? frameCanvas(f, scaleKey, colourCache.current) : null, smooth,
+      contours: f && showContours ? frameContours(f, scaleKey, model?.res_km, contourCache.current) : null,
+      contourLabels: true, chrome: chromeFor(raw), star: showStar && f ? { frame: f, unit: vmeta?.unit } : null,
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [style, basemapFor, statics, showCities, varKey, smooth, showContours, model, chromeFor, fontsOk, showStar, vmeta]);
+  }, [disp, style, basemapFor, statics, showCities, scaleKey, smooth, showContours, model, chromeFor, fontsOk, showStar, vmeta]);
+  useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); }, [thr, dir, scaleKey]);
 
   /* draw: the map everywhere, dimmed outside the frame, the finished graphic inside it */
   useEffect(() => {
@@ -403,10 +461,12 @@ export default function ModelData() {
       return;
     }
     const { gx, gy } = toGrid(e.clientX, e.clientY);
-    const i = Math.floor(gx), j = Math.floor(gy);
-    if (!frame || i < 0 || j < 0 || i >= NX || j >= NY) { setHover(null); return; }
+    const df = disp(frame);
+    const K = df?.nx ? df.k : 1, W = df?.nx || NX, Hh = df?.ny || NY;
+    const i = Math.floor(gx / K), j = Math.floor(gy / K);
+    if (!df || i < 0 || j < 0 || i >= W || j >= Hh) { setHover(null); return; }
     const r = e.currentTarget.getBoundingClientRect();
-    setHover({ x: e.clientX - r.left, y: e.clientY - r.top, v: frame.table[frame.q[j * NX + i]] });
+    setHover({ x: e.clientX - r.left, y: e.clientY - r.top, v: df.table[df.q[j * W + i]] });
   };
   const onUp = (e) => { pointers.current.delete(e.pointerId); gesture.current = null; };
   const zoomBy = (k) => { const r = canvasRef.current.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, k); };
@@ -422,7 +482,7 @@ export default function ModelData() {
     const k = W / R.w;
     drawScene(ctx, { x: 0, y: 0, w: W, h: H }, { cx: view.cx, cy: view.cy, s: view.s * k }, layersFor(f));
   }, [view, layersFor, frameRect]);
-  const fileBase = () => `MyWeatherUK_${model.id}_${runTag(run.run)}_${varKey}_${frameKey}`;
+  const fileBase = () => `MyWeatherUK_${model.id}_${runTag(run.run)}_${isProb ? `${presetKey}_${dir}${fmtThr(thr)}` : varKey}_${frameKey}`;
   const exportPng = () => {
     if (!frame) return;
     const [W, H] = exportSize(exp.png);
@@ -456,19 +516,25 @@ export default function ModelData() {
     if (!model || !cat) return [];
     const g = {};
     const qq = q.trim().toLowerCase();
+    if (isProb) {
+      for (const pr of PRESETS) {
+        if (model.fields.includes(pr.field) && (!qq || pr.label.toLowerCase().includes(qq) || pr.group.toLowerCase().includes(qq))) (g[pr.group] ||= []).push([pr.key, pr]);
+      }
+      return Object.entries(g);
+    }
     for (const k of model.variables) {
       const v = cat.variables[k];
       if (v && (!qq || v.label.toLowerCase().includes(qq) || v.group.toLowerCase().includes(qq))) (g[v.group] ||= []).push([k, v]);
     }
     return GROUP_ORDER.filter((n) => g[n]).map((n) => [n, g[n]]);
-  }, [model, cat, q]);
+  }, [model, cat, q, isProb]);
   const pending = status && status.state !== 'complete' ? Math.max(0, steps.length - loadedCount) : 0;
   const sel = { ...T.glass, appearance: 'none', borderRadius: 999, padding: '7px 30px 7px 12px', fontSize: 12.5, fontWeight: 600, fontFamily: FONT, cursor: 'pointer', color: T.ink, background: T.track, boxShadow: T.trackShadow };
   const validLabel = frame ? new Date(frame.head.valid).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 
   const varButton = (
     <button onClick={() => setVarOpen((o) => !o)} style={{ ...sel, padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0, background: varOpen ? T.btn : sel.background }}>
-      {vmeta?.label || 'Variable'} <ChevronDown style={{ width: 14, height: 14, opacity: 0.7, transform: varOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+      {isProb ? preset.label : vmeta?.label || 'Variable'} <ChevronDown style={{ width: 14, height: 14, opacity: 0.7, transform: varOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
     </button>
   );
   const mapControls = (
@@ -495,16 +561,20 @@ export default function ModelData() {
       </div>
 
       {/* top bar */}
-      <div ref={topRef} style={{ position: 'absolute', top: 10, left: 10, right: 10, display: 'flex', gap: 8, alignItems: 'center', pointerEvents: 'none' }}>
+      <div ref={topRef} style={{ position: 'absolute', top: 10, left: 10, right: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', pointerEvents: 'none' }}>
         <div className="md-noscroll" style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', overflowX: 'auto', minWidth: 0, maxWidth: '100%', pointerEvents: 'auto' }}>
           {cat ? (
             <>
+              <Seg items={[['forecast', 'Forecast'], ['prob', 'Probability']]} value={mode} onChange={(m) => { setMode(m); setVarOpen(false); }} />
               {narrow && varButton}
-              <Seg items={cat.models.filter((m) => m.runs?.length).map((m) => [m.id, SHORT_NAMES[m.id] || m.label])} value={modelId}
-                onChange={(id) => { setModelId(id); setRunIso(null); }} />
+              {isProb
+                ? <Seg items={(cat.ensembles || []).filter((m) => m.runs?.length).map((m) => [m.id, SHORT_NAMES[m.id] || m.label])} value={ensId}
+                    onChange={(id) => { setEnsId(id); setEnsRunIso(null); }} />
+                : <Seg items={cat.models.filter((m) => m.runs?.length).map((m) => [m.id, SHORT_NAMES[m.id] || m.label])} value={modelId}
+                    onChange={(id) => { setModelId(id); setRunIso(null); }} />}
               {model && (
                 <div style={{ position: 'relative' }}>
-                  <select value={run?.run || ''} onChange={(e) => setRunIso(e.target.value)} style={sel} title={model.source}>
+                  <select value={run?.run || ''} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} style={sel} title={model.source || `${model.label} · ${model.members} members`}>
                     {model.runs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runLabel(r.run)} · T+{r.steps[r.steps.length - 1]}</option>)}
                   </select>
                   <ChevronDown style={{ position: 'absolute', right: 10, top: 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
@@ -522,6 +592,17 @@ export default function ModelData() {
         {narrow
           ? <div style={{ ...T.capsule, padding: 5, pointerEvents: 'auto', flexShrink: 0 }}><IconBtn on={mapOpen} title="Map, frame and layers" onClick={() => setMapOpen((o) => !o)}><Layers size={15} /></IconBtn></div>
           : <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{mapControls}</div>}
+        {isProb && cat && (
+          <div style={{ ...T.capsule, padding: '5px 12px 5px 5px', display: 'flex', alignItems: 'center', gap: 10, pointerEvents: 'auto', flexBasis: '100%', maxWidth: 680 }}>
+            <Seg small items={[['above', '≥ above'], ['below', '≤ below']]} value={dir} onChange={setDir} />
+            <input type="range" min={preset.min} max={preset.max} step={preset.step} value={thr} onChange={(e) => setThr(Number(e.target.value))}
+              style={{ flex: 1, minWidth: 90, accentColor: T.light ? '#1f6fe0' : '#7cc8ff' }} aria-label="Threshold" />
+            <span style={{ fontSize: 13, fontWeight: 800, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+              {dir === 'below' ? '≤' : '≥'} {fmtThr(thr)}<span style={{ color: T.ink2, fontWeight: 600 }}>{fmeta?.unit ? ` ${fmeta.unit}` : ''}</span>
+            </span>
+            <span className="hidden md:inline" style={{ fontSize: 11.5, color: T.ink2, whiteSpace: 'nowrap' }}>{model?.members ? `${model.members} members` : ''}</span>
+          </div>
+        )}
       </div>
       {narrow && mapOpen && (
         <div style={{ ...T.glass, borderRadius: 24, position: 'absolute', right: 10, top: (topRef.current?.offsetHeight || 46) + 18, padding: 12, display: 'grid', gap: 10, zIndex: 6, maxWidth: 'calc(100% - 20px)' }}>
@@ -536,7 +617,7 @@ export default function ModelData() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderRadius: 999, background: T.track }}>
               <Search size={14} style={{ opacity: 0.6 }} />
-              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search variables"
+              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={isProb ? 'Search wind, rain, frost, snow…' : 'Search variables'}
                 style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: T.ink, fontFamily: FONT, fontSize: 13 }} />
             </div>
             <IconBtn title="Close" onClick={() => setVarOpen(false)}><X size={15} /></IconBtn>
@@ -546,17 +627,19 @@ export default function ModelData() {
               <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '2px 4px 6px' }}>{g}</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {list.map(([k, v]) => (
-                  <button key={k} onClick={() => { setVarKey(k); setVarOpen(false); }} style={{
+                  <button key={k} onClick={() => { if (isProb) choosePreset(k); else setVarKey(k); setVarOpen(false); }} style={{
                     border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 999,
-                    color: k === varKey ? '#fff' : T.ink3,
-                    background: k === varKey ? (T.light ? 'linear-gradient(180deg, #4b95ff, #1f6fe0)' : 'linear-gradient(180deg, rgba(110,180,255,0.55), rgba(60,130,240,0.4))') : T.chip,
-                    boxShadow: k === varKey ? 'inset 0 1px 0 rgba(255,255,255,0.5)' : T.chipShadow,
+                    color: k === (isProb ? presetKey : varKey) ? '#fff' : T.ink3,
+                    background: k === (isProb ? presetKey : varKey) ? (T.light ? 'linear-gradient(180deg, #4b95ff, #1f6fe0)' : 'linear-gradient(180deg, rgba(110,180,255,0.55), rgba(60,130,240,0.4))') : T.chip,
+                    boxShadow: k === (isProb ? presetKey : varKey) ? 'inset 0 1px 0 rgba(255,255,255,0.5)' : T.chipShadow,
                   }}>{v.label}</button>
                 ))}
               </div>
             </div>
           ))}
-          {model && <div style={{ fontSize: 11, color: T.ink2, margin: '4px 4px 0' }}>{model.source}</div>}
+          {model && <div style={{ fontSize: 11, color: T.ink2, margin: '4px 4px 0' }}>{isProb
+            ? `${model.label}: ${model.members} members. The chance is the share of members past your threshold, so drag the slider to ask a different question. Flooding uses 24 h rain or ECMWF runoff (wet ground runs off more); it is a signal, not a river forecast.`
+            : model.source}</div>}
         </div>
       )}
 

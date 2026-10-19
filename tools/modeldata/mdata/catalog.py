@@ -27,8 +27,9 @@ def model_entry(m):
 def prune(keep_hours=36):
     """Frames of runs older than `keep_hours` (relative to the newest run of that model)."""
     import shutil
-    for md in FRAMES.glob('*'):
-        runs = sorted(p for p in md.iterdir() if p.is_dir())
+    model_dirs = [m for m in FRAMES.glob('*') if m.name != 'ens'] + list((FRAMES / 'ens').glob('*'))
+    for md in model_dirs:
+        runs = sorted(p for p in md.iterdir() if p.is_dir() and len(p.name) == 14)
         if not runs:
             continue
         newest = datetime.strptime(runs[-1].name, '%Y%m%dT%H%MZ')
@@ -46,18 +47,27 @@ def main():
         old = {m['id']: m for m in json.loads((DATA / 'catalog.json').read_text())['models']}
     except Exception:
         pass
-    with cf.ThreadPoolExecutor(len(MODELS)) as ex:
+    from . import ens
+    with cf.ThreadPoolExecutor(len(MODELS) + 1) as ex:
+        ens_fut = ex.submit(ens.catalog_entries)
         models = list(ex.map(model_entry, MODELS.values()))
+        ensembles = ens_fut.result()
     # a model whose listing failed this time keeps its last good runs
     models = [m if m['runs'] or m['id'] not in old else dict(old[m['id']], stale=True) for m in models]
+    old_ens = {}
+    try:
+        old_ens = {m['id']: m for m in json.loads((DATA / 'catalog.json').read_text()).get('ensembles', [])}
+    except Exception:
+        pass
+    ensembles = [m if m['runs'] or m['id'] not in old_ens else dict(old_ens[m['id']], stale=True) for m in ensembles]
     write_json(DATA / 'catalog.json', {
         'generated': datetime.now(timezone.utc).isoformat(), 'grid': grid_meta(),
-        'variables': VARIABLES, 'models': models})
+        'variables': VARIABLES, 'models': models, 'ensembles': ensembles, 'ens_fields': ens.FIELDS})
     try:
         prune()
     except Exception:
         pass
-    print(f'catalog: {[(m["id"], len(m["runs"])) for m in models]} in {time.time() - t:.0f} s')
+    print(f'catalog: {[(m["id"], len(m["runs"])) for m in models + ensembles]} in {time.time() - t:.0f} s')
 
 
 if __name__ == '__main__':

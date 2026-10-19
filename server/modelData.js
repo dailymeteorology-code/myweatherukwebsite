@@ -21,6 +21,7 @@ const TOOL = path.resolve(HERE, '..', 'tools', 'modeldata');
 const DATA = process.env.MODELDATA_DIR || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/modeldata' : path.join(HERE, 'data', 'modeldata'));
 const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg', 'night_lights.png', 'lines.json', 'cities.json', 'grid.json']);
 const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs']);
+const ENS_MODELS = new Set(['ecmwf_ens', 'gefs']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
 const MAX_USER_JOBS = 3;               // what someone is waiting for
@@ -43,7 +44,7 @@ function python(args, onExit) {
 }
 
 const runIso = (tag) => `${tag.slice(0, 4)}-${tag.slice(4, 6)}-${tag.slice(6, 8)}T${tag.slice(9, 11)}:${tag.slice(11, 13)}Z`;
-const frameDir = (model, run, v) => path.join(DATA, 'frames', model, run, v);
+const frameDir = (model, run, v) => (ENS_MODELS.has(model) ? path.join(DATA, 'frames', 'ens', model, run, v) : path.join(DATA, 'frames', model, run, v));
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 
 function pump() {
@@ -53,7 +54,7 @@ function pump() {
     if (running.has(job.key)) { queue.splice(i, 1); continue; }
     if (count(job.prefetch) >= (job.prefetch ? MAX_PREFETCH_JOBS : MAX_USER_JOBS)) { i++; continue; }
     queue.splice(i, 1);
-    const child = python(['mdata.job', ...job.args], (code, err) => {
+    const child = python([ENS_MODELS.has(job.args[0]) ? 'mdata.ens' : 'mdata.job', ...job.args], (code, err) => {
       running.delete(job.key);
       if (code) console.warn(`[modeldata] job ${job.key} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
       pump();
@@ -129,7 +130,7 @@ export function mountModelData(app) {
     res.sendFile(f);
   });
 
-  const valid = (p) => MODELS.has(p.model) && RUN_RE.test(p.run) && VAR_RE.test(p.v);
+  const valid = (p) => (MODELS.has(p.model) || ENS_MODELS.has(p.model)) && RUN_RE.test(p.run) && VAR_RE.test(p.v);
 
   app.get('/api/modeldata/frames/:model/:run/:v/status', (req, res) => {
     if (!valid(req.params)) return res.status(400).json({ error: 'bad request' });
@@ -138,6 +139,10 @@ export function mountModelData(app) {
     const key = `${model}/${run}/${v}`;
     const first = /^\d{1,3}$/.test(String(req.query.first || '')) ? Number(req.query.first) : null;
     if (!st || (st.state !== 'complete' && !running.has(key))) ensureJob(model, run, v, false, first);
+    else if (first != null && st.state !== 'complete' && ENS_MODELS.has(model)) {
+      /* a running ensemble job builds around where the viewer is now */
+      fs.promises.writeFile(path.join(frameDir(model, run, v), 'focus.json'), JSON.stringify({ step: first })).catch(() => {});
+    }
     res.set('Cache-Control', 'no-cache');
     res.json(st ? { ...st, queued: queue.some((q) => q.key === key) } : { state: 'queued', done: [], missing: [] });
   });
