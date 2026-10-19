@@ -72,6 +72,15 @@ function regionsFrom(areas) {
   return [...new Set(names)];
 }
 
+/** [{ region, authorities: [...] }] — the regions with their local authorities, as the Met Office lists them. */
+function areasFrom(areas) {
+  if (!Array.isArray(areas)) return [];
+  return areas.filter(a => a?.regionName).map(a => ({
+    region: a.regionName,
+    authorities: [...new Set((a.subRegions || []).map(sub => (typeof sub === 'string' ? sub : sub?.name || sub?.regionName)).filter(Boolean))],
+  }));
+}
+
 /** One GeoJSON feature -> one warning in the app's shape. */
 export function featureToWarning(feature) {
   const p = feature?.properties || {};
@@ -86,6 +95,7 @@ export function featureToWarning(feature) {
     type: types.length ? types.map(pretty).join(' & ') : 'Weather',
     severity: pretty(p.warningLevel) || 'Yellow',
     regions: regionsFrom(p.affectedAreas),
+    areas: areasFrom(p.affectedAreas),
     description: String(p.warningHeadline || '').trim(),
     validFrom: p.validFromDate || null,
     validTo: p.validToDate || null,

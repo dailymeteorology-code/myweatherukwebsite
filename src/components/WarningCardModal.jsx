@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { format, isValid } from 'date-fns';
 import WarningMap from './WarningMap';
+import { OfficialImpactMatrix, matrixSentence } from '@/components/warnings/MetOfficeWarning';
 
 const fmtDT = (d) => {
   if (!d) return 'N/A';
@@ -59,52 +60,6 @@ const extractImpacts = (w) => {
   if (/lightning|thunder/i.test(t)) out.push({ label: 'Lightning' });
   return out;
 };
-
-/* Met Office warnings impact matrix: likelihood (rows, High at the top) x impact
-   (columns, Very low on the left). The cell colour is the warning level that
-   combination produces; the warning's own cell is outlined. */
-const MATRIX_LEVELS = ['Very low', 'Low', 'Medium', 'High'];
-const MATRIX = {           // [likelihood 1..4][impact 1..4] -> level
-  4: ['G', 'Y', 'A', 'R'],
-  3: ['G', 'Y', 'A', 'A'],
-  2: ['G', 'Y', 'Y', 'A'],
-  1: ['G', 'G', 'Y', 'Y'],
-};
-const MATRIX_FILL = { G: '#16a34a', Y: '#facc15', A: '#f59e0b', R: '#dc2626' };
-
-function ImpactMatrix({ likelihood, impact }) {
-  const L = Number(likelihood), I = Number(impact);
-  const has = L >= 1 && L <= 4 && I >= 1 && I <= 4;
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'auto repeat(4, 1fr)', gap: 4, alignItems: 'stretch' }}>
-      {[4, 3, 2, 1].map((l) => (
-        <React.Fragment key={l}>
-          <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#94a3b8', paddingRight: 6, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', whiteSpace: 'nowrap' }}>
-            {MATRIX_LEVELS[l - 1]}
-          </div>
-          {[1, 2, 3, 4].map((i) => {
-            const on = has && l === L && i === I;
-            return (
-              <div key={i} title={`Likelihood ${MATRIX_LEVELS[l - 1].toLowerCase()}, impact ${MATRIX_LEVELS[i - 1].toLowerCase()}`}
-                style={{ height: 30, borderRadius: 6, background: MATRIX_FILL[MATRIX[l][i - 1]], opacity: on ? 1 : 0.38,
-                  outline: on ? '3px solid #fff' : 'none', outlineOffset: -3, boxShadow: on ? '0 0 0 2px rgba(0,0,0,0.6), 0 0 14px rgba(255,255,255,0.35)' : 'none',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {on && <span style={{ width: 10, height: 10, borderRadius: 99, background: '#0f172a', border: '2px solid #fff' }} />}
-              </div>
-            );
-          })}
-        </React.Fragment>
-      ))}
-      <div />
-      {MATRIX_LEVELS.map((n) => (
-        <div key={n} style={{ fontSize: '0.62rem', fontWeight: 700, color: '#94a3b8', textAlign: 'center', paddingTop: 2 }}>{n}</div>
-      ))}
-      <div />
-      <div style={{ gridColumn: '2 / 6', fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748b', textAlign: 'center' }}>Impact →</div>
-      {!has && <div style={{ gridColumn: '1 / 6', fontSize: '0.7rem', color: '#64748b' }}>The Met Office did not publish a likelihood/impact position for this warning.</div>}
-    </div>
-  );
-}
 
 function useCountdown(targetDate) {
   const [remaining, setRemaining] = React.useState('');
@@ -289,15 +244,15 @@ export default function WarningCardModal({ warning, isUpcoming, onClose, mapUrl 
               </motion.div>
             )}
 
-            {/* Impact matrix */}
+            {/* Impact matrix — the Met Office's own design */}
             {(warning.likelihood != null || warning.impactLevel != null) && (
               <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.22 }} style={{ marginBottom: 16 }}>
-                <p style={{ margin: '0 0 8px', fontSize: '0.58rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Impact Matrix</p>
-                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 12, padding: '12px 14px' }}>
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    <div style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748b', textAlign: 'center' }}>Likelihood →</div>
-                    <div style={{ flex: 1 }}><ImpactMatrix likelihood={warning.likelihood} impact={warning.impactLevel} /></div>
-                  </div>
+                <p style={{ margin: '0 0 8px', fontSize: '0.58rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Why is the warning {String(warning.severity || 'yellow').toLowerCase()}?</p>
+                <div style={{ background: '#2b2b2b', borderRadius: 12, padding: '14px 16px' }}>
+                  {matrixSentence(warning.likelihood, warning.impactLevel) && (
+                    <p style={{ margin: '0 0 14px', fontSize: '0.86rem', lineHeight: 1.5, color: '#f3f4f6' }}>{matrixSentence(warning.likelihood, warning.impactLevel)}</p>
+                  )}
+                  <OfficialImpactMatrix likelihood={warning.likelihood} impact={warning.impactLevel} />
                 </div>
               </motion.div>
             )}

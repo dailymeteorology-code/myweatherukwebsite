@@ -26,7 +26,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useTheme } from '@/components/ThemeContext';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, AlertTriangle, SlidersHorizontal, MapPin } from 'lucide-react';
+import { X, AlertTriangle, SlidersHorizontal, MapPin, Tag, ArrowRight } from 'lucide-react';
+import { WarningDetailPanel, warningTagHtml, insideGeometries } from '@/components/warnings/MetOfficeWarning';
 
 const SEV = {
   Red:    { hex: '#dc2626', rank: 3 },
@@ -74,6 +75,14 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
   const [labelsOn, setLabelsOn] = useState(readPlaceLabelsOn);
   const labelsRef = useRef(null);
   useEffect(() => { writePlaceLabelsOn(labelsOn); labelsRef.current?.setVisible(labelsOn); }, [labelsOn]);
+  /* Warning name tags ("Yellow | Wind >") on each area, remembered per browser. */
+  const [namesOn, setNamesOn] = useState(() => { try { return localStorage.getItem('mwuk_warning_names') !== '0'; } catch { return true; } });
+  useEffect(() => { try { localStorage.setItem('mwuk_warning_names', namesOn ? '1' : '0'); } catch { /* blocked */ } }, [namesOn]);
+  /* Place names are only drawn INSIDE the warning areas on show: the places
+     being warned, not every town in the country. */
+  const geomsRef = useRef([]);
+  const insideWarned = useRef((lat, lon) => insideGeometries(geomsRef.current, lat, lon)).current;
+  const fitKeyRef = useRef('');
 
   const days = useMemo(() => {
     const t = startOfDay(new Date());
@@ -121,6 +130,15 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
       sevOf(w.severity).rank > sevOf(best).rank ? w.severity : best, on[0].severity);
   }), [mappable, days]);
 
+  /** The nearest day with a warning: the next one after this day, else the latest before it. */
+  const nextWarnedDay = useMemo(() => {
+    const after = dayPeak.findIndex((p, i) => p && i > dayIdx);
+    if (after >= 0) return after;
+    for (let i = dayIdx - 1; i >= 0; i -= 1) if (dayPeak[i]) return i;
+    return null;
+  }, [dayPeak, dayIdx]);
+  const warnedDays = dayPeak.filter(Boolean).length;
+
   const toggle = (list, setList, v) =>
     setList(list.includes(v) ? list.filter(x => x !== v) : [...list, v]);
 
@@ -142,7 +160,9 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
         (a, b) => sevOf(a.severity).rank - sevOf(b.severity).rank);
 
       const drawn = [];
+      const tags = [];
       ordered.forEach(w => {
+        let biggest = null, bigArea = -1;
         const hex = sevOf(w.severity).hex;
         w.polygons.forEach(g => {
           const polyList = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
@@ -156,14 +176,33 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
             poly.on('mouseout', () => poly.setStyle({ fillOpacity: 0.34 }));
             layersRef.current.push(poly);
             drawn.push(poly);
+            const b = poly.getBounds();
+            const area = (b.getNorth() - b.getSouth()) * (b.getEast() - b.getWest());
+            if (area > bigArea) { bigArea = area; biggest = poly; }
           });
         });
+        if (namesOn && biggest) tags.push([w, biggest]);
       });
+      // Name tags on top of every area, at the centre of each warning's largest piece.
+      tags.forEach(([w, poly]) => {
+        let at;
+        try { at = poly.getCenter(); } catch { at = poly.getBounds().getCenter(); }
+        const m = L.marker(at, { icon: L.divIcon({ className: '', iconSize: [0, 0], html: warningTagHtml(w) }), zIndexOffset: 1000, title: `${w.severity} ${w.type} warning` }).addTo(map);
+        m.on('click', () => setSelected(w));
+        layersRef.current.push(m);
+      });
+      geomsRef.current = visible.flatMap(w => w.polygons);
+      labelsRef.current?.setFilter(insideWarned);
 
-      if (drawn.length) {
-        try { map.fitBounds(L.featureGroup(drawn).getBounds().pad(0.2)); } catch { /* noop */ }
-      } else {
-        try { map.fitBounds(UK_BOUNDS, { padding: [10, 10] }); } catch { /* noop */ }
+      // Refit only when the set of warnings changes, not when a tag toggle redraws.
+      const fitKey = `${dayIdx}|${visible.map(w => w.warningId || `${w.type}${w.validFrom}${w.severity}`).join(',')}`;
+      if (fitKeyRef.current !== fitKey) {
+        fitKeyRef.current = fitKey;
+        if (drawn.length) {
+          try { map.fitBounds(L.featureGroup(drawn).getBounds().pad(0.2)); } catch { /* noop */ }
+        } else {
+          try { map.fitBounds(UK_BOUNDS, { padding: [10, 10] }); } catch { /* noop */ }
+        }
       }
     };
 
@@ -178,7 +217,7 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
           { maxZoom: 12, subdomains: 'abcd' }).addTo(map);
         map.fitBounds(UK_BOUNDS, { padding: [10, 10] });
         mapInst.current = map;
-        labelsRef.current = attachPlaceLabels(L, map, { dark: isDark, visible: labelsOn });
+        labelsRef.current = attachPlaceLabels(L, map, { dark: isDark, visible: labelsOn, extraTiers: 1, filter: insideWarned });
         // Leaflet measures the container on creation; inside a modal that is
         // still animating open it reads zero and renders a grey box.
         setTimeout(() => { try { map.invalidateSize(); } catch { /* gone */ } }, 260);
@@ -206,13 +245,14 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
       return () => { cancelled = true; clearInterval(poll); };
     }
     return () => { cancelled = true; };
-  }, [isOpen, visible, isDark]);
+  }, [isOpen, visible, isDark, namesOn, dayIdx]);
 
   // Tear the map down on close so reopening builds against a live container.
   useEffect(() => {
     if (isOpen) return;
     if (mapInst.current) { try { mapInst.current.remove(); } catch { /* noop */ } mapInst.current = null; labelsRef.current = null; }
     layersRef.current = [];
+    fitKeyRef.current = '';
     setSelected(null);
   }, [isOpen]);
 
@@ -262,8 +302,12 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
               <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
                 {visible.length} shown{forDay.length !== visible.length ? ` of ${forDay.length}` : ''}
               </span>
-              <button onClick={() => setLabelsOn(v => !v)} aria-pressed={labelsOn} title="Show or hide place names"
-                      style={{ ...chip(labelsOn, '#38bdf8'), marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <button onClick={() => setNamesOn(v => !v)} aria-pressed={namesOn} title="Show or hide warning names on the map"
+                      style={{ ...chip(namesOn, '#facc15'), marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <Tag style={{ width: 12, height: 12 }} /> Warning names
+              </button>
+              <button onClick={() => setLabelsOn(v => !v)} aria-pressed={labelsOn} title="Show or hide the names of places inside the warning areas"
+                      style={{ ...chip(labelsOn, '#38bdf8'), display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <MapPin style={{ width: 12, height: 12 }} /> Place names
               </button>
               <button onClick={() => setShowFilters(v => !v)}
@@ -331,42 +375,27 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
                       ? `There are no Met Office weather warnings in force for ${dayLabel(days[dayIdx], dayIdx).toLowerCase()}.`
                       : `${forDay.length} warning${forDay.length === 1 ? '' : 's'} on this day are hidden by the severity or type filter.`}
                   </span>
+                  {forDay.length === 0 && nextWarnedDay != null && (
+                    <button type="button" onClick={() => setDayIdx(nextWarnedDay)}
+                      style={{ pointerEvents: 'auto', marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 16px', borderRadius: 99, cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.8rem', fontWeight: 800,
+                        background: sevOf(dayPeak[nextWarnedDay]).hex, color: dayPeak[nextWarnedDay] === 'Red' ? '#fff' : '#0a0f1e', border: 'none', boxShadow: '0 6px 20px rgba(0,0,0,0.35)' }}>
+                      {warnedDays > 1 ? 'View warnings on ' : 'View the warning on '}
+                      {days[nextWarnedDay].toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })}
+                      <ArrowRight style={{ width: 15, height: 15 }} />
+                    </button>
+                  )}
                 </div>
               )}
 
-              {/* Detail popup for a clicked area */}
+              {/* The full warning, laid out like the Met Office's own page */}
               <AnimatePresence>
                 {selected && (
                   <motion.div
-                    initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }}
-                    style={{
-                      position: 'absolute', left: 12, right: 12, bottom: 12, maxWidth: 420,
-                      borderRadius: 14, overflow: 'hidden', zIndex: 500,
-                      background: isDark ? 'rgba(7,13,24,0.96)' : 'rgba(255,255,255,0.97)', border: `1px solid ${sevOf(selected.severity).hex}66`,
-                      boxShadow: '0 16px 40px rgba(0,0,0,0.55)',
-                    }}
+                    key={selected.warningId || selected.type}
+                    initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 30 }}
+                    style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 'min(440px, 100%)', zIndex: 700, display: 'flex', boxShadow: '-12px 0 40px rgba(0,0,0,0.45)' }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: `${sevOf(selected.severity).hex}1f` }}>
-                      <span style={{ padding: '2px 8px', borderRadius: 5, background: sevOf(selected.severity).hex, color: selected.severity === 'Yellow' ? '#0a0f1e' : '#fff', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '0.05em' }}>
-                        {selected.severity}
-                      </span>
-                      <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#f1f5f9' }}>{selected.type} Warning</span>
-                      <button onClick={() => setSelected(null)} aria-label="Close details"
-                              style={{ marginLeft: 'auto', width: 22, height: 22, borderRadius: 6, cursor: 'pointer', background: 'rgba(148,163,184,0.14)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <X style={{ width: 12, height: 12, color: '#cbd5e1' }} />
-                      </button>
-                    </div>
-                    <div style={{ padding: '10px 12px', maxHeight: 210, overflowY: 'auto' }}>
-                      {selected.headline && (
-                        <p style={{ margin: '0 0 7px', fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0', lineHeight: 1.45 }}>{selected.headline}</p>
-                      )}
-                      <p style={{ margin: 0, fontSize: '0.73rem', color: '#94a3b8', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
-                        {selected.description || 'No further detail published.'}
-                      </p>
-                      {selected.regions?.length > 0 && (
-                        <p style={{ margin: '8px 0 0', fontSize: '0.68rem', color: '#64748b' }}>{selected.regions.join(' · ')}</p>
-                      )}
-                    </div>
+                    <WarningDetailPanel warning={selected} onClose={() => setSelected(null)} style={{ flex: 1, minHeight: 0 }} />
                   </motion.div>
                 )}
               </AnimatePresence>

@@ -68,6 +68,7 @@ function normaliseRegion(r) {
 }
 
 import { attachPlaceLabels, readPlaceLabelsOn, writePlaceLabelsOn } from '@/lib/placeLabels';
+import { insideGeometries } from '@/components/warnings/MetOfficeWarning';
 
 export default function WarningMap({ warning, height = 220, mapUrl }) {
   /* The basemap and the ground behind it follow the site theme — this drew a
@@ -188,7 +189,16 @@ export default function WarningMap({ warning, height = 220, mapUrl }) {
         try { map.fitBounds(UK_BOUNDS, { padding: [2, 2] }); } catch (_) {}
       }
       mapInst.current = map;
-      labelsRef.current = attachPlaceLabels(L, map, { dark: isDark, visible: labelsOn, extraTiers: 1 });
+      /* Only the places inside this warning's area are named: the official shape
+         when we have it, else the admin drawing, else the council areas. */
+      const areaGeoms = (validDrawing.length
+        ? validDrawing.map(sh => ({ type: 'Polygon', coordinates: [sh.latLngs.map(([la, lo]) => [lo, la])] }))
+        : hasExact ? exactPolys
+          : (Array.isArray(areas) ? areas.flatMap(a => a.rings.map(r => ({ type: 'Polygon', coordinates: [r.map(([la, lo]) => [lo, la])] }))) : []));
+      labelsRef.current = attachPlaceLabels(L, map, {
+        dark: isDark, visible: labelsOn, extraTiers: 1,
+        filter: areaGeoms.length ? (lat, lon) => insideGeometries(areaGeoms, lat, lon) : null,
+      });
     };
 
     if (window.L) { build(); }

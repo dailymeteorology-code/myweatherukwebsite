@@ -20,10 +20,13 @@ const KEY = 'mwuk_warning_place_labels';
 export const readPlaceLabelsOn = () => { try { return localStorage.getItem(KEY) !== '0'; } catch { return true; } };
 export const writePlaceLabelsOn = (on) => { try { localStorage.setItem(KEY, on ? '1' : '0'); } catch { /* storage blocked */ } };
 
-/** Attach to a Leaflet map. Returns { setVisible(bool), remove() }. */
-export function attachPlaceLabels(L, map, { dark = true, visible = true, extraTiers = 0 } = {}) {
+/** Attach to a Leaflet map. Returns { setVisible(bool), setFilter(fn|null), remove() }.
+ *  `filter(lat, lon)` limits labels to places it accepts — the warning maps pass
+ *  "inside a warning area", so the names shown are the places being warned. */
+export function attachPlaceLabels(L, map, { dark = true, visible = true, extraTiers = 0, filter = null } = {}) {
   const layer = L.layerGroup();
   let on = visible;
+  let accept = filter;
   let places = [];
   const ink = dark ? '#f1f5f9' : '#0f172a';
   const halo = dark ? 'rgba(2,6,23,0.92)' : 'rgba(255,255,255,0.95)';
@@ -36,6 +39,7 @@ export function attachPlaceLabels(L, map, { dark = true, visible = true, extraTi
     const placed = [];
     for (const [name, lat, lon, tier] of places) {          // file is ordered biggest first
       if (tier > maxTier || !bounds.contains([lat, lon])) continue;
+      if (accept && !accept(lat, lon)) continue;
       const [fs, fw] = FONT[tier];
       const p = map.latLngToContainerPoint([lat, lon]);
       const w = name.length * fs * 0.58 + 12, h = fs + 6;
@@ -67,6 +71,7 @@ export function attachPlaceLabels(L, map, { dark = true, visible = true, extraTi
   loadPlaces().then((p) => { places = p; schedule(); });
   return {
     setVisible(v) { on = v; draw(); },
+    setFilter(fn) { accept = fn; draw(); },
     remove() { clearTimeout(timer); map.off('zoomstart', hide); map.off('moveend resize', schedule); layer.remove(); },
   };
 }
