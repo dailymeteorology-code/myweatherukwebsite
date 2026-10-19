@@ -332,6 +332,21 @@ export function mountTcmNova(app, { schedule = process.env.NOVA_SCHEDULE !== 'of
     fs.createReadStream(file).pipe(res);
   });
 
+  // whole-UK-day summaries (max over the day's frames; total for accumulation), Main Run V5
+  app.get('/api/nova/:product/runs/:id/day/:date/:field', (req, res) => {
+    const p = prod(req, res); if (!p) return;
+    const { id, date, field } = req.params;
+    const m = manifest(p, id);
+    if (!m) return res.status(404).json({ error: 'no such run for this product' });
+    const d = (m.days || []).find((x) => x.date === date);
+    if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(404).json({ error: 'no such day in this run' });
+    if (!SAFE_FIELD.test(field) || !d.fields.includes(field)) return res.status(404).json({ error: 'field not summarised for this day' });
+    const file = path.join(DATA, p, id, 'days', date, `${field}.bin`);
+    if (!fs.existsSync(file)) return res.status(404).json({ error: 'missing' });
+    res.set({ 'Content-Type': 'application/octet-stream', 'X-Nova-Dtype': 'float16', 'Cache-Control': 'public, max-age=86400, immutable' });
+    fs.createReadStream(file).pipe(res);
+  });
+
   app.get('/api/nova/:product/status', (req, res) => {
     const p = prod(req, res); if (!p) return;
     const st = readJson(path.join(DATA, p, 'status.json')) || {};

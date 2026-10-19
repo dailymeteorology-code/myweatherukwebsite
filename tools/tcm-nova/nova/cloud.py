@@ -73,7 +73,8 @@ def fetch_static():
     download('nova-static', 'pseudoadiabat_*.npy', CACHE)
     download('nova-static', 'icon_eu_eps_map_*.npz', CACHE)
     from . import terrain
-    need = [g for g in ('gb2km', 'gb1p5km') if not (DATA / 'terrain' / f'{g}-{terrain.TERRAIN_VERSION}.npz').exists()]
+    from . import v5_blend  # noqa: F401  (registers the V5 grid)
+    need = [g for g in ('gb2km', 'gb1p5km', 'gb_v5laea2km') if not (DATA / 'terrain' / f'{g}-{terrain.TERRAIN_VERSION}.npz').exists()]
     for g in need:
         log(f'cloud: building terrain {g}')
         p = terrain.build(g)

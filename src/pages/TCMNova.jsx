@@ -38,7 +38,7 @@ const MONO = "'DM Mono',ui-monospace,monospace";
 const card = { background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, boxShadow: '0 1px 3px rgba(15,23,42,0.05)' };
 
 const PRODUCTS = {
-  main: { label: 'TCM Main Run', res: '2 km', blurb: 'Four runs a day · AWS multi-model blend · deterministic downscaling' },
+  main: { label: 'TCM Main Run', res: '2 km', blurb: 'Four runs a day · every model downscaled to 2 km · TCM V5 physics' },
   hyper: { label: 'TCM Hyper-Short', res: '1.5 km', blurb: 'Hourly · 24 h at 30 min · radar & lightning nowcast blended with the latest UKV' },
 };
 
@@ -133,8 +133,8 @@ function f16(u) {
   if (e === 31) return f ? NaN : s * Infinity;
   return s * 2 ** (e - 15) * (1 + f / 1024);
 }
-async function fetchField(product, runId, lead, field) {
-  const r = await novaFetch(`/api/nova/${product}/runs/${runId}/frame/${lead}/${field}`);
+async function fetchField(product, runId, lead, field, day = null) {
+  const r = await novaFetch(day ? `/api/nova/${product}/runs/${runId}/day/${day}/${field}` : `/api/nova/${product}/runs/${runId}/frame/${lead}/${field}`);
   if (!r.ok) throw new Error(`${field}: ${r.status}`);
   const dtype = r.headers.get('X-Nova-Dtype');
   const ds = r.body.pipeThrough(new DecompressionStream('deflate'));
@@ -306,7 +306,7 @@ function useLightningToday(on) {
 }
 
 /* ── map ─────────────────────────────────────────────────────────────────── */
-function NovaMap({ product, manifest, lead, layerKey, onHover, strikes }) {
+function NovaMap({ product, manifest, lead, day = null, layerKey, onHover, strikes }) {
   const el = useRef(null), map = useRef(null), overlay = useRef(null), dataRef = useRef(null), strikeLayer = useRef(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -336,7 +336,7 @@ function NovaMap({ product, manifest, lead, layerKey, onHover, strikes }) {
     if (!manifest || lead == null) return undefined;
     let alive = true;
     setBusy(true); setErr(null);
-    fetchField(product, manifest.run_id, lead, layerKey).then((data) => {
+    fetchField(product, manifest.run_id, lead, layerKey, day).then((data) => {
       if (!alive) return;
       dataRef.current = { data, grid: manifest.grid };
       const url = renderField(data, manifest.grid, LAYERS[layerKey]);
@@ -345,7 +345,7 @@ function NovaMap({ product, manifest, lead, layerKey, onHover, strikes }) {
     }).catch((e) => { if (alive) { setErr(String(e.message || e)); if (overlay.current) { overlay.current.remove(); overlay.current = null; } dataRef.current = null; } })
       .finally(() => alive && setBusy(false));
     return () => { alive = false; };
-  }, [product, manifest, lead, layerKey]);
+  }, [product, manifest, lead, layerKey, day]);
   return (
     <div style={{ position: 'relative' }}>
       {/* isolation: Leaflet's panes use z-index up to 1000; keep them inside the map so they never cover the sticky bars */}
@@ -427,6 +427,9 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   const [ended, setEnded] = useState(false);
   const [showLightning, setShowLightning] = useState(() => { try { return localStorage.getItem('nova_lightning') === '1'; } catch { return false; } });
   const lightning = useLightningToday(showLightning);
+  /* Main Run: a day opens as its WHOLE-DAY risk (max over the day); 3-hourly frames are opt-in */
+  const [threeHourly, setThreeHourly] = useState(() => { try { return localStorage.getItem('nova_3h') === '1'; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem('nova_3h', threeHourly ? '1' : '0'); } catch { /* blocked */ } }, [threeHourly]);
   useEffect(() => { try { localStorage.setItem('nova_lightning', showLightning ? '1' : '0'); } catch { /* blocked */ } }, [showLightning]);
 
   useEffect(() => { setPinned(null); setIdx(0); setEnded(false); setLayerKey('p_thunder'); }, [product]);
@@ -452,7 +455,6 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   const prev = () => { setEnded(false); setIdx(Math.max(0, idx - 1)); };
 
   const groups = product === 'main' ? MAIN_LAYER_GROUPS : HYPER_LAYER_GROUPS;
-  const fieldMax = (f, fr = frame) => fr?.stats?.[f]?.max ?? null;
 
   /* day cards (Main): highest thunder probability per UK calendar day */
   const days = useMemo(() => {
@@ -467,7 +469,10 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   }, [frames]);
   const curDay = frame ? london(frame.valid, { year: 'numeric', month: '2-digit', day: '2-digit' }) : null;
   const dayMax = days.find((d) => d.key === curDay)?.max || 0;
-  const [word, colour] = riskWord(dayMax);
+  const dayMeta = frame ? (manifest?.days || []).find((d) => d.lead_min?.includes(frame.lead_min)) : null;
+  const dayView = product === 'main' && !threeHourly && !!dayMeta && dayMeta.fields.includes(layerKey);
+  const fieldMax = (f, fr = frame) => (dayView && dayMeta?.stats?.[f] ? dayMeta.stats[f].max : fr?.stats?.[f]?.max) ?? null;
+  const [word, colour] = riskWord(dayMeta?.stats?.p_thunder?.max ?? dayMax);
   const P = PRODUCTS[product];
 
   return (
@@ -580,7 +585,7 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
               )}
             </div>
             <div style={{ ...card, padding: 12 }}>
-              <SectionTitle icon={AlertTriangle} text="Hazards · this frame" />
+              <SectionTitle icon={AlertTriangle} text={dayView ? "Hazards · whole day" : "Hazards · this frame"} />
               {HAZARDS.map(({ f, label, icon: Icon }) => {
                 const v = fieldMax(f);
                 const avail = v != null;
@@ -665,7 +670,7 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
                   )}
                 </div>
                 <div style={{ ...card, padding: 8, position: 'relative' }}>
-                  <NovaMap product={product} manifest={manifest} lead={frame?.lead_min} layerKey={layerKey} onHover={setHover}
+                  <NovaMap product={product} manifest={manifest} lead={frame?.lead_min} day={dayView ? dayMeta.date : null} layerKey={layerKey} onHover={setHover}
                     strikes={showLightning ? lightning?.strikes : null} />
                   {ended && (
                     <div style={{ position: 'absolute', inset: 8, zIndex: 800, borderRadius: 14, background: 'rgba(15,23,42,0.72)', display: 'grid', placeItems: 'center', color: '#fff', textAlign: 'center', padding: 20 }}>
@@ -679,6 +684,18 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
                   )}
                 </div>
                 {/* timeline */}
+                {product === 'main' && manifest?.days?.length > 0 && (
+                  <div style={{ ...card, padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 900, fontSize: '0.95rem' }}>{dayView ? `${dayMeta.label} · whole day` : frame ? `${dayName(frame.valid)} ${hhmm(frame.valid)}` : '—'}</div>
+                    {dayView && <span style={{ ...pill(T.soft, T.mid) }}>highest value at any time of the day{dayMeta.complete ? '' : ' (part day in this run)'}</span>}
+                    {!threeHourly && dayMeta && !dayMeta.fields.includes(layerKey) && <span style={{ ...pill('#fff7ed', '#c2410c') }}>this layer has no whole-day summary · showing {hhmm(frame.valid)}</span>}
+                    <label style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: '0.78rem', fontWeight: 800, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={threeHourly} onChange={(e) => { setThreeHourly(e.target.checked); setPlaying(false); }} style={{ accentColor: T.sky }} />
+                      3-hourly view
+                    </label>
+                  </div>
+                )}
+                {(product !== 'main' || threeHourly || !manifest?.days?.length) && (
                 <div style={{ ...card, padding: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <button type="button" onClick={prev} aria-label="Previous frame" style={btn}><ChevronLeft style={{ width: 16, height: 16 }} /></button>
@@ -704,6 +721,7 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
                     </div>
                   )}
                 </div>
+                )}
                 <div style={{ ...card, padding: 12, fontSize: '0.72rem', color: T.mid, lineHeight: 1.6, display: 'flex', gap: 8 }}>
                   <Info style={{ width: 15, height: 15, flexShrink: 0, color: T.sky }} />
                   <span>
