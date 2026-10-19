@@ -336,10 +336,22 @@ export default function WindyRadarEmbed() {
      another — without it you would zoom into your town, go fullscreen and be
      thrown back out to the whole country. */
   const viewRef = useRef({ center: [54.6, -2.6], zoom: 5 });
+  /* ...but only INTO fullscreen. Leaving it puts the home-page map back exactly
+     where it was before, whatever was explored full-size. */
+  const embedViewRef = useRef(null);
+  const openFullscreen = useCallback(() => {
+    embedViewRef.current = { ...viewRef.current };
+    setFullscreen(true);
+  }, []);
+  const closeFullscreen = useCallback(() => {
+    if (embedViewRef.current) viewRef.current = embedViewRef.current;
+    embedViewRef.current = null;
+    setFullscreen(false);
+  }, []);
 
   useEffect(() => {
     if (!fullscreen) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') setFullscreen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') closeFullscreen(); };
     window.addEventListener('keydown', onKey);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -347,7 +359,7 @@ export default function WindyRadarEmbed() {
       window.removeEventListener('keydown', onKey);
       document.body.style.overflow = prevOverflow;
     };
-  }, [fullscreen]);
+  }, [fullscreen, closeFullscreen]);
 
   /* Auto-refresh aligned to the 5-minute boundary. */
   useEffect(() => {
@@ -544,7 +556,7 @@ export default function WindyRadarEmbed() {
         <button type="button" onClick={handleManualRefresh} style={chipBtn(false)} title="Refresh now">
           <RefreshCw className="w-3.5 h-3.5" /> Refresh
         </button>
-        <button type="button" onClick={() => setFullscreen(true)} style={chipBtn(false)}>
+        <button type="button" onClick={openFullscreen} style={chipBtn(false)}>
           <Maximize2 className="w-3.5 h-3.5" /> Fullscreen
         </button>
       </div>
@@ -585,7 +597,7 @@ export default function WindyRadarEmbed() {
                       onClick={() => setLightningOn((v) => !v)} style={ovBtn(lightningOn, '#facc15')}>
                 <Zap className="w-4 h-4" /> Lightning
               </button>
-              <button type="button" onClick={() => setFullscreen(false)}
+              <button type="button" onClick={closeFullscreen}
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 999, fontSize: 13, fontWeight: 700, cursor: 'pointer', color: '#fff', background: '#e0322f', border: 'none' }}>
                 <X className="w-4 h-4" /> Exit
               </button>
