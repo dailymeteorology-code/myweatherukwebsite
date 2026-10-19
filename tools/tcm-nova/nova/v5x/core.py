@@ -12,8 +12,118 @@ _EXP_LIMIT = 500.0
 NAN = np.nan
 
 
+# ── compiled versions (same arithmetic, one pass over the grid instead of ~6) ──
+from numba import njit, prange  # noqa: E402
+
+_SHAPE = {Shape.RAMP: 0, Shape.INVERSE_RAMP: 1, Shape.LOGISTIC: 2, Shape.INVERSE_LOGISTIC: 3, Shape.BAND: 4}
+_RULE = {Rule.INGREDIENTS: 0, Rule.CONDITIONAL: 1, Rule.LIMITING: 2, Rule.ALTERNATIVES: 3, Rule.DOMINANT: 4}
+
+
+@njit(cache=True)
+def _clip01(v):
+    return 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
+
+
+@njit(parallel=True, cache=True)
+def _tv_nb(code, lo, hi, margin, margin_low, absent, x):
+    out = np.empty(x.size)
+    mid = 0.5 * (lo + hi)
+    span = hi - lo
+    k = 2.0 * math.log(9.0) / span if span != 0 else 0.0
+    for i in prange(x.size):
+        v = x[i]
+        if not math.isfinite(v):
+            out[i] = absent
+            continue
+        if code == 0:
+            o = _clip01((v - lo) / (hi - lo))
+        elif code == 1:
+            o = _clip01(1.0 - (v - lo) / (hi - lo))
+        elif code == 2 or code == 3:
+            e = -k * (v - mid) if code == 2 else k * (v - mid)
+            if e > 500.0:
+                o = 0.0
+            elif e < -500.0:
+                o = 1.0
+            else:
+                o = _clip01(1.0 / (1.0 + math.exp(e)))
+        else:
+            if v >= lo and v <= hi:
+                o = 1.0
+            elif v < lo:
+                o = _clip01(1.0 - (lo - v) / margin_low)
+            else:
+                o = _clip01(1.0 - (v - hi) / margin)
+        out[i] = o
+    return out
+
+
+@njit(parallel=True, cache=True)
+def _compose_nb(code, M, minimum):
+    nf, n = M.shape
+    val = np.empty(n)
+    cnt = np.empty(n, np.int64)
+    for i in prange(n):
+        c = 0
+        if code == 0:
+            anyzero = False
+            ls = 0.0
+            for f in range(nf):
+                m = M[f, i]
+                if math.isfinite(m):
+                    c += 1
+                    if m <= 0.0:
+                        anyzero = True
+                    else:
+                        ls += math.log(m)
+            v = 0.0 if anyzero else math.exp(ls / max(c, 1))
+        elif code == 1:
+            v = 1.0
+            for f in range(nf):
+                m = M[f, i]
+                if math.isfinite(m):
+                    c += 1
+                    v = v * m
+        elif code == 2:
+            v = np.inf
+            for f in range(nf):
+                m = M[f, i]
+                if math.isfinite(m):
+                    c += 1
+                    v = min(v, m)
+        elif code == 3:
+            pr = 1.0
+            for f in range(nf):
+                m = M[f, i]
+                if math.isfinite(m):
+                    c += 1
+                    pr = pr * (1.0 - m)
+            v = 1.0 - pr
+        else:
+            v = -np.inf
+            for f in range(nf):
+                m = M[f, i]
+                if math.isfinite(m):
+                    c += 1
+                    v = max(v, m)
+        cnt[i] = c
+        val[i] = _clip01(v) if c >= max(1, minimum) else np.nan
+    return val, cnt
+
+
+#: Use the compiled versions (production). verify.py may switch to NumPy to cross-check.
+COMPILED = True
+
+
 def tv(transfer, x):
     """Transfer.__call__ over an array. NaN in -> `absent` (or NaN) out."""
+    if COMPILED:
+        xa = np.asarray(x, dtype='float64')
+        flat = np.ascontiguousarray(xa.ravel())
+        ml = transfer.margin_low if transfer.margin_low is not None else transfer.margin
+        absent = NAN if transfer.absent is None else float(transfer.absent)
+        return _tv_nb(_SHAPE[transfer.shape], float(transfer.low), float(transfer.high), float(transfer.margin or 0.0),
+                      float(ml or 0.0), absent, flat).reshape(xa.shape)
     x = np.asarray(x, dtype='float64')
     lo, hi = transfer.low, transfer.high
     with np.errstate(invalid='ignore', divide='ignore', over='ignore'):
@@ -43,6 +153,11 @@ def compose(rule, members, minimum=1):
     """compose() over arrays. members: list of membership arrays (NaN = unusable).
     Returns (value, n_usable); value is NaN where fewer than `minimum` are usable."""
     shape = np.broadcast(*[np.asarray(m) for m in members]).shape if members else ()
+    if COMPILED and members:
+        M = np.ascontiguousarray(np.stack([np.broadcast_to(np.asarray(m, dtype='float64'), shape).ravel()
+                                           for m in members]))
+        val, cnt = _compose_nb(_RULE[rule], M, int(minimum))
+        return val.reshape(shape), cnt.reshape(shape)
     ms = [np.broadcast_to(np.asarray(m, dtype='float64'), shape) for m in members]
     ok = [np.isfinite(m) for m in ms]
     n = np.sum(ok, axis=0) if ms else np.zeros(shape, int)

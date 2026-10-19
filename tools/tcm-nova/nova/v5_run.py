@@ -49,7 +49,7 @@ PARAM_FIELDS = {'mucape': 'mu_cape', 'sbcape': 'sb_cape', 'mlcape': 'ml_cape', '
 # fields summarised over each whole UK day: maximum (probabilities, intensities) or total
 DAY_MAX = ['p_thunder', 'p_lightning', 'p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_tornado_env',
            'p_heavy_rain', 'p_severe', 'flash_density', 'gust_max', 'mu_cape', 'dcape', 'shear_0_6km', 'srh_0_1km',
-           'precip', 'pw', 'lapse_700_500']
+           'precip', 'pw', 'lapse_700_500', 'p_initiation', 'uncertainty']
 DAY_MIN = ['ml_cin']
 
 

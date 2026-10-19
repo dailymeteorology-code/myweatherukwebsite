@@ -38,7 +38,7 @@ const MONO = "'DM Mono',ui-monospace,monospace";
 const card = { background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, boxShadow: '0 1px 3px rgba(15,23,42,0.05)' };
 
 const PRODUCTS = {
-  main: { label: 'TCM Main Run', res: '2 km', blurb: 'Four runs a day · every model downscaled to 2 km · TCM V5 physics' },
+  main: { label: 'TCM Main Run', res: '2 km', blurb: 'Four runs a day · 7 models each run through TCM V5 at 2 km' },
   hyper: { label: 'TCM Hyper-Short', res: '1.5 km', blurb: 'Hourly · 24 h at 30 min · radar & lightning nowcast blended with the latest UKV' },
 };
 
@@ -72,7 +72,7 @@ const LAYERS = {
   p_heavy_rain: { label: 'Heavy rain probability', unit: '%', stops: PROB, pct: true },
   p_training: { label: 'Cell-training probability', unit: '%', stops: PROB, pct: true },
   p_severe: { label: 'Severe-weather probability', unit: '%', stops: PROB, pct: true },
-  p_initiation: { label: 'New initiation probability', unit: '%', stops: PROB, pct: true },
+  p_initiation: { label: 'Initiation probability (V5 realisation stage)', unit: '%', stops: PROB, pct: true },
   p_ci_orographic: { label: 'Orographic initiation (terrain part)', unit: '%', stops: PROB, pct: true },
   p_rain: { label: 'Rain ≥1 mm/h probability', unit: '%', stops: PROB, pct: true },
   precip: { label: 'Precipitation rate', unit: 'mm/h', stops: [[0.1, [147, 197, 253, 0]], [0.3, [96, 165, 250, 170]], [1, [37, 99, 235, 200]], [4, [250, 204, 21, 210]], [10, [249, 115, 22, 220]], [25, [220, 38, 38, 230]], [50, [168, 85, 247, 235]]] },
@@ -93,7 +93,8 @@ const LAYERS = {
   w_oro: { label: 'Orographic ascent (terrain diag.)', unit: 'm/s', stops: [[-0.6, [59, 130, 246, 200]], [-0.15, [147, 197, 253, 120]], [-0.03, [255, 255, 255, 0]], [0.03, [255, 255, 255, 0]], [0.15, [250, 204, 21, 140]], [0.6, [220, 38, 38, 210]]] },
   windward_exposure: { label: 'Windward (+) / lee (−) exposure', unit: '', stops: [[-1, [59, 130, 246, 180]], [-0.2, [147, 197, 253, 80]], [0, [255, 255, 255, 0]], [0.2, [250, 204, 21, 80]], [1, [234, 88, 12, 190]]] },
   terrain_modulation: { label: 'Terrain modulation factor', unit: '×', stops: [[0.6, [59, 130, 246, 190]], [0.95, [147, 197, 253, 60]], [1, [255, 255, 255, 0]], [1.05, [250, 204, 21, 60]], [1.5, [234, 88, 12, 200]]] },
-  confidence: { label: 'Forecast confidence', unit: '%', pct: true, stops: [[0, [239, 68, 68, 140]], [0.4, [250, 204, 21, 110]], [0.7, [74, 222, 128, 90]], [1, [74, 222, 128, 0]]] },
+  uncertainty: { label: 'Forecast uncertainty (TCM V5)', unit: '%', pct: true, stops: [[0.1, [74, 222, 128, 0]], [0.3, [250, 204, 21, 120]], [0.5, [249, 115, 22, 170]], [0.7, [220, 38, 38, 210]]] },
+  confidence: { label: 'Forecast confidence (TCM V5, capped until calibrated)', unit: '%', pct: true, stops: [[0, [239, 68, 68, 140]], [0.4, [250, 204, 21, 110]], [0.7, [74, 222, 128, 90]], [1, [74, 222, 128, 0]]] },
   qc_path: { label: 'Cloud liquid water path', unit: 'kg/m²', stops: [[0.01, [186, 230, 253, 0]], [0.05, [125, 211, 252, 150]], [0.2, [59, 130, 246, 185]], [0.5, [99, 102, 241, 205]], [1, [168, 85, 247, 220]], [2, [219, 39, 119, 230]]] },
   qi_path: { label: 'Cloud ice water path', unit: 'kg/m²', stops: [[0.01, [186, 230, 253, 0]], [0.05, [125, 211, 252, 150]], [0.2, [59, 130, 246, 185]], [0.5, [99, 102, 241, 205]], [1, [168, 85, 247, 220]], [2, [219, 39, 119, 230]]] },
   qg_path: { label: 'Graupel water path (GFS)', unit: 'kg/m²', stops: [[0.01, [186, 230, 253, 0]], [0.05, [125, 211, 252, 150]], [0.2, [59, 130, 246, 185]], [0.5, [99, 102, 241, 205]], [1, [168, 85, 247, 220]], [2, [219, 39, 119, 230]]] },
@@ -108,7 +109,7 @@ const LAYERS = {
   conv_10m: { label: '10 m convergence', unit: '10⁻⁵/s', mul: 1e5, stops: [[0, [255, 255, 255, 0]], [3, [250, 204, 21, 140]], [8, [249, 115, 22, 200]], [15, [220, 38, 38, 220]]] },
 };
 const MAIN_LAYER_GROUPS = [
-  ['Hazards', ['p_thunder', 'p_lightning', 'p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_supercell', 'p_tornado_env', 'p_heavy_rain', 'p_training', 'p_severe', 'p_initiation', 'confidence']],
+  ['Hazards', ['p_thunder', 'p_lightning', 'p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_supercell', 'p_tornado_env', 'p_heavy_rain', 'p_training', 'p_severe', 'p_initiation', 'uncertainty', 'confidence']],
   ['Estimates', ['precip', 'precip_accum', 'flash_density', 'hail_size_max_cm', 'gust_max']],
   ['Environment', ['mu_cape', 'ml_cin', 'dcape', 'shear_0_6km', 'srh_0_1km', 'scp', 'stp', 'lapse_700_500', 'pw', 'wbz', 'conv_10m']],
   ['Cloud microphysics', ['qc_path', 'qi_path', 'qr_path', 'qg_path', 'slw_max_gm3', 'droplet_re_um', 'ice_re_um', 'charging_index', 'lpi', 'htop_con']],

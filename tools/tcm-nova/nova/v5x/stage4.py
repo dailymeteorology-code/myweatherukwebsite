@@ -782,6 +782,95 @@ def wet_bulb_nb(T, D, P):
     return out
 
 
+# ── fast helpers for the production kernels ─────────────────────────────────
+# Saturation vapour pressure (Bolton eq. 10, as V5) tabulated every 0.005 K and read by
+# linear interpolation: the relative error is ~1e-8, below the float32 resolution of every
+# field it feeds, and it takes an exponential out of the innermost loops.
+ES_T0 = 150.0
+ES_DT = 0.005
+_c = ES_T0 + np.arange(40001) * ES_DT - ZC
+ES_TAB = 611.2 * np.exp(17.67 * _c / (_c + 243.5))
+ES_N = ES_TAB.size
+del _c
+LN_DESCENT = np.log(50000.0 + 500.0 * np.arange(111))
+LN_SEARCH = np.log(70000.0 - 1000.0 * np.arange(21))
+
+
+@njit(cache=True)
+def es_t(t):
+    f = (t - ES_T0) / ES_DT
+    if not (f >= 0.0 and f < ES_N - 1):
+        return es(t)
+    i = int(f)
+    return ES_TAB[i] + (f - i) * (ES_TAB[i + 1] - ES_TAB[i])
+
+
+@njit(cache=True)
+def ws_t(t, p):
+    e = es_t(t)
+    d = p - e
+    if d > 1.0:
+        return EPS * e / d
+    return NAN
+
+
+@njit(cache=True)
+def theta_e_t(t, td, p):
+    w = ws_t(td, p)
+    r_g = w * 1000.0
+    e = p * w / (EPS + w)
+    tl = t_lcl(t, td)
+    th_dl = t * (P0 / (p - e)) ** KAPPA * (t / tl) ** (0.28e-3 * r_g)
+    return th_dl * math.exp((3036.0 / tl - 1.78) * w * (1.0 + 0.448 * w))
+
+
+@njit(cache=True)
+def env_at_ln(lnP_asc, T_asc, D_asc, p, lt, has_sfc, p_low, ln_p_low, t_low, d_low, sp, ln_span, st, sd):
+    """env_at with the logarithms supplied (identical arithmetic)."""
+    if has_sfc and (p > p_low + 1e-6) and (p <= sp + 1e-6) and (p_low == p_low):
+        w = (lt - ln_p_low) / ln_span if ln_span != 0 else 0.0
+        if w != w:
+            w = 0.0
+        elif w == np.inf:
+            w = 1.0
+        elif w == -np.inf:
+            w = 0.0
+        w = min(max(w, 0.0), 1.0)
+        return t_low + w * (st - t_low), d_low + w * (sd - d_low)
+    return interp_logp(lnP_asc, T_asc, lt), interp_logp(lnP_asc, D_asc, lt)
+
+
+def fixed_tables(lnP, lts):
+    """For pressures that are the SAME in every cell, the stored-level intervals and
+    weights _at_pressure would find, worked out once: up to 3 matching intervals each,
+    in order (the first finite candidate wins, exactly as _at_pressure)."""
+    n = len(lts)
+    K = np.full((n, 3), -1, np.int64)
+    W = np.zeros((n, 3))
+    for i, lt in enumerate(lts):
+        m = 0
+        for k in range(lnP.size - 1):
+            lo, hi = lnP[k], lnP[k + 1]
+            if min(lo, hi) <= lt <= max(lo, hi) and m < 3:
+                K[i, m] = k
+                W[i, m] = 0.0 if hi == lo else (lt - lo) / (hi - lo)
+                m += 1
+    return K, W
+
+
+@njit(cache=True)
+def at_fixed(vals, K, W, i):
+    out = NAN
+    for m in range(3):
+        k = K[i, m]
+        if k < 0:
+            break
+        cand = vals[k] + W[i, m] * (vals[k + 1] - vals[k])
+        if out != out:
+            out = cand
+    return out
+
+
 # ── kernel v2 (production): all three parcels on one shared environment walk ─
 # Every V5 parcel ascent starts from a 5 hPa grid anchored on its own origin. The
 # surface and mixed-layer parcels both start at the search base, and the most-unstable
@@ -821,16 +910,35 @@ def tv_table():
 @njit(cache=True)
 def _env_grid(lnP_asc, T_asc, D_asc, has_sfc, p_low, t_low, d_low, sp, st, sd, base, top, step, n,
               G, lnG, ET, ED, TVE):
+    ln_p_low = math.log(p_low) if p_low > 0 else NAN
+    ln_span = (math.log(sp) - ln_p_low) if (has_sfc and sp > 0) else NAN
+    nl = lnP_asc.size
+    ptr = nl - 1
     for i in range(n):
         g = base - i * step
         if g < top:
             g = top
         G[i] = g
-        lnG[i] = math.log(g)
-        et, ed = env_at(lnP_asc, T_asc, D_asc, g, has_sfc, p_low, t_low, d_low, sp, st, sd)
+        lg = math.log(g)
+        lnG[i] = lg
+        if has_sfc and (g > p_low + 1e-6) and (g <= sp + 1e-6) and (p_low == p_low):
+            et, ed = env_at_ln(lnP_asc, T_asc, D_asc, g, lg, has_sfc, p_low, ln_p_low, t_low, d_low, sp, ln_span, st, sd)
+        elif lg < lnP_asc[0] - 1e-9 or lg > lnP_asc[nl - 1] + 1e-9:
+            et = NAN
+            ed = NAN
+        else:
+            # searchsorted-left by a pointer that only moves upward through the column
+            while ptr > 0 and lnP_asc[ptr - 1] >= lg:
+                ptr -= 1
+            j = ptr if ptr >= 1 else 1
+            lo = j - 1
+            span = lnP_asc[j] - lnP_asc[lo]
+            wgt = (lg - lnP_asc[lo]) / span if span != 0 else 0.0
+            et = T_asc[lo] + wgt * (T_asc[j] - T_asc[lo])
+            ed = D_asc[lo] + wgt * (D_asc[j] - D_asc[lo])
         ET[i] = et
         ED[i] = ed
-        we = ws(ed, g)
+        we = ws_t(ed, g)
         if we != we:
             we = 0.0
         TVE[i] = tvirt(et, we)
@@ -854,10 +962,11 @@ def _lift_shared(tv_tab, tab, G, lnG, TVE, k0, n, p0, t0, d0, lnP_asc, Z_asc, ou
     dtv = np.empty(n)
     grid = G[k0:k0 + n]
     lnp = lnG[k0:k0 + n]
+    lnp0 = math.log(p0)
     for i in range(n):
         lev = grid[i]
         if not (lev <= pl):
-            tvp = tvirt(t0 * (lev / p0) ** KAPPA, w0)
+            tvp = tvirt(t0 * math.exp(KAPPA * (lnp[i] - lnp0)), w0)
         else:
             tvp = tab_T(tv_tab, curve, lev)
         d = tvp - TVE[k0 + i]
@@ -1015,7 +1124,7 @@ def ascend3_all(P, T, D, Z, SP, ST, SD, has_sfc, top, step, ml_depth, mu_depth, 
             if et == et and ed == ed:
                 tot += step
                 ths += nan0(et * (P0 / p) ** KAPPA) * step
-                wsum += nan0(ws(ed, p)) * step
+                wsum += nan0(ws_t(ed, p)) * step
         if tot > 0:
             t0 = (ths / tot) * (base / P0) ** KAPPA
             d0 = nanmin2(td_from_w(wsum / tot, base), t0)
@@ -1034,13 +1143,13 @@ def ascend3_all(P, T, D, Z, SP, ST, SD, has_sfc, top, step, ml_depth, mu_depth, 
         for k in range(nmu):
             et = ET[k]
             ed = nanmin2(ED[k], et)
-            te = theta_e(et, ed, G[k])
+            te = theta_e_t(et, ed, G[k])
             if te != te:
                 te = -np.inf
             if k == 0 or te > best:
                 best = te
                 kb = k
-        te = theta_e(st0, nanmin2(sd0, st0), sp0)
+        te = theta_e_t(st0, nanmin2(sd0, st0), sp0)
         if te != te:
             te = -np.inf
         if te > best:
@@ -1063,7 +1172,7 @@ def ascend3_all(P, T, D, Z, SP, ST, SD, has_sfc, top, step, ml_depth, mu_depth, 
 
 
 @njit(parallel=True, cache=True)
-def dcape2_all(P, T, D, SP, has_sp, tab, tv_tab):
+def dcape2_all(P, T, D, SP, has_sp, tab, tv_tab, KS, WS, KD, WD):
     """dcape_all with the descent read from the pseudoadiabat tables."""
     ncell, nlev = T.shape
     lnP = np.log(P)
@@ -1076,10 +1185,9 @@ def dcape2_all(P, T, D, SP, has_sp, tab, tv_tab):
         have = False
         for i in range(21):
             p = 70000.0 - 1000.0 * i
-            lt = math.log(p)
-            t = at_pressure(lnP, Tc, lt)
-            td = nanmin2(at_pressure(lnP, Dc, lt), t)
-            te = theta_e(t, td, p)
+            t = at_fixed(Tc, KS, WS, i)
+            td = nanmin2(at_fixed(Dc, KS, WS, i), t)
+            te = theta_e_t(t, td, p)
             if te == te:
                 have = True
                 if te < best:
@@ -1089,9 +1197,9 @@ def dcape2_all(P, T, D, SP, has_sp, tab, tv_tab):
             out[c] = NAN
             continue
         ps = 70000.0 - 1000.0 * src
-        lts = math.log(ps)
-        ts = at_pressure(lnP, Tc, lts)
-        tds = nanmin2(at_pressure(lnP, Dc, lts), ts)
+        lts = LN_SEARCH[src]
+        ts = at_fixed(Tc, KS, WS, src)
+        tds = nanmin2(at_fixed(Dc, KS, WS, src), ts)
         twet = wet_bulb(ts, tds, ps)
         sfc = SP[c] if has_sp else P[0]
         sfc = nanmin2(sfc, P[0])
@@ -1102,9 +1210,9 @@ def dcape2_all(P, T, D, SP, has_sp, tab, tv_tab):
         w_src = ws(twet, ps)
         if w_src != w_src:
             w_src = 0.0
-        e_t0 = take_at(lnP, Tc, lts)
-        e_td0 = nanmin2(take_at(lnP, Dc, lts), e_t0)
-        w_e0 = ws(e_td0, ps)
+        e_t0 = ts
+        e_td0 = nanmin2(at_fixed(Dc, KS, WS, src), e_t0)
+        w_e0 = ws_t(e_td0, ps)
         if w_e0 != w_e0:
             w_e0 = 0.0
         prev_dtv = tvirt(e_t0, w_e0) - tvirt(twet, w_src)
@@ -1115,11 +1223,11 @@ def dcape2_all(P, T, D, SP, has_sp, tab, tv_tab):
             p = 50000.0 + 500.0 * j
             if not ((p > ps) and (p <= sfc)):
                 continue
-            lp = math.log(p)
+            lp = LN_DESCENT[j]
             tvp = tab_T(tv_tab, curve, p)
-            et = at_pressure(lnP, Tc, lp)
-            ed = at_pressure(lnP, Dc, lp)
-            we = ws(nanmin2(ed, et), p)
+            et = at_fixed(Tc, KD, WD, j)
+            ed = at_fixed(Dc, KD, WD, j)
+            we = ws_t(nanmin2(ed, et), p)
             if we != we:
                 we = 0.0
             d = tvirt(et, we) - tvp
@@ -1189,29 +1297,77 @@ def _interp_at_height_fast(height, values, target):
     return interp_at_height_nb(H, _flat(values), tg).reshape(ny, nx)
 
 
+@njit(cache=True)
+def wet_bulb_t(t, td, p):
+    """wet_bulb with the tabulated saturation vapour pressure (production)."""
+    w = ws_t(td, p)
+    low = min(td, t) if (td == td and t == t) else NAN
+    high = t
+    for _ in range(12):
+        mid = 0.5 * (low + high)
+        res = CP * (t - mid) - lv(mid) * (ws_t(mid, p) - w)
+        if res < 0:
+            high = mid
+        else:
+            low = mid
+    return 0.5 * (low + high)
+
+
+@njit(parallel=True, cache=True)
+def wet_bulb_t_nb(T, D, P):
+    out = np.empty(T.size)
+    for c in prange(T.size):
+        out[c] = wet_bulb_t(T[c], D[c], P[c])
+    return out
+
+
+@njit(parallel=True, cache=True)
+def dewpoint_from_rh_nb(RH, T):
+    """thermo.dewpoint_from_rh, elementwise and exact."""
+    out = np.empty(T.size)
+    for c in prange(T.size):
+        rh = RH[c]
+        if rh == rh and rh < 1e-6:
+            rh = 1e-6
+        e = (rh / 100.0) * es(T[c])
+        if e > 0:
+            ln = math.log(e / 611.2)
+            out[c] = ZC + 243.5 * ln / (17.67 - ln)
+        else:
+            out[c] = NAN
+    return out
+
+
+def _dewpoint_from_rh_fast(relative_humidity, temperature):
+    rh = np.asarray(relative_humidity, dtype='float64')
+    t = np.asarray(temperature, dtype='float64')
+    shape = np.broadcast(rh, t).shape
+    f = lambda a: np.ascontiguousarray(np.broadcast_to(a, shape).ravel())   # noqa: E731
+    return dewpoint_from_rh_nb(f(rh), f(t)).reshape(shape)
+
+
 def _wet_bulb_fast(temperature, dewpoint, pressure, iterations=12):
     t = np.asarray(temperature, dtype='float64')
     td = np.asarray(dewpoint, dtype='float64')
     p = np.asarray(pressure, dtype='float64')
     shape = np.broadcast(t, td, p).shape
     f = lambda a: np.ascontiguousarray(np.broadcast_to(a, shape).ravel())   # noqa: E731
-    return wet_bulb_nb(f(t), f(td), f(p)).reshape(shape)
+    k = wet_bulb_nb if EXACT else wet_bulb_t_nb
+    return k(f(t), f(td), f(p)).reshape(shape)
 
 
 @njit(parallel=True, cache=True)
-def sample_layer_nb(P, T, D, grid):
+def sample_layer_nb(P, T, D, grid, K, W):
     """gridparams._sample_layer per cell: RH (%) and mixing ratio on the 10 hPa grid."""
     ncell, nlev = T.shape
-    lnP = np.log(P)
     ng = grid.size
     rh = np.empty((ng, ncell))
     w = np.empty((ng, ncell))
     for c in prange(ncell):
         for i in range(ng):
             p = grid[i]
-            lt = math.log(p)
-            t = at_pressure(lnP, T[c], lt)
-            td = nanmin2(at_pressure(lnP, D[c], lt), t)
+            t = at_fixed(T[c], K, W, i)
+            td = nanmin2(at_fixed(D[c], K, W, i), t)
             rh[i, c] = 100.0 * es(td) / es(t)
             w[i, c] = ws(td, p)
     return rh, w
@@ -1220,9 +1376,10 @@ def sample_layer_nb(P, T, D, grid):
 def _sample_layer_fast(columns, top_pa, bottom_pa):
     grid = np.arange(bottom_pa, top_pa - 1.0, -1000.0)
     shape = columns.shape
-    rh, w = sample_layer_nb(np.asarray(columns.pressure, dtype='float64'),
-                            np.ascontiguousarray(_flat(columns.temperature).T),
-                            np.ascontiguousarray(_flat(columns.dewpoint).T), grid)
+    P = np.asarray(columns.pressure, dtype='float64')
+    rh, w = sample_layer_nb(P, np.ascontiguousarray(_flat(columns.temperature).T),
+                            np.ascontiguousarray(_flat(columns.dewpoint).T), grid,
+                            *fixed_tables(np.log(P), np.log(grid)))
     return grid, rh.reshape((grid.size,) + shape), w.reshape((grid.size,) + shape)
 
 
@@ -1263,7 +1420,9 @@ def _dcape_v2(out, columns):
     vals = dcape2_all(np.asarray(columns.pressure, dtype='float64'), np.ascontiguousarray(_flat(columns.temperature).T),
                       np.ascontiguousarray(_flat(columns.dewpoint).T),
                       np.ascontiguousarray(np.asarray(sp, dtype='float64').ravel()) if sp is not None
-                      else np.zeros(shape[0] * shape[1]), sp is not None, table(), tv_table()).reshape(shape)
+                      else np.zeros(shape[0] * shape[1]), sp is not None, table(), tv_table(),
+                      *fixed_tables(np.log(np.asarray(columns.pressure, dtype='float64')), LN_SEARCH),
+                      *fixed_tables(np.log(np.asarray(columns.pressure, dtype='float64')), LN_DESCENT)).reshape(shape)
     if not np.isfinite(vals).any():
         out.issues.append('theta-e could not be evaluated in the 700-500 hPa source layer anywhere; DCAPE unavailable')
         return
@@ -1277,11 +1436,14 @@ def compute_grid(cube):
     otherwise the shared-environment table kernels (v2). Every other Stage 4
     calculation is V5's own code."""
     asc, dc = (_ascend_fast, _dcape_fast) if EXACT else (_ascend_v2, _dcape_v2)
-    orig = GP._ascend_tiled, GP._dcape, GP._interp_at_height, GP._sample_layer, TH.wet_bulb_temperature
+    orig = (GP._ascend_tiled, GP._dcape, GP._interp_at_height, GP._sample_layer, TH.wet_bulb_temperature,
+            TH.dewpoint_from_rh)
     GP._ascend_tiled, GP._dcape, GP._interp_at_height, GP._sample_layer = asc, dc, _interp_at_height_fast, _sample_layer_fast
     TH.wet_bulb_temperature = _wet_bulb_fast
+    TH.dewpoint_from_rh = _dewpoint_from_rh_fast
     try:
         return GP.compute_grid(cube)
     finally:
-        GP._ascend_tiled, GP._dcape, GP._interp_at_height, GP._sample_layer, TH.wet_bulb_temperature = orig
+        (GP._ascend_tiled, GP._dcape, GP._interp_at_height, GP._sample_layer, TH.wet_bulb_temperature,
+         TH.dewpoint_from_rh) = orig
         _V2.clear()
