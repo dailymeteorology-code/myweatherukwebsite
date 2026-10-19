@@ -28,6 +28,7 @@ const TARGETS = [
   { group: 'Graphic Tools', path: 'src/components/TemperatureMapTool.jsx',                note: 'Temperature map tool' },
   { group: 'Graphic Tools', path: 'src/components/ClimateAnomalyGraphicTool.jsx',        note: 'Climate anomaly vs 1991–2020' },
   { group: 'Graphic Tools', path: 'src/components/scenario/ScenarioForecastTool.jsx',    note: '3-way scenario forecast board' },
+  { group: 'Graphic Tools', path: 'src/components/scenario/scenarioCards.jsx',           note: 'Scenario story cards (1080×1920)' },
   { group: 'Graphic Tools', path: 'src/components/synoptic/SynopticChartTool.jsx',        note: 'Synoptic chart drawing' },
   { group: 'Graphic Tools', path: 'src/components/synoptic/WeatherTypeMapTool.jsx',       note: 'Weather-type area drawing' },
   { group: 'Graphic Tools', path: 'src/components/synoptic/synopticDraw.jsx',             note: 'Synoptic drawing primitives' },

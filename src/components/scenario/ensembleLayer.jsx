@@ -5,11 +5,11 @@
  * The server clusters the 50 members (server/pastFuture/ens_scenarios.py) and sends each
  * cluster's mean MSLP on a 0.5° grid. Here that grid is upsampled bilinearly to 0.125°,
  * contoured every 4 hPa with marching squares, the segments are chained into lines and
- * drawn as smooth curves in the map's own projection (scnProject), so they line up with
+ * drawn as smooth curves in the active view's projection, so they line up with
  * the coastline and with anything drawn on top.
  */
-import React from 'react';
-import { scnProject, SCN_VIEW_W, SCN_VIEW_H } from './NWEuropeMap';
+import React, { useMemo } from 'react';
+import { VIEW_W as SCN_VIEW_W, VIEW_H as SCN_VIEW_H } from './NWEuropeMap';
 
 const LWT_DIR = {
   N: 'northerly', NE: 'north-easterly', E: 'easterly', SE: 'south-easterly',
@@ -99,7 +99,8 @@ function smoothPath(P) {
 }
 
 /** Everything the map layer needs for one cluster, in SCN_VIEW pixels. */
-export function buildEnsembleOverlay(cluster, grid) {
+export function buildEnsembleOverlay(cluster, grid, view) {
+  const scnProject = view.project;
   const K = 4;
   const { out, NX, NY } = upsample(cluster.msl, grid.nx, grid.ny, K);
   const step = grid.d / K;
@@ -127,32 +128,19 @@ export function buildEnsembleOverlay(cluster, grid) {
   return { isobars, labels, centres, lwt: cluster.lwt, summary: describeLwt(cluster.lwt), members: cluster.n };
 }
 
-export function EnsembleLayer({ auto }) {
+export function EnsembleLayer({ ens, view }) {
+  const auto = useMemo(() => (ens ? buildEnsembleOverlay(ens.cluster, ens.grid, view) : null), [ens, view]);
   if (!auto) return null;
+  // Same look as the hand-drawn boards: grey isobars, orange H, blue L.
   return (
-    <svg viewBox={`0 0 ${SCN_VIEW_W} ${SCN_VIEW_H}`} preserveAspectRatio="xMidYMid meet"
+    <svg viewBox={'0 0 ' + SCN_VIEW_W + ' ' + SCN_VIEW_H} preserveAspectRatio="xMidYMid meet"
       style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 2 }}>
-      <g fill="none" strokeLinecap="round" strokeLinejoin="round">
-        {auto.isobars.map((l, i) => (
-          <path key={i} d={l.d} stroke={l.bold ? 'rgba(255,255,255,0.92)' : 'rgba(226,232,240,0.72)'} strokeWidth={l.bold ? 1.7 : 1.05} />
-        ))}
+      <g fill="none" strokeLinecap="round" strokeLinejoin="round" stroke="#9a9a9a">
+        {auto.isobars.map((l, i) => <path key={i} d={l.d} strokeWidth={l.bold ? 1.9 : 1.3} />)}
       </g>
-      <g fontFamily="'DM Mono','SFMono-Regular',monospace" fontSize="8.5" fontWeight="700" textAnchor="middle">
-        {auto.labels.map((l, i) => (
-          <g key={i}>
-            <rect x={l.x - 13} y={l.y - 6.5} width="26" height="13" rx="4" fill="rgba(10,20,40,0.85)" />
-            <text x={l.x} y={l.y + 3} fill="#e2e8f0">{l.p}</text>
-          </g>
-        ))}
-      </g>
-      <g fontFamily="Inter, system-ui, sans-serif" textAnchor="middle">
+      <g fontFamily="'Baloo 2','Poppins',sans-serif" textAnchor="middle" fontWeight="600">
         {auto.centres.map((c, i) => (
-          <g key={i}>
-            <text x={c.x} y={c.y + 9} fontSize="28" fontWeight="900" fill={c.t === 'H' ? '#60a5fa' : '#f87171'}
-              stroke="rgba(5,10,25,0.85)" strokeWidth="3" paintOrder="stroke">{c.t}</text>
-            <text x={c.x} y={c.y + 23} fontSize="9.5" fontWeight="800" fill="#f8fafc"
-              stroke="rgba(5,10,25,0.85)" strokeWidth="2.5" paintOrder="stroke">{c.p}</text>
-          </g>
+          <text key={i} x={c.x} y={c.y} dominantBaseline="central" fontSize="58" fill={c.t === 'H' ? '#f5a623' : '#3d8ef0'}>{c.t}</text>
         ))}
       </g>
     </svg>

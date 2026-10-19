@@ -8,8 +8,10 @@
  *   GET /api/pastfuture/likelihood            Met Office DataHub site-specific DAILY forecast
  *                                             for 13 UK places: the Met Office's own
  *                                             probabilities of thunder, heavy rain, snow, hail…
- *   GET /api/pastfuture/ensemble?date=…       ECMWF ENS (50 members) clustered into three
- *                                             synoptic scenarios (ens_scenarios.py).
+ *   GET /api/pastfuture/ensemble?date=…[&end=…]  ECMWF ENS (50 members) clustered into three
+ *                                             synoptic scenarios (ens_scenarios.py), for one
+ *                                             day or a run of up to 7, with each scenario's
+ *                                             main-low track.
  *
  * Everything is cached in memory; the climate series change once a month, the DataHub
  * calls are rationed (one per place per 3 hours) because they share the free allowance
@@ -167,15 +169,38 @@ async function placeDaily(name, lat, lon) {
 
 /* ── ensemble scenarios: Python + ecCodes ───────────────────────────────── */
 
-const ENS_CACHE = path.join(HERE, '..', 'data', 'ens-cache');
-function ensPython() {
-  if (process.env.ENS_PYTHON) return process.env.ENS_PYTHON;
-  const guess = path.resolve(HERE, '..', '..', '..', 'ukv-platform', '.venv', 'Scripts', 'python.exe');
-  return fs.existsSync(guess) ? guess : 'python';
+// A multi-day request caches ~25 MB per forecast step, so the cache lives on the external
+// drive when there is one (C: is nearly full); ENS_CACHE overrides. The script prunes old runs.
+const ENS_CACHE = process.env.ENS_CACHE
+  || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/ens-cache' : path.join(HERE, '..', 'data', 'ens-cache'));
+
+/**
+ * Which Python to run, as [command, extra env].
+ *
+ * The ukv-platform venv was made with a uv-managed Python installed from inside the Claude
+ * desktop app, whose MSIX container redirects %APPDATA% writes to its own LocalCache folder.
+ * The venv's pyvenv.cfg `home` therefore names C:\Users\…\AppData\Roaming\uv\…, a path that
+ * only exists inside that container. The live server is started by Task Scheduler, outside
+ * it, so the venv launcher died with "No Python at …" and the scenario tool never loaded.
+ * pyvenv.cfg also records the interpreter's REAL path (`executable`), so when `home` is
+ * missing we run that interpreter with the venv's site-packages on PYTHONPATH instead.
+ */
+export function resolveEnsPython({ venv = path.resolve(HERE, '..', '..', '..', 'ukv-platform', '.venv'), exists = fs.existsSync, read = (f) => fs.readFileSync(f, 'utf8') } = {}) {
+  if (process.env.ENS_PYTHON) return { cmd: process.env.ENS_PYTHON, env: {} };
+  const venvPy = path.join(venv, 'Scripts', 'python.exe');
+  const cfgFile = path.join(venv, 'pyvenv.cfg');
+  if (!exists(venvPy) || !exists(cfgFile)) return { cmd: 'python', env: {} };
+  const cfg = Object.fromEntries(read(cfgFile).split(/\r?\n/).map((l) => l.match(/^\s*([\w-]+)\s*=\s*(.*?)\s*$/)).filter(Boolean).map((m) => [m[1], m[2]]));
+  if (!cfg.home || exists(path.join(cfg.home, 'python.exe'))) return { cmd: venvPy, env: {} };
+  if (cfg.executable && exists(cfg.executable)) return { cmd: cfg.executable, env: { PYTHONPATH: path.join(venv, 'Lib', 'site-packages') } };
+  return { cmd: venvPy, env: {} };   // nothing better: let the launcher report what is missing
 }
-function runEnsemble(validIso) {
+let ensPy = null;
+function runEnsemble(validIso, lastDay) {
+  ensPy ||= resolveEnsPython();
   return new Promise((resolve, reject) => {
-    const p = spawn(ensPython(), [path.join(HERE, 'ens_scenarios.py'), validIso, ENS_CACHE], { windowsHide: true });
+    const args = [path.join(HERE, 'ens_scenarios.py'), validIso, ENS_CACHE, ...(lastDay ? [lastDay] : [])];
+    const p = spawn(ensPy.cmd, args, { windowsHide: true, env: { ...process.env, ...ensPy.env } });
     let out = '', err = '';
     p.stdout.on('data', (d) => { out += d; });
     p.stderr.on('data', (d) => { err += d; });
@@ -215,6 +240,10 @@ export function mountPastFuture(app) {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
     const hour = [0, 6, 12, 18].includes(+req.query.hour) ? +req.query.hour : 12;
     const iso = `${date}T${String(hour).padStart(2, '0')}:00:00Z`;
-    return cached(`ens:${iso}`, 6 * 3600e3, () => runEnsemble(iso));
+    // Optional last day of a range (inclusive, up to 7 days); absent or equal = one day, as before.
+    let end = /^\d{4}-\d{2}-\d{2}$/.test(req.query.end || '') ? req.query.end : null;
+    if (end && end <= date) end = null;
+    if (end && (Date.parse(end) - Date.parse(date)) / 864e5 > 6) throw new Error('Pick at most 7 days');
+    return cached(`ens:${iso}:${end || ''}`, 6 * 3600e3, () => runEnsemble(iso, end));
   }));
 }
