@@ -98,6 +98,9 @@ export function featureToWarning(feature) {
     warningVersion: p.warningVersion ?? null,
     issuedDate: p.issuedDate || null,
     geometry: feature?.geometry || null,
+    // The maps draw `polygons` (a list of GeoJSON Polygon/MultiPolygon). The NSWWS
+    // feature geometry IS the official warning area, so hand it over as that.
+    polygons: feature?.geometry ? [feature.geometry] : [],
   };
 }
 

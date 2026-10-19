@@ -86,6 +86,8 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
   const mappable = useMemo(
     () => warnings.map(w => {
       if (Array.isArray(w.polygons) && w.polygons.length > 0) return w;
+      // Met Office NSWWS warnings carry their official area as `geometry`.
+      if (w.geometry && (w.geometry.type === 'Polygon' || w.geometry.type === 'MultiPolygon')) return { ...w, polygons: [w.geometry] };
       const drawn = (w.area_drawing || [])
         .map(s => (s?.latLngs || []).filter(p => Array.isArray(p) && p.length === 2))
         .filter(ring => ring.length >= 3)

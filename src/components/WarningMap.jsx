@@ -87,10 +87,9 @@ export default function WarningMap({ warning, height = 220, mapUrl }) {
      nothing else is needed — these ARE the warning area, not an approximation
      of it, so the council lookup below is skipped entirely. */
   const exactPolys = React.useMemo(() => (
-    Array.isArray(warning.polygons)
-      ? warning.polygons.filter(g => g && (g.type === 'Polygon' || g.type === 'MultiPolygon'))
-      : []
-  ), [warning.polygons]);
+    (Array.isArray(warning.polygons) && warning.polygons.length ? warning.polygons : [warning.geometry])
+      .filter(g => g && (g.type === 'Polygon' || g.type === 'MultiPolygon'))
+  ), [warning.polygons, warning.geometry]);
   const hasExact = exactPolys.length > 0;
 
   const names = React.useMemo(() => {
