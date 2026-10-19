@@ -1,3 +1,4 @@
+import { attachPlaceLabels, readPlaceLabelsOn, writePlaceLabelsOn } from '@/lib/placeLabels';
 /* ════════════════════════════════════════════════════════════════════════════
    WarningsMapModal — every warning on one interactive map.
 
@@ -25,7 +26,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useTheme } from '@/components/ThemeContext';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, AlertTriangle, SlidersHorizontal } from 'lucide-react';
+import { X, AlertTriangle, SlidersHorizontal, MapPin } from 'lucide-react';
 
 const SEV = {
   Red:    { hex: '#dc2626', rank: 3 },
@@ -70,6 +71,9 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
   const [typeFilter, setTypeFilter] = useState([]); // empty = all
   const [selected, setSelected] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [labelsOn, setLabelsOn] = useState(readPlaceLabelsOn);
+  const labelsRef = useRef(null);
+  useEffect(() => { writePlaceLabelsOn(labelsOn); labelsRef.current?.setVisible(labelsOn); }, [labelsOn]);
 
   const days = useMemo(() => {
     const t = startOfDay(new Date());
@@ -174,6 +178,7 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
           { maxZoom: 12, subdomains: 'abcd' }).addTo(map);
         map.fitBounds(UK_BOUNDS, { padding: [10, 10] });
         mapInst.current = map;
+        labelsRef.current = attachPlaceLabels(L, map, { dark: isDark, visible: labelsOn });
         // Leaflet measures the container on creation; inside a modal that is
         // still animating open it reads zero and renders a grey box.
         setTimeout(() => { try { map.invalidateSize(); } catch { /* gone */ } }, 260);
@@ -206,7 +211,7 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
   // Tear the map down on close so reopening builds against a live container.
   useEffect(() => {
     if (isOpen) return;
-    if (mapInst.current) { try { mapInst.current.remove(); } catch { /* noop */ } mapInst.current = null; }
+    if (mapInst.current) { try { mapInst.current.remove(); } catch { /* noop */ } mapInst.current = null; labelsRef.current = null; }
     layersRef.current = [];
     setSelected(null);
   }, [isOpen]);
@@ -257,8 +262,12 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
               <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
                 {visible.length} shown{forDay.length !== visible.length ? ` of ${forDay.length}` : ''}
               </span>
+              <button onClick={() => setLabelsOn(v => !v)} aria-pressed={labelsOn} title="Show or hide place names"
+                      style={{ ...chip(labelsOn, '#38bdf8'), marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <MapPin style={{ width: 12, height: 12 }} /> Place names
+              </button>
               <button onClick={() => setShowFilters(v => !v)}
-                      style={{ ...chip(showFilters, '#38bdf8'), marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      style={{ ...chip(showFilters, '#38bdf8'), display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <SlidersHorizontal style={{ width: 12, height: 12 }} /> Filters
               </button>
               <button onClick={onClose} aria-label="Close"

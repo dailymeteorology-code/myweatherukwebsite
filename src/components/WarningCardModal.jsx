@@ -60,6 +60,52 @@ const extractImpacts = (w) => {
   return out;
 };
 
+/* Met Office warnings impact matrix: likelihood (rows, High at the top) x impact
+   (columns, Very low on the left). The cell colour is the warning level that
+   combination produces; the warning's own cell is outlined. */
+const MATRIX_LEVELS = ['Very low', 'Low', 'Medium', 'High'];
+const MATRIX = {           // [likelihood 1..4][impact 1..4] -> level
+  4: ['G', 'Y', 'A', 'R'],
+  3: ['G', 'Y', 'A', 'A'],
+  2: ['G', 'Y', 'Y', 'A'],
+  1: ['G', 'G', 'Y', 'Y'],
+};
+const MATRIX_FILL = { G: '#16a34a', Y: '#facc15', A: '#f59e0b', R: '#dc2626' };
+
+function ImpactMatrix({ likelihood, impact }) {
+  const L = Number(likelihood), I = Number(impact);
+  const has = L >= 1 && L <= 4 && I >= 1 && I <= 4;
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'auto repeat(4, 1fr)', gap: 4, alignItems: 'stretch' }}>
+      {[4, 3, 2, 1].map((l) => (
+        <React.Fragment key={l}>
+          <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#94a3b8', paddingRight: 6, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', whiteSpace: 'nowrap' }}>
+            {MATRIX_LEVELS[l - 1]}
+          </div>
+          {[1, 2, 3, 4].map((i) => {
+            const on = has && l === L && i === I;
+            return (
+              <div key={i} title={`Likelihood ${MATRIX_LEVELS[l - 1].toLowerCase()}, impact ${MATRIX_LEVELS[i - 1].toLowerCase()}`}
+                style={{ height: 30, borderRadius: 6, background: MATRIX_FILL[MATRIX[l][i - 1]], opacity: on ? 1 : 0.38,
+                  outline: on ? '3px solid #fff' : 'none', outlineOffset: -3, boxShadow: on ? '0 0 0 2px rgba(0,0,0,0.6), 0 0 14px rgba(255,255,255,0.35)' : 'none',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {on && <span style={{ width: 10, height: 10, borderRadius: 99, background: '#0f172a', border: '2px solid #fff' }} />}
+              </div>
+            );
+          })}
+        </React.Fragment>
+      ))}
+      <div />
+      {MATRIX_LEVELS.map((n) => (
+        <div key={n} style={{ fontSize: '0.62rem', fontWeight: 700, color: '#94a3b8', textAlign: 'center', paddingTop: 2 }}>{n}</div>
+      ))}
+      <div />
+      <div style={{ gridColumn: '2 / 6', fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748b', textAlign: 'center' }}>Impact →</div>
+      {!has && <div style={{ gridColumn: '1 / 6', fontSize: '0.7rem', color: '#64748b' }}>The Met Office did not publish a likelihood/impact position for this warning.</div>}
+    </div>
+  );
+}
+
 function useCountdown(targetDate) {
   const [remaining, setRemaining] = React.useState('');
   const [elapsed, setElapsed] = React.useState(null);
@@ -200,26 +246,58 @@ export default function WarningCardModal({ warning, isUpcoming, onClose, mapUrl 
               <WarningMap warning={warning} height={230} mapUrl={mapUrl} />
             </motion.div>
 
-            {/* Description */}
+            {/* Summary — the Met Office headline */}
             {warning.description && (
               <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.16 }} style={{ marginBottom: 16 }}>
-                <p style={{ margin: '0 0 8px', fontSize: '0.58rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>What to Expect</p>
-                <p style={{ margin: 0, fontSize: '0.82rem', lineHeight: 1.65, color: '#cbd5e1', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 12, padding: '13px 15px' }}>
-                  {warning.description}
-                </p>
+                <p style={{ margin: '0 0 8px', fontSize: '0.58rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Summary</p>
+                <p style={{ ...{ margin: 0, fontSize: '0.82rem', lineHeight: 1.65, color: '#cbd5e1', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 12, padding: '13px 15px' }, color: '#e2e8f0', fontWeight: 600 }}>{warning.description}</p>
               </motion.div>
             )}
 
-            {/* Impacts */}
-            {impacts.length > 0 && (
+            {/* Further details — the Met Office's full description */}
+            {warning.furtherDetails && (
+              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }} style={{ marginBottom: 16 }}>
+                <p style={{ margin: '0 0 8px', fontSize: '0.58rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Further Details</p>
+                <div style={{ margin: 0, fontSize: '0.82rem', lineHeight: 1.65, color: '#cbd5e1', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 12, padding: '13px 15px' }}>
+                  {warning.furtherDetails.split(/\n+/).filter(Boolean).map((para, i) => (
+                    <p key={i} style={{ margin: i ? '8px 0 0' : 0 }}>{para}</p>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+
+            {/* Impacts expected — the Met Office's "what to expect" statements */}
+            {(Array.isArray(warning.whatToExpect) && warning.whatToExpect.length > 0) ? (
               <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.20 }} style={{ marginBottom: 16 }}>
-                <p style={{ margin: '0 0 8px', fontSize: '0.58rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Expected Impacts</p>
+                <p style={{ margin: '0 0 8px', fontSize: '0.58rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Impacts Expected</p>
+                <ul style={{ ...{ margin: 0, fontSize: '0.82rem', lineHeight: 1.65, color: '#cbd5e1', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 12, padding: '13px 15px' }, margin: 0, paddingLeft: 30, listStyleType: 'disc', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {warning.whatToExpect.map((t, i) => (
+                    <li key={i} style={{ paddingLeft: 2, display: 'list-item' }}>{t}</li>
+                  ))}
+                </ul>
+              </motion.div>
+            ) : impacts.length > 0 && (
+              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.20 }} style={{ marginBottom: 16 }}>
+                <p style={{ margin: '0 0 8px', fontSize: '0.58rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Impacts Expected</p>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {impacts.map(imp => (
                     <span key={imp.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 13px', borderRadius: 99, background: `rgba(${sev.rgb},0.12)`, border: `1px solid rgba(${sev.rgb},0.28)`, fontSize: '0.73rem', fontWeight: 700, color: sev.hex }}>
                       {imp.label}
                     </span>
                   ))}
+                </div>
+              </motion.div>
+            )}
+
+            {/* Impact matrix */}
+            {(warning.likelihood != null || warning.impactLevel != null) && (
+              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.22 }} style={{ marginBottom: 16 }}>
+                <p style={{ margin: '0 0 8px', fontSize: '0.58rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Impact Matrix</p>
+                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 12, padding: '12px 14px' }}>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <div style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748b', textAlign: 'center' }}>Likelihood →</div>
+                    <div style={{ flex: 1 }}><ImpactMatrix likelihood={warning.likelihood} impact={warning.impactLevel} /></div>
+                  </div>
                 </div>
               </motion.div>
             )}

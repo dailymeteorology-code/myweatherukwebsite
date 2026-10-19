@@ -67,6 +67,8 @@ function normaliseRegion(r) {
   return null;
 }
 
+import { attachPlaceLabels, readPlaceLabelsOn, writePlaceLabelsOn } from '@/lib/placeLabels';
+
 export default function WarningMap({ warning, height = 220, mapUrl }) {
   /* The basemap and the ground behind it follow the site theme — this drew a
      dark-grey canvas on a near-black ground whatever the page around it was
@@ -75,6 +77,9 @@ export default function WarningMap({ warning, height = 220, mapUrl }) {
   const mapRef  = useRef(null);
   const mapInst = useRef(null);
   const sev = getSev(warning.severity);
+  const [labelsOn, setLabelsOn] = useState(readPlaceLabelsOn);
+  const labelsRef = useRef(null);
+  useEffect(() => { writePlaceLabelsOn(labelsOn); labelsRef.current?.setVisible(labelsOn); }, [labelsOn]);
 
 
   /* Council boundaries for the named areas, loaded once and shared. `null`
@@ -183,6 +188,7 @@ export default function WarningMap({ warning, height = 220, mapUrl }) {
         try { map.fitBounds(UK_BOUNDS, { padding: [2, 2] }); } catch (_) {}
       }
       mapInst.current = map;
+      labelsRef.current = attachPlaceLabels(L, map, { dark: isDark, visible: labelsOn, extraTiers: 1 });
     };
 
     if (window.L) { build(); }
@@ -202,7 +208,7 @@ export default function WarningMap({ warning, height = 220, mapUrl }) {
     }
     return () => {
       cancelled = true;
-      if (mapInst.current) { try { mapInst.current.remove(); } catch(_){} mapInst.current = null; }
+      if (mapInst.current) { try { mapInst.current.remove(); } catch(_){} mapInst.current = null; labelsRef.current = null; }
     };
   }, [warning, mapUrl, areas, sev.hex, hasExact, exactPolys, isDark]);
 
@@ -251,6 +257,14 @@ export default function WarningMap({ warning, height = 220, mapUrl }) {
           Approx. council areas
         </div>
       )}
+      <button type="button" onClick={() => setLabelsOn(v => !v)} aria-pressed={labelsOn} title="Show or hide place names"
+        style={{
+          position: 'absolute', bottom: 8, right: 8, zIndex: 500, padding: '4px 9px', borderRadius: 7, cursor: 'pointer',
+          fontSize: '0.62rem', fontWeight: 700, fontFamily: 'inherit', border: `1px solid ${labelsOn ? sev.border : 'rgba(148,163,184,0.35)'}`,
+          background: 'rgba(6,13,26,0.86)', color: labelsOn ? '#f1f5f9' : '#94a3b8',
+        }}>
+        {labelsOn ? 'Place names on' : 'Place names off'}
+      </button>
       <div style={{ position: 'absolute', bottom: 8, left: 8, display: 'flex', alignItems: 'center', gap: 0, borderRadius: 8, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,0.6)', pointerEvents: 'none' }}>
         <div style={{ padding: '4px 10px', background: sev.hex, color: warning.severity === 'Yellow' ? '#0a0f1e' : '#fff', fontWeight: 800, fontSize: '0.68rem', letterSpacing: '0.05em' }}>
           {warning.severity}

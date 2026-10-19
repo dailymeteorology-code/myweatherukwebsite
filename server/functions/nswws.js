@@ -90,6 +90,10 @@ export function featureToWarning(feature) {
     validFrom: p.validFromDate || null,
     validTo: p.validToDate || null,
     impacts,
+    // The Met Office's own two text blocks, kept separate for the warning info panel:
+    // the further-details paragraph and the "what to expect" impact statements.
+    furtherDetails: String(p.warningFurtherDetails || '').trim(),
+    whatToExpect: expect,
     // Extra detail the scraper could never provide. Ignored by anything that
     // does not know about it, so it costs nothing to carry.
     likelihood: p.warningLikelihood ?? null,

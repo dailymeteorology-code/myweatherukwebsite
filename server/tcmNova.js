@@ -14,7 +14,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { requireAdmin } from './auth.js';
 import { releaseAssets } from './githubReleases.js';
@@ -142,12 +142,24 @@ const REPO = process.env.NOVA_REPO || 'dailymeteorology-code/myweatherukwebsite'
 const MODE = process.env.NOVA_MODE || 'cloud';
 let syncState = { last: null, error: null, downloaded: [] };
 
+/* Downloads stream to disk and archives unpack in a child process: run archives are tens
+   of MB, and doing either synchronously froze the whole site for over a minute per sync. */
 async function fetchTo(url, file) {
   const r = await fetch(url, { headers: { 'User-Agent': 'MyWeatherUK-NOVA' } });
   if (!r.ok) throw new Error(`${r.status} ${url}`);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file + '.part', Buffer.from(await r.arrayBuffer()));
-  fs.renameSync(file + '.part', file);
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  const { pipeline } = await import('node:stream/promises');
+  const { Readable } = await import('node:stream');
+  await pipeline(Readable.fromWeb(r.body), fs.createWriteStream(file + '.part'));
+  await fs.promises.rename(file + '.part', file);
+}
+
+function untar(tgz, dir) {
+  return new Promise((resolve) => {
+    const p = spawn('tar', ['-xzf', tgz, '-C', dir], { windowsHide: true });
+    p.on('exit', (code) => resolve(code));
+    p.on('error', () => resolve(1));
+  });
 }
 
 export async function syncFromGitHub() {
@@ -161,9 +173,9 @@ export async function syncFromGitHub() {
         if (!m || fs.existsSync(path.join(dir, m[1], 'manifest.json'))) continue;
         const tgz = path.join(DATA, '_dl', a.name);
         await fetchTo(a.browser_download_url, tgz);
-        const x = spawnSync('tar', ['-xzf', tgz, '-C', dir], { windowsHide: true });
-        fs.rmSync(tgz, { force: true });
-        if (x.status === 0) got.push(m[1]);
+        const code = await untar(tgz, dir);
+        await fs.promises.rm(tgz, { force: true });
+        if (code === 0) got.push(m[1]);
       }
       const runs = fs.readdirSync(dir).filter((n) => SAFE_ID.test(n) && fs.existsSync(path.join(dir, n, 'manifest.json'))).sort();
       const newest = runs.reverse().find((n) => ['published', 'degraded'].includes(readJson(path.join(dir, n, 'manifest.json'))?.status));
@@ -175,7 +187,7 @@ export async function syncFromGitHub() {
         const tgz = path.join(DATA, '_dl', a.name);
         await fetchTo(a.browser_download_url, tgz);
         fs.mkdirSync(path.join(DATA, 'learning'), { recursive: true });
-        spawnSync('tar', ['-xzf', tgz, '-C', path.join(DATA, 'learning')], { windowsHide: true });
+        await untar(tgz, path.join(DATA, 'learning'));
         const days = fs.readdirSync(path.join(DATA, 'learning', 'reports')).filter((f) => f.endsWith('.json')).sort();
         if (days.length) fs.writeFileSync(path.join(DATA, 'learning', 'latest.json'), JSON.stringify({ day: days.at(-1).replace('.json', '') }));
       }
