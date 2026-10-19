@@ -86,7 +86,7 @@ def analyse_product(product, day, strikes, now):
     by_region = {}
     peak_fc, peak_ob = {}, {}
     for rd in sorted((DATA / product).glob(f'{product}-*')):
-        if rd.name.endswith('.partial') or not calibrate.same_grid(rd, grid):
+        if rd.name.endswith('.partial') or not calibrate.same_grid(rd, grid) or not calibrate.engine_ok(rd, product):
             continue
         m = json.loads((rd / 'manifest.json').read_text())
         raw_name = 'p_thunder_uncal' if 'p_thunder_uncal' in m['fields'] else 'p_thunder'

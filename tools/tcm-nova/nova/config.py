@@ -9,8 +9,17 @@ import os
 from pathlib import Path
 
 ENGINE_VERSION = 'nova-1.0.0'
-HYPER_ENGINE_VERSION = 'nova-hyper-0.1.0'      # stage-1 kinematic engine, see docs/HYPER_SHORT.md
-ANALYSIS_VERSION = 'nova-obsan-0.1.0'
+HYPER_ENGINE_VERSION = 'nova-hyper-2.0.0'      # Hyper-Short 2 (hyper/engine2.py) on the TCM V5 UKV environment
+ANALYSIS_VERSION = 'nova-obsan-2.0.0'
+
+# Calibration era. Curves and NOVA-AI fitted on runs of the OLD engines must never be
+# applied to the new ones: everything learned is stamped with CAL_ERA, only runs whose
+# engine_version starts with CAL_ENGINES[product] are learned from, and live pairs from
+# before CAL_SINCE are ignored. Until enough new-era days exist (calibrate.MIN_DAYS), the
+# forecasts go out uncalibrated -- which the manifests say.
+CAL_ERA = 'v5'
+CAL_SINCE = '2026-10-19'
+CAL_ENGINES = {'main': 'nova-v5', 'hyper': 'nova-hyper-2', 'hindcast': 'nova-v5'}
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parents[1]
@@ -84,20 +93,21 @@ MODELS = {
 WINDOWS = [(0, 6), (6, 24), (24, 72), (72, 120)]
 BASELINE = {
     'ukv':        [20, 16, 4, 1],
-    'mogreps_uk': [20, 16, 7, 4],
+    'mogreps_uk': [14, 12, 6, 4],
     'mo_global':  [2, 3, 6, 8],
     'mogreps_g':  [3, 4, 7, 9],
     'ifs':        [9, 10, 10, 9],
     'ifs_ens':    [14, 16, 18, 20],
     'aifs':       [1, 2, 3, 4],
     'aifs_ens':   [3, 5, 7, 8],
-    'icon_eu':    [6, 7, 7, 6],
-    'icon_d2':    [12, 10, 5, 0],      # added Oct 2026 (2.2 km, convection-permitting; to T+48 only)
+    'icon_eu':    [3, 4, 5, 6],
+    'icon_d2':    [12, 10, 5, 0],      # added Oct 2026 (2.2 km, convection-permitting; to T+48 only),
+                                       # its share taken from ICON-EU (which it nests in) and the non-AWS MOGREPS-UK/Meteo-France
     'icon_eps':   [7, 8, 7, 8],
     'gfs':        [2, 2, 5, 5],
     'gefs':       [5, 4, 8, 9],
-    'arpege':     [3, 3, 6, 4],
-    'pearp':      [5, 4, 5, 5],
+    'arpege':     [2, 2, 5, 4],
+    'pearp':      [3, 2, 4, 5],
 }
 
 # Initial-development family caps (fraction of the renormalised blend). Not a

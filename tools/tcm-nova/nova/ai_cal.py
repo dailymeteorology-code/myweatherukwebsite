@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from .config import DATA
+from .config import CAL_ERA, DATA
 from .regions import REGIONS
 
 MODEL_FILE = DATA / 'nova_ai.json'
@@ -191,7 +191,8 @@ def load():
     if 'm' not in _LOADED:
         try:
             d = json.loads(MODEL_FILE.read_text())
-            _LOADED['m'] = (Net.from_json(d['model']), d) if d.get('applied') and 'model' in d else (None, d)
+            ok = d.get('applied') and 'model' in d and d.get('era') == CAL_ERA    # never an old-engine net
+            _LOADED['m'] = (Net.from_json(d['model']), d) if ok else (None, d)
         except Exception:
             _LOADED['m'] = (None, {})
     return _LOADED['m']

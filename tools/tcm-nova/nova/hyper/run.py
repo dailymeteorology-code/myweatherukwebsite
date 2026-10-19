@@ -1,4 +1,5 @@
-"""TCM Hyper-Short run: hourly, 1.5 km, 24 h at 30-min frames, observations only.
+"""TCM Hyper-Short run: hourly, 1.5 km, 24 h at 30-min frames; radar + lightning nowcast
+(engine2) blended with TCM V5 on the latest UKV.
 
     python -m nova.hyper.run [--init 2026-10-18T16:00]
 """
@@ -6,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -19,30 +21,29 @@ from ..calibrate import calibrate_field
 from ..config import ANALYSIS_VERSION, HYPER, HYPER_ENGINE_VERSION
 from ..grid import Grid, coarsen_sampler
 from ..io_aws import log
-from . import engine, obs
-from .ukv_env import ENV_FIELDS, UKVEnvironment, blend_weight
+from . import engine2 as E2
+from . import obs
+from .ukv_env import ENV_FIELDS, UKVEnvironment
 
 UNAVAILABLE = {
     'hydrometeor mixing ratios': 'UKV does not publish them on AWS, and Hyper-Short may only use UKV',
 }
 
 
-_STATIC = {}
-
-
-def hyper_static():
-    if 's' not in _STATIC:
-        from .. import ai_cal, terrain
-        from ..regions import region_map
-        g = Grid.get(HYPER['grid'])
-        t = terrain.load(g.name)
-        _STATIC['s'] = ai_cal.static_fields(t, region_map(g, t['land_frac']))
-    return _STATIC['s']
-
-
 def hour_init(now=None):
     now = now or datetime.now(timezone.utc)
     return now.replace(minute=0, second=0, microsecond=0)
+
+
+def _ukv_skill(E0, radar, dx_m):
+    """UKV's skill right now: FSS of its precipitation against the radar analysis (1 mm/h,
+    on the TAU_SCALE_KM neighbourhood the nowcast's own predictability is measured on), over
+    the radar's coverage. None when neither has rain."""
+    if not E0 or 'ukv_precip' not in E0:
+        return None
+    seen = np.isfinite(radar)
+    return E2.fss(np.where(seen, np.nan_to_num(E0['ukv_precip']), 0), np.where(seen, radar, 0), 1.0,
+                  max(3, int(round(E2.TAU_SCALE_KM * 1000 / dx_m))))
 
 
 def run(init=None):
@@ -51,16 +52,19 @@ def run(init=None):
     rid = store.run_id('hyper', init)
     store.set_status('hyper', state='collecting', run_id=rid, init_utc=init.isoformat())
     t0 = time.time()
-    # 1-2. acquire + freshness/QC
-    frames = obs.latest_radar(init, n=5, max_age_min=HYPER['max_obs_age_min'])
+    # 1. observations: the last 90 minutes of radar (7 composites, 15-min), QC'd and de-speckled
+    frames = obs.latest_radar(init, n=7, max_age_min=HYPER['max_obs_age_min'])
     newest = frames[-1]
     age_min = (init - newest['time']).total_seconds() / 60
     to_grid = coarsen_sampler(grid, newest['projdef'], newest['x'], newest['y'])
-    rains = []
+    rains, prev = [], None
     for f in frames:
         r = f['rate'].copy()
         r[r > 250] = np.nan                                # QC: physically implausible rates
-        rains.append(to_grid(r))
+        r = E2.clean_radar(to_grid(r), prev)
+        rains.append(r)
+        prev = r
+    times = [f['time'] for f in frames]
     cur = rains[-1]
     coverage = float(np.isfinite(cur).mean())
     store.set_status('hyper', state='analysing', run_id=rid)
@@ -72,31 +76,39 @@ def run(init=None):
     except Exception as e:
         strikes, lt_update, lt_ok = [], None, False
         log(f'lightning feed unavailable: {e}')
-    # 3-6. analysis: lightning density (strikes km-2 h-1, last 30 min, time-weighted) on the grid
-    lt = np.zeros(grid.shape, np.float32)
-    if strikes:
-        tr = Transformer.from_crs('EPSG:4326', grid.crs, always_xy=True)
-        for t, la, lo in strikes:
-            age = (init - t).total_seconds() / 60
-            if 0 <= age <= 30:
-                x, y = tr.transform(lo, la)
-                ix, iy = int((x - grid.x0) // grid.dx), int((y - grid.y0) // grid.dx)
-                if 0 <= ix < grid.nx and 0 <= iy < grid.ny:
-                    lt[iy, ix] += 2.0 / ((grid.dx / 1000) ** 2)            # per km² per hour
-        from scipy import ndimage
-        lt = ndimage.gaussian_filter(lt, 2.0)
-    dt_s = (frames[-1]['time'] - frames[0]['time']).total_seconds()
-    u, v, nblk = engine.motion_field(np.nan_to_num(rains[0]), np.nan_to_num(cur), grid.dx, dt_s) if dt_s > 0 else (0 * cur, 0 * cur, 0)
+    tr = Transformer.from_crs('EPSG:4326', grid.crs, always_xy=True)
+    lt, lt_trend = E2.lightning_analysis(strikes, init, grid, tr)
+    # 2. the environment: TCM V5 on the latest UKV (steering wind, CAPE, UKV's own hazards)
+    env = UKVEnvironment(init)
+    E0 = env.at(init)
+    steer_u = E0.get('ukv_steer_u') if E0 else None
+    steer_v = E0.get('ukv_steer_v') if E0 else None
+    # 3. motion: every radar pair + the whole sequence, steering wind where echoes are sparse
+    u, v, minfo = E2.motion_multi(rains, times, grid.dx, steer_u, steer_v)
     speed = float(np.hypot(u, v).mean() * grid.dx)
-    # advance analysis from radar time to the run init (radar is ~10–15 min old)
+    # 4. growth/decay trend and today's own predictability time, from the radar sequence
+    g, tau_now = E2.growth_and_memory(rains, times, u, v, grid.dx)
+    # 5. carry the analysis from radar time to the run init (radar is ~10-15 min old);
+    #    the lightning analysis is already referenced to the init
     rain0 = np.nan_to_num(cur)
-    lag = (init - newest['time']).total_seconds()
-    if lag > 0:
-        rain0, lt = engine.advect(rain0, u, v, lag), engine.advect(lt, u, v, lag)
+    lag_min = (init - newest['time']).total_seconds() / 60
+    if lag_min > 0:
+        rain0, g = E2.advance(rain0, u, v, lag_min), E2.advance(g, u, v, lag_min)
+    # 6. lifetimes from the environment; a rising flash rate lengthens a storm's life
+    tau_small, tau_light = E2.lifetimes(E0.get('mu_cape') if E0 else None)
+    jump = np.clip(lt_trend / (lt + 0.05), -1, 1)
+    tau_light = (np.asarray(tau_light, np.float32) * (1 + 0.4 * jump)).astype(np.float32)
+    tau_small = (np.asarray(tau_small, np.float32) * (1 + 0.2 * np.clip(jump, 0, 1))).astype(np.float32)
+    skill = _ukv_skill(E0, cur, grid.dx)
+    s_used = skill if skill is not None else 0.5
     analysis = {
-        'version': ANALYSIS_VERSION, 'radar_times': [f['time'].isoformat() for f in frames],
-        'radar_age_min': round(age_min, 1), 'radar_coverage': round(coverage, 3), 'motion_blocks': nblk,
-        'mean_motion_ms': round(speed, 1), 'lightning_feed': 'ok' if lt_ok else 'unavailable',
+        'version': ANALYSIS_VERSION, 'radar_times': [t.isoformat() for t in times],
+        'radar_age_min': round(age_min, 1), 'radar_coverage': round(coverage, 3),
+        'motion_pairs': minfo['pairs'], 'motion_blocks': minfo['blocks'],
+        'motion_steering_blend': minfo['steering'], 'radar_motion_fraction': minfo.get('radar_motion_fraction'),
+        'mean_motion_ms': round(speed, 1), 'predictability_min': round(tau_now),
+        'ukv_fss_now': None if skill is None else round(skill, 3),
+        'lightning_feed': 'ok' if lt_ok else 'unavailable',
         'lightning_strikes_60min': len(strikes), 'lightning_last_update': lt_update,
         'uncertainty': 'radar-unobserved cells (NaN) treated as dry; lightning detection efficiency not modelled',
     }
@@ -104,44 +116,47 @@ def run(init=None):
         'name': HYPER['name'], 'engine_version': HYPER_ENGINE_VERSION, 'analysis_version': ANALYSIS_VERSION,
         'init_utc': init.isoformat(), 'init_local': init.astimezone(ZoneInfo('Europe/London')).strftime('%Y-%m-%d %H:%M %Z'),
         'grid': grid.meta(), 'resolution_m': grid.dx, 'horizon_h': 24, 'step_min': 30,
-        'method': ('Observation-initialised kinematic forecast (TCM engine, stage 1): radar + lightning analysis, '
-                   'phase-correlation motion field, semi-Lagrangian advection with scale-dependent Lagrangian decay. '
-                   'No NWP forecast input of any kind. Not a 3-D atmospheric model: it does not initiate new storms.'),
-        'inputs': {'radar': 's3://met-office-radar-obs-data (observations)', 'lightning': 'Met Office LEELA (observations)'},
-        'nwp_inputs': [], 'analysis': analysis, 'unavailable': UNAVAILABLE, 'calibration': 'uncalibrated',
-        'skill_horizon': 'useful mainly to ~T+3 h; later frames show only decaying existing echoes',
+        'inputs': {'radar': 's3://met-office-radar-obs-data (observations, 7 composites over 90 min)',
+                   'lightning': 'Met Office LEELA (observations)',
+                   'ukv': 'latest UKV run (s3://met-office-atmospheric-model-data/uk-deterministic-2km) through TCM V5'},
+        'nwp_inputs': ['ukv'] if env.run else [], 'ukv_cycle_utc': env.run.isoformat() if env.run else None,
+        'analysis': analysis, 'unavailable': UNAVAILABLE,
+        'calibration': 'uncalibrated (new engine; NOVA learning recalibrates once its own verification pairs exist)',
+        'method': ('TCM Hyper-Short 2. Observation nowcast: the last 90 min of radar (7 composites, de-speckled) and '
+                   'recency-weighted LEELA lightning; motion from every radar pair and the whole sequence, blended '
+                   'towards the TCM V5 850-500 hPa steering wind where echoes are sparse; backward-trajectory '
+                   'extrapolation that samples the analysis once per output time (no cumulative smoothing); measured '
+                   'Lagrangian growth/decay; storm lifetimes from V5 MUCAPE and the lightning trend; a 16-member '
+                   'ensemble (speed, direction, growth) for probabilities to T+6 h. Blended with TCM V5 on the latest '
+                   'UKV using STEPS skill weights: the hand-over comes where the nowcast\'s measured correlation falls '
+                   'to UKV\'s current skill against the radar. No machine learning, no other model.'),
+        'skill_horizon': (f'nowcast and UKV weigh equally at about T+{-tau_now * math.log(min(max(s_used, 0.15), 0.9)) / 60:.1f} h today '
+                          f'(radar predictability {tau_now:.0f} min, UKV FSS {s_used:.2f}); later frames are mainly UKV'),
     }
-    env = UKVEnvironment(init)
-    manifest['nwp_inputs'] = ['ukv'] if env.run else []
-    manifest['ukv_cycle_utc'] = env.run.isoformat() if env.run else None
-    manifest['inputs']['ukv'] = 'latest UKV run (s3://met-office-atmospheric-model-data/uk-deterministic-2km): 3-D environment and UKV hazards'
-    manifest['method'] = ('Observation nowcast (radar + lightning analysis, phase-correlation motion, semi-Lagrangian advection '
-                          'with scale-dependent decay) blended with the latest UKV run; nowcast weight exp(-lead/90 min). '
-                          'The UKV half is the TCM V5 engine on UKV alone (V5 Stage 4 parcels/DCAPE/shear/moisture, the '
-                          'twelve V5 engines and the V5 probability chain, verified against V5 cell by cell), on the 2 km '
-                          'grid, remapped to 1.5 km. No other model is used.')
-    manifest['skill_horizon'] = 'nowcast dominates to about T+2 h; later frames are mainly UKV'
     writer = store.RunWriter('hyper', init, manifest)
     store.set_status('hyper', state='running', run_id=rid)
     acc = np.zeros(grid.shape, np.float32)
     prev = None
-    for lead, rain, light in engine.integrate(rain0, lt, u, v, grid.dx, 24 * 60, 30):
-        P = engine.probabilities(rain, light, lead, grid.dx, speed)
+    motion = {'motion_u': (u * grid.dx).astype(np.float32), 'motion_v': (v * grid.dx).astype(np.float32)}
+    seed = int(init.timestamp() // 3600)
+    stream = E2.nowcast(rain0, lt, u, v, g, tau_small, tau_light, grid.dx, range(0, 24 * 60 + 1, 30), seed=seed,
+                        extra={'lightning_jump': (np.clip(lt_trend, 0, None), 30.0)})
+    for lead, rain, light, members, carried in stream:
+        P = E2.probabilities(members, rain, light, lead, grid.dx, speed)
         vt = init + timedelta(minutes=lead)
-        E = env.at(vt)
-        wn = blend_weight(lead)
-        out = {'p_rain': P['p_rain'], 'motion_u': (u * grid.dx).astype(np.float32), 'motion_v': (v * grid.dx).astype(np.float32)}
+        E = env.at(vt) if lead else E0
+        wn = E2.blend_weight(lead, tau_now, s_used) if E else 1.0
+        out = dict(motion, lightning_jump=carried['lightning_jump'])
         if E:
             def mix(now, mod):
-                return np.clip(wn * now + (1 - wn) * mod, 0, None).astype(np.float32)
-            E.setdefault('ukv_precip', np.zeros(grid.shape, np.float32))
-            E.setdefault('ukv_flash_density', np.zeros(grid.shape, np.float32))
-            for k in ('ukv_precip', 'ukv_flash_density', 'ukv_p_thunder', 'ukv_p_lightning', 'ukv_p_heavy_rain'):
-                E[k] = np.nan_to_num(E.get(k, np.zeros(grid.shape, np.float32)))
-            out.update(precip=mix(rain, E['ukv_precip']), flash_density=mix(light, E['ukv_flash_density']),
-                       p_thunder=np.clip(mix(P['p_thunder'], E['ukv_p_thunder']), 0, 1),
-                       p_lightning=np.clip(mix(P['p_lightning'], E['ukv_p_lightning']), 0, 1),
-                       p_heavy_rain=np.clip(mix(P['p_heavy_rain'], E['ukv_p_heavy_rain']), 0, 1))
+                return np.clip(wn * now + (1 - wn) * np.nan_to_num(mod), 0, None).astype(np.float32)
+            z = np.zeros(grid.shape, np.float32)
+            ukv_rain = np.nan_to_num(E.get('ukv_precip', z))
+            out.update(precip=mix(rain, ukv_rain), flash_density=mix(light, E.get('ukv_flash_density', z)),
+                       p_rain=np.clip(mix(P['p_rain'], (ukv_rain >= 1.0).astype(np.float32)), 0, 1),
+                       p_thunder=np.clip(mix(P['p_thunder'], E.get('ukv_p_thunder', z)), 0, 1),
+                       p_lightning=np.clip(mix(P['p_lightning'], E.get('ukv_p_lightning', z)), 0, 1),
+                       p_heavy_rain=np.clip(mix(P['p_heavy_rain'], E.get('ukv_p_heavy_rain', z)), 0, 1))
             for k in ('p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_tornado_env', 'p_severe', 'p_initiation'):
                 if 'ukv_' + k in E:
                     out[k] = np.clip(np.nan_to_num(E['ukv_' + k]), 0, 1).astype(np.float32)
@@ -150,19 +165,15 @@ def run(init=None):
             for k in ENV_FIELDS + ['t2', 'td2', 'u10', 'v10']:
                 if k in E:
                     out[k] = E[k]
-            conf = float(0.5 + 0.5 * np.exp(-lead / 360))
+            ukv_conf = float(np.nanmean(E['ukv_confidence'])) if 'ukv_confidence' in E else 0.5
+            conf = float(wn * math.exp(-lead / (2 * tau_now)) + (1 - wn) * ukv_conf)
         else:
-            out.update(precip=rain, flash_density=light, p_thunder=P['p_thunder'], p_lightning=P['p_lightning'],
-                       p_heavy_rain=P['p_heavy_rain'])
-            conf = float(np.exp(-lead / 180))
+            out.update(precip=rain, flash_density=light, p_rain=P['p_rain'], p_thunder=P['p_thunder'],
+                       p_lightning=P['p_lightning'], p_heavy_rain=P['p_heavy_rain'])
+            conf = float(math.exp(-lead / (2 * tau_now)))
         out['p_thunder_uncal'] = out['p_thunder']
-        out['p_thunder'], cal_t = calibrate_field(out['p_thunder'], lead / 60, 'hyper_p_thunder')
-        if E is not None:
-            from .. import ai_cal
-            p_ai, used = ai_cal.apply_grid(out['p_thunder_uncal'], lead / 60, {k: out[k] for k in ai_cal.ENV_FIELDS if k in out},
-                                           hyper_static(), 'hyper')
-            if used:
-                out['p_thunder'], cal_t = p_ai, 'nova-ai'
+        out['p_thunder'], used = calibrate_field(out['p_thunder'], lead / 60, 'hyper_p_thunder')   # new-era curves only
+        cal_t = 'isotonic (V5 era)' if used else 'uncalibrated'
         acc = acc + 0.25 * (prev + out['precip']) if lead else acc          # trapezoid over 30 min, mm
         prev = out['precip']
         pk = [k for k in out if k.startswith('p_')]
@@ -170,7 +181,8 @@ def run(init=None):
             'checks': {'prob_out_of_range': int(sum(((out[k] < 0) | (out[k] > 1)).sum() for k in pk)),
                        'negative_precip': int((out['precip'] < 0).sum()), 'nan_frac_core': float(np.isnan(out['precip']).mean())},
             'confidence': round(conf, 3), 'neighbourhood_km': round(P['neighbourhood_km'], 1),
-            'nowcast_weight': round(wn, 3), 'ukv_environment': bool(E), 'calibrated': cal_t})
+            'nowcast_weight': round(wn, 3), 'ensemble_members': len(members) if members else 1,
+            'ukv_environment': bool(E), 'calibrated': cal_t})
         log(f'hyper T+{lead / 60:4.1f} h  nowcast w={wn:.2f}  ukv={bool(E)}  pmax={out["p_thunder"].max():.2f}')
     store.set_status('hyper', state='validating', run_id=rid)
     fr = writer.manifest['frames']

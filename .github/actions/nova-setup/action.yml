@@ -4,10 +4,18 @@ runs:
   using: composite
   steps:
     - uses: actions/setup-python@v5
-      with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
+      with: { python-version: '3.11' }
+    # the whole installed environment is cached (restores in seconds; pip only runs when
+    # requirements.txt changes) -- job start-up is on the Main Run's critical path
+    - uses: actions/cache@v4
+      id: pyenv
+      with:
+        path: ${{ env.pythonLocation }}
+        key: nova-pyenv-${{ runner.os }}-${{ env.pythonLocation }}-${{ hashFiles('tools/tcm-nova/requirements.txt') }}
     - shell: bash
-      run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libeccodes0 libeccodes-data >/dev/null
-    - shell: bash
+      run: sudo apt-get install -y -qq --no-install-recommends libeccodes0 libeccodes-data >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libeccodes0 libeccodes-data >/dev/null)
+    - if: steps.pyenv.outputs.cache-hit != 'true'
+      shell: bash
       run: pip install -q -r tools/tcm-nova/requirements.txt
     # Numba keys its on-disk cache on each source file's modification time, which a fresh
     # checkout resets. Pinning the times keeps the compiled kernels valid between runs, so
@@ -19,7 +27,7 @@ runs:
     - uses: actions/cache@v4
       with:
         path: /tmp/numba
-        key: nova-kernels-${{ runner.os }}-${{ hashFiles('tools/tcm-nova/nova/v5x/*.py', 'tools/tcm-nova/requirements.txt') }}
+        key: nova-kernels-${{ runner.os }}-${{ hashFiles('tools/tcm-nova/nova/v5x/*.py', 'tools/tcm-nova/nova/hyper/engine2.py', 'tools/tcm-nova/requirements.txt') }}
     - uses: actions/cache@v4
       with:
         path: /tmp/nova/cache/v5_pseudoadiabat_rk4_v1.npy

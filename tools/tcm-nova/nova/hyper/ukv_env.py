@@ -8,9 +8,9 @@ precipitation and gust fields. Diagnostics are computed on UKV's own ~2 km colum
 real resolution) on the NOVA 2 km grid, then remapped bilinearly to the 1.5 km grid —
 1.5 km output does not pretend UKV has 1.5 km detail.
 
-Blending with the observation nowcast (`blend_weight`): the nowcast dominates the first
-hour and fades with an e-folding of 90 min (as in STEPS-style nowcast/NWP blending,
-Bowler et al. 2006); beyond ~4 h the forecast is essentially UKV's.
+Blending with the observation nowcast is engine2.blend_weight: STEPS skill weights, the
+hand-over coming where the nowcast's measured correlation falls to UKV's current skill
+against the radar (Bowler et al. 2006).
 """
 from __future__ import annotations
 
@@ -19,21 +19,13 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 from scipy import ndimage
 
-from .. import hazards as hz
-from .. import terrain
 from ..grid import Grid
 from ..io_aws import log
-from ..main_run import environment, prepare
 from ..sources import UKV
 
 ENV_FIELDS = ['mu_cape', 'sb_cape', 'ml_cape', 'ml_cin', 'mu_cin', 'dcape', 'ml_lcl_z', 'mu_lfc_z', 'mu_el_z', 'lifted_index',
               'freezing_level', 'wbz', 'pw', 'shear_0_1km', 'shear_0_6km', 'srh_0_1km', 'srh_0_3km', 'esrh', 'scp', 'stp',
               'storm_u', 'storm_v', 'lapse_700_500', 'pbl_height']
-
-
-def blend_weight(lead_min):
-    """Weight of the observation nowcast at a lead time (UKV gets 1 − w)."""
-    return float(np.exp(-lead_min / 90.0))
 
 
 def env_hours(horizon_h=24):

@@ -39,7 +39,7 @@ const card = { background: T.card, border: `1px solid ${T.border}`, borderRadius
 
 const PRODUCTS = {
   main: { label: 'TCM Main Run', res: '2 km', blurb: 'Four runs a day · 7 models each run through TCM V5 at 2 km' },
-  hyper: { label: 'TCM Hyper-Short', res: '1.5 km', blurb: 'Hourly · 24 h at 30 min · radar & lightning nowcast blended with the latest UKV' },
+  hyper: { label: 'TCM Hyper-Short', res: '1.5 km', blurb: 'Hourly · 24 h at 30 min · 16-member radar & lightning nowcast blended with TCM V5 on the latest UKV' },
 };
 
 /* hazards shown in the left column: field, label, icon */
@@ -77,6 +77,7 @@ const LAYERS = {
   p_rain: { label: 'Rain ≥1 mm/h probability', unit: '%', stops: PROB, pct: true },
   precip: { label: 'Precipitation rate', unit: 'mm/h', stops: [[0.1, [147, 197, 253, 0]], [0.3, [96, 165, 250, 170]], [1, [37, 99, 235, 200]], [4, [250, 204, 21, 210]], [10, [249, 115, 22, 220]], [25, [220, 38, 38, 230]], [50, [168, 85, 247, 235]]] },
   precip_accum: { label: 'Accumulated precipitation', unit: 'mm', stops: [[0.5, [147, 197, 253, 0]], [2, [96, 165, 250, 160]], [10, [37, 99, 235, 195]], [25, [250, 204, 21, 205]], [50, [239, 68, 68, 220]], [100, [168, 85, 247, 230]]] },
+  lightning_jump: { label: 'Lightning jump (rising flash rate)', unit: '/km²/h', stops: [[0.005, [250, 204, 21, 0]], [0.02, [250, 204, 21, 160]], [0.1, [249, 115, 22, 200]], [0.5, [220, 38, 38, 220]], [2, [168, 85, 247, 235]]] },
   flash_density: { label: 'Lightning flash density', unit: '/km²/h', stops: [[0.005, [250, 204, 21, 0]], [0.02, [250, 204, 21, 170]], [0.1, [249, 115, 22, 200]], [0.5, [220, 38, 38, 220]], [2, [168, 85, 247, 235]]] },
   hail_size_max_cm: { label: 'Max hail size estimate', unit: 'cm', stops: [[0.5, [125, 211, 252, 0]], [1, [125, 211, 252, 170]], [2, [250, 204, 21, 200]], [3, [249, 115, 22, 215]], [5, [220, 38, 38, 230]]] },
   gust_max: { label: 'Max gust estimate', unit: 'mph', mul: 2.237, stops: [[25, [148, 163, 184, 0]], [35, [125, 211, 252, 150]], [45, [250, 204, 21, 190]], [58, [249, 115, 22, 210]], [70, [220, 38, 38, 225]]] },
@@ -117,8 +118,8 @@ const MAIN_LAYER_GROUPS = [
   ['Calibration', ['p_thunder_uncal']],
 ];
 const HYPER_LAYER_GROUPS = [
-  ['Nowcast + UKV', ['p_thunder', 'p_lightning', 'p_rain', 'p_heavy_rain', 'precip', 'precip_accum', 'flash_density']],
-  ['UKV hazards', ['p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_supercell', 'p_tornado_env', 'p_severe', 'hail_size_max_cm', 'gust_max']],
+  ['Nowcast + UKV', ['p_thunder', 'p_lightning', 'p_rain', 'p_heavy_rain', 'precip', 'precip_accum', 'flash_density', 'lightning_jump']],
+  ['UKV hazards', ['p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_supercell', 'p_tornado_env', 'p_severe', 'p_initiation', 'hail_size_max_cm', 'gust_max']],
   ['UKV environment', ['mu_cape', 'ml_cin', 'dcape', 'shear_0_6km', 'srh_0_1km', 'scp', 'stp', 'lapse_700_500', 'pw', 'wbz']],
 ];
 

@@ -69,6 +69,12 @@ def run_source(key, frame, terr, *, run, fh, valid_time, lon, fixes=True):
            'freezing_level': F['freezing_level'], 'wbz': F['wet_bulb_zero'], 'pw': v('precipitable_water'),
            'lapse_700_500': v('lr_700_500'), 'shear_0_1km': v('shear_0_1km'), 'shear_0_6km': v('shear_0_6km'),
            'srh_0_1km': v('srh_0_1km'), 'srh_0_3km': v('srh_0_3km'), 'pbl_height': F['pbl_depth']}
+    # steering-level wind (850-500 hPa mean, grid-relative), for Hyper-Short's motion field
+    from ..config import LEVELS
+    sel = [i for i, p in enumerate(LEVELS) if 500 <= p <= 850]
+    with np.errstate(invalid='ignore'):
+        env['steer_u'] = np.nanmean(frame['pl']['u'][sel], axis=0)
+        env['steer_v'] = np.nanmean(frame['pl']['v'][sel], axis=0)
     env = {k: np.where(valid, a, np.nan) for k, a in env.items() if a is not None}
     return {'sf': sf, 'env': env, 'R': R, 'valid': valid, 'seconds': round(time.time() - t0, 1), 'stage4_s': round(t4, 1)}
 

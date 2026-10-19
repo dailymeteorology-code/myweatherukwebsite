@@ -34,6 +34,7 @@ from .config import LEVELS, MAIN
 from .grid import Grid
 from .sources import UKV, log
 from . import v5_bridge as B
+from .calibrate import calibrate_field
 
 from route_ci import MAIN_ENGINE as ENGINE_VERSION   # one definition, shared with the scheduler
 LONDON = ZoneInfo('Europe/London')
@@ -122,11 +123,19 @@ def compute(product, init, leads, stride, workers, writer_dir: Path, cycles_out:
     only = ('ukv',) if product == 'hyper' else None
     blender = VB.Blender(init, max(leads), only=only)
     cycles_out.update(blender.cycles)
-    for lead in leads:
+    # the next frame's data downloads while this frame computes (fetching is network-bound,
+    # the physics CPU-bound, so the two overlap almost completely)
+    import concurrent.futures as cf
+    ex = cf.ThreadPoolExecutor(1)
+    nxt = ex.submit(blender.at, init + timedelta(hours=leads[0])) if leads else None
+    for i, lead in enumerate(leads):
         vt = init + timedelta(hours=lead)
         t0 = time.time()
         try:
-            got = blender.at(vt)
+            try:
+                got = nxt.result()
+            finally:            # one fetch at a time (SourceCache is not shared across threads)
+                nxt = ex.submit(blender.at, init + timedelta(hours=leads[i + 1])) if i + 1 < len(leads) else None
             t_fetch = time.time() - t0
             fields, meta = PL.run_frame(got, lead, blender.cycles, blender.terr, blender.g, run=init, valid_time=vt, log=log)
             if fields is None:
@@ -134,15 +143,18 @@ def compute(product, init, leads, stride, workers, writer_dir: Path, cycles_out:
                 continue
             srcs = fields.pop('_sources', {})
             fields = to_nova_fields(fields, grid)
+            fields['p_thunder_uncal'] = fields['p_thunder']
+            fields['p_thunder'], cal = calibrate_field(fields['p_thunder'], lead, 'p_thunder')
             if lead <= 24 and product != 'hyper':
                 save_sources(writer_dir, lead * 60, srcs, grid)
         except Exception:
             traceback.print_exc()
             continue
-        meta = dict(meta, calibrated='uncalibrated', fetch_s=round(t_fetch, 1), seconds=round(time.time() - t0))
+        meta = dict(meta, calibrated='isotonic (V5 era)' if cal else 'uncalibrated', fetch_s=round(t_fetch, 1), seconds=round(time.time() - t0))
         tmp.frame(lead * 60, vt.isoformat(), fields, meta)
         log(f'T+{lead:3d} {vt:%a %HZ} p_thunder max={fields["p_thunder"].max():.2f} '
-            f'(data {t_fetch:.0f}s, total {time.time() - t0:.0f}s, models {meta["sources"]})')
+            f'(waited {t_fetch:.0f}s for data, total {time.time() - t0:.0f}s, models {meta["sources"]})')
+    ex.shutdown(wait=False)
     return tmp.manifest['frames']
 
 

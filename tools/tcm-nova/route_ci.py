@@ -22,7 +22,7 @@ REPO = os.environ.get('GITHUB_REPOSITORY', 'dailymeteorology-code/myweatherukweb
 LONDON = ZoneInfo('Europe/London')
 MAIN_CYCLES = (3, 9, 15, 21)                 # UK wall clock
 #: Bump when the Main Run engine changes: the current cycle is then re-run with it.
-MAIN_ENGINE = 'nova-v5-2.1'
+MAIN_ENGINE = 'nova-v5-2.2'
 MAIN_LEADS = list(range(0, 97, 3))
 MAIN_JOBS = 17
 UKV_BUCKET = 'https://met-office-atmospheric-model-data.s3.eu-west-2.amazonaws.com'

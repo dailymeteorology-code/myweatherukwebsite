@@ -375,6 +375,32 @@ class GFS(GribLatLon):
         return out
 
 
+def _ecm_base(src, run, step, stem=None, host=None):
+    host = host or src.__dict__.get('_host', {}).get((run, step), BUCKETS['ecm_gcs'])
+    return f'{host}/{run:%Y%m%d}/{run:%H}z/{src.path}/{run:%Y%m%d%H}0000-{step}h-{stem or src.stem}'
+
+
+def _ecm_available(src, run):
+    return any(exists(_ecm_base(src, run, 0, host=h) + '.index') for h in (BUCKETS['ecm_gcs'], BUCKETS['ecm']))
+
+
+def _ecm_index(src, run, step):
+    """The step's index from ECMWF's Google Cloud copy, else the AWS copy; remembers which
+    host answered so the GRIB ranges come from the same file."""
+    hosts = src.__dict__.setdefault('_host', {})
+    for i in range(3):
+        for h in (BUCKETS['ecm_gcs'], BUCKETS['ecm']):
+            try:
+                txt = get(_ecm_base(src, run, step, host=h) + '.index', tries=2, timeout=60).decode()
+                if txt.strip():
+                    hosts[(run, step)] = h
+                    return ecmwf_index(txt)
+            except Exception:
+                pass
+        time.sleep(2 + 2 * i)
+    return None
+
+
 class ECMWF(GribLatLon):
     """IFS HRES and AIFS Single (stream oper)."""
     key = 'ifs'
@@ -386,24 +412,16 @@ class ECMWF(GribLatLon):
            'skt': 'skt', 'tcwv': 'pw_src', 'swvl1': 'soilw', 'vsw': 'soilw'}
 
     def base(self, run, step):
-        return f'{BUCKETS["ecm"]}/{run:%Y%m%d}/{run:%H}z/{self.path}/{run:%Y%m%d%H}0000-{step}h-{self.stem}'
+        return _ecm_base(self, run, step)
 
     def available(self, run, need):
-        return exists(self.base(run, 0) + '.index')
+        return _ecm_available(self, run)
 
     def steps_ok(self, step):
         return step <= 144 and step % 3 == 0 or step % 6 == 0
 
     def _index(self, run, step):
-        for i in range(4):
-            try:
-                txt = get(self.base(run, step) + '.index').decode()
-                if txt.strip():
-                    return ecmwf_index(txt)
-            except RuntimeError:
-                pass
-            time.sleep(2 + 2 * i)
-        return None
+        return _ecm_index(self, run, step)
 
     def frame(self, run, vt, grid, dt_h):
         step = int((vt - run).total_seconds() // 3600)
@@ -424,7 +442,7 @@ class ECMWF(GribLatLon):
                 if lt == 'sol' and str(r.get('levelist')) not in ('1',):
                     continue
                 want.append((r['_offset'], r['_offset'] + r['_length'] - 1, ('sfc', p, 0)))
-        blobs = fetch_ranges(self.base(run, step) + '.grib2', want, gap=3_000_000, workers=2)
+        blobs = fetch_ranges(self.base(run, step) + '.grib2', want, gap=200_000, workers=16)
         pl, sfc, valid = {}, {}, None
         tp = None
         for (kind, p, lev), blob in blobs.items():
@@ -484,10 +502,10 @@ class ECMWFEns(GribLatLon):
     params = ('tp', 'mucape')
 
     def base(self, run, step, stem=None):
-        return f'{BUCKETS["ecm"]}/{run:%Y%m%d}/{run:%H}z/{self.path}/{run:%Y%m%d%H}0000-{step}h-{stem or self.stem}'
+        return _ecm_base(self, run, step, stem)
 
     def available(self, run, need):
-        return exists(self.base(run, 0) + '.index')
+        return _ecm_available(self, run)
 
     def members(self, run, step, grid):
         key = (run, step, grid.name)
@@ -499,15 +517,14 @@ class ECMWFEns(GribLatLon):
         return memo[key]
 
     def _members(self, run, step, grid):
-        try:
-            idx = ecmwf_index(get(self.base(run, step) + '.index').decode())
-        except Exception:
+        idx = _ecm_index(self, run, step)
+        if not idx:
             return None
         want = [(r['_offset'], r['_offset'] + r['_length'] - 1, (r['param'], int(r.get('number', 0))))
                 for r in idx if r.get('param') in self.params and r.get('levtype') == 'sfc']
         if not want:
             return None
-        blobs = fetch_ranges(self.base(run, step) + '.grib2', want, gap=4_000_000, workers=2)
+        blobs = fetch_ranges(self.base(run, step) + '.grib2', want, gap=200_000, workers=16)
         out = {}
         for (p, n), blob in blobs.items():
             a, meta = decode_grib(blob)

@@ -27,7 +27,8 @@ FIELDS_OUT = ('p_thunder', 'p_lightning', 'p_hail', 'p_hail_sig', 'p_wind_damagi
               'p_tornado_env', 'p_heavy_rain', 'p_severe', 'p_initiation', 'confidence', 'uncertainty',
               'mu_cape', 'sb_cape', 'ml_cape', 'ml_cin', 'mu_cin', 'dcape', 'ml_lcl_z', 'mu_lfc_z', 'mu_el_z',
               'freezing_level', 'wbz', 'pw', 'lapse_700_500', 'shear_0_1km', 'shear_0_6km', 'srh_0_1km',
-              'srh_0_3km', 'pbl_height', 't2', 'td2', 'u10', 'v10', 'precip', 'flash_density', 'gust_max')
+              'srh_0_3km', 'pbl_height', 't2', 'td2', 'u10', 'v10', 'precip', 'flash_density', 'gust_max',
+              'steer_u', 'steer_v')
 
 
 def path(cycle, vt):

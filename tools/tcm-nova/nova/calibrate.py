@@ -31,7 +31,7 @@ import numpy as np
 from scipy import ndimage
 
 from . import store
-from .config import DATA
+from .config import CAL_ENGINES, CAL_ERA, CAL_SINCE, DATA
 from .grid import Grid, coarsen_sampler
 from .hyper import obs
 from .io_aws import log
@@ -88,6 +88,8 @@ def calibrate_field(p, lead_h, field='p_thunder'):
         try:
             _CACHE['cal'] = json.loads(CAL_FILE.read_text())
         except Exception:
+            _CACHE['cal'] = {}
+        if _CACHE['cal'].get('era') != CAL_ERA:            # curves fitted on the old engines
             _CACHE['cal'] = {}
     cur = _CACHE['cal'].get(field, {}).get(str(window_index(lead_h)))
     if cur is None and field == 'hyper_p_thunder':
@@ -177,7 +179,7 @@ def collect():
     cache_dir.mkdir(parents=True, exist_ok=True)
     static = static_thinned(grid)
     for rd in sorted((DATA / 'hindcast').glob('hindcast-*')):
-        if rd.name.endswith('.partial') or not same_grid(rd, grid):
+        if rd.name.endswith('.partial') or not same_grid(rd, grid) or not engine_ok(rd, 'hindcast'):
             continue
         cf_ = cache_dir / f'{rd.name}.v2.npz'
         if cf_.exists():
@@ -226,6 +228,15 @@ def collect():
 AI_ROWS = []          # (day, X, y) for NOVA-AI, filled by collect() and live_samples()
 
 
+def engine_ok(rd, product):
+    """Only runs of the current engines teach the calibration (see config.CAL_ENGINES)."""
+    try:
+        e = json.loads((rd / 'manifest.json').read_text()).get('engine_version') or ''
+    except Exception:
+        return False
+    return e.startswith(CAL_ENGINES.get(product, '\0'))
+
+
 def same_grid(rd, grid):
     try:
         g = json.loads((rd / 'manifest.json').read_text())['grid']
@@ -249,7 +260,7 @@ def live_samples(days=60):
     cut = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
     for f in sorted((DATA / 'learning' / 'pairs').glob('*-20??-??-??.npz')):
         product, day = f.stem.split('-', 1)
-        if day < cut or product not in ('main', 'hyper'):
+        if day < cut or day < CAL_SINCE or product not in ('main', 'hyper'):
             continue
         field = 'p_thunder' if product == 'main' else 'hyper_p_thunder'
         z = np.load(f)
@@ -310,7 +321,7 @@ def fit(live_days=60):
     for field, by_win in live_samples(live_days).items():
         for wi, rows in by_win.items():
             samples.setdefault(field, {}).setdefault(wi, []).extend(rows)
-    out = {'event_definition': f'radar >= {CORE_MMH} mm/h (convective-core proxy) or archived lightning, within the forecast neighbourhood, ±90 min',
+    out = {'era': CAL_ERA, 'event_definition': f'radar >= {CORE_MMH} mm/h (convective-core proxy) or archived lightning, within the forecast neighbourhood, ±90 min',
            'method': 'isotonic (pool-adjacent-violators) reliability mapping, binned; leave-one-day-out cross-validation',
            'fitted_utc': datetime.now(timezone.utc).isoformat(), 'thinning': THIN}
     for field, by_win in samples.items():
@@ -347,6 +358,7 @@ def fit(live_days=60):
     # NOVA-AI: must beat both the raw forecast and the isotonic curves on day-held-out data
     iso_cv = [(v['brier_calibrated_cv'], v['n_samples']) for v in out.get('p_thunder', {}).values() if v.get('brier_calibrated_cv') is not None]
     ai = ai_cal.fit([(d, np.asarray(X, np.float32), np.asarray(y, np.float32)) for d, X, y in AI_ROWS])
+    ai['era'] = CAL_ERA
     if iso_cv and ai.get('brier_ai_cv') is not None:
         iso_tot = sum(b * n for b, n in iso_cv) / sum(n for _, n in iso_cv)
         ai['brier_isotonic_cv'] = iso_tot

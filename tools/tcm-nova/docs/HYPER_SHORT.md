@@ -1,5 +1,37 @@
 # TCM Hyper-Short: what exists, what doesn't, and the staged plan
 
+> **Hyper-Short 2 (19 Oct 2026, `nova/hyper/engine2.py`, engine `nova-hyper-2.0.0`).** It replaces the stage-1 engine described below, which `engine.py` still holds; v2 reuses its block motion estimator. What changed:
+>
+> - **Radar:** the last 90 min (7 composites at 15 min, not 5). Speckle is removed unless it was also there in the previous frame.
+> - **Motion:**
+>   - Estimated from every consecutive pair and from the whole sequence, weighted by evidence.
+>   - Where echoes are sparse, it blends to the TCM V5 850–500 hPa steering wind from UKV. v1 returned zero motion there.
+> - **Extrapolation:** backward trajectories that sample the analysis once per output time. v1 re-interpolated every 5 min, which blurred cells into smudges by T+3 h.
+> - **Growth and decay:**
+>   - The Lagrangian intensity trend is measured from the radar sequence and extrapolated with 30-min damping.
+>   - Storm lifetimes come from V5 MUCAPE (30–105 min). A rising lightning flash rate lengthens them.
+> - **Ensemble:** 16 members (speed ±12 %, direction ±10°, growth ±50 %) to T+6 h. Probabilities are neighbourhood member frequencies.
+> - **Lightning:** recency-weighted, with a published `lightning_jump` layer showing where the flash rate is rising.
+> - **Blend with UKV:** STEPS skill weights (Bowler et al. 2006). The hand-over comes where the nowcast's expected FSS falls to UKV's current FSS against the radar. The nowcast's decay comes from today's radar sequence forecasting itself (1 mm/h, 20 km). It is not at a fixed 90 min.
+> - **Calibration:** none until new-engine verification pairs exist. The old-engine curves and NOVA-AI are stamped out by `config.CAL_ERA`.
+>
+> **Verified (19 Oct 2026, 7 inits 06–15Z, a showery day).** Mean FSS against the radar that fell:
+>
+> | | T+30 | T+60 | T+90 | T+120 | T+180 |
+> |---|---|---|---|---|---|
+> | **1 mm/h, 10 km:** persistence | 0.68 | 0.49 | 0.38 | 0.33 | 0.24 |
+> | **1 mm/h, 10 km:** v1 | 0.69 | 0.48 | 0.36 | 0.30 | 0.19 |
+> | **1 mm/h, 10 km:** v2 | 0.73 | 0.53 | 0.42 | 0.36 | 0.25 |
+> | **4 mm/h, 30 km:** persistence | 0.69 | 0.44 | 0.34 | 0.24 | 0.15 |
+> | **4 mm/h, 30 km:** v1 | 0.56 | 0.20 | 0.08 | 0.01 | 0.00 |
+> | **4 mm/h, 30 km:** v2 | 0.74 | 0.51 | 0.39 | 0.31 | 0.22 |
+>
+> The same test showed:
+> - v2's motion alone beats v1's.
+> - Decaying the cells (v1, and an early v2) loses to persistence for heavy rain.
+>
+> So v2 carries the cells with their measured growth and no blanket decay, leaving the uncertainty to the ensemble and the UKV hand-over. On the test run, today's hand-over to UKV was at about T+2 h.
+
 > **Update 18 Oct 2026, by the user's instruction:** Hyper-Short now also uses the **latest UKV run**, and only UKV, for everything observations can't provide. The rest of this document describes the observation part.
 >
 > `hyper/ukv_env.py` computes the 3-D environment (CAPE/CIN/LCL/LFC/shear/SRH/DCAPE/freezing levels) and UKV hazard probabilities:

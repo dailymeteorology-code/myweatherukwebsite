@@ -22,6 +22,10 @@ _codes = threading.Lock()
 BUCKETS = {
     'mo':   'https://met-office-atmospheric-model-data.s3.eu-west-2.amazonaws.com',
     'ecm':  'https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com',
+    # ECMWF's own Google Cloud copy of the same open-data files. The AWS copy throttles the
+    # AIFS and ENS objects hard (a 1 MB range measured at 18-46 s on 19 Oct 2026, the same
+    # 46 MB in 4 s here), so ECMWF readers try this first and fall back to AWS.
+    'ecm_gcs': 'https://storage.googleapis.com/ecmwf-open-data',
     'gfs':  'https://noaa-gfs-bdp-pds.s3.amazonaws.com',
     'gefs': 'https://noaa-gefs-pds.s3.amazonaws.com',
     'radar': 'https://met-office-radar-obs-data.s3.eu-west-2.amazonaws.com',

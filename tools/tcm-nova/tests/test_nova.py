@@ -78,23 +78,75 @@ def test_main_cycles_configured():
 
 # 6-8 hyper horizon / frames ---------------------------------------------------
 def test_hyper_produces_49_half_hour_frames():
-    from nova.hyper import engine
+    from nova.hyper import engine2 as E2
     rain = np.zeros((60, 60), np.float32)
     rain[20:30, 20:30] = 10
-    leads = [l for l, *_ in engine.integrate(rain, rain * 0, np.zeros_like(rain), np.zeros_like(rain), 1500, 1440, 30)]
+    z = np.zeros_like(rain)
+    leads = [l for l, *_ in E2.nowcast(rain, z, z, z, z, 45.0, 40.0, 1500, range(0, 1441, 30))]
     assert leads == list(range(0, 1441, 30)) and len(leads) == 49
 
 
 def test_hyper_advection_moves_and_decays():
-    from nova.hyper import engine
+    from nova.hyper import engine2 as E2
     rain = np.zeros((40, 80), np.float32)
     rain[18:22, 10:14] = 20
+    z = np.zeros_like(rain)
     u = np.full_like(rain, 1 / 300.0)                    # 1 cell per 5 min eastwards
-    out = {l: r for l, r, _ in engine.integrate(rain, rain * 0, u, rain * 0, 1500, 60, 30)}
-    c0 = np.average(np.arange(80), weights=out[0].sum(0))
-    c60 = np.average(np.arange(80), weights=out[60].sum(0) + 1e-9)
-    assert 10 < c60 - c0 < 14                            # ~12 cells in 60 min
-    assert out[60].sum() < out[0].sum()                  # Lagrangian decay, no new rain
+    out = {l: (r, m) for l, r, _, m, _ in E2.nowcast(rain, z, u * 0.2, z, z, 45.0, 40.0, 1500, [0, 30, 300, 720])}
+    c0 = np.average(np.arange(80), weights=out[0][0].sum(0))
+    c300 = np.average(np.arange(80), weights=out[300][0].sum(0) + 1e-9)
+    assert 10 < c300 - c0 < 14                           # ~12 cells in 300 min at 0.2 cell / 5 min
+    assert abs(out[30][0].sum() / out[0][0].sum() - 1) < 0.05     # no blanket decay inside 6 h
+    assert out[720][0].sum() < 0.5 * out[0][0].sum()     # fades beyond the ensemble window
+    assert out[30][1] is not None and len(out[30][1]) == E2.ENSEMBLE
+
+
+def test_hyper_extrapolation_does_not_smear():
+    """One sampling per output time: a sharp cell stays sharp after 3 h of motion."""
+    from nova.hyper import engine2 as E2
+    rain = np.zeros((40, 200), np.float32)
+    rain[18:22, 10:14] = 1.0
+    z = np.zeros_like(rain)
+    u = np.full_like(rain, 1 / 300.0)
+    adv = E2.advance(rain, u, z, 180)                    # 36 cells east
+    assert abs(np.argmax(adv.sum(0)) - 47.5) <= 1.5
+    assert adv.max() > 0.95 and (adv > 0.05).sum() <= 25
+
+
+def test_blend_weight_hands_over_where_nowcast_meets_ukv_skill():
+    import math
+    from nova.hyper import engine2 as E2
+    from nova.hyper.ukv_env import env_hours
+    tau = 120.0
+    assert E2.blend_weight(0, tau, 0.5) == 1.0
+    t_cross = -tau * math.log(0.5)                       # where exp(-t/tau) = UKV skill
+    assert abs(E2.blend_weight(t_cross, tau, 0.5) - 0.5) < 1e-6
+    ws = [E2.blend_weight(t, tau, 0.5) for t in range(0, 361, 30)]
+    assert all(a >= b for a, b in zip(ws, ws[1:])) and ws[-1] < 0.05
+    assert E2.blend_weight(60, tau, 0.8) < E2.blend_weight(60, tau, 0.3)   # good UKV day -> earlier hand-over
+    assert env_hours()[0] == 0 and env_hours()[-1] == 24
+
+
+def test_radar_cleaning_drops_speckle_keeps_persistent_showers():
+    from nova.hyper import engine2 as E2
+    prev = np.zeros((50, 50), np.float32)
+    prev[10, 10] = 3.0                                   # a small shower already there
+    cur = np.zeros_like(prev)
+    cur[10, 11] = 3.0                                    # ... moved one cell
+    cur[40, 40] = 5.0                                    # isolated speckle, new
+    cur[20:25, 20:25] = 2.0                              # a real rain area
+    out = E2.clean_radar(cur, prev)
+    assert out[10, 11] == 3.0 and out[40, 40] == 0.0 and out[20:25, 20:25].min() == 2.0
+
+
+def test_motion_follows_steering_wind_where_dry():
+    from datetime import datetime, timedelta
+    from nova.hyper import engine2 as E2
+    t0 = datetime(2026, 10, 19, 12)
+    rains = [np.zeros((80, 80), np.float32) for _ in range(3)]
+    su = np.full((80, 80), 15.0, np.float32)             # 15 m/s westerly steering
+    u, v, info = E2.motion_multi(rains, [t0 + timedelta(minutes=5 * i) for i in range(3)], 1500, su, su * 0)
+    assert info['steering'] and abs(float(u.mean()) * 1500 - 15.0) < 0.5 and abs(float(v.mean())) < 1e-6
 
 
 def test_motion_field_recovers_shift():
@@ -145,7 +197,7 @@ def test_frame_roundtrip(tmp_data):
 
 # 12 lineage: Hyper-Short uses observations + the latest UKV, and NO other model --------
 def test_hyper_lineage_is_obs_plus_ukv_only():
-    allowed = {'sources': {'UKV'}, 'main_run': {'environment', 'prepare'}}
+    allowed = {'sources': {'UKV'}, 'main_run': {'SourceCache'}}
     banned_strings = ('ecmwf-forecasts', 'noaa-gfs', 'noaa-gefs', 'open-meteo', 'opendata.dwd.de', 'global-deterministic',
                       'READERS', 'ICONEU', 'GFS(', 'ECMWF(', 'GEFS(', 'MOGlobal')
     for f in (ROOT / 'nova' / 'hyper').glob('*.py'):
@@ -160,12 +212,6 @@ def test_hyper_lineage_is_obs_plus_ukv_only():
         code = '\n'.join(l for l in src.splitlines() if not l.strip().startswith('#'))
         for b in banned_strings:
             assert b not in code, f'{f.name} references {b}'
-
-
-def test_blend_weight_hands_over_to_ukv():
-    from nova.hyper.ukv_env import blend_weight, env_hours
-    assert blend_weight(0) == 1.0 and blend_weight(90) < 0.4 and blend_weight(360) < 0.02
-    assert env_hours()[0] == 0 and env_hours()[-1] == 24
 
 
 # 15 no AI / ML anywhere in the downscaling and engines -------------------------
@@ -359,8 +405,9 @@ def test_learning_scores():
     assert 0 <= s['brier'] <= 1
 
 
-def test_live_pairs_roundtrip_into_calibration(tmp_data):
+def test_live_pairs_roundtrip_into_calibration(tmp_data, monkeypatch):
     from nova import calibrate
+    monkeypatch.setattr(calibrate, 'CAL_SINCE', '2000-01-01')
     (tmp_data / 'learning' / 'pairs').mkdir(parents=True)
     rng = np.random.default_rng(3)
     from datetime import date
@@ -378,6 +425,21 @@ def test_live_pairs_roundtrip_into_calibration(tmp_data):
     c = out['p_thunder']['1']
     assert c['n_days'] == 10 and c['applied'] and c['brier_calibrated_cv'] < c['brier_raw_cv']
     assert abs(calibrate.apply_curve(np.array([0.8]), c)[0] - 0.4) < 0.08
+
+
+def test_old_engine_calibration_is_never_applied(tmp_data):
+    from nova import ai_cal, calibrate
+    (tmp_data / 'calibration.json').write_text(json.dumps(
+        {'p_thunder': {'1': {'applied': True, 'x': [0.5], 'y': [0.1]}}}))          # no era stamp = old engine
+    calibrate._CACHE.clear()
+    p = np.full((4, 4), 0.5, np.float32)
+    out, used = calibrate.calibrate_field(p, 12, 'p_thunder')
+    assert not used and np.allclose(out, p)
+    (tmp_data / 'calibration.json').write_text(json.dumps(
+        {'era': calibrate.CAL_ERA, 'p_thunder': {'1': {'applied': True, 'x': [0.5], 'y': [0.1]}}}))
+    calibrate._CACHE.clear()
+    out, used = calibrate.calibrate_field(p, 12, 'p_thunder')
+    assert used and np.allclose(out, 0.1)
 
 
 def test_rule_based_analysis_runs():

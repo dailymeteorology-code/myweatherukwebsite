@@ -162,6 +162,20 @@ function untar(tgz, dir) {
   });
 }
 
+/* A run is re-published under the same id when the engine changes and the cycle is re-run.
+   Each download records the asset it came from; a local copy older than that (or, for copies
+   made before the stamp existed, a manifest written well before the asset was uploaded) is
+   replaced. */
+const assetStamp = (a) => `${a.size}|${a.updated_at || ''}`;
+function replaced(a, runDir) {
+  try {
+    return fs.readFileSync(path.join(runDir, '.release-asset'), 'utf8') !== assetStamp(a);
+  } catch {
+    const written = fs.statSync(path.join(runDir, 'manifest.json')).mtimeMs;
+    return Date.parse(a.updated_at) - written > 15 * 60000;
+  }
+}
+
 export async function syncFromGitHub() {
   const got = [];
   try {
@@ -170,12 +184,24 @@ export async function syncFromGitHub() {
       fs.mkdirSync(dir, { recursive: true });
       for (const a of await releaseAssets(`nova-${product}`)) {
         const m = /^((main|hyper)-\d{8}T\d{4}Z)\.tar\.gz$/.exec(a.name);
-        if (!m || fs.existsSync(path.join(dir, m[1], 'manifest.json'))) continue;
+        if (!m) continue;
+        const runDir = path.join(dir, m[1]);
+        if (fs.existsSync(path.join(runDir, 'manifest.json')) && !replaced(a, runDir)) continue;
         const tgz = path.join(DATA, '_dl', a.name);
         await fetchTo(a.browser_download_url, tgz);
-        const code = await untar(tgz, dir);
+        /* unpack beside, then swap: a re-run must not leave the old engine's fields behind */
+        const tmp = path.join(DATA, '_dl', `x-${m[1]}`);
+        await fs.promises.rm(tmp, { recursive: true, force: true });
+        fs.mkdirSync(tmp, { recursive: true });
+        const code = await untar(tgz, tmp);
         await fs.promises.rm(tgz, { force: true });
-        if (code === 0) got.push(m[1]);
+        if (code === 0 && fs.existsSync(path.join(tmp, m[1], 'manifest.json'))) {
+          await fs.promises.rm(runDir, { recursive: true, force: true });
+          await fs.promises.rename(path.join(tmp, m[1]), runDir);
+          fs.writeFileSync(path.join(runDir, '.release-asset'), assetStamp(a));
+          got.push(m[1]);
+        }
+        await fs.promises.rm(tmp, { recursive: true, force: true });
       }
       const runs = fs.readdirSync(dir).filter((n) => SAFE_ID.test(n) && fs.existsSync(path.join(dir, n, 'manifest.json'))).sort();
       const newest = runs.reverse().find((n) => ['published', 'degraded'].includes(readJson(path.join(dir, n, 'manifest.json'))?.status));
