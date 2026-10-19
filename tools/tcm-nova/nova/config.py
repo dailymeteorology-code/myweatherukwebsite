@@ -71,6 +71,7 @@ MODELS = {
     'aifs':       dict(label='ECMWF AIFS Single',               family='ecmwf',     kind='det', res_km=28.0, aws='ecmwf-forecasts/aifs-single/0p25/oper', max_lead_h=360, profile=True, ai=True),
     'aifs_ens':   dict(label='ECMWF AIFS ENS',                  family='ecmwf',     kind='ens', res_km=31.0, aws='ecmwf-forecasts/aifs-ens/0p25/enfo', max_lead_h=360, members=50, ai=True),
     'icon_eu':    dict(label='DWD ICON-EU deterministic',       family='dwd',       kind='det', res_km=6.5,  aws='opendata.dwd.de/weather/nwp/icon-eu', max_lead_h=120, profile=True),
+    'icon_d2':    dict(label='DWD ICON-D2 (convection-permitting)', family='dwd',     kind='det', res_km=2.2,  aws='opendata.dwd.de/weather/nwp/icon-d2', max_lead_h=48, profile=True),
     'icon_eps':   dict(label='DWD ICON-EU-EPS (EU nest)',       family='dwd',       kind='ens', res_km=13.2, aws='opendata.dwd.de/weather/nwp/icon-eu-eps', max_lead_h=120, members=40),
     'gfs':        dict(label='NOAA GFS deterministic',          family='noaa',      kind='det', res_km=13.0, aws='noaa-gfs-bdp-pds', max_lead_h=384, profile=True),
     'gefs':       dict(label='NOAA GEFS ensemble',              family='noaa',      kind='ens', res_km=25.0, aws='noaa-gefs-pds/pgrb2ap5', max_lead_h=384, members=30),
@@ -91,6 +92,7 @@ BASELINE = {
     'aifs':       [1, 2, 3, 4],
     'aifs_ens':   [3, 5, 7, 8],
     'icon_eu':    [6, 7, 7, 6],
+    'icon_d2':    [12, 10, 5, 0],      # added Oct 2026 (2.2 km, convection-permitting; to T+48 only)
     'icon_eps':   [7, 8, 7, 8],
     'gfs':        [2, 2, 5, 5],
     'gefs':       [5, 4, 8, 9],

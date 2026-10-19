@@ -75,6 +75,8 @@ def run_verification(now=None):
             wi = str(window_index(fr['lead_h']))
             sd = rd / 'sources' / str(fr['lead_min'])
             for f in sd.glob('*.bin') if sd.exists() else []:
+                if f.name.endswith('.pthunder.bin'):
+                    continue                            # scored against lightning below
                 a = np.frombuffer(zlib.decompress(f.read_bytes()), np.float16).astype(np.float32).reshape(oc.shape)
                 s = fss(a, oc, 1.0, 3)
                 if s is None:
@@ -99,6 +101,20 @@ def run_verification(now=None):
             r = max(1, int((10 + 0.35 * fr['lead_h']) * 1000 / grid.dx))
             yy, xx = np.ogrid[-r:r + 1, -r:r + 1]
             obs_ev = ndimage.maximum_filter(hit, footprint=(xx * xx + yy * yy) <= r * r)
+            # each model's own TCM V5 probability against the same lightning, at 10 km
+            oev = block_mean(obs_ev.astype(np.float32), COARSE) > 0
+            ce = float(oev.mean())
+            for f in sd.glob('*.pthunder.bin') if sd.exists() else []:
+                pm = np.frombuffer(zlib.decompress(f.read_bytes()), np.float16).astype(np.float32).reshape(oev.shape)
+                ok = np.isfinite(pm)
+                if not ok.any() or ce in (0.0, 1.0):
+                    continue
+                bsm = float(np.mean((pm[ok] - oev[ok]) ** 2))
+                bssm = 1 - bsm / (ce * (1 - ce))
+                model = f.name.split('.')[0]
+                cell = skill.setdefault('thunder_v5', {}).setdefault(wi, {}).setdefault(model, {'n': 0, 'skill': 0.0})
+                cell['skill'] = (cell['skill'] * cell['n'] + max(bssm, 0.0)) / (cell['n'] + 1)
+                cell['n'] += 1
             bs = float(np.mean((p - obs_ev) ** 2))
             clim = float(obs_ev.mean())
             bss = None if clim in (0, 1) else 1 - bs / (clim * (1 - clim))

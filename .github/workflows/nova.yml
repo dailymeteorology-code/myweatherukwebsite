@@ -1,173 +1,196 @@
 # TCM NOVA on GitHub's servers, so the forecasts keep running when the PC is off.
 #
-#   hyper      every hour             TCM Hyper-Short (radar + lightning + latest UKV)
-#   main       03/09/15/21 UK time    TCM Main Run on TCM V5 (4 days, every model at 2 km, 4 parallel chunks)
-#   learning   00:00 UK time          verify yesterday, retrain weights + calibration + NOVA-AI
-#   lightning  every 6 hours          archive every UK & Ireland strike per UK day
-#   train      on demand              historical training, one parallel job per day
+# Every 10 minutes the `route` job asks the PUBLISHED STATE what is missing and starts it
+# (tools/tcm-nova/route_ci.py). GitHub drops or delays many scheduled triggers -- on
+# 19 Oct 2026 only 13 of ~30 fired, which is why the 09Z/15Z Main Runs and most
+# Hyper-Short hours never appeared -- so nothing here is keyed to which trigger fired: a
+# dropped trigger is simply caught by the next one.
 #
-# Results are published as GitHub Release assets (nova-main, nova-hyper, nova-state,
-# nova-lightning); the self-hosted site syncs them to D:/TCM-NOVA when it is running.
-# All inputs are public (AWS open data, DWD open data, Met Office radar/LEELA) — no secrets.
+#   main       03/09/15/21 UK time   TCM Main Run on the TCM V5 engine, 3-hourly to 4 days.
+#                                    17 jobs side by side, two lead times each; one job
+#                                    assembles and publishes.
+#   ukv-env    each new UKV cycle    Hyper-Short's UKV half (TCM V5 on UKV), computed as soon
+#                                    as the cycle reaches AWS, 6 jobs side by side.
+#   hyper      every hour            TCM Hyper-Short (radar + lightning nowcast + UKV/V5),
+#                                    then the UK & Ireland lightning archive.
+#   learning   00:20 UK time         verify yesterday, retrain weights + calibration + NOVA-AI
+#   train      on demand             historical training, one parallel job per day
+#
+# Results are GitHub Release assets (nova-main, nova-hyper, nova-ukvenv, nova-state,
+# nova-lightning); the self-hosted site mirrors them. All inputs are public open data.
 name: TCM NOVA
 
 on:
   schedule:
-    - cron: '7 * * * *'                       # hyper, every hour
-    - cron: '12 2,8,14,20 * * *'              # main during BST (03/09/15/21 UK)
-    - cron: '12 3,9,15,21 * * *'              # main during GMT
-    - cron: '20 23 * * *'                     # learning during BST (00:20 UK)
-    - cron: '20 0 * * *'                      # learning during GMT
-    - cron: '40 */6 * * *'                    # lightning archive
+    - cron: '3,13,23,33,43,53 * * * *'
   push:
-    paths: ['tools/tcm-nova/TRAIN_REQUEST.json']   # editing this file starts a training run
+    paths: ['tools/tcm-nova/TRAIN_REQUEST.json']
   workflow_dispatch:
     inputs:
       job:
-        description: 'hyper | main | learning | lightning | train'
+        description: 'auto | main | hyper | ukv_env | learning | train'
         required: true
-        default: hyper
+        default: auto
       train_start: { description: 'train: first day (YYYY-MM-DD)', required: false, default: '2026-06-01' }
       train_end:   { description: 'train: last day', required: false, default: '2026-10-12' }
       train_every: { description: 'train: every N days', required: false, default: '4' }
 
 permissions:
   contents: write
+  actions: read
 
 env:
   NOVA_DATA: /tmp/nova/data
   NOVA_CACHE: /tmp/nova/cache
   PYTHONPATH: tools/tcm-nova
   GH_TOKEN: ${{ github.token }}
+  NUMBA_CACHE_DIR: /tmp/numba
 
 jobs:
   route:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
-      job: ${{ steps.r.outputs.job }}
-      init: ${{ steps.r.outputs.init }}
-      days: ${{ steps.r.outputs.days }}
+      main: ${{ steps.r.outputs.main }}
+      main_init: ${{ steps.r.outputs.main_init }}
+      main_chunks: ${{ steps.r.outputs.main_chunks }}
+      hyper: ${{ steps.r.outputs.hyper }}
+      ukv_env: ${{ steps.r.outputs.ukv_env }}
+      ukv_env_cycle: ${{ steps.r.outputs.ukv_env_cycle }}
+      ukv_env_chunks: ${{ steps.r.outputs.ukv_env_chunks }}
+      learning: ${{ steps.r.outputs.learning }}
+      train: ${{ steps.t.outputs.train }}
+      days: ${{ steps.t.outputs.days }}
     steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: tools/tcm-nova/route_ci.py, sparse-checkout-cone-mode: false }
       - id: r
         run: |
-          S="${{ github.event.schedule }}"; OFF=$(TZ=Europe/London date +%z); J=none
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then J="${{ inputs.job }}"; fi
-          TS="${{ inputs.train_start }}"; TE="${{ inputs.train_end }}"; TN="${{ inputs.train_every }}"
+          J="${{ inputs.job }}"; [ -z "$J" ] && J=auto
+          [ "${{ github.event_name }}" = "push" ] && J=none
+          [ "$J" = "train" ] && J=none
+          python3 tools/tcm-nova/route_ci.py "$J"
+      - id: t
+        run: |
+          TS="${{ inputs.train_start }}"; TE="${{ inputs.train_end }}"; TN="${{ inputs.train_every }}"; T=false
+          [ "${{ inputs.job }}" = "train" ] && T=true
           if [ "${{ github.event_name }}" = "push" ]; then
-            J=train
+            T=true
             curl -s "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/tools/tcm-nova/TRAIN_REQUEST.json" -o /tmp/req.json
             TS=$(python3 -c "import json;print(json.load(open('/tmp/req.json'))['start'])")
             TE=$(python3 -c "import json;print(json.load(open('/tmp/req.json'))['end'])")
             TN=$(python3 -c "import json;print(json.load(open('/tmp/req.json'))['every'])")
           fi
-          [ "$S" = "7 * * * *" ] && J=hyper
-          [ "$S" = "12 2,8,14,20 * * *" ] && [ "$OFF" = "+0100" ] && J=main
-          [ "$S" = "12 3,9,15,21 * * *" ] && [ "$OFF" = "+0000" ] && J=main
-          [ "$S" = "20 23 * * *" ] && [ "$OFF" = "+0100" ] && J=learning
-          [ "$S" = "20 0 * * *" ] && [ "$OFF" = "+0000" ] && J=learning
-          [ "$S" = "40 */6 * * *" ] && J=lightning
-          echo "schedule='$S' uk-offset=$OFF job=$J"
-          echo "job=$J" >> "$GITHUB_OUTPUT"
-          # Main Run initialisation (latest 03/09/15/21 UK cycle), shared by all chunk jobs
-          python3 -c "
-          from datetime import datetime, timedelta, timezone; from zoneinfo import ZoneInfo
-          tz=ZoneInfo('Europe/London'); now=datetime.now(timezone.utc).astimezone(tz); best=None
-          for dd in (0,-1):
-              day=(now+timedelta(days=dd)).date()
-              for h in (3,9,15,21):
-                  t=datetime(day.year,day.month,day.day,h,tzinfo=tz)
-                  if t<=now and (best is None or t>best): best=t
-          print('init='+best.astimezone(timezone.utc).isoformat())" >> "$GITHUB_OUTPUT"
-          if [ "$J" = "train" ]; then
+          echo "train=$T" >> "$GITHUB_OUTPUT"
+          if [ "$T" = "true" ]; then
             python3 -c "
           import json,datetime as d
           a=d.date.fromisoformat('$TS'); b=d.date.fromisoformat('$TE'); n=int('$TN')
           print('days='+json.dumps([(a+d.timedelta(days=i)).isoformat() for i in range(0,(b-a).days+1,n)]))" >> "$GITHUB_OUTPUT"
           else echo 'days=[]' >> "$GITHUB_OUTPUT"; fi
 
-  forecast:
-    needs: route
-    if: needs.route.outputs.job == 'hyper' || needs.route.outputs.job == 'lightning'
-    runs-on: ubuntu-latest
-    timeout-minutes: 340
-    concurrency:
-      group: nova-${{ needs.route.outputs.job }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libeccodes0 libeccodes-data >/dev/null
-      - run: pip install -r tools/tcm-nova/requirements.txt
-      - name: Static data (terrain etc.)
-        if: needs.route.outputs.job != 'lightning'
-        run: python -m nova.cloud fetch-static
-      - name: Learning state (weights, calibration, NOVA-AI)
-        if: needs.route.outputs.job != 'lightning'
-        run: python -m nova.cloud fetch-state
-      - name: Hyper-Short
-        if: needs.route.outputs.job == 'hyper'
-        run: python -m nova.hyper.run && python -m nova.cloud publish hyper
-      - name: Lightning archive
-        if: needs.route.outputs.job == 'lightning'
-        run: python -m nova.cloud lightning
-
-  # TCM Main Run on the TCM V5 engine: every model downscaled to 2 km and blended, then V5
-  # Stages 3-8. Four jobs compute lead ranges side by side; one job assembles and publishes.
+  # ── Main Run (TCM V5 on every model at 2 km) ────────────────────────────────
   main-chunk:
     needs: route
-    if: needs.route.outputs.job == 'main'
+    if: needs.route.outputs.main == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        leads: ['0-21', '24-45', '48-69', '72-96']
-    env:
-      NOVA_V5_STORE: /tmp/nova/v5
+        leads: ${{ fromJSON(needs.route.outputs.main_chunks) }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libeccodes0 libeccodes-data >/dev/null
-      - run: pip install -r tools/tcm-nova/requirements.txt
+      - uses: ./.github/actions/nova-setup
       - run: python -m nova.cloud fetch-static
       - run: python -m nova.cloud fetch-state
-      - name: V5 frames ${{ matrix.leads }}
-        run: python -m nova.v5_run --product main --init "${{ needs.route.outputs.init }}" --leads ${{ matrix.leads }} --chunk
+      - name: TCM V5 frames T+${{ matrix.leads }}
+        run: python -m nova.v5_run --product main --init "${{ needs.route.outputs.main_init }}" --leads "${{ matrix.leads }}" --chunk
       - uses: actions/upload-artifact@v4
         with:
-          name: main-chunk-${{ matrix.leads }}
+          name: main-chunk-${{ strategy.job-index }}
           path: /tmp/nova/data/main/
           retention-days: 2
 
   main-publish:
     needs: [route, main-chunk]
-    if: always() && needs.route.outputs.job == 'main'
+    if: always() && needs.route.outputs.main == 'true' && needs.main-chunk.result != 'cancelled'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     concurrency: { group: nova-main-publish, cancel-in-progress: false }
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libeccodes0 libeccodes-data >/dev/null
-      - run: pip install -r tools/tcm-nova/requirements.txt
+      - uses: ./.github/actions/nova-setup
       - uses: actions/download-artifact@v4
         with: { pattern: main-chunk-*, merge-multiple: true, path: /tmp/nova/data/main/ }
-      - run: python -m nova.v5_run --product main --init "${{ needs.route.outputs.init }}" --assemble && python -m nova.cloud publish main
+      - run: python -m nova.v5_run --product main --init "${{ needs.route.outputs.main_init }}" --assemble && python -m nova.cloud publish main
 
+  # ── Hyper-Short's UKV environment (TCM V5 on UKV), per new UKV cycle ────────
+  ukv-env:
+    needs: route
+    if: needs.route.outputs.ukv_env == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        hours: ${{ fromJSON(needs.route.outputs.ukv_env_chunks) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/nova-setup
+      - run: python -m nova.cloud fetch-static
+      - name: TCM V5 on UKV ${{ needs.route.outputs.ukv_env_cycle }} T+${{ matrix.hours }}
+        run: python -m nova.hyper.v5env --cycle "${{ needs.route.outputs.ukv_env_cycle }}" --hours "${{ matrix.hours }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ukv-env-${{ strategy.job-index }}
+          path: /tmp/nova/cache/ukvenv/
+          retention-days: 1
+
+  ukv-env-publish:
+    needs: [route, ukv-env]
+    if: always() && needs.route.outputs.ukv_env == 'true' && needs.ukv-env.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency: { group: nova-ukvenv-publish, cancel-in-progress: false }
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: tools/tcm-nova, sparse-checkout-cone-mode: true }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: actions/download-artifact@v4
+        with: { pattern: ukv-env-*, merge-multiple: true, path: /tmp/nova/cache/ukvenv/ }
+      - run: pip install -q numpy && python -m nova.cloud publish-ukvenv "${{ needs.route.outputs.ukv_env_cycle }}"
+
+  # ── Hyper-Short, hourly ─────────────────────────────────────────────────────
+  hyper:
+    needs: route
+    if: needs.route.outputs.hyper == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency: { group: nova-hyper, cancel-in-progress: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/nova-setup
+      - run: python -m nova.cloud fetch-static
+      - run: python -m nova.cloud fetch-state
+      - run: python -m nova.cloud fetch-ukvenv
+      - name: Hyper-Short
+        run: python -m nova.hyper.run && python -m nova.cloud publish hyper
+      - name: Lightning archive
+        if: always()
+        run: python -m nova.cloud lightning
+
+  # ── nightly learning ────────────────────────────────────────────────────────
   learning:
     needs: route
-    if: needs.route.outputs.job == 'learning'
+    if: needs.route.outputs.learning == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     concurrency: { group: nova-learning, cancel-in-progress: false }
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libeccodes0 libeccodes-data >/dev/null
-      - run: pip install -r tools/tcm-nova/requirements.txt
+      - uses: ./.github/actions/nova-setup
       - run: python -m nova.cloud fetch-static && python -m nova.cloud fetch-state && python -m nova.cloud lightning
       - name: Yesterday's runs
         run: |
@@ -179,22 +202,20 @@ jobs:
         env: { ANTHROPIC_API_KEY: '${{ secrets.ANTHROPIC_API_KEY }}' }
       - run: python -m nova.cloud publish-state
 
-  train-prep:                                   # build/publish static data ONCE before the parallel days
+  # ── historical training (on demand) ─────────────────────────────────────────
+  train-prep:
     needs: route
-    if: needs.route.outputs.job == 'train'
+    if: needs.route.outputs.train == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libeccodes0 libeccodes-data >/dev/null
-      - run: pip install -r tools/tcm-nova/requirements.txt
+      - uses: ./.github/actions/nova-setup
       - run: python -m nova.cloud fetch-static
 
   train-day:
     needs: [route, train-prep]
-    if: needs.route.outputs.job == 'train'
+    if: needs.route.outputs.train == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 340
     strategy:
@@ -203,10 +224,7 @@ jobs:
       matrix: { day: '${{ fromJson(needs.route.outputs.days) }}' }
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libeccodes0 libeccodes-data >/dev/null
-      - run: pip install -r tools/tcm-nova/requirements.txt
+      - uses: ./.github/actions/nova-setup
       - run: python -m nova.cloud fetch-static
       - name: Hindcast ${{ matrix.day }}
         run: python -c "from datetime import date; from nova.calibrate import hindcast; hindcast([date.fromisoformat('${{ matrix.day }}')])"
@@ -223,15 +241,12 @@ jobs:
 
   train-fit:
     needs: [route, train-day]
-    if: always() && needs.route.outputs.job == 'train'
+    if: always() && needs.route.outputs.train == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11', cache: pip, cache-dependency-path: tools/tcm-nova/requirements.txt }
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libeccodes0 libeccodes-data >/dev/null
-      - run: pip install -r tools/tcm-nova/requirements.txt
+      - uses: ./.github/actions/nova-setup
       - run: python -m nova.cloud fetch-static && python -m nova.cloud fetch-state
       - uses: actions/download-artifact@v4
         with: { pattern: 'train-*', path: /tmp/nova/train, merge-multiple: true }

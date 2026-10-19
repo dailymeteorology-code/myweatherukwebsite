@@ -566,8 +566,8 @@ READERS = {'ukv': UKV, 'mo_global': MOGlobal, 'ifs': ECMWF, 'aifs': AIFS, 'ifs_e
 
 def _register_external():
     """Non-AWS readers (never Open-Meteo): DWD open data."""
-    from .sources_dwd import ICONEU, ICONEUEPS
-    READERS.update({'icon_eu': ICONEU, 'icon_eps': ICONEUEPS})
+    from .sources_dwd import ICOND2, ICONEU, ICONEUEPS
+    READERS.update({'icon_eu': ICONEU, 'icon_d2': ICOND2, 'icon_eps': ICONEUEPS})
 
 
 _register_external()

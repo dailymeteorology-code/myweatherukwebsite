@@ -117,8 +117,9 @@ def run(init=None):
     manifest['inputs']['ukv'] = 'latest UKV run (s3://met-office-atmospheric-model-data/uk-deterministic-2km): 3-D environment and UKV hazards'
     manifest['method'] = ('Observation nowcast (radar + lightning analysis, phase-correlation motion, semi-Lagrangian advection '
                           'with scale-dependent decay) blended with the latest UKV run; nowcast weight exp(-lead/90 min). '
-                          'Environment diagnostics (CAPE, CIN, shear, SRH, LCL, freezing levels) from UKV 3-D fields on its '
-                          '~2 km columns, remapped to 1.5 km. No other model is used.')
+                          'The UKV half is the TCM V5 engine on UKV alone (V5 Stage 4 parcels/DCAPE/shear/moisture, the '
+                          'twelve V5 engines and the V5 probability chain, verified against V5 cell by cell), on the 2 km '
+                          'grid, remapped to 1.5 km. No other model is used.')
     manifest['skill_horizon'] = 'nowcast dominates to about T+2 h; later frames are mainly UKV'
     writer = store.RunWriter('hyper', init, manifest)
     store.set_status('hyper', state='running', run_id=rid)
@@ -133,14 +134,19 @@ def run(init=None):
         if E:
             def mix(now, mod):
                 return np.clip(wn * now + (1 - wn) * mod, 0, None).astype(np.float32)
+            E.setdefault('ukv_precip', np.zeros(grid.shape, np.float32))
+            E.setdefault('ukv_flash_density', np.zeros(grid.shape, np.float32))
+            for k in ('ukv_precip', 'ukv_flash_density', 'ukv_p_thunder', 'ukv_p_lightning', 'ukv_p_heavy_rain'):
+                E[k] = np.nan_to_num(E.get(k, np.zeros(grid.shape, np.float32)))
             out.update(precip=mix(rain, E['ukv_precip']), flash_density=mix(light, E['ukv_flash_density']),
                        p_thunder=np.clip(mix(P['p_thunder'], E['ukv_p_thunder']), 0, 1),
                        p_lightning=np.clip(mix(P['p_lightning'], E['ukv_p_lightning']), 0, 1),
                        p_heavy_rain=np.clip(mix(P['p_heavy_rain'], E['ukv_p_heavy_rain']), 0, 1))
-            for k in ('p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_supercell', 'p_tornado_env', 'p_severe'):
-                out[k] = np.clip(E['ukv_' + k], 0, 1).astype(np.float32)
-            out['hail_size_max_cm'] = E['ukv_hail_size_max_cm']
-            out['gust_max'] = E['ukv_gust_max']
+            for k in ('p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_tornado_env', 'p_severe', 'p_initiation'):
+                if 'ukv_' + k in E:
+                    out[k] = np.clip(np.nan_to_num(E['ukv_' + k]), 0, 1).astype(np.float32)
+            if 'ukv_gust_max' in E:
+                out['gust_max'] = E['ukv_gust_max']
             for k in ENV_FIELDS + ['t2', 'td2', 'u10', 'v10']:
                 if k in E:
                     out[k] = E[k]

@@ -35,7 +35,7 @@ from .grid import Grid
 from .sources import UKV, log
 from . import v5_bridge as B
 
-ENGINE_VERSION = 'nova-v5-1.1'
+ENGINE_VERSION = 'nova-v5-2.0'
 LONDON = ZoneInfo('Europe/London')
 
 HAZARD_FIELDS = {'lightning': 'p_lightning', 'hail': 'p_hail', 'severe_hail': 'p_hail_sig',
@@ -53,41 +53,34 @@ DAY_MAX = ['p_thunder', 'p_lightning', 'p_hail', 'p_hail_sig', 'p_wind_damaging'
 DAY_MIN = ['ml_cin']
 
 
-def _store_value(run, fh, name):
-    from app.pipeline.ingest import load_field
-    f = load_field('ukv', run, name, fh)
-    return None if f is None else f.values
-
-
-def frame_fields(run, fh, gf, params, grid):
-    S = gf.stride
-    out = {'p_thunder': B.to_nova(gf.probability, grid, S),
-           'p_thunder_uncal': B.to_nova(gf.raw_probability, grid, S),
-           'confidence': B.to_nova(gf.confidence, grid, S)}
-    for h, k in HAZARD_FIELDS.items():
-        if h in gf.hazards:
-            out[k] = B.to_nova(gf.hazards[h], grid, S)
-    if 'p_hail_sig' in out and 'p_hail' in out:            # V5 nesting can slip by rounding
-        out['p_hail_sig'] = np.minimum(out['p_hail_sig'], out['p_hail'])
-    sev = [out[k] for k in ('p_hail_sig', 'p_wind_damaging', 'p_tornado_env') if k in out]
-    if sev:
-        out['p_severe'] = np.fmax.reduce(sev)
-    for p, k in PARAM_FIELDS.items():
-        v = params.value(p)
-        if v is not None:
-            v = B.to_nova(v, grid)
-            out[k] = -np.abs(v) if k.endswith('_cin') else v          # NOVA shows CIN negative
-    for v5n, k, f in (('precip_rate', 'precip', 3600.0), ('lightning_flash_density_1h', 'flash_density', 1.0),
-                      ('temperature_2m', 't2', 1.0), ('dewpoint_2m', 'td2', 1.0), ('u_wind_10m', 'u10', 1.0),
-                      ('v_wind_10m', 'v10', 1.0), ('pressure_msl', 'mslp', 0.01), ('total_cloud_cover', 'tcc', 0.01),
-                      ('wind_gust_10m', 'gust_max', 1.0)):
-        a = _store_value(run, fh, v5n)
-        if a is not None:
-            out[k] = B.to_nova(a, grid) * f
-    for k, a in list(out.items()):
-        if k.startswith('p_') or k == 'confidence':
-            out[k] = np.clip(np.nan_to_num(a), 0, 1).astype(np.float32)
+def to_nova_fields(fields, grid):
+    """V5 LAEA arrays -> the NOVA grid (bilinear), probabilities clipped to [0, 1]."""
+    out = {}
+    for k, a in fields.items():
+        if a is None:
+            continue
+        v = B.to_nova(np.asarray(a, dtype='float64'), grid)
+        if k.startswith('p_') or k in ('confidence', 'uncertainty'):
+            v = np.clip(np.nan_to_num(v), 0, 1)
+        out[k] = v.astype(np.float32)
     return out
+
+
+def save_sources(writer_dir, lead_min, srcs, grid):
+    """Each model's own V5 thunderstorm probability and precipitation at 10 km, for the
+    nightly verification that sets the skill-based weights."""
+    from .grid import block_mean
+    from .verify import COARSE
+    d = writer_dir / 'sources' / str(lead_min)
+    d.mkdir(parents=True, exist_ok=True)
+    for k, v in srcs.items():
+        for name, suffix in (('p_thunder', '.pthunder.bin'), ('precip', '.bin')):
+            a = v.get(name)
+            if a is None:
+                continue
+            a = B.to_nova(np.asarray(a, dtype='float64'), grid)
+            c = block_mean(np.nan_to_num(a), COARSE) if name == 'precip' else block_mean(a, COARSE)
+            (d / f'{k}{suffix}').write_bytes(zlib.compress(np.asarray(c, np.float16).tobytes(), 6))
 
 
 def _manifest(product, init, horizon_h, stride, cycles, extra=None):
@@ -102,69 +95,54 @@ def _manifest(product, init, horizon_h, stride, cycles, extra=None):
         'engine': 'TCM V5', 'init_utc': init.isoformat(),
         'init_local': init.astimezone(LONDON).strftime('%Y-%m-%d %H:%M %Z'),
         'grid': grid.meta(), 'resolution_m': grid.dx, 'horizon_h': horizon_h, 'step_h': 1 if product == 'hyper' else 3,
-        'method': (('Every available model (UKV, Met Office Global, ECMWF IFS/AIFS + ensembles, DWD ICON-EU + EPS, '
-                    'NOAA GFS/GEFS) downscaled to the 2 km grid (bilinear, log-p, terrain-corrected against the '
-                    '90 m Copernicus DEM) and blended with the NOVA-V5 weighting (continuous lead baseline, '
-                    'resolution credit, cycle freshness, verified skill, family caps, per-cell consensus). '
-                    if blend else 'Latest Met Office UKV 2 km from AWS. ') +
-                   'TCM V5 physics on that state: V5 profile builder (no extrapolation, below-ground levels masked), '
-                   'V5 gridded convective parameters, V5 spatial intelligence, and the V5 per-cell engine chain, '
-                   f'TCM probability and hazard models, evaluated every {stride} cells ({2 * stride} km) and remapped '
-                   'bilinearly to this grid.'),
+        'method': ('TCM V5 physics, run separately on every model that publishes a vertical profile (UKV, ICON-D2, '
+                   'ICON-EU, ECMWF IFS, ECMWF AIFS, NOAA GFS), each first downscaled by code to the 2 km grid: bilinear '
+                   'from its native grid, log-p vertical interpolation inside its own levels, screen temperature and '
+                   'dew point corrected to the 90 m Copernicus DEM, surface pressure, hodograph and boundary-layer '
+                   'depth derived on the 2 km terrain. V5 Stage 4 (parcels, DCAPE, shear, moisture) compiled and '
+                   'bit-identical to V5; the twelve V5 engines and the V5 probability chain vectorised and verified '
+                   'against V5 cell by cell. Models combined by V5 linear pooling with the NOVA-V5 weights '
+                   '(continuous-lead baseline, resolution credit, cycle freshness, verified skill, family caps); '
+                   'hazards pooled with the same weights and nested under the thunderstorm probability.'
+                   if blend else 'TCM V5 physics on the latest Met Office UKV 2 km (AWS).'),
+        'v5_fixes': __import__('nova.v5x.pipeline', fromlist=['FIXES']).FIXES,
         'v5_stride': stride, 'sources': src_labels, 'unavailable': {},
-        'calibration': 'TCM V5 (per-frame calibration recorded)',
+        'calibration': 'uncalibrated (TCM V5 links; NOVA learning recalibrates once V5 verification pairs exist)',
     }, **(extra or {}))
 
 
 def compute(product, init, leads, stride, workers, writer_dir: Path, cycles_out: dict):
-    """Run V5 for `leads`, writing NOVA frames into writer_dir. Returns frame metas."""
+    """The V5 engine for `leads`, writing NOVA frames into writer_dir. Returns frame metas."""
+    from . import v5_blend as VB
+    from .v5x import pipeline as PL
     grid = Grid.get(MAIN['grid'])
     tmp = store.RunWriter.__new__(store.RunWriter)            # frame writer only (no partial-dir reset)
     tmp.dir, tmp.manifest = writer_dir, {'frames': [], 'fields': {}}
     (writer_dir / 'frames').mkdir(parents=True, exist_ok=True)
-    blender = None
-    src = UKV()
-    if product == 'hyper':
-        cyc = src.find_run(init, need_lead_h=max(leads)) or src.find_run(init)
-        cycles_out['ukv'] = cyc
-    else:
-        from . import v5_blend as VB
-        blender = VB.Blender(init, max(leads))
-        cycles_out.update(blender.cycles)
+    only = ('ukv',) if product == 'hyper' else None
+    blender = VB.Blender(init, max(leads), only=only)
+    cycles_out.update(blender.cycles)
     for lead in leads:
         vt = init + timedelta(hours=lead)
         t0 = time.time()
         try:
-            if blender:
-                got = blender.at(vt)
-                st = VB.blend(got, lead, blender.cycles, blender.g, blender.terr) if got else None
-                if st is None:
-                    log(f'T+{lead}: no source with a vertical profile')
-                    continue
-                prof, sfc, bmeta = st
-                VB.write_store(init, lead, prof, sfc, blender.terr, ','.join(sorted(got)))
-                run_for_v5, fh = init, lead
-                levels = LEVELS
-            else:
-                fh = int((vt - cyc).total_seconds() // 3600)
-                B.ingest(cyc, fh, src)
-                run_for_v5, levels, bmeta = cyc, None, {'sources': ['ukv'], 'ukv_cycle': cyc.isoformat()}
-            gf, params, _ = B.run_v5(run_for_v5, fh, stride=stride, workers=workers, pressure_levels=levels)
-            if gf is None:
-                log(f'T+{lead}: V5 found no usable column')
+            got = blender.at(vt)
+            t_fetch = time.time() - t0
+            fields, meta = PL.run_frame(got, lead, blender.cycles, blender.terr, blender.g, run=init, valid_time=vt, log=log)
+            if fields is None:
+                log(f'T+{lead}: {meta}')
                 continue
-            fields = frame_fields(run_for_v5, fh, gf, params, grid)
-        except Exception as e:
-            if 'no pressure-level temperature' in str(e):
-                log(f'T+{lead}: UKV cycle ends here')
-                break
+            srcs = fields.pop('_sources', {})
+            fields = to_nova_fields(fields, grid)
+            if lead <= 24 and product != 'hyper':
+                save_sources(writer_dir, lead * 60, srcs, grid)
+        except Exception:
             traceback.print_exc()
             continue
-        meta = dict(bmeta, calibrated=gf.calibration, v5_coverage=round(gf.coverage, 4), v5_cells=gf.produced,
-                    v5_issues=gf.issues[:6], seconds=round(time.time() - t0))
+        meta = dict(meta, calibrated='uncalibrated', fetch_s=round(t_fetch, 1), seconds=round(time.time() - t0))
         tmp.frame(lead * 60, vt.isoformat(), fields, meta)
-        log(f'T+{lead:3d} {vt:%a %HZ} V5 pthunder max={fields["p_thunder"].max():.2f} ({time.time() - t0:.0f}s)')
-        shutil.rmtree(B.V5_ROOT / 'fields' / 'ukv' / f'{run_for_v5:%Y%m%dT%H}', ignore_errors=True)
+        log(f'T+{lead:3d} {vt:%a %HZ} p_thunder max={fields["p_thunder"].max():.2f} '
+            f'(data {t_fetch:.0f}s, total {time.time() - t0:.0f}s, models {meta["sources"]})')
     return tmp.manifest['frames']
 
 
@@ -302,6 +280,9 @@ def assemble(product, init, horizon_h=None, stride=3):
 
 
 def _leads(spec):
+    """'0-21' (every 3 h) or '0,51,3' (explicit list)."""
+    if ',' in spec or '-' not in spec:
+        return sorted(int(x) for x in spec.split(',') if x.strip())
     a, b = (int(x) for x in spec.split('-'))
     return list(range(a, b + 1, 3))
 

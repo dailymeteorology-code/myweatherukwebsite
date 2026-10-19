@@ -48,7 +48,8 @@ def dynamic(lead_h, available, hazard='environment', skill=None):
     w = {m: v / s for m, v in elig.items()}
     prov['renormalised'] = {m: round(v * 100, 2) for m, v in w.items()}
     skill = load_skill() if skill is None else skill
-    sk = skill.get(hazard if hazard in skill else 'thunder', {}).get(str(wi), {})
+    key = hazard if hazard in skill else ('thunder_v5' if 'thunder_v5' in skill else 'thunder')
+    sk = skill.get(key, {}).get(str(wi), {})
     alpha = {}
     if sk:
         raw = {}
@@ -56,7 +57,7 @@ def dynamic(lead_h, available, hazard='environment', skill=None):
             rec = sk.get(m)
             if rec and rec.get('n', 0) >= SKILL_MIN_SAMPLES:
                 a = rec['n'] / (rec['n'] + SKILL_SHRINK_N0)
-                score = max(rec.get('fss', 0.0), 0.01)
+                score = max(rec.get('skill', rec.get('fss', 0.0)), 0.01)   # BSS of V5 P(thunder) or precip FSS
                 raw[m] = (w[m], score, a)
         if raw:
             mean_score = np.mean([r[1] for r in raw.values()])

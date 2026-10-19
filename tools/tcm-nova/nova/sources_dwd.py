@@ -39,6 +39,7 @@ class ICONEU(GribLatLon):
            'TQC': 'tqc', 'TQI': 'tqi', 'TQR': 'tqr', 'TQS': 'tqs', 'TQV': 'pw_src', 'HTOP_CON': 'htop_con',
            'HBAS_CON': 'hbas_con', 'LPI_CON_MAX': 'lpi', 'CLCT': 'tcc', 'HZEROCL': 'frz_asl', 'W_SO': 'soilw_kgm2'}
     PLV = {'T': 't', 'RELHUM': 'rh', 'U': 'u', 'V': 'v', 'FI': 'z', 'OMEGA': 'w'}
+    LEVELS = PL
 
     def url(self, run, step, var, kind='single-level', lev=None):
         lv = f'{lev}_' if lev is not None else ''
@@ -58,7 +59,7 @@ class ICONEU(GribLatLon):
         maxlead = 120 if run.hour % 6 == 0 else 48
         if step < 0 or step > maxlead or (step > 78 and step % 3):
             return None
-        jobs = [('sfc', v, None) for v in self.SFC] + [('pl', v, l) for v in self.PLV for l in PL] + [('acc', 'TOT_PREC', None)]
+        jobs = [('sfc', v, None) for v in self.SFC] + [('pl', v, l) for v in self.PLV for l in self.LEVELS] + [('acc', 'TOT_PREC', None)]
 
         def one(j):
             kind, v, lev = j
@@ -116,6 +117,41 @@ class ICONEU(GribLatLon):
                 prof['w'] = stack('w')
             out['pl'] = prof
         return out
+
+
+class ICOND2(ICONEU):
+    """DWD ICON-D2: 2.2 km, convection-PERMITTING (no deep-convection scheme), 3-hourly
+    cycles to T+48. The domain is Germany-centred and reaches only to about 3.9 W and
+    58 N, so it covers the east of Great Britain; the sampler marks the rest as not
+    covered and the blend renormalises there. Pressure levels 1000-200 hPa (11)."""
+    key = 'icon_d2'
+    cycle_h = 3
+    latency_h = 2
+    SFC = {'T_2M': 't2', 'TD_2M': 'td2', 'PMSL': 'mslp', 'PS': 'sp', 'U_10M': 'u10', 'V_10M': 'v10',
+           'VMAX_10M': 'gust', 'CAPE_ML': 'cape_mu_src', 'CIN_ML': 'cin_mu_src', 'CLCT': 'tcc',
+           'HZEROCL': 'frz_asl', 'LPI_MAX': 'lpi'}
+    PLV = {'T': 't', 'RELHUM': 'rh', 'U': 'u', 'V': 'v', 'FI': 'z', 'OMEGA': 'w'}
+    LEVELS = [1000, 975, 950, 850, 700, 600, 500, 400, 300, 250, 200]
+
+    def url(self, run, step, var, kind='single-level', lev=None):
+        v = var.lower()
+        tag = f'{lev}_' if lev is not None else '2d_'
+        return (f'{DWD}/icon-d2/grib/{run:%H}/{v}/icon-d2_germany_regular-lat-lon_{kind}_'
+                f'{run:%Y%m%d%H}_{step:03d}_{tag}{v}.grib2.bz2')
+
+    def available(self, run, need):
+        return exists(self.url(run, min(need, 48), 'T_2M'))
+
+    def candidates(self, init):
+        t = _floor(init - timedelta(hours=self.latency_h), 3)
+        for k in range(8):
+            yield t - timedelta(hours=3 * k)
+
+    def frame(self, run, vt, grid, dt_h):
+        step = int((vt - run).total_seconds() // 3600)
+        if step < 0 or step > 48:
+            return None
+        return super().frame(run, vt, grid, dt_h)
 
 
 class ICONEUEPS(Source):

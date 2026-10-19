@@ -192,11 +192,60 @@ def lightning():
         log(f'cloud: lightning {day}: {len(rows)} strikes')
 
 
+
+def publish_ukvenv(cycle_iso):
+    """Upload Hyper-Short's V5 UKV environment for one cycle, then point latest.json at it."""
+    tag = 'nova-ukvenv'
+    ensure_release(tag, 'TCM NOVA Hyper-Short UKV environment (TCM V5)')
+    cyc = datetime.fromisoformat(cycle_iso.replace('Z', '+00:00')).astimezone(timezone.utc)
+    d = CACHE / 'ukvenv' / f'{cyc:%Y%m%dT%H%MZ}'
+    files = sorted(d.glob('*.npz')) if d.exists() else []
+    if not files:
+        raise RuntimeError(f'no environment files for {cyc:%Y%m%dT%H%MZ}')
+    staged = []
+    for f in files:
+        t = d / f'{d.name}_{f.name}'
+        t.write_bytes(f.read_bytes())
+        staged.append(t)
+    upload(tag, *staged)
+    for t in staged:
+        t.unlink()
+    latest = d / 'latest.json'
+    latest.write_text(json.dumps({'cycle': cyc.isoformat(), 'hours': len(files)}))
+    upload(tag, latest)
+    keep = sorted({a['name'].split('_')[0] for a in assets(tag) if a['name'].endswith('.npz')})[-2:]
+    for a in assets(tag):
+        n = a['name']
+        if n.endswith('.npz') and n.split('_')[0] not in keep:
+            gh('release', 'delete-asset', tag, n, '--yes', check=False)
+    log(f'cloud: published UKV environment {d.name} ({len(files)} hours)')
+
+
+def fetch_ukvenv():
+    """Download the newest published V5 UKV environment into the cache Hyper-Short reads."""
+    tag = 'nova-ukvenv'
+    tmp = CACHE / '_ukvenv'
+    if not download(tag, 'latest.json', tmp):
+        log('cloud: no published UKV environment yet')
+        return
+    cyc = datetime.fromisoformat(json.loads((tmp / 'latest.json').read_text())['cycle'])
+    name = f'{cyc:%Y%m%dT%H%MZ}'
+    download(tag, f'{name}_*.npz', tmp)
+    d = CACHE / 'ukvenv' / name
+    d.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for f in tmp.glob(f'{name}_*.npz'):
+        os.replace(f, d / f.name.split('_', 1)[1])
+        n += 1
+    log(f'cloud: UKV environment {name}: {n} hours')
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['fetch-static', 'fetch-state', 'publish', 'publish-state', 'fetch-runs', 'lightning'])
+    ap.add_argument('cmd', choices=['fetch-static', 'fetch-state', 'publish', 'publish-state', 'fetch-runs', 'lightning', 'publish-ukvenv', 'fetch-ukvenv'])
     ap.add_argument('product', nargs='?')
     ap.add_argument('--day')
     a = ap.parse_args()
     {'fetch-static': fetch_static, 'fetch-state': fetch_state, 'publish-state': publish_state, 'lightning': lightning,
-     'publish': lambda: publish(a.product), 'fetch-runs': lambda: fetch_runs(a.product, a.day)}[a.cmd]()
+     'publish': lambda: publish(a.product), 'fetch-runs': lambda: fetch_runs(a.product, a.day),
+     'publish-ukvenv': lambda: publish_ukvenv(a.product), 'fetch-ukvenv': fetch_ukvenv}[a.cmd]()

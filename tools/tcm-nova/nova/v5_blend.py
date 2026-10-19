@@ -99,10 +99,10 @@ def consensus(items, shape):
 
 
 class Blender:
-    def __init__(self, init, horizon_h):
+    def __init__(self, init, horizon_h, only=None):
         self.g = grid()
         self.terr = terrain.load(GRID_NAME)
-        readers = {k: READERS[k]() for k in READERS}
+        readers = {k: READERS[k]() for k in READERS if only is None or k in only}
         self.cycles = {}
         for k, r in readers.items():
             rr = r.find_run(init, need_lead_h=min(horizon_h, 54)) if k in ('ukv', 'icon_eu') else None

@@ -14,7 +14,7 @@ Bowler et al. 2006); beyond ~4 h the forecast is essentially UKV's.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 from scipy import ndimage
@@ -56,47 +56,52 @@ def to_fine(a, coarse: Grid, fine: Grid):
 
 
 class UKVEnvironment:
+    """The UKV half of Hyper-Short, on the TCM V5 engine (hyper/v5env.py).
+
+    Uses the newest UKV cycle whose V5 environment has been published (computed in
+    parallel as soon as the cycle reached AWS); computes any missing hour on the spot.
+    Fields arrive on the V5 2 km grid and are remapped to the 1.5 km grid here, so the
+    1.5 km output does not pretend UKV has 1.5 km detail."""
+
     def __init__(self, init):
+        from ..config import CACHE
         self.init = init
-        self.coarse = Grid.get('gb2km')
         self.fine = Grid.get('gb1p5km')
         self.reader = UKV()
-        self.run = self.reader.find_run(init, need_lead_h=24) or self.reader.find_run(init, need_lead_h=12)
-        self.terr = terrain.load('gb2km')
         self.cache = {}
-        log(f'hyper: UKV run {self.run}')
+        self.run = None
+        d = CACHE / 'ukvenv'
+        if d.exists():
+            need = [init + timedelta(hours=h) for h in env_hours()]
+            for c in sorted((p.name for p in d.iterdir() if p.is_dir() and any(p.glob('*.npz'))), reverse=True):
+                cyc = datetime.strptime(c, '%Y%m%dT%H%MZ').replace(tzinfo=timezone.utc)
+                have = sum((d / c / f'{vt:%Y%m%dT%H%MZ}.npz').exists() for vt in need)
+                if timedelta(0) <= init - cyc <= timedelta(hours=12) and have >= len(need) - 2:
+                    self.run = cyc
+                    break
+        if self.run is None:
+            self.run = self.reader.find_run(init, need_lead_h=24) or self.reader.find_run(init, need_lead_h=12)
+        log(f'hyper: UKV run {self.run} (TCM V5 environment)')
 
     def at_hour(self, vt):
         if vt in self.cache:
             return self.cache[vt]
         out = None
         if self.run is not None:
-            f = self.reader.frame(self.run, vt, self.coarse, 1)
-            if f and 'pl' in f:
-                f = prepare('ukv', f, self.coarse, self.terr)
-                prof = dict(f['pl'])
-                D, ps, t2, td2, q2 = environment(prof, f['sfc'], self.terr, self.coarse)
-                sfc = f['sfc']
-                sig = hz.model_signal(sfc, D['mu_cape'])
-                fields = {k: D[k] for k in ENV_FIELDS if k in D}
-                fields.update(t2=t2, td2=td2, u10=sfc['u10'], v10=sfc['v10'], ukv_signal=sig,
-                              ukv_precip=sfc.get('precip', np.zeros(self.coarse.shape, np.float32)),
-                              ukv_lightning=np.nan_to_num(sfc.get('lightning', np.zeros(self.coarse.shape, np.float32))),
-                              ukv_hail=np.nan_to_num(sfc.get('hail', np.zeros(self.coarse.shape, np.float32))),
-                              gust=sfc.get('gust', np.zeros(self.coarse.shape, np.float32)))
-                # UKV hazard probabilities through the same deterministic hazard code as the Main Run
-                from ..diagnostics import grid_diagnostics
-                flow = terrain.flow_diagnostics(self.terr, self.coarse, np.nanmean(prof['u'][:3], 0),
-                                                np.nanmean(prof['v'][:3], 0), D['bv_freq_0_2km'])
-                Gd = grid_diagnostics({'u10': sfc['u10'], 'v10': sfc['v10'], 'q2': q2}, self.coarse.lonlat[1], self.coarse.dx)
-                F = dict(sfc, conv_10m=Gd['conv_10m'], q2=q2, t2=t2)
-                lead_h = (vt - self.init).total_seconds() / 3600
-                H = hz.compute(F, D, self.terr, flow, {'ukv': np.nan_to_num(sig)}, {},
-                               {'ukv': np.ones(self.coarse.shape, np.float32)}, {}, self.coarse.dx, lead_h)
-                for k in ('p_thunder', 'p_lightning', 'p_hail', 'p_hail_sig', 'p_wind_damaging', 'p_downburst', 'p_supercell',
-                          'p_tornado_env', 'p_heavy_rain', 'p_severe', 'hail_size_max_cm', 'gust_max', 'flash_density'):
-                    fields['ukv_' + k] = H[k]
-                out = {k: to_fine(np.asarray(v, np.float32), self.coarse, self.fine) for k, v in fields.items() if v is not None}
+            from . import v5env
+            from .. import v5_bridge as B
+            try:
+                f = v5env.load(self.run, vt)
+            except Exception as e:
+                log(f'hyper: V5 UKV environment failed for {vt:%d %HZ}: {e!r}')
+                f = None
+            if f:
+                out = {}
+                for k, a in f.items():
+                    name = k if k in ENV_FIELDS or k in ('t2', 'td2', 'u10', 'v10') else 'ukv_' + k
+                    if k == 'precip':
+                        name = 'ukv_precip'
+                    out[name] = B.to_nova(a, self.fine).astype(np.float32)
         if len(self.cache) > 2:
             self.cache.pop(min(self.cache))
         self.cache[vt] = out

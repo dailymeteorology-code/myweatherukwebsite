@@ -38,7 +38,7 @@ from .grid import Grid, earth_to_grid_wind
 from .io_aws import log
 from .sources import READERS
 
-NATIVE_STEP = {'icon_eu': 1, 'icon_eps': 3, 'ukv': 1, 'mo_global': 1, 'ifs': 3, 'aifs': 6, 'ifs_ens': 3, 'aifs_ens': 6, 'gfs': 1, 'gefs': 3}
+NATIVE_STEP = {'icon_d2': 1, 'icon_eu': 1, 'icon_eps': 3, 'ukv': 1, 'mo_global': 1, 'ifs': 3, 'aifs': 6, 'ifs_ens': 3, 'aifs_ens': 6, 'gfs': 1, 'gefs': 3}
 RANGES = {'t': (170, 335), 'q': (0, 0.04), 'rh': (0, 110), 'u': (-150, 150), 'v': (-150, 150), 'z': (-700, 17000),
           't2': (220, 325), 'td2': (210, 310), 'precip': (0, 500), 'gust': (0, 90), 'mslp': (87000, 109000)}
 STORE_FIELDS = [
