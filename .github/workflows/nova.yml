@@ -1,6 +1,6 @@
 # TCM NOVA on GitHub's servers, so the forecasts keep running when the PC is off.
 #
-# Every 10 minutes the `route` job asks the PUBLISHED STATE what is missing and starts it
+# Every ~10 minutes the `route` job asks the PUBLISHED STATE what is missing and starts it
 # (tools/tcm-nova/route_ci.py). GitHub drops or delays many scheduled triggers -- on
 # 19 Oct 2026 only 13 of ~30 fired, which is why the 09Z/15Z Main Runs and most
 # Hyper-Short hours never appeared -- so nothing here is keyed to which trigger fired: a
@@ -37,7 +37,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
 
 env:
   NOVA_DATA: /tmp/nova/data
@@ -47,6 +47,21 @@ env:
   NUMBA_CACHE_DIR: /tmp/numba
 
 jobs:
+  # GitHub's scheduler fires this repository's cron irregularly (often only hourly). Every
+  # run therefore also starts the NEXT run itself, ~9 minutes later, through
+  # workflow_dispatch -- the one event GitHub's own token is allowed to trigger. The
+  # concurrency group keeps exactly one such chain alive (a newer heartbeat replaces an
+  # older one), and the cron above restarts the chain if it ever breaks.
+  heartbeat:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency: { group: nova-heartbeat, cancel-in-progress: true }
+    steps:
+      - run: |
+          sleep 540
+          gh workflow run nova.yml -R "${{ github.repository }}" -f job=auto
+
   route:
     runs-on: ubuntu-latest
     timeout-minutes: 5
