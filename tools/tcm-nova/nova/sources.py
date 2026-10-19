@@ -240,6 +240,39 @@ class MOGlobal(MetOffice):
         'cape_mu_src': 'CAPE_most_unstable_below_500hPa', 'cin_mu_src': 'CIN_most_unstable_below_500hPa',
         'cape_ml_src': 'CAPE_mixed_layer_lowest_500m', 'conv_rain': 'rainfall_rate_from_convection',
     }
+    # The 3-D fields are global files of ~870 MB a step; only the UK window's HDF5 chunks
+    # are read (h5window.py, ~1 MB a variable), so the Global model can run the V5 chain.
+    profiles = True
+
+    def pl(self, run, vt, grid):
+        names = {'t': 'temperature_on_pressure_levels', 'rh': 'relative_humidity_on_pressure_levels',
+                 'ws': 'wind_speed_on_pressure_levels', 'wd': 'wind_direction_on_pressure_levels',
+                 'z': 'geopotential_height_on_pressure_levels'}
+
+        from .h5window import read_windows
+        try:
+            got = read_windows({k: self.key_for(run, vt, n) for k, n in names.items()})
+        except Exception as e:
+            log(f'mo_global pl {vt:%d%H}: {e}')
+            return None
+        a, lat, lon, lev = got['t']
+        S = regular_sampler(grid, lat, lon)
+        vals = {k: S(v[0]) for k, v in got.items()}
+        lev_hpa = np.asarray(lev, float) / 100.0
+        u, v = _uv(vals['ws'], vals['wd'])
+        T = vals['t']
+        rh = np.nan_to_num(vals['rh'])
+        if np.nanmax(rh) > 3.0:                     # percent -> fraction
+            rh = rh / 100.0
+        rh = np.clip(rh, 0, 1.6)
+        Tc = T - 273.15
+        es_w = 6.112 * np.exp(17.67 * Tc / (Tc + 243.5))
+        es_i = 6.112 * np.exp(22.46 * Tc / (Tc + 272.62))
+        e = np.minimum(rh * np.where(T < 273.15, es_i, es_w), es_w)      # Met Office RH is w.r.t. ice below 0 C
+        p3 = lev_hpa[:, None, None]
+        r = 0.622 * e / np.maximum(p3 - e, 1e-3)
+        q = (r / (1 + r)).astype(np.float32)
+        return _order_levels({'t': T, 'q': q, 'u': u, 'v': v, 'z': vals['z'], 'levels': lev_hpa})
 
 
 def _order_levels(pl):

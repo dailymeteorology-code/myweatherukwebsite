@@ -64,7 +64,7 @@ LEVELS = [1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450,
 MODELS = {
     'ukv':        dict(label='UKV deterministic',               family='metoffice', kind='det', res_km=2.0,  aws='met-office-atmospheric-model-data/uk-deterministic-2km', max_lead_h=120, profile=True),
     'mogreps_uk': dict(label='MOGREPS-UK ensemble',             family='metoffice', kind='ens', res_km=2.2,  aws=None, max_lead_h=126),
-    'mo_global':  dict(label='Met Office Global deterministic', family='metoffice', kind='det', res_km=10.0, aws='met-office-atmospheric-model-data/global-deterministic-10km', max_lead_h=168),
+    'mo_global':  dict(label='Met Office Global deterministic', family='metoffice', kind='det', res_km=10.0, aws='met-office-atmospheric-model-data/global-deterministic-10km', max_lead_h=168, profile=True),
     'mogreps_g':  dict(label='MOGREPS-G ensemble',              family='metoffice', kind='ens', res_km=20.0, aws=None, max_lead_h=198),
     'ifs':        dict(label='ECMWF IFS HRES',                  family='ecmwf',     kind='det', res_km=9.0,  aws='ecmwf-forecasts/ifs/0p25/oper', max_lead_h=144, profile=True),
     'ifs_ens':    dict(label='ECMWF IFS ENS',                   family='ecmwf',     kind='ens', res_km=9.0,  aws='ecmwf-forecasts/ifs/0p25/enfo', max_lead_h=360, members=50),

@@ -32,7 +32,7 @@ FIXES = {
     'hodograph': "AWS carries height-level winds only for UKV; NOVA builds V5's hodograph for every model "
                  "from its pressure-level winds over the 2 km terrain, so shear and helicity exist for all.",
 }
-PROFILE_SOURCES = ('ukv', 'icon_d2', 'icon_eu', 'ifs', 'aifs', 'gfs')
+PROFILE_SOURCES = ('ukv', 'icon_d2', 'icon_eu', 'mo_global', 'ifs', 'aifs', 'gfs')
 
 
 def run_source(key, frame, terr, *, run, fh, valid_time, lon, fixes=True):
