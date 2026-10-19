@@ -23,9 +23,10 @@ const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg',
 const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
-const MAX_JOBS = 2;
+const MAX_USER_JOBS = 3;               // what someone is waiting for
+const MAX_PREFETCH_JOBS = 1;           // background warming, never in the way
 
-const running = new Map();            // key -> child
+const running = new Map();            // key -> { child, prefetch }
 const queue = [];                     // [{key, args, prefetch}]
 let catalogBusy = false;
 
@@ -46,26 +47,36 @@ const frameDir = (model, run, v) => path.join(DATA, 'frames', model, run, v);
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 
 function pump() {
-  while (running.size < MAX_JOBS && queue.length) {
-    /* what someone is looking at goes before background prefetch */
-    const i = Math.max(0, queue.findIndex((q) => !q.prefetch));
-    const job = queue.splice(i, 1)[0];
-    if (running.has(job.key)) continue;
+  const count = (p) => [...running.values()].filter((r) => r.prefetch === p).length;
+  for (let i = 0; i < queue.length;) {
+    const job = queue[i];
+    if (running.has(job.key)) { queue.splice(i, 1); continue; }
+    if (count(job.prefetch) >= (job.prefetch ? MAX_PREFETCH_JOBS : MAX_USER_JOBS)) { i++; continue; }
+    queue.splice(i, 1);
     const child = python(['mdata.job', ...job.args], (code, err) => {
       running.delete(job.key);
       if (code) console.warn(`[modeldata] job ${job.key} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
       pump();
     });
-    running.set(job.key, child);
+    running.set(job.key, { child, prefetch: job.prefetch });
   }
 }
 
-function ensureJob(model, run, v, prefetch = false) {
+function ensureJob(model, run, v, prefetch = false, first = null) {
   const key = `${model}/${run}/${v}`;
-  if (running.has(key) || queue.some((q) => q.key === key)) return;
+  if (running.has(key)) return;
+  const queued = queue.find((q) => q.key === key);
+  if (queued) {
+    if (!prefetch && queued.prefetch) {                 // someone is now waiting for it
+      queued.prefetch = false;
+      if (first != null) queued.args = [model, runIso(run), v, String(first)];
+      pump();
+    }
+    return;
+  }
   const st = readJson(path.join(frameDir(model, run, v), 'status.json'));
   if (st?.state === 'complete') return;
-  queue.push({ key, args: [model, runIso(run), v], prefetch });
+  queue.push({ key, args: [model, runIso(run), v, ...(first != null ? [String(first)] : [])], prefetch });
   pump();
 }
 
@@ -76,8 +87,8 @@ export function defaultRun(m) {
   return m.runs.find((r) => r.steps.length >= 0.6 * most) || m.runs[0];
 }
 
-const PREFETCH = { ukv: ['precip_rate', 'precip_total', 't2', 'gust10', 'mslp'], mo_global: ['precip_rate', 't2'],
-  ifs: ['precip_total', 't2'], aifs: ['precip_total'], gfs: ['refc', 't2'] };
+/* warmed in the background (one job at a time) for each model's default run, most-used first */
+const PREFETCH = ['precip_rate', 'precip_total', 't2', 'gust10', 'wind10', 'mslp', 'refc', 'tcc', 'cape_mu', 'cape_sb', 't850', 'z500', 'feels', 'snow_rate'];
 
 function refreshCatalog() {
   if (catalogBusy) return;
@@ -90,7 +101,7 @@ function refreshCatalog() {
       const r = m.runs?.length ? defaultRun(m) : null;
       if (!r) continue;
       const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';
-      for (const v of PREFETCH[m.id] || []) ensureJob(m.id, tag, v, true);
+      for (const v of PREFETCH.filter((x) => m.variables?.includes(x))) ensureJob(m.id, tag, v, true);
     }
   });
 }
@@ -123,7 +134,8 @@ export function mountModelData(app) {
     const { model, run, v } = req.params;
     const st = readJson(path.join(frameDir(model, run, v), 'status.json'));
     const key = `${model}/${run}/${v}`;
-    if (!st || (st.state !== 'complete' && !running.has(key))) ensureJob(model, run, v);
+    const first = /^\d{1,3}$/.test(String(req.query.first || '')) ? Number(req.query.first) : null;
+    if (!st || (st.state !== 'complete' && !running.has(key))) ensureJob(model, run, v, false, first);
     res.set('Cache-Control', 'no-cache');
     res.json(st ? { ...st, queued: queue.some((q) => q.key === key) } : { state: 'queued', done: [], missing: [] });
   });

@@ -41,7 +41,7 @@ def steps_for(model, run):
     return M.steps(run) if hasattr(M, 'steps') else M.schedule(run)
 
 
-def main(model, run_s, var):
+def main(model, run_s, var, first=None):
     logging.disable(logging.WARNING)
     warnings.filterwarnings('ignore')
     M = MODELS[model]
@@ -57,6 +57,10 @@ def main(model, run_s, var):
     diff = (model, var) in DIFFERENCED
     need_all = accum or diff                       # these need every raw step, even if frames exist
     prev = {s: (steps[i - 1] if i else None) for i, s in enumerate(steps)}
+    order = steps
+    if first is not None and not need_all:          # the step on screen first, then outwards
+        f = int(first)
+        order = sorted(steps, key=lambda s: (abs(s - f), s))
 
     def fetch(h):
         if not need_all and (d / f'{h}.bin').exists():
@@ -67,8 +71,8 @@ def main(model, run_s, var):
             return h, e
 
     total, acc_h, last_raw, last_h = None, None, None, None
-    with cf.ThreadPoolExecutor(6) as ex:
-        for h, a in ex.map(fetch, steps):
+    with cf.ThreadPoolExecutor(16) as ex:           # downloads are latency-bound: many in flight
+        for h, a in ex.map(fetch, order):
             vt = run + timedelta(hours=h)
             meta = {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat()}
             if isinstance(a, str):
@@ -116,7 +120,7 @@ def main(model, run_s, var):
 
 if __name__ == '__main__':
     try:
-        main(*sys.argv[1:4])
+        main(*sys.argv[1:5])
     except Exception:
         traceback.print_exc()
         sys.exit(1)

@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
-  LayoutGrid, Waves, MapPin, Search, ChevronDown, X, Layers,
+  LayoutGrid, Waves, MapPin, Search, ChevronDown, X, Layers, Star,
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, frameCanvas, frameContours, drawScene,
@@ -80,6 +80,7 @@ export default function ModelData() {
   const [smooth, setSmooth] = useState(false);
   const [showContours, setShowContours] = useState(true);
   const [showCities, setShowCities] = useState(true);
+  const [showStar, setShowStar] = useState(false);
   const [style, setStyle] = useState('dark');
   const [frameKey, setFrameKey] = useState('screen');
   const [view, setView] = useState(null);
@@ -162,12 +163,22 @@ export default function ModelData() {
 
   /* frames for this model / run / variable (made on demand on the server) */
   const key = run && model ? `${model.id}/${runTag(run.run)}/${varKey}` : null;
+  /* switching variable, model or run keeps the same valid time: remember it before the
+     switch, then land on that time (or the nearest the new run has) once its steps are known */
+  const lastValid = useRef(null);
+  const targetValid = useRef(null);
+  const wantStep = useRef(0);
+  useEffect(() => {
+    targetValid.current = lastValid.current;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
   useEffect(() => {
     if (!key) return undefined;
     const [m, rt, v] = key.split('/');
     const ac = new AbortController();
     const want = new Set();
     let alive = true;
+    if (targetValid.current != null) wantStep.current = Math.max(0, Math.round((targetValid.current - Date.parse(run.run)) / 3600e3));
     setFrames({}); setStatus(null); colourCache.current.clear(); contourCache.current.clear();
     const pull = async (step) => {
       want.add(step);
@@ -179,13 +190,15 @@ export default function ModelData() {
     const poll = async () => {
       if (!alive) return;
       try {
-        const st = await fetch(`${API}/frames/${m}/${rt}/${v}/status`, { signal: ac.signal }).then((r) => r.json());
+        const st = await fetch(`${API}/frames/${m}/${rt}/${v}/status?first=${Math.max(0, wantStep.current)}`, { signal: ac.signal }).then((r) => r.json());
         if (!alive) return;
         setStatus(st);
-        const todo = (st.done || []).filter((s) => !want.has(s));
-        for (let i = 0; i < todo.length; i += 4) await Promise.all(todo.slice(i, i + 4).map(pull));
-        if (st.state !== 'complete') setTimeout(poll, 1500);
-      } catch { if (alive) setTimeout(poll, 3000); }
+        /* the frame being looked at first, then outwards from it, eight at a time */
+        const todo = (st.done || []).filter((s) => !want.has(s)).sort((a, b) => Math.abs(a - wantStep.current) - Math.abs(b - wantStep.current));
+        const batch = todo.slice(0, 8);
+        await Promise.all(batch.map(pull));
+        if (st.state !== 'complete' || todo.length > batch.length) setTimeout(poll, todo.length > batch.length ? 0 : 600);
+      } catch { if (alive) setTimeout(poll, 2000); }
     };
     poll();
     return () => { alive = false; ac.abort(); };
@@ -199,7 +212,20 @@ export default function ModelData() {
   const step = steps[Math.min(idx, Math.max(0, steps.length - 1))];
   const frame = frames[step];
   const loadedCount = steps.filter((s) => frames[s]).length;
-  useEffect(() => { setIdx(0); setPlaying(false); }, [key]);
+  useEffect(() => {
+    if (!run || !steps.length) return;
+    if (targetValid.current == null) { setIdx((i) => Math.min(i, steps.length - 1)); return; }
+    const runMs = Date.parse(run.run);
+    let best = 0;
+    steps.forEach((s, i) => {
+      if (Math.abs(runMs + s * 3600e3 - targetValid.current) < Math.abs(runMs + steps[best] * 3600e3 - targetValid.current)) best = i;
+    });
+    setIdx(best);
+    if (status) targetValid.current = null;              // settled once the run's real steps are known
+  }, [steps, run, status]);
+  useEffect(() => {
+    if (run && step != null && targetValid.current == null) { lastValid.current = Date.parse(run.run) + step * 3600e3; wantStep.current = step; }
+  }, [run, step]);
 
   /* canvas follows the stage; the frame sits between the top and bottom bars */
   useEffect(() => {
@@ -266,9 +292,9 @@ export default function ModelData() {
     style, basemap: basemapFor(f), lines: statics?.lines, cities: showCities ? statics?.cities : null,
     data: f ? frameCanvas(f, varKey, colourCache.current) : null, smooth,
     contours: f && showContours ? frameContours(f, varKey, model?.res_km, contourCache.current) : null,
-    contourLabels: true, chrome: chromeFor(f),
+    contourLabels: true, chrome: chromeFor(f), star: showStar && f ? { frame: f, unit: vmeta?.unit } : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [style, basemapFor, statics, showCities, varKey, smooth, showContours, model, chromeFor, fontsOk]);
+  }), [style, basemapFor, statics, showCities, varKey, smooth, showContours, model, chromeFor, fontsOk, showStar, vmeta]);
 
   /* draw: the map everywhere, dimmed outside the frame, the finished graphic inside it */
   useEffect(() => {
@@ -429,6 +455,7 @@ export default function ModelData() {
         <IconBtn on={!smooth} title={smooth ? 'Smooth (click for the native grid)' : 'Native grid cells (click to smooth)'} onClick={() => setSmooth((x) => !x)}><LayoutGrid size={15} /></IconBtn>
         <IconBtn on={showContours} title="Contours" onClick={() => setShowContours((x) => !x)}><Waves size={15} /></IconBtn>
         <IconBtn on={showCities} title="Places" onClick={() => setShowCities((x) => !x)}><MapPin size={15} /></IconBtn>
+        <IconBtn on={showStar} title="Star the highest value in view" onClick={() => setShowStar((x) => !x)}><Star size={15} /></IconBtn>
       </div>
     </>
   );

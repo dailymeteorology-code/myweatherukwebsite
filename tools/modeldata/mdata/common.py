@@ -81,6 +81,85 @@ def regular_index(lats, lons):
     return np.clip(j, 0, lats.size - 1), i, ok
 
 
+def regular_frac(lats, lons):
+    """Fractional (row, col) of every display cell in a regular lat/lon grid, flattened,
+    plus whether the grid wraps round the globe in longitude."""
+    lon, lat = lonlat()
+    lats = np.asarray(lats, float)
+    lons = np.asarray(lons, float)
+    dlat, dlon = lats[1] - lats[0], lons[1] - lons[0]
+    fj = (lat - lats[0]) / dlat
+    lo = np.where(lon < lons[0], lon + 360.0, lon)
+    lo = np.where(lo >= lons[0] + 360.0, lo - 360.0, lo)
+    fi = (lo - lons[0]) / dlon
+    wrap = abs(lons.size * dlon - 360.0) < 1.5 * abs(dlon)
+    return fj.ravel(), fi.ravel(), wrap
+
+
+try:
+    from numba import njit
+except Exception:                                       # numba missing: plain Python is too slow, fall back below
+    njit = None
+
+if njit:
+    @njit(cache=True, nogil=True)
+    def _cubic_kernel(a, fj, fi, wrap):
+        ny, nx = a.shape
+        out = np.empty(fj.size, np.float32)
+        wy = np.empty(4)
+        wx = np.empty(4)
+        for k in range(fj.size):
+            y, x = fj[k], fi[k]
+            if not (y >= 0.0 and y <= ny - 1):
+                out[k] = np.nan
+                continue
+            j1 = int(np.floor(y))
+            i1 = int(np.floor(x))
+            ty, tx = y - j1, x - i1
+            for t, w in ((ty, wy), (tx, wx)):          # Catmull-Rom (Keys a = -0.5)
+                w[0] = ((-0.5 * t + 1.0) * t - 0.5) * t
+                w[1] = (1.5 * t - 2.5) * t * t + 1.0
+                w[2] = ((-1.5 * t + 2.0) * t + 0.5) * t
+                w[3] = (0.5 * t - 0.5) * t * t
+            s = 0.0
+            ws = 0.0
+            lo = np.inf
+            hi = -np.inf
+            for dj in range(4):
+                jj = min(max(j1 - 1 + dj, 0), ny - 1)
+                for di in range(4):
+                    ii = i1 - 1 + di
+                    if wrap:
+                        ii = ii % nx
+                    else:
+                        ii = min(max(ii, 0), nx - 1)
+                    v = a[jj, ii]
+                    if v != v:
+                        continue
+                    w = wy[dj] * wx[di]
+                    s += w * v
+                    ws += w
+                    if 1 <= dj <= 2 and 1 <= di <= 2:
+                        lo = min(lo, v)
+                        hi = max(hi, v)
+            if hi < lo or ws <= 0.0:
+                out[k] = np.nan
+            else:
+                out[k] = min(max(s / ws, lo), hi)    # never outside the four surrounding cells
+        return out
+
+
+def smooth_sample(a, frac):
+    """A coarse model's field on the display grid, interpolated smoothly (cubic, clamped so
+    it cannot overshoot: no negative rain, no invented peaks). frac = regular_frac(...)."""
+    fj, fi, wrap = frac
+    a = np.ascontiguousarray(a, np.float64)
+    if njit:
+        return _cubic_kernel(a, fj, fi, wrap).reshape(NY, NX)
+    from scipy import ndimage
+    return ndimage.map_coordinates(np.nan_to_num(a), [fj, fi], order=1, mode='grid-wrap' if wrap else 'nearest').astype(np.float32).reshape(NY, NX)
+
+
 def encode(a, enc):
     """float field (NY, NX) -> uint8 per the variable's encoding."""
     lo, hi, kind = enc['lo'], enc['hi'], enc.get('scale', 'lin')

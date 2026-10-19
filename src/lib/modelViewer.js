@@ -9,6 +9,8 @@ import { contours as d3contours } from 'd3-contour';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 
 export const API = '/api/modeldata';
+/* bump when frames are re-made differently (v2: coarse models smooth, not blocks) */
+export const FRAME_V = 2;
 export const NX = 1042;
 export const NY = 970;
 
@@ -145,7 +147,7 @@ export function decodeTable(h) {
 }
 
 export async function loadFrame(model, runTag, v, step, signal) {
-  const r = await fetch(`${API}/frames/${model}/${runTag}/${v}/${step}`, { signal });
+  const r = await fetch(`${API}/frames/${model}/${runTag}/${v}/${step}?v=${FRAME_V}`, { signal });
   if (!r.ok) throw new Error(`frame ${step}: ${r.status}`);
   const buf = await r.arrayBuffer();
   const n = new DataView(buf).getUint32(0, true);
@@ -435,6 +437,13 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   edgeFade(ctx, X(0), Y(0), NX * s, NY * s, 36 * s, st.bg);
   if (L.contours && L.contourLabels) drawContourLabels(ctx, L.contours, X, Y, rect, u, st);
   if (L.cities) drawCities(ctx, L.cities, X, Y, rect, s / u, u, st, L.chrome ? 150 * u : 0);
+  if (L.star) {
+    /* the highest value in view, kept clear of the title card and the key */
+    const top = L.chrome ? 150 * u : 20 * u, bot = L.chrome ? 104 * u : 20 * u;
+    const m = frameMax(L.star.frame, (rect.x + 20 * u - ox) / s + cx, (rect.y + top - oy) / s + cy,
+      (rect.x + rect.w - 20 * u - ox) / s + cx, (rect.y + rect.h - bot - oy) / s + cy);
+    if (m) drawStar(ctx, X(m.gx), Y(m.gy), u, st, `${fmtValue(m.v, L.star.unit)}`, rect);
+  }
   if (L.chrome) drawChrome(ctx, rect, u, L.chrome, st);
   ctx.restore();
 }
@@ -463,6 +472,79 @@ function strokeLines(ctx, lines, X, Y) {
     for (let i = 2; i < l.length; i += 2) ctx.lineTo(X(l[i]), Y(l[i + 1]));
   }
   ctx.stroke();
+}
+
+/* where the field peaks inside a grid box: the highest value, and among equal highs the
+   cell nearest their middle (so a flat-topped maximum gets its star in the middle of it) */
+const maxCache = new WeakMap();
+export function frameMax(frame, gx0, gy0, gx1, gy1) {
+  const x0 = Math.max(0, Math.floor(gx0)), x1 = Math.min(NX - 1, Math.ceil(gx1));
+  const y0 = Math.max(0, Math.floor(gy0)), y1 = Math.min(NY - 1, Math.ceil(gy1));
+  if (x1 <= x0 || y1 <= y0) return null;
+  const k = `${x0},${y0},${x1},${y1}`;
+  const c = maxCache.get(frame);
+  if (c && c.k === k) return c.m;
+  const q = frame.q;
+  let best = -1, n = 0, sx = 0, sy = 0;
+  for (let y = y0; y <= y1; y++) {
+    const row = y * NX;
+    for (let x = x0; x <= x1; x++) {
+      const v = q[row + x];
+      if (v === 255 || v < best) continue;
+      if (v > best) { best = v; n = 0; sx = 0; sy = 0; }
+      n++; sx += x; sy += y;
+    }
+  }
+  let m = null;
+  if (best > 0) {
+    const mx = sx / n, my = sy / n;
+    let bd = Infinity, bx = 0, by = 0;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (q[y * NX + x] !== best) continue;
+        const d = (x - mx) ** 2 + (y - my) ** 2;
+        if (d < bd) { bd = d; bx = x; by = y; }
+      }
+    }
+    m = { gx: bx + 0.5, gy: by + 0.5, v: frame.table[best] };
+  }
+  maxCache.set(frame, { k, m });
+  return m;
+}
+
+function drawStar(ctx, x, y, u, st, label, R) {
+  const r = 17 * u, ri = r * 0.45;
+  ctx.save();
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 5, rr = i % 2 ? ri : r;
+    i ? ctx.lineTo(x + rr * Math.cos(a), y + rr * Math.sin(a)) : ctx.moveTo(x + rr * Math.cos(a), y + rr * Math.sin(a));
+  }
+  ctx.closePath();
+  ctx.shadowColor = 'rgba(255,200,40,0.85)';
+  ctx.shadowBlur = 16 * u;
+  const g = ctx.createRadialGradient(x, y - r * 0.3, 0, x, y, r);
+  g.addColorStop(0, '#fff6c9');
+  g.addColorStop(0.55, '#ffd23f');
+  g.addColorStop(1, '#f5a300');
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 2.2 * u;
+  ctx.strokeStyle = 'rgba(40,24,0,0.85)';
+  ctx.stroke();
+  ctx.restore();
+  // value capsule beside the star (flips left near the right edge)
+  ctx.font = `800 ${16 * u}px ${FONT}`;
+  const tw = ctx.measureText(label).width;
+  const w = tw + 22 * u, h = 30 * u;
+  const right = x + r + 8 * u + w < R.x + R.w - 10 * u;
+  const bx = right ? x + r + 8 * u : x - r - 8 * u - w, by = y - h / 2;
+  glassPanel(ctx, bx, by, w, h, h / 2, u, st.glass);
+  ctx.fillStyle = st.glass === 'light' ? '#111820' : '#ffffff';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.fillText(label, bx + 11 * u, by + h / 2 + 1 * u);
 }
 
 function haloText(ctx, t, x, y, st, w) {

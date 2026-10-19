@@ -7,8 +7,11 @@
     NOAA GFS 0.25 deg            s3://noaa-gfs-bdp-pds
 
 No Open-Meteo, no third-party API. ECMWF's AWS copy throttles some objects to tens of
-seconds per request; when a request there stalls, the identical file is read from ECMWF's
-own Google Cloud copy (the same open-data release), and the frame records which host served it.
+seconds per request, so ECMWF files are read from ECMWF's own Google Cloud copy of the same
+open-data release first, with the AWS copy as the fallback.
+
+Coarse models are put on the 2 km display grid with a clamped cubic (smooth, no overshoot);
+UKV IS the display grid and is never resampled.
 """
 from __future__ import annotations
 
@@ -19,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
-from .common import NC_LOCK, NX, NY, X0, DX, Y_TOP, regular_index
+from .common import NC_LOCK, NX, NY, X0, DX, Y_TOP, regular_frac, smooth_sample
 
 from nova.io_aws import decode_grib, ecmwf_index, exists, fetch_ranges, get, open_nc   # noqa: E402
 
@@ -194,10 +197,9 @@ class MetOffice:
         _, lats, lons = geo
         key = (lats.size, lons.size, float(lats[0]), float(lons[0]))
         if getattr(self, '_ix_key', None) != key:
-            self._ix = regular_index(lats, lons)
+            self._ix = regular_frac(lats, lons)
             self._ix_key = key
-        j, i, ok = self._ix
-        return np.where(ok, a[j, i], np.nan).astype(np.float32)
+        return smooth_sample(a, self._ix)              # coarse model: smooth, not blocks
 
     def field(self, run, h, var, prev_h):
         """-> float32 (NY, NX) in display units, plus the raw accumulation for running totals."""
@@ -289,7 +291,7 @@ class MOGlobal(MetOffice):
 
 
 # ── ECMWF (IFS, AIFS) ───────────────────────────────────────────────────────
-ECM_HOSTS = ('https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com', 'https://storage.googleapis.com/ecmwf-open-data')
+ECM_HOSTS = ('https://storage.googleapis.com/ecmwf-open-data', 'https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com')
 
 
 class ECMWF:
@@ -328,7 +330,7 @@ class ECMWF:
             last = None
             for host in ECM_HOSTS:
                 try:
-                    txt = get(self.base(run, h, host) + '.index', tries=2, timeout=12).decode()
+                    txt = get(self.base(run, h, host) + '.index', tries=2, timeout=8).decode()
                     if txt.strip():
                         self._idx[k], self._host[k] = ecmwf_index(txt), host
                         break
@@ -379,7 +381,7 @@ class ECMWF:
                 raise KeyError(f'{w} not in {self.id} T+{h}')
             ranges.append((rec['_offset'], rec['_offset'] + rec['_length'] - 1, len(names)))
             names.append(w)
-        blobs = fetch_ranges(self.base(run, h, host) + '.grib2', ranges, gap=0, workers=8)
+        blobs = fetch_ranges(self.base(run, h, host) + '.grib2', ranges, gap=0, workers=12)
         out = []
         for i in range(len(names)):
             a, meta = decode_grib(blobs[i])
@@ -394,10 +396,9 @@ class ECMWF:
             lat2 = meta['latitudeOfLastGridPointInDegrees']
             lats = lat1 + np.arange(meta['Nj']) * (dj if lat2 > lat1 else -dj)
             lons = lon1 + np.arange(meta['Ni']) * di
-            self._ix = (key, regular_index(lats, lons))
-        j, i, ok = self._ix[1]
+            self._ix = (key, regular_frac(lats, lons))
         a = np.asarray(a, np.float32).reshape(meta['Nj'], meta['Ni'])
-        return np.where(ok, a[j, i], np.nan).astype(np.float32)
+        return smooth_sample(a, self._ix[1])           # coarse model: smooth, not blocks
 
     def field(self, run, h, var, prev_h, prev_raw=None):
         S = self.SPEC[var]
@@ -528,7 +529,7 @@ class GFS:
             if r is None:
                 raise KeyError(f'{v}:{lev} not in GFS T+{h}')
             wants.append((r['start'], r['end'], len(wants)))
-        blobs = fetch_ranges(self.url(run, h), wants, gap=0, workers=8)
+        blobs = fetch_ranges(self.url(run, h), wants, gap=0, workers=12)
         A = []
         for i in range(len(wants)):
             a, meta = decode_grib(blobs[i])
@@ -558,8 +559,8 @@ MODELS = {m.id: m for m in (UKV(), MOGlobal(), ECMWF(), AIFS(), GFS())}
 SOURCES = {
     'ukv': 'Met Office UKV 2 km — AWS open data (uk-deterministic-2km)',
     'mo_global': 'Met Office Global 10 km — AWS open data (global-deterministic-10km)',
-    'ifs': 'ECMWF IFS 0.25° — ECMWF open data on AWS (Google Cloud copy if AWS is throttling)',
-    'aifs': 'ECMWF AIFS 0.25° — ECMWF open data on AWS (Google Cloud copy if AWS is throttling)',
+    'ifs': "ECMWF IFS 0.25° — ECMWF open data (ECMWF's Google Cloud copy; the AWS copy as fallback)",
+    'aifs': "ECMWF AIFS 0.25° — ECMWF open data (ECMWF's Google Cloud copy; the AWS copy as fallback)",
     'gfs': 'NOAA GFS 0.25° — AWS open data (noaa-gfs-bdp-pds)',
 }
 # variables whose frames are differences of an accumulation between consecutive steps
