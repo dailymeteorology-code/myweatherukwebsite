@@ -233,58 +233,227 @@ function boxBlur(a, w, h, r) {
   return o;
 }
 
-/* ── the scene ───────────────────────────────────────────────────────────── */
+/* ── map styles ──────────────────────────────────────────────────────────── */
+/* realtime = the motion-graphics look: NASA Blue Marble by day, NASA Black Marble city lights
+   (sodium gold) by night, lit by the real sun for each frame's valid time, with the blue hour
+   and golden hour around the terminator. */
+export const MAP_STYLES = {
+  dark: { label: 'Dark', base: 'basemap.png', glass: 'dark', coast: 'rgba(226,236,248,0.62)', border: 'rgba(226,236,248,0.42)', text: '#f2f6fb', halo: 'rgba(6,10,18,0.8)', bg: '#0e1b2a' },
+  light: { label: 'Light', base: 'basemap_light.png', glass: 'light', coast: 'rgba(38,52,68,0.6)', border: 'rgba(38,52,68,0.42)', text: '#17202b', halo: 'rgba(255,255,255,0.85)', bg: '#c9d9e7' },
+  satellite: { label: 'Satellite', base: 'sat_day.jpg', glass: 'dark', coast: 'rgba(255,255,255,0.5)', border: 'rgba(255,255,255,0.4)', text: '#ffffff', halo: 'rgba(0,0,0,0.75)', bg: '#06111f' },
+  realtime: { label: 'Real-time', base: null, glass: 'dark', coast: 'rgba(255,255,255,0.45)', border: 'rgba(255,255,255,0.35)', text: '#ffffff', halo: 'rgba(0,0,0,0.75)', bg: '#050a14' },
+};
+
+const DEG = Math.PI / 180;
+export function sunAt(utcMs) {                      // NOAA solar position (as the motion graphics' core/sun.ts)
+  const jd = utcMs / 86400000 + 2440587.5;
+  const T = (jd - 2451545.0) / 36525;
+  const L0 = ((280.46646 + T * (36000.76983 + T * 0.0003032)) % 360 + 360) % 360;
+  const M = 357.52911 + T * (35999.05029 - 0.0001537 * T);
+  const e = 0.016708634 - T * (0.000042037 + 0.0000001267 * T);
+  const Mr = M * DEG;
+  const C = Math.sin(Mr) * (1.914602 - T * (0.004817 + 0.000014 * T)) + Math.sin(2 * Mr) * (0.019993 - 0.000101 * T) + Math.sin(3 * Mr) * 0.000289;
+  const omega = (125.04 - 1934.136 * T) * DEG;
+  const lambda = (L0 + C - 0.00569 - 0.00478 * Math.sin(omega)) * DEG;
+  const eps0 = 23 + (26 + (21.448 - T * (46.815 + T * (0.00059 - T * 0.001813))) / 60) / 60;
+  const eps = (eps0 + 0.00256 * Math.cos(omega)) * DEG;
+  const decl = Math.asin(Math.sin(eps) * Math.sin(lambda));
+  const y = Math.tan(eps / 2) ** 2;
+  const L0r = L0 * DEG;
+  const eqTime = (4 / DEG) * (y * Math.sin(2 * L0r) - 2 * e * Math.sin(Mr) + 4 * e * y * Math.sin(Mr) * Math.cos(2 * L0r) - 0.5 * y * y * Math.sin(4 * L0r) - 1.25 * e * e * Math.sin(2 * Mr));
+  const d = new Date(utcMs);
+  const utcMin = d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60;
+  const subLon = ((-(utcMin - 720 + eqTime) / 4 + 540) % 360) - 180;
+  return { dec: decl, subLon };
+}
+
+/* lon/lat of the basemap pixels (spherical inverse of the grid's LAEA: plenty for sunlight) */
+const LAT0 = 54.9 * DEG, LON0 = -2.5 * DEG, R = 6371007.2;
+function invLaea(x, y) {
+  const rho = Math.hypot(x, y);
+  if (rho < 1e-6) return [LON0 / DEG, LAT0 / DEG];
+  const c = 2 * Math.asin(Math.min(1, rho / (2 * R)));
+  const lat = Math.asin(Math.cos(c) * Math.sin(LAT0) + (y * Math.sin(c) * Math.cos(LAT0)) / rho);
+  const lon = LON0 + Math.atan2(x * Math.sin(c), rho * Math.cos(LAT0) * Math.cos(c) - y * Math.sin(LAT0) * Math.sin(c));
+  return [lon / DEG, lat / DEG];
+}
+const BW = NX * 2, BH = NY * 2, CS = 16;            // basemap pixels; sun sampled every 16 px
+let COARSE = null;
+function coarseLonLat() {
+  if (COARSE) return COARSE;
+  const cw = Math.ceil(BW / CS) + 1, ch = Math.ceil(BH / CS) + 1;
+  const lon = new Float32Array(cw * ch), lat = new Float32Array(cw * ch);
+  for (let j = 0; j < ch; j++) {
+    for (let i = 0; i < cw; i++) {
+      const x = -1159000 + (i * CS) * 1000, y = 903000 - (j * CS) * 1000;
+      const [lo, la] = invLaea(x, y);
+      lon[j * cw + i] = lo; lat[j * cw + i] = la;
+    }
+  }
+  COARSE = { cw, ch, lon, lat };
+  return COARSE;
+}
+
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const pixCache = {};
+function pixelsOf(img) {
+  if (pixCache[img.src]) return pixCache[img.src];
+  const c = document.createElement('canvas');
+  c.width = BW; c.height = BH;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.drawImage(img, 0, 0, BW, BH);
+  return (pixCache[img.src] = x.getImageData(0, 0, BW, BH).data);
+}
+
+/* look-up tables: light by sun elevation (-20..40 deg in 0.1 deg steps) and the sodium-gold
+   city glow by Black Marble radiance */
+const EN = 601;
+let LUTS = null;
+function luts() {
+  if (LUTS) return LUTS;
+  const E = new Float32Array(EN * 7);
+  for (let i = 0; i < EN; i++) {
+    const e = -20 + i / 10;
+    const gold = sstep(12, 1, e) * sstep(-3, 1, e);
+    E.set([sstep(-7, 2, e), 0.6 + 0.4 * sstep(0, 28, e), gold, sstep(-12, -4, e) * sstep(3, -4, e), 1 - sstep(-8, -1, e),
+      1 + 0.1 * gold, 1 - 0.07 * gold], i * 7);
+  }
+  const C = new Float32Array(256 * 4);
+  for (let n = 0; n < 256; n++) {
+    const city = Math.pow(Math.min(1, Math.max(0, (n / 255 - 0.085) / 0.915)), 1.45);
+    const ci = Math.min(1.35, city * 1.5), core = sstep(0.75, 1.35, ci);
+    C.set([255 * ci, (148 + 78 * core) * ci, (51 + 115 * core) * ci, 0], n * 4);
+  }
+  return (LUTS = { E, C });
+}
+
+/* the real-time basemap for one instant (cached per 10 minutes) */
+const rtCache = new Map();
+export function realtimeBasemap(day, night, utcMs) {
+  const key = Math.round(utcMs / 600000);
+  if (rtCache.has(key)) return rtCache.get(key);
+  const D = pixelsOf(day), N = pixelsOf(night);
+  const { cw, ch, lon, lat } = coarseLonLat();
+  const sun = sunAt(utcMs);
+  const el = new Float32Array(cw * ch);
+  const sd = Math.sin(sun.dec), cd = Math.cos(sun.dec);
+  for (let k = 0; k < el.length; k++) {
+    const phi = lat[k] * DEG, H = (lon[k] - sun.subLon) * DEG;
+    el[k] = Math.asin(Math.sin(phi) * sd + Math.cos(phi) * cd * Math.cos(H)) / DEG;
+  }
+  const { E, C } = luts();
+  const out = document.createElement('canvas');
+  out.width = BW; out.height = BH;
+  const ctx = out.getContext('2d');
+  const img = ctx.createImageData(BW, BH);
+  const o = img.data;
+  for (let y = 0; y < BH; y++) {
+    const fy = y / CS, j0 = Math.min(ch - 2, Math.floor(fy)), ty = fy - j0;
+    for (let x = 0; x < BW; x++) {
+      const fx = x / CS, i0 = Math.min(cw - 2, Math.floor(fx)), tx = fx - i0;
+      const k = j0 * cw + i0;
+      const e = (el[k] * (1 - tx) + el[k + 1] * tx) * (1 - ty) + (el[k + cw] * (1 - tx) + el[k + cw + 1] * tx) * ty;
+      const q = Math.max(0, Math.min(EN - 1, Math.round((e + 20) * 10))) * 7;
+      const dayF = E[q], sunI = E[q + 1], dark = E[q + 4];
+      const p = (y * BW + x) * 4;
+      const n = N[p], c = n * 4;
+      const moon = Math.min(1, n / 85);
+      const nr = 7 + 12 * moon, ng = 11 + 14 * moon, nb = 22 + 18 * moon;
+      const dr = D[p] * sunI * E[q + 5], dg = D[p + 1] * sunI * E[q + 6], db = D[p + 2] * sunI * (1 - 0.22 * E[q + 2]);
+      const bl = E[q + 3];
+      o[p] = nr + (dr - nr) * dayF + 12.8 * bl + C[c] * dark;
+      o[p + 1] = ng + (dg - ng) * dayF + 13.2 * bl + C[c + 1] * dark;
+      o[p + 2] = nb + (db - nb) * dayF + 30.8 * bl + C[c + 2] * dark;
+      o[p + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  rtCache.set(key, out);
+  if (rtCache.size > 8) rtCache.delete(rtCache.keys().next().value);
+  return out;
+}
+
+/* ── the scene: one renderer for the screen preview and every export ───────── */
 export const fmtValue = (v, unit) => {
   if (v == null || Number.isNaN(v)) return '—';
   const a = Math.abs(v);
   const s = a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1).replace(/\.0$/, '') : v.toFixed(1);
   return `${s}${unit ? ` ${unit}` : ''}`;
 };
-
 const timeFmt = (iso, opts) => new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/London', ...opts });
+export const FONT = '"Inter", -apple-system, "SF Pro Display", "Segoe UI", system-ui, sans-serif';
 
-/* view: { cx, cy, s } = grid point at the canvas centre and screen px per grid cell */
-export function drawScene(ctx, W, H, view, L) {
+/* rect = the graphic's frame on this canvas; view = { cx, cy, s }: the grid point at the
+   frame's centre and canvas px per grid cell. Everything else scales with the frame
+   (u = 1 at a 1080 px short side), so a PNG at any size is the preview, enlarged. */
+export function drawScene(ctx, rect, view, L, opts = {}) {
   const { cx, cy, s } = view;
-  const X = (gx) => (gx - cx) * s + W / 2;
-  const Y = (gy) => (gy - cy) * s + H / 2;
+  const u = Math.min(rect.w, rect.h) / 1080;
+  const ox = rect.x + rect.w / 2, oy = rect.y + rect.h / 2;
+  const X = (gx) => (gx - cx) * s + ox;
+  const Y = (gy) => (gy - cy) * s + oy;
+  const st = MAP_STYLES[L.style] || MAP_STYLES.dark;
+  const clip = opts.clip || rect;
   ctx.save();
-  ctx.fillStyle = '#0e1b2a';
-  ctx.fillRect(0, 0, W, H);
+  ctx.beginPath();
+  if (opts.round) roundRect(ctx, clip.x, clip.y, clip.w, clip.h, opts.round); else ctx.rect(clip.x, clip.y, clip.w, clip.h);
+  ctx.clip();
+  ctx.fillStyle = st.bg;
+  ctx.fillRect(clip.x, clip.y, clip.w, clip.h);
   ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   if (L.basemap) ctx.drawImage(L.basemap, X(0), Y(0), NX * s, NY * s);
   if (L.data) {
     ctx.imageSmoothingEnabled = !!L.smooth;
-    ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(L.data, X(0), Y(0), NX * s, NY * s);
     ctx.imageSmoothingEnabled = true;
   }
-  const lw = Math.max(1, Math.min(2.2, s * 0.55)) * (L.pixelRatio || 1);
   if (L.contours) {
     ctx.lineJoin = 'round';
+    ctx.lineWidth = 1.7 * u;
     for (const c of L.contours) {
       ctx.beginPath();
-      for (const ring of c.rings) {
-        ring.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
-      }
-      ctx.strokeStyle = c.line;
-      ctx.lineWidth = lw * 0.9;
+      for (const ring of c.rings) ring.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
+      ctx.strokeStyle = L.style === 'light' && c.line.startsWith('rgba(236') ? 'rgba(30,42,58,0.7)' : c.line;
       ctx.stroke();
     }
-    if (L.contourLabels) drawContourLabels(ctx, L.contours, X, Y, W, H, lw);
   }
   if (L.lines) {
-    ctx.lineWidth = lw * 0.8;
-    ctx.strokeStyle = 'rgba(226,236,248,0.62)';
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(X(0), Y(0), NX * s, NY * s);                // the model domain only
+    ctx.clip();
+    ctx.lineWidth = 1.5 * u;
+    ctx.strokeStyle = st.coast;
     strokeLines(ctx, L.lines.coast, X, Y);
-    ctx.setLineDash([4 * lw, 3 * lw]);
-    ctx.strokeStyle = 'rgba(226,236,248,0.45)';
+    ctx.setLineDash([6 * u, 4 * u]);
+    ctx.strokeStyle = st.border;
     strokeLines(ctx, L.lines.border, X, Y);
     ctx.setLineDash([]);
+    ctx.restore();
   }
-  if (L.cities) drawCities(ctx, L.cities, X, Y, W, L.chrome ? H - Math.min(W, H) * 0.13 : H, s, L.pixelRatio || 1);
-  if (L.chrome) drawChrome(ctx, W, H, L.chrome);
+  edgeFade(ctx, X(0), Y(0), NX * s, NY * s, 36 * s, st.bg);
+  if (L.contours && L.contourLabels) drawContourLabels(ctx, L.contours, X, Y, rect, u, st);
+  if (L.cities) drawCities(ctx, L.cities, X, Y, rect, s / u, u, st, L.chrome ? 150 * u : 0);
+  if (L.chrome) drawChrome(ctx, rect, u, L.chrome, st);
   ctx.restore();
+}
+
+/* the domain's edge melts into the background instead of ending in a hard line */
+function edgeFade(ctx, x, y, w, h, f, bg) {
+  const c = hex(bg);
+  const solid = `rgba(${c[0]},${c[1]},${c[2]},1)`, clear = `rgba(${c[0]},${c[1]},${c[2]},0)`;
+  const band = (x0, y0, x1, y1, rx, ry, rw, rh) => {
+    const g = ctx.createLinearGradient(x0, y0, x1, y1);
+    g.addColorStop(0, solid);
+    g.addColorStop(1, clear);
+    ctx.fillStyle = g;
+    ctx.fillRect(rx, ry, rw, rh);
+  };
+  band(x, 0, x + f, 0, x, y, f, h);
+  band(x + w, 0, x + w - f, 0, x + w - f, y, f, h);
+  band(0, y, 0, y + f, x, y, w, f);
+  band(0, y + h, 0, y + h - f, x, y + h - f, w, f);
 }
 
 function strokeLines(ctx, lines, X, Y) {
@@ -296,8 +465,16 @@ function strokeLines(ctx, lines, X, Y) {
   ctx.stroke();
 }
 
-function drawContourLabels(ctx, contours, X, Y, W, H, lw) {
-  ctx.font = `700 ${Math.round(9.5 * Math.max(1, lw * 0.7))}px Inter, system-ui, sans-serif`;
+function haloText(ctx, t, x, y, st, w) {
+  ctx.lineWidth = w;
+  ctx.strokeStyle = st.halo;
+  ctx.strokeText(t, x, y);
+  ctx.fillStyle = st.text;
+  ctx.fillText(t, x, y);
+}
+
+function drawContourLabels(ctx, contours, X, Y, R, u, st) {
+  ctx.font = `700 ${15 * u}px ${FONT}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const placed = [];
@@ -306,134 +483,169 @@ function drawContourLabels(ctx, contours, X, Y, W, H, lw) {
       if (ring.length < 30) continue;
       for (let i = 10; i < ring.length; i += 140) {
         const x = X(ring[i][0]), y = Y(ring[i][1]);
-        if (x < 30 || y < 70 || x > W - 30 || y > H - 110) continue;
-        if (placed.some(([px, py]) => Math.hypot(px - x, py - y) < 70)) continue;
+        if (x < R.x + 40 * u || y < R.y + 170 * u || x > R.x + R.w - 40 * u || y > R.y + R.h - 140 * u) continue;
+        if (placed.some(([px, py]) => Math.hypot(px - x, py - y) < 110 * u)) continue;
         placed.push([x, y]);
-        const t = Number.isInteger(c.value) ? String(c.value) : c.value.toFixed(0);
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = 'rgba(8,14,24,0.9)';
-        ctx.strokeText(t, x, y);
-        ctx.fillStyle = '#f5f8fc';
-        ctx.fillText(t, x, y);
+        haloText(ctx, Number.isInteger(c.value) ? String(c.value) : c.value.toFixed(0), x, y, st, 4 * u);
       }
     }
   }
 }
 
-function drawCities(ctx, cities, X, Y, W, H, s, pr) {
-  const maxRank = s > 2.4 ? 3 : s > 1.2 ? 2 : 1;
-  const fs = Math.round(12 * pr);
-  ctx.font = `600 ${fs}px Inter, system-ui, sans-serif`;
+function drawCities(ctx, cities, X, Y, R, cellPx, u, st, footer) {
+  const maxRank = cellPx > 3.2 ? 3 : cellPx > 1.5 ? 2 : 1;
+  ctx.font = `600 ${19 * u}px ${FONT}`;
   ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
   for (const c of cities) {
     if (c.rank > maxRank) continue;
     const x = X(c.x), y = Y(c.y);
-    if (x < 8 || y < 8 || x > W - 8 || y > H - 8) continue;
+    if (x < R.x + 10 * u || y < R.y + 170 * u || x > R.x + R.w - 120 * u || y > R.y + R.h - footer) continue;
     ctx.beginPath();
-    ctx.arc(x, y, 2.6 * pr, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff';
+    ctx.arc(x, y, 4 * u, 0, Math.PI * 2);
+    ctx.fillStyle = st.text;
     ctx.fill();
-    ctx.lineWidth = 1.2 * pr;
-    ctx.strokeStyle = 'rgba(8,14,24,0.9)';
+    ctx.lineWidth = 2 * u;
+    ctx.strokeStyle = st.halo;
     ctx.stroke();
-    ctx.textAlign = 'left';
-    ctx.lineWidth = 3.2 * pr;
-    ctx.strokeStyle = 'rgba(8,14,24,0.78)';
-    ctx.strokeText(c.name, x + 6 * pr, y);
-    ctx.fillStyle = '#f2f6fb';
-    ctx.fillText(c.name, x + 6 * pr, y);
+    haloText(ctx, c.name, x + 9 * u, y, st, 5 * u);
   }
 }
 
-/* title block, legend and credit line: our own layout (glass panels, legend along the foot) */
-function drawChrome(ctx, W, H, C) {
-  const u = Math.min(W, H) / 1080;                          // design unit: 1 at 1080 px
-  const pad = 28 * u;
-  // top band
-  const g = ctx.createLinearGradient(0, 0, 0, 170 * u);
-  g.addColorStop(0, 'rgba(6,12,22,0.86)');
-  g.addColorStop(1, 'rgba(6,12,22,0)');
+/* frosted glass inside a canvas: the scene under the panel, blurred, then a tint, a top
+   highlight and a hairline edge (Safari without canvas filters gets a stronger tint) */
+const FILTER_OK = typeof document !== 'undefined' && 'filter' in (document.createElement('canvas').getContext('2d') || {});
+function glassPanel(ctx, x, y, w, h, r, u, theme) {
+  const light = theme === 'light';
+  ctx.save();
+  roundRect(ctx, x, y, w, h, r);
+  ctx.clip();
+  if (FILTER_OK) {
+    ctx.filter = `blur(${Math.round(18 * u)}px) saturate(160%)`;
+    ctx.drawImage(ctx.canvas, x, y, w, h, x, y, w, h);
+    ctx.filter = 'none';
+  }
+  ctx.fillStyle = light ? `rgba(255,255,255,${FILTER_OK ? 0.5 : 0.78})` : `rgba(14,20,32,${FILTER_OK ? 0.42 : 0.72})`;
+  ctx.fillRect(x, y, w, h);
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, light ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.16)');
+  g.addColorStop(0.45, 'rgba(255,255,255,0)');
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, 170 * u);
-  let x = pad;
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+  ctx.save();
+  roundRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, r);
+  const e = ctx.createLinearGradient(0, y, 0, y + h);
+  e.addColorStop(0, light ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.42)');
+  e.addColorStop(1, light ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.08)');
+  ctx.strokeStyle = e;
+  ctx.lineWidth = Math.max(1, 1.2 * u);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* the graphic's furniture: a title card, a logo capsule and a compact key */
+function drawChrome(ctx, R, u, C, st) {
+  const light = st.glass === 'light';
+  const ink = light ? '#111820' : '#ffffff';
+  const sub = light ? 'rgba(17,24,32,0.62)' : 'rgba(255,255,255,0.7)';
+  const accent = light ? '#0a6fd1' : '#7cc8ff';
+  const pad = 26 * u;
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  // title card
+  const day = timeFmt(C.valid, { weekday: 'short', day: 'numeric', month: 'short' });
+  const hour = timeFmt(C.valid, { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
+  ctx.font = `800 ${34 * u}px ${FONT}`;
+  const dw = ctx.measureText(day + ' ').width;
+  ctx.font = `400 ${34 * u}px ${FONT}`;
+  const hw = ctx.measureText(hour).width;
+  ctx.font = `600 ${14 * u}px ${FONT}`;
+  const meta = `${C.model} · run ${C.runLabel} · T+${C.step}`;
+  const mw = ctx.measureText(meta).width;
+  ctx.font = `800 ${13 * u}px ${FONT}`;
+  const vlab = C.variable.toUpperCase();
+  const vw = ctx.measureText(vlab).width + 1.2 * u * vlab.length;
+  const tw = Math.min(R.w - 2 * pad - 70 * u, Math.max(dw + hw, mw, vw) + 40 * u);
+  const th = 112 * u;
+  glassPanel(ctx, R.x + pad, R.y + pad, tw, th, 24 * u, u, st.glass);
+  let x = R.x + pad + 20 * u;
+  ctx.fillStyle = accent;
+  ctx.font = `800 ${13 * u}px ${FONT}`;
+  if ('letterSpacing' in ctx) ctx.letterSpacing = `${1.2 * u}px`;
+  ctx.fillText(vlab, x, R.y + pad + 30 * u);
+  if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+  ctx.fillStyle = ink;
+  ctx.font = `800 ${34 * u}px ${FONT}`;
+  ctx.fillText(day, x, R.y + pad + 70 * u);
+  ctx.font = `400 ${34 * u}px ${FONT}`;
+  ctx.fillStyle = sub;
+  ctx.fillText(hour, x + dw, R.y + pad + 70 * u);
+  ctx.fillStyle = sub;
+  ctx.font = `600 ${14 * u}px ${FONT}`;
+  ctx.fillText(meta, x, R.y + pad + 96 * u);
+  // logo capsule, top right
   if (C.logo) {
-    const r = 30 * u;
+    const d = 58 * u, lx = R.x + R.w - pad - d, ly = R.y + pad;
+    glassPanel(ctx, lx, ly, d, d, d / 2, u, st.glass);
     ctx.save();
     ctx.beginPath();
-    ctx.arc(x + r, pad + r, r, 0, Math.PI * 2);
+    ctx.arc(lx + d / 2, ly + d / 2, d / 2 - 6 * u, 0, Math.PI * 2);
     ctx.clip();
-    ctx.drawImage(C.logo, x, pad, 2 * r, 2 * r);
+    ctx.drawImage(C.logo, lx + 6 * u, ly + 6 * u, d - 12 * u, d - 12 * u);
     ctx.restore();
-    x += 2 * r + 16 * u;
   }
-  ctx.textBaseline = 'alphabetic';
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#7cc4ff';
-  ctx.font = `800 ${15 * u}px Inter, system-ui, sans-serif`;
-  ctx.fillText(C.variable.toUpperCase(), x, pad + 16 * u);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `800 ${38 * u}px Inter, system-ui, sans-serif`;
-  const day = timeFmt(C.valid, { weekday: 'long', day: 'numeric', month: 'long' });
-  ctx.fillText(day, x, pad + 56 * u);
-  const dw = ctx.measureText(day).width;
-  ctx.font = `400 ${38 * u}px Inter, system-ui, sans-serif`;
-  ctx.fillStyle = '#c9d6e6';
-  ctx.fillText(` ${timeFmt(C.valid, { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}`, x + dw, pad + 56 * u);
-  // run pill, top right
-  ctx.font = `700 ${14 * u}px Inter, system-ui, sans-serif`;
-  const runTxt = `${C.model}  ·  ${C.runLabel}  ·  T+${C.step}`;
-  const tw = ctx.measureText(runTxt).width;
-  const pw = tw + 28 * u, ph = 32 * u, px = W - pad - pw, py = pad;
-  roundRect(ctx, px, py, pw, ph, ph / 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.1)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.fillStyle = '#e6eef8';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(runTxt, px + 14 * u, py + ph / 2 + 1);
-  // legend along the foot
-  const lh = 92 * u, ly = H - lh - pad * 0.6, lx = pad, lw = W - 2 * pad;
-  roundRect(ctx, lx, ly, lw, lh, 18 * u);
-  ctx.fillStyle = 'rgba(6,12,22,0.78)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-  ctx.stroke();
+  // key: one slim capsule along the foot
   const sc = C.scale;
-  const ticks = sc.ticks?.length ? sc.ticks : [];
-  const bx = lx + 22 * u, bw = lw - 44 * u - 120 * u, by = ly + 26 * u, bh = 16 * u;
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = '#9fb3c8';
-  ctx.font = `700 ${12 * u}px Inter, system-ui, sans-serif`;
-  ctx.fillText(C.unit ? `${C.variable} (${C.unit})` : C.variable, bx, ly + 18 * u);
-  if (ticks.length > 1) {
-    const n = ticks.length;
-    const segW = bw / n;
-    for (let i = 0; i < n; i++) {
-      const v0 = ticks[i], v1 = ticks[i + 1] ?? ticks[i] + (ticks[i] - ticks[i - 1]);
-      const c = colourAt({ ...sc, floor: null }, sc.discrete ? v0 : (v0 + v1) / 2) || [60, 70, 80, 255];
-      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},1)`;
-      const r = i === 0 ? 'l' : i === n - 1 ? 'r' : '';
-      roundRect(ctx, bx + i * segW + 1, by, segW - 2, bh, r ? 6 * u : 2 * u);
-      ctx.fill();
-      ctx.fillStyle = '#e6eef8';
-      ctx.font = `600 ${13 * u}px Inter, system-ui, sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.fillText(String(v0), bx + i * segW + 2, by + bh + 22 * u);
-    }
-  }
+  const ticks = sc.ticks || [];
+  const kh = 64 * u, kw = Math.min(R.w - 2 * pad, Math.max(420 * u, ticks.length * 70 * u + 40 * u));
+  const kx = R.x + pad, ky = R.y + R.h - pad - kh;
+  glassPanel(ctx, kx, ky, kw, kh, 22 * u, u, st.glass);
+  ctx.font = `700 ${12.5 * u}px ${FONT}`;
+  ctx.fillStyle = sub;
+  const unitTxt = C.unit || '';
+  ctx.fillText(`${C.variable}${unitTxt ? ` · ${unitTxt}` : ''}`, kx + 18 * u, ky + 22 * u);
   ctx.textAlign = 'right';
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `800 ${16 * u}px Inter, system-ui, sans-serif`;
-  ctx.fillText('MyWeatherUK', lx + lw - 20 * u, ly + 44 * u);
-  ctx.fillStyle = '#8aa0b8';
-  ctx.font = `500 ${11 * u}px Inter, system-ui, sans-serif`;
-  ctx.fillText(C.gridNote, lx + lw - 20 * u, ly + 64 * u);
+  ctx.fillText(C.credit, kx + kw - 18 * u, ky + 22 * u);
   ctx.textAlign = 'left';
+  if (ticks.length > 1) {
+    const bx = kx + 18 * u, bw = kw - 36 * u, by = ky + 31 * u, bh = 9 * u, n = ticks.length;
+    const seg = bw / n;
+    ctx.save();
+    roundRect(ctx, bx, by, bw, bh, bh / 2);
+    ctx.clip();
+    if (sc.discrete) {
+      for (let i = 0; i < n; i++) {
+        const c = colourAt({ ...sc, floor: null }, ticks[i]) || [80, 90, 100, 255];
+        ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+        ctx.fillRect(bx + i * seg, by, seg + 0.5, bh);
+      }
+    } else {
+      const g = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+      for (let i = 0; i <= 24; i++) {
+        const f = i / 24, pos = f * n - 0.5, k = Math.max(0, Math.min(n - 1, Math.floor(pos)));
+        const t = Math.max(0, Math.min(1, pos - k));
+        const v = k + 1 < n ? ticks[k] + t * (ticks[k + 1] - ticks[k]) : ticks[n - 1];
+        const c = colourAt({ ...sc, floor: null }, v) || [80, 90, 100, 255];
+        g.addColorStop(f, `rgb(${c[0]},${c[1]},${c[2]})`);
+      }
+      ctx.fillStyle = g;
+      ctx.fillRect(bx, by, bw, bh);
+    }
+    ctx.restore();
+    ctx.fillStyle = ink;
+    ctx.font = `600 ${12.5 * u}px ${FONT}`;
+    ctx.textAlign = sc.discrete ? 'left' : 'center';
+    for (let i = 0; i < n; i++) {
+      const tx = sc.discrete ? bx + i * seg + 1 * u : bx + (i + 0.5) * seg;
+      ctx.fillText(String(ticks[i]), tx, by + bh + 16 * u);
+    }
+    ctx.textAlign = 'left';
+  }
 }
 
 function roundRect(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
   ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);

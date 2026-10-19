@@ -2,7 +2,10 @@
 
     python -m mdata.static
 
-basemap.png   2x the grid (2084 x 1940): sea, and land shaded by UKV's own 2 km orography
+basemap.png        2x the grid (2084 x 1940): dark map, land shaded by UKV's own 2 km orography
+basemap_light.png  the same relief as a light paper map
+sat_day.jpg        NASA Blue Marble (day satellite), reprojected onto the grid
+night_lights.png   NASA Black Marble city lights (radiance), for the real-time day/night map
 lines.json    coastlines and national borders (Natural Earth 1:10m), in grid pixels
 cities.json   place labels, in grid pixels
 grid.json     the projection
@@ -155,6 +158,67 @@ def basemap():
     np.save(STATIC / 'land_mask.npy', ndimage.zoom(land, 1 / SS, order=1)[:NY, :NX] > 0.5)
 
 
+NASA = REPO.parent / 'mwuk-graphics' / 'assets' / 'basemap'      # same NASA imagery as the motion graphics
+NASA_BOX = (-22.5, 40.5, 18.0, 67.5)                                # equirectangular, north-up
+GIBS = ('https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0'
+        '&LAYERS={layer}&CRS=EPSG:4326&BBOX=40.5,-22.5,67.5,18&WIDTH=4608&HEIGHT=3072&FORMAT=image/jpeg')
+
+
+def _nasa(name, layer):
+    """NASA Blue Marble (day) / Black Marble (night) over NW Europe, from the motion-graphics
+    assets, or straight from NASA GIBS if they are not on this machine."""
+    f = NASA / name
+    if not f.exists():
+        from nova.io_aws import get
+        STATIC.mkdir(parents=True, exist_ok=True)
+        f = STATIC / name
+        f.write_bytes(get(GIBS.format(layer=layer), tries=3, timeout=180))
+    return np.asarray(Image.open(f).convert('RGB'), np.float32)
+
+
+def _pixel_lonlat():
+    """lon/lat of every basemap pixel (2x the grid)."""
+    inv = Transformer.from_crs(PROJ, 'EPSG:4326', always_xy=True)
+    x = (X0 - DX / 2) + (np.arange(NX * SS) + 0.5) * DX / SS
+    y = (Y_TOP + DX / 2) - (np.arange(NY * SS) + 0.5) * DX / SS
+    xx, yy = np.meshgrid(x, y)
+    return inv.transform(xx, yy)
+
+
+def _sample(img, lon, lat):
+    lo0, la0, lo1, la1 = NASA_BOX
+    h, w = img.shape[:2]
+    cols = (lon - lo0) / (lo1 - lo0) * w - 0.5
+    rows = (la1 - lat) / (la1 - la0) * h - 0.5
+    return np.stack([ndimage.map_coordinates(img[..., c], [rows, cols], order=1, mode='nearest') for c in range(3)], -1)
+
+
+def styled_basemaps():
+    """Light map, satellite (Blue Marble) and night lights (Black Marble) on the display grid."""
+    lon, lat = _pixel_lonlat()
+    day = _sample(_nasa('day_europe.jpg', 'BlueMarble_NextGeneration'), lon, lat)
+    # Blue Marble is a little dark and flat for a weather map: lift the midtones, add saturation
+    day = 255 * np.power(np.clip(day / 255, 0, 1), 0.82)
+    g = day.mean(-1, keepdims=True)
+    day = np.clip(g + 1.18 * (day - g), 0, 255)
+    Image.fromarray(day.astype(np.uint8)).save(STATIC / 'sat_day.jpg', quality=88, optimize=True)
+    night = _sample(_nasa('night_europe.jpg', 'VIIRS_Black_Marble'), lon, lat).mean(-1)
+    Image.fromarray(np.clip(night, 0, 255).astype(np.uint8), 'L').save(STATIC / 'night_lights.png', optimize=True)
+    # light map: paper land with soft relief, pale sea
+    land = land_mask()
+    h = ndimage.zoom(orography(), SS, order=1)[:NY * SS, :NX * SS]
+    gy, gx = np.gradient(h, DX / SS)
+    slope = np.arctan(2.5 * np.hypot(gx, gy))
+    aspect = np.arctan2(-gx, gy)
+    shade = np.sin(np.deg2rad(42)) * np.cos(slope) + np.cos(np.deg2rad(42)) * np.sin(slope) * np.cos(np.deg2rad(315) - aspect)
+    shade = np.clip(shade / np.sin(np.deg2rad(42)), 0.55, 1.15)
+    elev = np.clip(h / 1000.0, 0, 1)[..., None]
+    lc = (np.array([238, 240, 233], float) * (1 - 0.18 * elev) + np.array([214, 206, 188], float) * 0.18 * elev) * shade[..., None]
+    sea = np.array([201, 217, 231], float)
+    rgb = sea * (1 - land[..., None]) + np.clip(lc, 0, 255) * land[..., None]
+    Image.fromarray(rgb.astype(np.uint8)).save(STATIC / 'basemap_light.png', optimize=True)
+
+
 def main():
     STATIC.mkdir(parents=True, exist_ok=True)
     write_json(STATIC / 'grid.json', grid_meta())
@@ -163,6 +227,7 @@ def main():
     write_json(STATIC / 'cities.json', [{'name': c[0], 'x': round(float(x), 2), 'y': round(float(y), 2), 'rank': c[3]}
                                         for c, x, y in zip(CITIES, px, py) if 0 <= x <= NX and 0 <= y <= NY])
     basemap()
+    styled_basemaps()
     print('static layers written to', STATIC)
 
 

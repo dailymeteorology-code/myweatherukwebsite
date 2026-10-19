@@ -19,7 +19,7 @@ import { resolveEnsPython } from './pastFuture/index.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TOOL = path.resolve(HERE, '..', 'tools', 'modeldata');
 const DATA = process.env.MODELDATA_DIR || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/modeldata' : path.join(HERE, 'data', 'modeldata'));
-const STATIC_FILES = new Set(['basemap.png', 'lines.json', 'cities.json', 'grid.json']);
+const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg', 'night_lights.png', 'lines.json', 'cities.json', 'grid.json']);
 const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
@@ -97,7 +97,7 @@ function refreshCatalog() {
 
 export function mountModelData(app) {
   fs.mkdirSync(DATA, { recursive: true });
-  if (!fs.existsSync(path.join(DATA, 'static', 'basemap.png'))) python(['mdata.static'], (c, e) => c && console.warn(`[modeldata] static build failed: ${e.slice(-300)}`));
+  if (!fs.existsSync(path.join(DATA, 'static', 'sat_day.jpg'))) python(['mdata.static'], (c, e) => c && console.warn(`[modeldata] static build failed: ${e.slice(-300)}`));
   refreshCatalog();
   setInterval(refreshCatalog, 10 * 60 * 1000).unref();
 
