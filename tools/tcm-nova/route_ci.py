@@ -21,6 +21,8 @@ from zoneinfo import ZoneInfo
 REPO = os.environ.get('GITHUB_REPOSITORY', 'dailymeteorology-code/myweatherukwebsite')
 LONDON = ZoneInfo('Europe/London')
 MAIN_CYCLES = (3, 9, 15, 21)                 # UK wall clock
+#: Bump when the Main Run engine changes: the current cycle is then re-run with it.
+MAIN_ENGINE = 'nova-v5-2.1'
 MAIN_LEADS = list(range(0, 97, 3))
 MAIN_JOBS = 17
 UKV_BUCKET = 'https://met-office-atmospheric-model-data.s3.eu-west-2.amazonaws.com'
@@ -110,7 +112,10 @@ def decide(now, force=''):
     out = {'main': 'false', 'hyper': 'false', 'ukv_env': 'false', 'learning': 'false'}
     # Main Run
     cyc = main_cycle(now)
-    have = run_init(latest('nova-main').get('run_id', ''))
+    lm = latest('nova-main')
+    have = run_init(lm.get('run_id', ''))
+    if have is not None and have >= cyc and lm.get('engine') != MAIN_ENGINE:
+        have = None                                  # made by an older engine: redo this cycle
     out['main_init'] = cyc.isoformat()
     out['main_chunks'] = json.dumps(chunks(MAIN_LEADS, MAIN_JOBS))
     if force == 'main' or ((have is None or have < cyc) and not in_progress('main')):

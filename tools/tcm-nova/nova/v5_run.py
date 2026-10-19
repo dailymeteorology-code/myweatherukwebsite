@@ -35,7 +35,7 @@ from .grid import Grid
 from .sources import UKV, log
 from . import v5_bridge as B
 
-ENGINE_VERSION = 'nova-v5-2.0'
+from route_ci import MAIN_ENGINE as ENGINE_VERSION   # one definition, shared with the scheduler
 LONDON = ZoneInfo('Europe/London')
 
 HAZARD_FIELDS = {'lightning': 'p_lightning', 'hail': 'p_hail', 'severe_hail': 'p_hail_sig',

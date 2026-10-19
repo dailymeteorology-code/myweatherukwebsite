@@ -81,7 +81,8 @@ class RunWriter:
         _write_json(self.dir / 'manifest.json', self.manifest)
         os.replace(self.dir, self.final)
         if status in ('published', 'degraded'):
-            _write_json(self.root / 'latest.json', {'run_id': self.id, 'status': status, 'init': self.manifest['init_utc']})
+            _write_json(self.root / 'latest.json', {'run_id': self.id, 'status': status, 'init': self.manifest['init_utc'],
+                                                    'engine': self.manifest.get('engine_version')})
         return self.final
 
     def abandon(self, reason):

@@ -93,8 +93,8 @@ def publish(product):
     runs = sorted(p for p in (DATA / product).glob(f'{product}-*') if p.is_dir() and not p.name.endswith('.partial'))
     for rd in runs[-2:]:
         name = f'{rd.name}.tar.gz'
-        if name in have:
-            continue
+        if name in have and rd != runs[-1]:
+            continue                                     # the newest run is always (re)uploaded
         tgz = DATA / name
         with tarfile.open(tgz, 'w:gz', compresslevel=1) as t:
             t.add(rd, arcname=rd.name, filter=lambda ti: None if '/sources' in ti.name.replace('\\', '/') else ti)
