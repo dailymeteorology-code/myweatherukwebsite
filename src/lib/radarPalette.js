@@ -56,7 +56,7 @@ const SNOW_HEX =
 
 /* Below −32 the table is empty; above 74 dBZ it repeats a sentinel colour
    rather than carrying data, so that is where the scale stops. */
-const DBZ_MIN = -32;
+export const DBZ_MIN = -32;
 const DBZ_TOP = 74;
 
 export const PHASE = { RAIN: 0, MIX: 1, SNOW: 2, ICE: 3 };
@@ -82,6 +82,18 @@ const LOOKUP = new Map();
  * the tile drew it as snow. Returns null for transparent pixels and for
  * anything outside the published palette.
  */
+/**
+ * The allocation-free form of `decode` for per-pixel loops: the packed code
+ * ((dBZ - DBZ_MIN) | SNOW_BIT), or -1 where the pixel carries nothing.
+ * `decode` returns an object per call, and a tile has up to 262,144 pixels.
+ */
+export const SNOW_FLAG = SNOW_BIT;
+export function decodePacked(r, g, b, a) {
+  if (a === 0) return -1;
+  const hit = LOOKUP.get((((r << 16) | (g << 8) | b) * 256 + a) >>> 0);
+  return hit === undefined ? -1 : hit;
+}
+
 export function decode(r, g, b, a) {
   if (a === 0) return null;
   const hit = LOOKUP.get((((r << 16) | (g << 8) | b) * 256 + a) >>> 0);

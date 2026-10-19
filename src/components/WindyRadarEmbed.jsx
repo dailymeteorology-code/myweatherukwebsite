@@ -36,7 +36,8 @@ import { useTheme } from '@/components/ThemeContext';
 import { loadTodayStrikes } from '@/components/tcm/strikeStorage';
 import { ensureLeaflet } from '@/lib/leafletLoader';
 import {
-  decode, buildPhaseLUT, lutIndex, describe, rateFor, rampColour, DBZ_FLOOR,
+  buildPhaseLUT, lutIndex, describe, rateFor, rampColour, DBZ_FLOOR, DBZ_MIN,
+  decodePacked, SNOW_FLAG,
 } from '@/lib/radarPalette';
 import { loadPhaseField, phaseField, sampleField, classify } from '@/lib/precipPhase';
 
@@ -132,6 +133,31 @@ const bar = (height) => ({
    lattice is spaced linearly in latitude across the tile, which Mercator is
    not — over one tile that error is a few hundred metres against a field whose
    own spacing is fifty kilometres. */
+/* ── Decoded-tile cache ──────────────────────────────────────────────────────
+   Zooming in and back out used to fetch and re-decode every tile again, for
+   every frame of the loop. A decoded tile never changes (a RainViewer frame
+   path is immutable), so the finished canvas and its dBZ/phase buffers are
+   kept, least-recently-used first out. Budget in pixels so a high-DPI screen
+   (512-pixel tiles, four times the memory) keeps proportionally fewer. */
+const TILE_CACHE = new Map();
+const TILE_CACHE_PIXELS = 110e6;
+let tileCachePixels = 0;
+function cacheGet(key) {
+  const hit = TILE_CACHE.get(key);
+  if (hit) { TILE_CACHE.delete(key); TILE_CACHE.set(key, hit); }   // most recent last
+  return hit;
+}
+function cachePut(key, entry) {
+  if (TILE_CACHE.has(key)) return;
+  TILE_CACHE.set(key, entry);
+  tileCachePixels += entry.canvas.width * entry.canvas.height;
+  while (tileCachePixels > TILE_CACHE_PIXELS && TILE_CACHE.size) {
+    const [k, old] = TILE_CACHE.entries().next().value;
+    TILE_CACHE.delete(k);
+    tileCachePixels -= old.canvas.width * old.canvas.height;
+  }
+}
+
 function makeRecolourLayer(L, { host, path, srcSize }) {
   const BLOCKS = 16;
   const blockShift = Math.round(Math.log2(srcSize / BLOCKS));
@@ -143,6 +169,16 @@ function makeRecolourLayer(L, { host, path, srcSize }) {
       tile.height = srcSize;                 // CSS size is set by Leaflet to 256
       const ctx = tile.getContext('2d', { willReadFrequently: true });
 
+      const key = `${coords.z}/${coords.x}/${coords.y}`;
+      const cacheKey = `${path}/${srcSize}/${key}`;
+      const cached = cacheGet(cacheKey);
+      if (cached) {
+        ctx.drawImage(cached.canvas, 0, 0);
+        this._dbz.set(key, cached.dbz);
+        this._phase.set(key, cached.phase);
+        Promise.resolve().then(() => done(null, tile));      // Leaflet expects done() after return
+        return tile;
+      }
       const src = `${host}${path}/${srcSize}/${coords.z}/${coords.x}/${coords.y}/2/0_1.png`;
       const img = new Image();
       img.crossOrigin = 'anonymous';         // RainViewer sends A-C-A-O: *
@@ -181,26 +217,30 @@ function makeRecolourLayer(L, { host, path, srcSize }) {
             for (let px = 0; px < srcSize; px += 1, p += 4) {
               const alpha = d[p + 3];
               if (alpha === 0) continue;
-              const sample = decode(d[p], d[p + 1], d[p + 2], alpha);
+              const code = decodePacked(d[p], d[p + 1], d[p + 2], alpha);
+              const dbz = code < 0 ? -999 : (code & 0x1ff) + DBZ_MIN;
               // Below the floor it is clutter as often as precipitation, and
               // anything the palette does not contain is not ours to draw.
-              if (!sample || sample.dbz < DBZ_FLOOR) { d[p + 3] = 0; continue; }
+              if (dbz < DBZ_FLOOR) { d[p + 3] = 0; continue; }
 
               const bi = brow + (px >> blockShift);
-              const ph = classify(tw[bi], fzl[bi], sample.snow);
-              const o = lutIndex(ph, sample.dbz);
+              const ph = classify(tw[bi], fzl[bi], (code & SNOW_FLAG) !== 0);
+              const o = lutIndex(ph, dbz);
               d[p] = PHASE_LUT[o];
               d[p + 1] = PHASE_LUT[o + 1];
               d[p + 2] = PHASE_LUT[o + 2];
               d[p + 3] = PHASE_LUT[o + 3];
 
               const q = qrow + px;
-              dbzOf[q] = sample.dbz;
+              dbzOf[q] = dbz;
               phaseOf[q] = ph + 1;
             }
           }
           ctx.putImageData(image, 0, 0);
-          const key = `${coords.z}/${coords.x}/${coords.y}`;
+          const keep = document.createElement('canvas');
+          keep.width = srcSize; keep.height = srcSize;
+          keep.getContext('2d').drawImage(tile, 0, 0);
+          cachePut(cacheKey, { canvas: keep, dbz: dbzOf, phase: phaseOf });
           this._dbz.set(key, dbzOf);
           this._phase.set(key, phaseOf);
           done(null, tile);
@@ -682,6 +722,39 @@ function RadarCanvas({
         viewRef.current = { center: [c.lat, c.lng], zoom: map.getZoom() };
       };
       map.on('moveend zoomend', remember);
+
+      /* ZOOMING ONLY RELOADS THE FRAME ON SCREEN. Every frame of the loop is a
+         layer on the map (hidden ones at opacity 0), so a zoom used to make all
+         thirteen fetch and decode a fresh set of tiles at once: hundreds of
+         requests and seconds of main-thread decoding before the visible frame
+         got its turn. Hidden frames now leave the map when a zoom starts and
+         come back one at a time once it has settled, behind the visible one. */
+      let reattach = 0;
+      map.on('zoomstart', () => {
+        reattach += 1;
+        Object.values(layersRef.current).forEach((l) => {
+          if (l !== activeLayerRef.current && map.hasLayer(l)) map.removeLayer(l);
+        });
+      });
+      map.on('zoomend', () => {
+        const run = ++reattach;
+        const active = activeLayerRef.current;
+        const waitLoad = (l) => new Promise((resolve) => {
+          if (!l || !l.isLoading || !l.isLoading()) { resolve(); return; }
+          const t = setTimeout(resolve, 2500);
+          l.once('load', () => { clearTimeout(t); resolve(); });
+        });
+        (async () => {
+          await waitLoad(active);
+          const order = Object.values(layersRef.current);
+          const start = Math.max(0, order.indexOf(active));
+          for (let i = 1; i < order.length; i += 1) {
+            if (run !== reattach) return;               // zoomed again: start over
+            const l = order[(start + i) % order.length];
+            if (!map.hasLayer(l)) { l.addTo(map); await waitLoad(l); }
+          }
+        })();
+      });
       map.on('click', (e) => {
         setProbe({
           lat: e.latlng.lat, lon: e.latlng.lng,
@@ -728,6 +801,8 @@ function RadarCanvas({
       layer = makeRecolourLayer(L, { host: frame.host, path: frame.path, srcSize });
       layer.addTo(map);
       layersRef.current[key] = layer;
+    } else if (!map.hasLayer(layer)) {
+      layer.addTo(map);                   // detached during a zoom (see below)
     }
     return layer;
   }, [frames]);
