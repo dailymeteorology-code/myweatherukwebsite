@@ -1,0 +1,170 @@
+"""Static layers for the viewer, all on the display grid (built once).
+
+    python -m mdata.static
+
+basemap.png   2x the grid (2084 x 1940): sea, and land shaded by UKV's own 2 km orography
+lines.json    coastlines and national borders (Natural Earth 1:10m), in grid pixels
+cities.json   place labels, in grid pixels
+grid.json     the projection
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+
+import numpy as np
+from PIL import Image, ImageDraw
+from pyproj import Transformer
+from scipy import ndimage
+
+from .common import DX, NX, NY, PROJ, REPO, STATIC, X0, Y_TOP, grid_meta, write_json
+from .models import UKV, _s3_list
+
+SS = 2                                                   # basemap supersampling
+TOPO = REPO / 'node_modules' / 'world-atlas'
+
+CITIES = [
+    ('London', 51.507, -0.128, 1), ('Birmingham', 52.486, -1.890, 1), ('Manchester', 53.481, -2.242, 1),
+    ('Newcastle', 54.978, -1.618, 1), ('Glasgow', 55.864, -4.252, 1), ('Edinburgh', 55.953, -3.189, 1),
+    ('Aberdeen', 57.150, -2.094, 1), ('Cardiff', 51.481, -3.179, 1), ('Belfast', 54.597, -5.930, 1),
+    ('Dublin', 53.350, -6.260, 1), ('Paris', 48.857, 2.352, 1), ('Amsterdam', 52.370, 4.895, 1),
+    ('Brussels', 50.850, 4.352, 1), ('Leeds', 53.800, -1.549, 2), ('Inverness', 57.478, -4.225, 2),
+    ('Cork', 51.898, -8.471, 2), ('Galway', 53.270, -9.057, 2), ('Plymouth', 50.376, -4.143, 2),
+    ('Bristol', 51.454, -2.588, 2), ('Norwich', 52.630, 1.297, 2), ('Liverpool', 53.408, -2.991, 2),
+    ('Stornoway', 58.209, -6.389, 2), ('Lerwick', 60.155, -1.145, 2), ('Lille', 50.629, 3.057, 2),
+    ('Brest', 48.390, -4.486, 2), ('Bergen', 60.391, 5.322, 2), ('Stavanger', 58.970, 5.733, 2),
+    ('Southampton', 50.910, -1.404, 3), ('Sheffield', 53.383, -1.465, 3), ('Nottingham', 52.954, -1.158, 3),
+    ('Exeter', 50.718, -3.534, 3), ('Kirkwall', 58.981, -2.960, 3), ('Dundee', 56.462, -2.971, 3),
+    ('Carlisle', 54.892, -2.932, 3), ('Hull', 53.767, -0.327, 3), ('Aberystwyth', 52.415, -4.083, 3),
+    ('Oban', 56.415, -5.472, 3), ('Derry', 54.997, -7.309, 3), ('Limerick', 52.668, -8.630, 3),
+    ('Douglas', 54.150, -4.482, 3), ('St Helier', 49.186, -2.107, 3), ('Rennes', 48.117, -1.678, 3),
+    ('Cherbourg', 49.640, -1.616, 3), ('Ipswich', 52.056, 1.148, 3), ('Lincoln', 53.230, -0.540, 3),
+    ('Fort William', 56.820, -5.105, 3), ('Penzance', 50.118, -5.537, 3), ('Brighton', 50.823, -0.137, 3),
+]
+
+_TR = Transformer.from_crs('EPSG:4326', PROJ, always_xy=True)
+
+
+def to_px(lon, lat, scale=1.0):
+    x, y = _TR.transform(np.asarray(lon, float), np.asarray(lat, float))
+    return (x - (X0 - DX / 2)) / DX * scale, ((Y_TOP + DX / 2) - y) / DX * scale
+
+
+def topo(name):
+    t = json.loads((TOPO / name).read_text())
+    sx, sy = t['transform']['scale']
+    tx, ty = t['transform']['translate']
+    arcs = []
+    for a in t['arcs']:
+        q = np.cumsum(np.asarray(a, float), axis=0)
+        arcs.append(np.c_[q[:, 0] * sx + tx, q[:, 1] * sy + ty])
+    return t, arcs
+
+
+def ring(arcs, idx):
+    pts = []
+    for i in idx:
+        a = arcs[i] if i >= 0 else arcs[~i][::-1]
+        pts.append(a if not pts else a[1:])
+    return np.vstack(pts)
+
+
+def in_area(ll):
+    return ((ll[:, 0] > -32) & (ll[:, 0] < 32) & (ll[:, 1] > 34) & (ll[:, 1] < 76)).any()
+
+
+def thin(px, py, tol=0.35):
+    keep = [0]
+    for i in range(1, len(px)):
+        if abs(px[i] - px[keep[-1]]) + abs(py[i] - py[keep[-1]]) >= tol or i == len(px) - 1:
+            keep.append(i)
+    return px[keep], py[keep]
+
+
+def lines():
+    t, arcs = topo('countries-10m.json')
+    use = {}
+    for g in t['objects']['countries']['geometries']:
+        polys = g['arcs'] if g['type'] == 'MultiPolygon' else [g['arcs']] if g['type'] == 'Polygon' else []
+        for poly in polys:
+            for rr in poly:
+                for i in rr:
+                    k = i if i >= 0 else ~i
+                    use[k] = use.get(k, 0) + 1
+    out = {'coast': [], 'border': []}
+    for k, n in use.items():
+        ll = arcs[k]
+        if not in_area(ll):
+            continue
+        px, py = to_px(ll[:, 0], ll[:, 1])
+        if np.all((px < -5) | (px > NX + 5) | (py < -5) | (py > NY + 5)):
+            continue
+        px, py = thin(px, py)
+        flat = np.round(np.c_[px, py].ravel(), 2).tolist()
+        out['border' if n >= 2 else 'coast'].append(flat)
+    return out
+
+
+def land_mask():
+    t, arcs = topo('land-10m.json')
+    img = Image.new('L', (NX * SS, NY * SS), 0)
+    dr = ImageDraw.Draw(img)
+    for g in t['objects']['land']['geometries']:
+        polys = g['arcs'] if g['type'] == 'MultiPolygon' else [g['arcs']]
+        for poly in polys:
+            for k, rr in enumerate(poly):
+                ll = ring(arcs, rr)
+                if not in_area(ll):
+                    continue
+                px, py = to_px(ll[:, 0], ll[:, 1], SS)
+                if len(px) > 2:
+                    dr.polygon(list(zip(px.tolist(), py.tolist())), fill=255 if k == 0 else 0)
+    return np.asarray(img, np.float32) / 255.0
+
+
+def orography():
+    """UKV's own 2 km orography (any recent run carries it)."""
+    from .common import NC_LOCK  # noqa: F401
+    m = UKV()
+    for r, steps in m.runs(n=2):
+        try:
+            a, _ = m._read(r, steps[0], 'height_of_orography')
+            return np.nan_to_num(a)
+        except Exception:
+            continue
+    raise RuntimeError('no UKV orography found')
+
+
+def basemap():
+    land = land_mask()
+    h = ndimage.zoom(orography(), SS, order=1)[:NY * SS, :NX * SS]
+    gy, gx = np.gradient(h, DX / SS)
+    z = 2.5                                              # vertical exaggeration for a readable relief
+    slope = np.arctan(z * np.hypot(gx, gy))
+    aspect = np.arctan2(-gx, gy)
+    az, alt = np.deg2rad(315), np.deg2rad(42)
+    shade = np.sin(alt) * np.cos(slope) + np.cos(alt) * np.sin(slope) * np.cos(az - aspect)
+    shade = np.clip(shade / np.sin(alt), 0.35, 1.35)
+    elev = np.clip(h / 1200.0, 0, 1)
+    base = np.array([58, 66, 76], float) * (1 + 0.35 * elev[..., None])
+    landc = np.clip(base * shade[..., None], 0, 255)
+    sea = np.array([14, 27, 42], float)
+    rgb = sea * (1 - land[..., None]) + landc * land[..., None]
+    STATIC.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(rgb.astype(np.uint8)).save(STATIC / 'basemap.png', optimize=True)
+    np.save(STATIC / 'land_mask.npy', ndimage.zoom(land, 1 / SS, order=1)[:NY, :NX] > 0.5)
+
+
+def main():
+    STATIC.mkdir(parents=True, exist_ok=True)
+    write_json(STATIC / 'grid.json', grid_meta())
+    write_json(STATIC / 'lines.json', lines())
+    px, py = to_px([c[2] for c in CITIES], [c[1] for c in CITIES])
+    write_json(STATIC / 'cities.json', [{'name': c[0], 'x': round(float(x), 2), 'y': round(float(y), 2), 'rank': c[3]}
+                                        for c, x, y in zip(CITIES, px, py) if 0 <= x <= NX and 0 <= y <= NY])
+    basemap()
+    print('static layers written to', STATIC)
+
+
+if __name__ == '__main__':
+    main()

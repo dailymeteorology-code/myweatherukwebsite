@@ -38,6 +38,7 @@ import { startAiw } from './aiw/index.js';
 import { mountScenarios } from './scenarios/api.js';
 import { startLiveScenarios } from './scenarios/live/index.js';
 import { mountPastFuture } from './pastFuture/index.js';
+import { mountModelData } from './modelData.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(here, '..');
@@ -465,6 +466,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 startAiw(app);
 mountScenarios(app);
 mountPastFuture(app);
+mountModelData(app);
 startLiveScenarios(app);
 
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y' }));
