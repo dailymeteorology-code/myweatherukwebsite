@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
-  LayoutGrid, Waves, MapPin, Search, ChevronDown, X, Layers, Star,
+  LayoutGrid, Waves, MapPin, Search, ChevronDown, X, Layers, Star, Minus, Plus,
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, frameCanvas, frameContours, drawScene,
@@ -144,6 +144,10 @@ export default function ModelData() {
   const [dir, setDir] = useState('above');
   const isProb = mode === 'prob';
   const preset = PRESET[presetKey];
+  /* the threshold as typed: kept as text while typing ('-', '1.'), applied whenever it is a number */
+  const [thrText, setThrText] = useState('50');
+  useEffect(() => { setThrText((t) => (parseFloat(t) === thr ? t : fmtThr(thr))); }, [thr]);
+  const nudge = (k) => setThr((v) => Math.round((v + k * preset.step) * 1000) / 1000);
   const [style, setStyle] = useState('dark');
   const T = THEMES[style === 'light' ? 'light' : 'dark'];
   const [frameKey, setFrameKey] = useState('screen');
@@ -595,11 +599,20 @@ export default function ModelData() {
         {isProb && cat && (
           <div style={{ ...T.capsule, padding: '5px 12px 5px 5px', display: 'flex', alignItems: 'center', gap: 10, pointerEvents: 'auto', flexBasis: '100%', maxWidth: 680 }}>
             <Seg small items={[['above', '≥ above'], ['below', '≤ below']]} value={dir} onChange={setDir} />
-            <input type="range" min={preset.min} max={preset.max} step={preset.step} value={thr} onChange={(e) => setThr(Number(e.target.value))}
-              style={{ flex: 1, minWidth: 90, accentColor: T.light ? '#1f6fe0' : '#7cc8ff' }} aria-label="Threshold" />
-            <span style={{ fontSize: 13, fontWeight: 800, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-              {dir === 'below' ? '≤' : '≥'} {fmtThr(thr)}<span style={{ color: T.ink2, fontWeight: 600 }}>{fmeta?.unit ? ` ${fmeta.unit}` : ''}</span>
-            </span>
+            <input type="range" className="md-thr" min={Math.min(preset.min, thr)} max={Math.max(preset.max, thr)} step={preset.step} value={thr}
+              onChange={(e) => setThr(Number(e.target.value))} style={{ flex: 1, minWidth: 70, accentColor: T.light ? '#1f6fe0' : '#7cc8ff' }} aria-label="Threshold" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: 2, borderRadius: 999, background: T.track, boxShadow: T.trackShadow, flexShrink: 0 }}>
+              <IconBtn title="Lower" onClick={() => nudge(-1)} style={{ width: 26, height: 26, background: 'transparent', boxShadow: 'none' }}><Minus size={13} /></IconBtn>
+              <span style={{ fontSize: 13, fontWeight: 800, color: T.ink2 }}>{dir === 'below' ? '≤' : '≥'}</span>
+              <input type="text" inputMode="decimal" value={thrText} aria-label="Threshold value"
+                onChange={(e) => { setThrText(e.target.value); const v = parseFloat(e.target.value); if (Number.isFinite(v)) setThr(v); }}
+                onBlur={() => setThrText(fmtThr(thr))}
+                onKeyDown={(e) => { if (e.key === 'ArrowUp') { e.preventDefault(); nudge(1); } if (e.key === 'ArrowDown') { e.preventDefault(); nudge(-1); } if (e.key === 'Enter') e.currentTarget.blur(); }}
+                style={{ width: `${Math.max(3, thrText.length + 1)}ch`, minWidth: 38, textAlign: 'center', border: 'none', outline: 'none', background: 'transparent',
+                  color: T.ink, fontFamily: FONT, fontSize: 14, fontWeight: 800, fontVariantNumeric: 'tabular-nums', padding: '4px 0' }} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: T.ink2, paddingRight: 2 }}>{fmeta?.unit || ''}</span>
+              <IconBtn title="Higher" onClick={() => nudge(1)} style={{ width: 26, height: 26, background: 'transparent', boxShadow: 'none' }}><Plus size={13} /></IconBtn>
+            </div>
             <span className="hidden md:inline" style={{ fontSize: 11.5, color: T.ink2, whiteSpace: 'nowrap' }}>{model?.members ? `${model.members} members` : ''}</span>
           </div>
         )}
@@ -643,7 +656,8 @@ export default function ModelData() {
         </div>
       )}
 
-      <style>{'.md-noscroll::-webkit-scrollbar{display:none}.md-noscroll{scrollbar-width:none}'}</style>
+      <style>{'.md-noscroll::-webkit-scrollbar{display:none}.md-noscroll{scrollbar-width:none}'
+        + '.md-thr{height:28px;cursor:pointer}.md-thr::-webkit-slider-thumb{width:22px;height:22px}.md-thr::-moz-range-thumb{width:22px;height:22px}'}</style>
       {/* zoom */}
       <div className="hidden sm:flex" style={{ ...T.capsule, position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', padding: 5, flexDirection: 'column', gap: 5 }}>
         <IconBtn title="Zoom in" onClick={() => zoomBy(1.35)}><ZoomIn size={15} /></IconBtn>
