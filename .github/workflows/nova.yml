@@ -24,7 +24,7 @@ on:
   schedule:
     - cron: '3,13,23,33,43,53 * * * *'
   push:
-    paths: ['tools/tcm-nova/TRAIN_REQUEST.json']
+    paths: ['tools/tcm-nova/TRAIN_REQUEST.json', '.github/workflows/nova.yml']
   workflow_dispatch:
     inputs:
       job:
@@ -53,7 +53,6 @@ jobs:
   # concurrency group keeps exactly one such chain alive (a newer heartbeat replaces an
   # older one), and the cron above restarts the chain if it ever breaks.
   heartbeat:
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency: { group: nova-heartbeat, cancel-in-progress: true }
@@ -89,7 +88,7 @@ jobs:
         run: |
           TS="${{ inputs.train_start }}"; TE="${{ inputs.train_end }}"; TN="${{ inputs.train_every }}"; T=false
           [ "${{ inputs.job }}" = "train" ] && T=true
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ contains(join(github.event.commits.*.modified, ','), 'TRAIN_REQUEST') || contains(join(github.event.commits.*.added, ','), 'TRAIN_REQUEST') }}" = "true" ]; then
             T=true
             curl -s "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/tools/tcm-nova/TRAIN_REQUEST.json" -o /tmp/req.json
             TS=$(python3 -c "import json;print(json.load(open('/tmp/req.json'))['start'])")
