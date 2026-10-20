@@ -51,15 +51,33 @@
 .lw-title .lw-title-aside { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; }
 
 /* ── header ── */
-.lw-head {
-  position: sticky; top: 56px; z-index: 20;
-  display: flex; align-items: center; gap: 10px;
-  max-width: 1180px; margin: 0 auto; padding: 10px 16px;
+/* the top bar: one floating glass capsule. It stays in view under the site's menu on larger
+   screens; on phones the site's own bar is already sticky, so this one scrolls away with the page */
+.lw-head { position: sticky; top: 56px; z-index: 20; max-width: 760px; margin: 0 auto; padding: 12px 16px 4px; }
+@media (max-width: 767px) { .lw-head { position: relative; top: 0; padding: 12px 12px 2px; } }
+.lw-bar {
+  display: flex; align-items: center; gap: 2px; height: 50px; padding: 0 6px;
+  border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.22);
+  background: linear-gradient(150deg, var(--tint), var(--tint2));
+  -webkit-backdrop-filter: blur(26px) saturate(170%); backdrop-filter: blur(26px) saturate(170%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 10px 30px rgba(0, 8, 24, 0.2);
 }
-.lw-search { flex: 1; min-width: 0; display: flex; }
-/* phones: the site's own bar is sticky there, so this one scrolls away, and the search gets a row */
-@media (max-width: 767px) { .lw-head { position: relative; top: 0; padding: 10px 12px 4px; flex-wrap: wrap; } }
-@media (max-width: 560px) { .lw-search { order: 10; flex-basis: 100%; } }
+.lw-bar-btn {
+  display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0;
+  border: 0; border-radius: 999px; background: transparent; color: #fff; cursor: pointer; transition: background 0.15s;
+}
+.lw-bar-btn:hover, .lw-bar-btn[aria-expanded='true'] { background: rgba(255, 255, 255, 0.16); }
+.lw-bar-search { flex: 1; min-width: 0; }
+.lw-bar-title { flex: 1; min-width: 0; text-align: center; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.lw-bar-sep { width: 1px; height: 24px; margin: 0 4px; background: rgba(255, 255, 255, 0.2); flex-shrink: 0; }
+.lw-menu-wrap { position: relative; flex-shrink: 0; }
+/* nearly solid: a blur inside the bar's own blur cannot reach the page behind the bar */
+.lw-menu { position: absolute; right: -6px; top: calc(100% + 12px); z-index: 60; width: 250px; padding: 6px; border-radius: 18px; --tint: rgba(18, 26, 40, 0.96); --tint2: rgba(18, 26, 40, 0.92); }
+.lw-menu-row { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: 12px; background: none; color: #fff; font: inherit; font-size: 14px; font-weight: 500; text-align: left; cursor: pointer; }
+.lw-menu-row:hover:not(.is-static) { background: rgba(255, 255, 255, 0.1); }
+.lw-menu-row.is-static { cursor: default; }
+.lw-menu-row + .lw-menu-row { border-top: 1px solid var(--line); border-radius: 0 0 12px 12px; }
+.lw-menu-tag { margin-left: auto; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink3); }
 .lw-icon-btn {
   display: inline-grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0;
   border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.22); cursor: pointer; color: #fff;
@@ -169,6 +187,8 @@
 .lw-chips::-webkit-scrollbar { display: none; }
 .lw-chip { flex: 0 0 auto; border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.08); color: var(--ink2); font: inherit; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 99px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .lw-chip[aria-pressed='true'] { background: rgba(255, 255, 255, 0.92); color: #0b1a2c; border-color: transparent; }
+/* chart choices wrap instead of scrolling sideways, so every one is visible on a phone */
+.lw-chips.is-wrap { flex-wrap: wrap; overflow: visible; }
 .lw-chart { position: relative; touch-action: pan-y; user-select: none; }
 .lw-chart svg { display: block; overflow: visible; }
 .lw-chart text { fill: rgba(255, 255, 255, 0.62); font-size: 11px; }

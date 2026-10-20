@@ -13,7 +13,9 @@
    ?location=Name opens a place directly. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Clock3, CalendarDays, Radar, AlertTriangle, CloudRain, Crosshair, ChevronLeft, ChevronRight, Loader2, Palette } from 'lucide-react';
+import {
+  Clock3, CalendarDays, Radar, AlertTriangle, CloudRain, ChevronLeft, ChevronRight, Loader2, Palette, LocateFixed, MoreHorizontal, Link2, Thermometer, Check,
+} from 'lucide-react';
 import LocationSearchBox from '@/components/location/LocationSearchBox';
 import LocationLanding from '@/components/location/LocationLanding';
 import LocationWarnings from '@/components/location/LocationWarnings';
@@ -169,12 +171,58 @@ function DaysCard({ model, T, dayIdx, onDay }) {
   );
 }
 
+/* ── the top bar's "more" menu: units, a link to this place, and (admins) the sky preview ── */
+function BarMenu({ unit, setUnit, link, isAdmin, previewOn, onPreview }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const down = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    const key = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', down);
+    document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('pointerdown', down); document.removeEventListener('keydown', key); };
+  }, [open]);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch { /* clipboard blocked */ }
+  };
+  return (
+    <div className="lw-menu-wrap" ref={ref}>
+      <button type="button" className="lw-bar-btn" aria-haspopup="menu" aria-expanded={open} aria-label="More options" onClick={() => setOpen((o) => !o)}>
+        <MoreHorizontal size={20} />
+      </button>
+      {open && (
+        <div className="lw-glass lw-menu" role="menu">
+          <div className="lw-menu-row is-static">
+            <Thermometer size={16} />Units
+            <div className="lw-seg" role="group" aria-label="Temperature unit" style={{ marginLeft: 'auto' }}>
+              <button type="button" aria-pressed={unit === 'C'} onClick={() => setUnit('C')}>°C</button>
+              <button type="button" aria-pressed={unit === 'F'} onClick={() => setUnit('F')}>°F</button>
+            </div>
+          </div>
+          {link && (
+            <button type="button" role="menuitem" className="lw-menu-row" onClick={copy}>
+              {copied ? <Check size={16} /> : <Link2 size={16} />}{copied ? 'Link copied' : 'Copy a link to this place'}
+            </button>
+          )}
+          {isAdmin && (
+            <button type="button" role="menuitem" className="lw-menu-row" onClick={() => { setOpen(false); onPreview(); }}>
+              <Palette size={16} />{previewOn ? 'Close the sky preview' : 'Sky preview'}<span className="lw-menu-tag">Admin</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LocationForecast() {
   const routerLocation = useLocation();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   /* a link naming a place starts loading at once, rather than flashing the search page first */
-  const [loading, setLoading] = useState(() => new URLSearchParams(routerLocation.search).has('location'));
+  const [loading, setLoading] = useState(() => { const q = new URLSearchParams(routerLocation.search); return q.has('location') || q.has('lat'); });
   const [error, setError] = useState(null);
   const [resp, setResp] = useState(null);
   const [place, setPlace] = useState(null);
@@ -254,9 +302,17 @@ export default function LocationForecast() {
     );
   }, [run]);
 
+  /* a link opens a place: ?lat=&lon=&name= exactly (the "copy a link" menu item), or ?location=Name */
   useEffect(() => {
-    const loc = new URLSearchParams(routerLocation.search).get('location');
-    if (loc) { setQuery(loc); run({ name: loc }); }
+    const q = new URLSearchParams(routerLocation.search);
+    const la = Number(q.get('lat')), lo = Number(q.get('lon'));
+    if (q.has('lat') && q.has('lon') && Number.isFinite(la) && Number.isFinite(lo)) {
+      setQuery(q.get('name') || '');
+      run({ lat: la, lon: lo, name: q.get('name') || '' });
+    } else if (q.get('location')) {
+      setQuery(q.get('location'));
+      run({ name: q.get('location') });
+    }
   }, [routerLocation.search, run]);
 
   const lat = place?.lat, lon = place?.lon;
@@ -329,27 +385,25 @@ export default function LocationForecast() {
         <SkyPreview value={preview} onChange={setPreview} onClose={togglePreview} hidePage={hidePage} onHidePage={setHidePage} />
       )}
 
+      {/* one glass bar: back, the search, my location, and a menu for the rest */}
       <div className="lw-head" style={hidePage ? { visibility: 'hidden' } : undefined}>
-        <button type="button" className="lw-icon-btn" onClick={backOut} aria-label={model ? 'Back to search' : 'Back'}>
-          <ArrowLeft size={16} />
-        </button>
-        {(model || loading || error) && (
-          <>
-            <div className="lw-search"><LocationSearchBox value={query} onChange={setQuery} onSearch={(p) => run(p)} loading={loading} /></div>
-            <button type="button" className="lw-icon-btn" onClick={useMyLocation} aria-label="Use my location" title="Use my location">
-              {locating ? <Loader2 size={15} className="animate-spin" /> : <Crosshair size={15} />}
-            </button>
-          </>
-        )}
-        {isAdmin && (
-          <button type="button" className="lw-icon-btn" onClick={togglePreview} aria-pressed={!!preview} title="Preview every sky (admin)" aria-label="Preview every sky"
-            style={{ marginLeft: 'auto', ...(preview ? { background: 'rgba(255,255,255,0.9)', color: '#0b1a2c' } : null) }}>
-            <Palette size={15} />
+        <div className="lw-bar">
+          <button type="button" className="lw-bar-btn" onClick={backOut} aria-label={model ? 'Back to search' : 'Back'}>
+            <ChevronLeft size={22} />
           </button>
-        )}
-        <div className="lw-seg" role="group" aria-label="Temperature unit" style={{ marginLeft: isAdmin ? 0 : 'auto' }}>
-          <button type="button" aria-pressed={unit === 'C'} onClick={() => setUnit('C')}>°C</button>
-          <button type="button" aria-pressed={unit === 'F'} onClick={() => setUnit('F')}>°F</button>
+          {model || loading || error ? (
+            <div className="lw-bar-search">
+              <LocationSearchBox size="bar" value={query} onChange={setQuery} onSearch={(p) => run(p)} loading={loading} />
+            </div>
+          ) : (
+            <div className="lw-bar-title">Location weather</div>
+          )}
+          <span className="lw-bar-sep" aria-hidden="true" />
+          <button type="button" className="lw-bar-btn" onClick={useMyLocation} aria-label="Use my location" title="Use my location">
+            {locating ? <Loader2 size={18} className="animate-spin" /> : <LocateFixed size={18} />}
+          </button>
+          <BarMenu unit={unit} setUnit={setUnit} isAdmin={isAdmin} previewOn={!!preview} onPreview={togglePreview}
+            link={model ? `${window.location.origin}/LocationWeather?lat=${model.lat.toFixed(4)}&lon=${model.lon.toFixed(4)}&name=${encodeURIComponent(model.location.name)}` : null} />
         </div>
       </div>
 

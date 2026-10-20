@@ -325,10 +325,10 @@ export default function LocationCharts({ model, unit, dayIdx, onDay }) {
   return (
     <div className="lw-glass lw-card">
       <div className="lw-title"><ChartSpline />Detailed forecast<span className="lw-title-aside">{longDay(day.day)}</span></div>
-      <div className="lw-chips" role="group" aria-label="Day" style={{ marginBottom: 8 }}>
+      <div className="lw-chips is-wrap" role="group" aria-label="Day" style={{ marginBottom: 8 }}>
         {model.days.map((d, i) => <button key={d.day} type="button" className="lw-chip" aria-pressed={i === dayIdx} onClick={() => onDay(i)}>{d.label}</button>)}
       </div>
-      <div className="lw-chips" role="group" aria-label="Measure" style={{ marginBottom: 10 }}>
+      <div className="lw-chips is-wrap" role="group" aria-label="Measure" style={{ marginBottom: 10 }}>
         {METRICS.map(([k, l]) => <button key={k} type="button" className="lw-chip" aria-pressed={metric === k} onClick={() => setMetric(k)}>{l}</button>)}
       </div>
       <div ref={wrap}>

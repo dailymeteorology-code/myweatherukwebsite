@@ -83,13 +83,15 @@ export default function LocationSearchBox({
   };
 
   const big = size === 'large';
+  const bar = size === 'bar';            // inside the page's glass top bar: no box of its own
 
   return (
     <div ref={boxRef} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
       <div style={{ position: 'relative' }}>
+        {/* above the input (zIndex): the input's own background used to paint over it */}
         <Search style={{
-          position: 'absolute', left: big ? 16 : 13, top: '50%', transform: 'translateY(-50%)',
-          width: big ? 18 : 15, height: big ? 18 : 15, color: 'rgba(255,255,255,0.45)', pointerEvents: 'none',
+          position: 'absolute', left: big ? 16 : bar ? 8 : 13, top: '50%', transform: 'translateY(-50%)', zIndex: 1,
+          width: big ? 18 : 16, height: big ? 18 : 16, color: 'rgba(255,255,255,0.7)', pointerEvents: 'none',
         }} />
         <input
           ref={inputRef}
@@ -103,16 +105,18 @@ export default function LocationSearchBox({
           aria-label="Search for a place in the UK or Ireland"
           aria-autocomplete="list"
           aria-expanded={open}
-          className="w-full bg-white/15 backdrop-blur-xl border border-white/25 text-white placeholder-white/55 focus:outline-none focus:border-white/60 focus:bg-white/20"
+          className={bar
+            ? 'w-full bg-transparent border-0 text-white placeholder-white/60 focus:outline-none'
+            : 'w-full bg-white/15 backdrop-blur-xl border border-white/25 text-white placeholder-white/55 focus:outline-none focus:border-white/60 focus:bg-white/20'}
           style={{
-            borderRadius: big ? 16 : 12,
-            padding: big ? '15px 44px 15px 46px' : '10px 38px 10px 38px',
-            fontSize: big ? 16 : 14,
+            borderRadius: big ? 16 : bar ? 999 : 12,
+            padding: big ? '15px 44px 15px 46px' : bar ? '9px 30px 9px 32px' : '10px 38px 10px 38px',
+            fontSize: big || bar ? 16 : 14,                 // 16 px: iPhones zoom the page into smaller inputs
           }}
         />
         {(busy || loading) && (
           <Loader2 className="animate-spin" style={{
-            position: 'absolute', right: big ? 16 : 13, top: '50%', transform: 'translateY(-50%)',
+            position: 'absolute', right: big ? 16 : bar ? 6 : 13, top: '50%', transform: 'translateY(-50%)',
             width: big ? 17 : 14, height: big ? 17 : 14, color: 'rgba(255,255,255,0.55)',
           }} />
         )}
@@ -121,7 +125,7 @@ export default function LocationSearchBox({
             type="button" onClick={() => { onChange(''); setSuggestions([]); setOpen(false); }}
             aria-label="Clear search"
             style={{
-              position: 'absolute', right: big ? 14 : 11, top: '50%', transform: 'translateY(-50%)',
+              position: 'absolute', right: big ? 14 : bar ? 4 : 11, top: '50%', transform: 'translateY(-50%)',
               background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.4)', lineHeight: 1,
             }}>
             <X style={{ width: big ? 16 : 14, height: big ? 16 : 14 }} />
@@ -133,9 +137,9 @@ export default function LocationSearchBox({
         <ul
           role="listbox"
           style={{
-            position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 60,
+            position: 'absolute', top: bar ? 'calc(100% + 12px)' : 'calc(100% + 6px)', left: 0, right: 0, zIndex: 60,
             margin: 0, padding: 6, listStyle: 'none',
-            background: 'rgba(14,22,36,0.86)', backdropFilter: 'blur(24px) saturate(160%)', WebkitBackdropFilter: 'blur(24px) saturate(160%)',
+            background: bar ? 'rgba(18,26,40,0.96)' : 'rgba(14,22,36,0.86)', backdropFilter: 'blur(24px) saturate(160%)', WebkitBackdropFilter: 'blur(24px) saturate(160%)',
             border: '1px solid rgba(255,255,255,0.16)', borderRadius: 14,
             boxShadow: '0 24px 60px rgba(0,0,0,0.55)',
             maxHeight: 320, overflowY: 'auto',
