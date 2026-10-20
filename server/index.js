@@ -255,7 +255,8 @@ app.get('/api/warning-archive', (req, res) => {
       const a = new Date(from);
       if (Number.isNaN(a.getTime())) return [];
       const b = new Date(to || from);
-      const end = Number.isNaN(b.getTime()) ? a : b;
+      // an end typed before the start (a slip in a hand-issued warning) counts as no end
+      const end = Number.isNaN(b.getTime()) || b < a ? a : b;
       const fmt = (d) => new Intl.DateTimeFormat('en-CA', {
         timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
       }).format(d);
@@ -302,7 +303,10 @@ app.get('/api/warning-archive', (req, res) => {
     const byType = {};
 
     for (const r of rows) {
-      const severity = r.severity === 'red' || r.severity === 'amber' ? r.severity : 'yellow';
+      /* The archiver stores the feed's own spelling ("Amber"), manual warnings are lower case:
+         compared as typed, every Met Office amber and red was being counted as yellow. */
+      const sv = String(r.severity || '').toLowerCase();
+      const severity = sv === 'red' || sv === 'amber' ? sv : 'yellow';
       totals[severity] += 1;
       const t = r.type || 'Unknown';
       byType[t] = byType[t] || { yellow: 0, amber: 0, red: 0, total: 0 };

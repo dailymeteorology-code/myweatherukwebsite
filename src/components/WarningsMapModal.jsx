@@ -21,13 +21,18 @@ import { attachPlaceLabels, readPlaceLabelsOn, writePlaceLabelsOn } from '@/lib/
    EMPTY DAYS SAY SO. A day with nothing active shows a blurred map behind a
    plain statement rather than an empty map, which is indistinguishable from a
    map that failed to load — the exact failure mode the old warning map had.
+
+   LIQUID GLASS. The map fills the whole sheet and every control floats on it in
+   glass (warnings-glass.css): the title bar, the filters, the day strip and the
+   warning's own sheet, which slides in from the side (up from the bottom on a
+   phone). Light or dark with the site.
    ════════════════════════════════════════════════════════════════════════════ */
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useTheme } from '@/components/ThemeContext';
 import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'framer-motion';
-import { X, AlertTriangle, SlidersHorizontal, MapPin, Tag, ArrowRight } from 'lucide-react';
+import { X, AlertTriangle, SlidersHorizontal, MapPin, Tag, ArrowRight, Check } from 'lucide-react';
 import { WarningDetailPanel, warningTagHtml, insideGeometries } from '@/components/warnings/MetOfficeWarning';
+import '@/components/warnings/warnings-glass.css';
 
 const SEV = {
   Red:    { hex: '#dc2626', rank: 3 },
@@ -211,8 +216,9 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
       if (!L || !mapRef.current || cancelled) return;
       if (!mapInst.current) {
         const map = L.map(mapRef.current, {
-          center: [54.6, -3.2], zoom: 5, zoomControl: true, attributionControl: false,
+          center: [54.6, -3.2], zoom: 5, zoomControl: false, attributionControl: false,
         });
+        L.control.zoom({ position: 'bottomleft' }).addTo(map);
         L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_${isDark ? 'Dark' : 'Light'}_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
           { maxZoom: 12, subdomains: 'abcd' }).addTo(map);
         map.fitBounds(UK_BOUNDS, { padding: [10, 10] });
@@ -258,183 +264,127 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
 
   useEffect(() => { setSelected(null); }, [dayIdx]);
 
+  /* Escape closes the open warning first, then the map; the page behind does not scroll */
   useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    if (!isOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (selected) setSelected(null); else onClose?.();
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, onClose]);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = overflow; };
+  }, [isOpen, onClose, selected]);
 
-  if (typeof document === 'undefined') return null;
+  if (typeof document === 'undefined' || !isOpen) return null;
 
-  const chip = (on, hex) => ({
-    padding: '4px 11px', borderRadius: 99, cursor: 'pointer', fontFamily: 'inherit',
-    fontSize: '0.68rem', fontWeight: 800, letterSpacing: '0.03em',
-    background: on ? `${hex}26` : 'rgba(148,163,184,0.08)',
-    border: `1.5px solid ${on ? hex : 'rgba(148,163,184,0.2)'}`,
-    color: on ? hex : '#94a3b8',
-  });
+  const filtersOn = sevFilter.length + typeFilter.length;
+  const nextHex = nextWarnedDay != null ? sevOf(dayPeak[nextWarnedDay]).hex : null;
+  const dayWord = dayIdx < 2 ? dayLabel(days[dayIdx], dayIdx).toLowerCase() : days[dayIdx].toLocaleDateString('en-GB', { weekday: 'long' });
 
   return createPortal(
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          className="fixed inset-0 flex items-center justify-center p-3 sm:p-6"
-          style={{ zIndex: 1300, background: 'rgba(2,6,16,0.82)', backdropFilter: 'blur(6px)' }}
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96, opacity: 0 }}
-            transition={{ type: 'spring', damping: 26, stiffness: 300 }}
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: '100%', maxWidth: 1040, height: 'min(88vh, 820px)',
-              display: 'flex', flexDirection: 'column', borderRadius: 20, overflow: 'hidden',
-              background: isDark ? '#070d18' : '#ffffff', border: '1px solid rgba(148,163,184,0.18)',
-              boxShadow: '0 30px 80px rgba(0,0,0,0.6)',
-            }}
-          >
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid rgba(148,163,184,0.14)' }}>
-              <AlertTriangle style={{ width: 16, height: 16, color: '#facc15' }} />
-              <span style={{ fontSize: '0.95rem', fontWeight: 800, color: '#f1f5f9' }}>UK Weather Warnings</span>
-              <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                {visible.length} shown{forDay.length !== visible.length ? ` of ${forDay.length}` : ''}
+    <div className={`wg wg-mapmodal${isDark ? '' : ' is-light'}`} role="dialog" aria-modal="true" aria-label="UK weather warnings map" onClick={onClose}>
+      <div className="wg-sheet wg-glass" onClick={(e) => e.stopPropagation()}>
+        {/* the map fills the whole sheet; everything else floats on it in glass */}
+        <div ref={mapRef} className={`wg-map${visible.length === 0 ? ' is-empty' : ''}`} />
+
+        <div className="wg-top wg-glass">
+          <div className="wg-top-title">
+            <span className="wg-top-mark"><AlertTriangle /></span>
+            <div style={{ minWidth: 0 }}>
+              <b>Weather warnings</b>
+              <small>
+                {visible.length} {visible.length === 1 ? 'warning' : 'warnings'} {dayIdx < 2 ? dayWord : `on ${dayWord}`}
+                {forDay.length !== visible.length ? ` · ${forDay.length - visible.length} filtered out` : ''}
+              </small>
+            </div>
+          </div>
+          <button type="button" className={`wg-btn${namesOn ? ' is-on' : ''}`} onClick={() => setNamesOn((v) => !v)} aria-pressed={namesOn} title="Warning names on the map">
+            <Tag /><span className="wg-txt">Names</span>
+          </button>
+          <button type="button" className={`wg-btn${labelsOn ? ' is-on' : ''}`} onClick={() => setLabelsOn((v) => !v)} aria-pressed={labelsOn} title="Names of places inside the warning areas">
+            <MapPin /><span className="wg-txt">Places</span>
+          </button>
+          <button type="button" className={`wg-btn${showFilters || filtersOn ? ' is-on' : ''}`} onClick={() => setShowFilters((v) => !v)} aria-expanded={showFilters} title="Filter by severity and type">
+            <SlidersHorizontal /><span className="wg-txt">Filters{filtersOn ? ` · ${filtersOn}` : ''}</span>
+          </button>
+          <button type="button" className="wg-btn wg-icon" onClick={onClose} aria-label="Close the warning map"><X /></button>
+        </div>
+
+        {showFilters && (
+          <div className="wg-pop wg-glass is-strong">
+            <div className="wg-pop-row">
+              <span className="wg-label">Severity</span>
+              {SEV_ORDER.map((s) => (
+                <button key={s} type="button" className="wg-chip" aria-pressed={sevFilter.includes(s)} onClick={() => toggle(sevFilter, setSevFilter, s)}>
+                  <i style={{ background: SEV[s].hex }} />{s}
+                </button>
+              ))}
+            </div>
+            <div className="wg-pop-row">
+              <span className="wg-label">Type</span>
+              {types.length === 0 && <span style={{ fontSize: '0.8rem', color: 'var(--wg-ink3)' }}>No warnings to filter</span>}
+              {types.map((t) => (
+                <button key={t} type="button" className="wg-chip" aria-pressed={typeFilter.includes(t)} onClick={() => toggle(typeFilter, setTypeFilter, t)}>{t}</button>
+              ))}
+            </div>
+            {filtersOn > 0 && (
+              <button type="button" className="wg-btn" style={{ alignSelf: 'flex-start' }} onClick={() => { setSevFilter([]); setTypeFilter([]); }}>Clear filters</button>
+            )}
+          </div>
+        )}
+
+        {/* An empty day says so in words, over a blurred map, rather than leaving an empty map
+            that looks exactly like one that failed to load. */}
+        {visible.length === 0 && (
+          <div className="wg-empty">
+            <div className="wg-empty-card wg-glass is-strong">
+              <span className="wg-empty-mark"><Check /></span>
+              <b>{forDay.length === 0 ? 'No warnings in force' : 'Nothing matches those filters'}</b>
+              <span>
+                {forDay.length === 0
+                  ? `The Met Office has no weather warnings for ${dayWord}.`
+                  : `${forDay.length} warning${forDay.length === 1 ? '' : 's'} on this day ${forDay.length === 1 ? 'is' : 'are'} hidden by the filters.`}
               </span>
-              <button onClick={() => setNamesOn(v => !v)} aria-pressed={namesOn} title="Show or hide warning names on the map"
-                      style={{ ...chip(namesOn, '#facc15'), marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <Tag style={{ width: 12, height: 12 }} /> Warning names
-              </button>
-              <button onClick={() => setLabelsOn(v => !v)} aria-pressed={labelsOn} title="Show or hide the names of places inside the warning areas"
-                      style={{ ...chip(labelsOn, '#38bdf8'), display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <MapPin style={{ width: 12, height: 12 }} /> Place names
-              </button>
-              <button onClick={() => setShowFilters(v => !v)}
-                      style={{ ...chip(showFilters, '#38bdf8'), display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <SlidersHorizontal style={{ width: 12, height: 12 }} /> Filters
-              </button>
-              <button onClick={onClose} aria-label="Close"
-                      style={{ width: 30, height: 30, borderRadius: 9, cursor: 'pointer', background: 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <X style={{ width: 15, height: 15, color: '#cbd5e1' }} />
-              </button>
-            </div>
-
-            {/* Filters */}
-            <AnimatePresence>
-              {showFilters && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-                  style={{ overflow: 'hidden', borderBottom: '1px solid rgba(148,163,184,0.14)' }}
-                >
-                  <div style={{ padding: '11px 16px', display: 'flex', flexDirection: 'column', gap: 9 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#64748b', width: 62 }}>Severity</span>
-                      {SEV_ORDER.map(s => (
-                        <button key={s} onClick={() => toggle(sevFilter, setSevFilter, s)} style={chip(sevFilter.includes(s), SEV[s].hex)}>{s}</button>
-                      ))}
-                      {sevFilter.length > 0 && (
-                        <button onClick={() => setSevFilter([])} style={{ ...chip(false, '#94a3b8'), fontWeight: 600 }}>Clear</button>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#64748b', width: 62 }}>Type</span>
-                      {types.length === 0 && <span style={{ fontSize: '0.7rem', color: '#475569' }}>No warnings to filter</span>}
-                      {types.map(t => (
-                        <button key={t} onClick={() => toggle(typeFilter, setTypeFilter, t)} style={chip(typeFilter.includes(t), '#38bdf8')}>{t}</button>
-                      ))}
-                      {typeFilter.length > 0 && (
-                        <button onClick={() => setTypeFilter([])} style={{ ...chip(false, '#94a3b8'), fontWeight: 600 }}>Clear</button>
-                      )}
-                    </div>
-                  </div>
-                </motion.div>
+              {forDay.length === 0 && nextWarnedDay != null && (
+                <button type="button" className="wg-go" onClick={() => setDayIdx(nextWarnedDay)}
+                  style={{ background: nextHex, color: dayPeak[nextWarnedDay] === 'Red' ? '#fff' : '#111' }}>
+                  {warnedDays > 1 ? 'Warnings on ' : 'The warning on '}
+                  {days[nextWarnedDay].toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })}
+                  <ArrowRight style={{ width: 15, height: 15 }} />
+                </button>
               )}
-            </AnimatePresence>
-
-            {/* Map */}
-            <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-              <div ref={mapRef} style={{
-                position: 'absolute', inset: 0, background: isDark ? '#060d1a' : '#e8eef6',
-                // Blurred rather than hidden when empty: the map stays as
-                // context, but is clearly not the thing to read.
-                filter: visible.length === 0 ? 'blur(5px) saturate(0.6)' : 'none',
-                transition: 'filter 0.3s',
-              }} />
-
-              {visible.length === 0 && (
-                <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, pointerEvents: 'none', padding: 24, textAlign: 'center' }}>
-                  <div style={{ width: 46, height: 46, borderRadius: '50%', background: 'rgba(74,222,128,0.12)', border: '1px solid rgba(74,222,128,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <AlertTriangle style={{ width: 20, height: 20, color: '#4ade80' }} />
-                  </div>
-                  <span style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9' }}>
-                    {forDay.length === 0 ? 'No warnings active' : 'Nothing matches those filters'}
-                  </span>
-                  <span style={{ fontSize: '0.76rem', color: '#94a3b8', maxWidth: 300 }}>
-                    {forDay.length === 0
-                      ? `There are no Met Office weather warnings in force for ${dayLabel(days[dayIdx], dayIdx).toLowerCase()}.`
-                      : `${forDay.length} warning${forDay.length === 1 ? '' : 's'} on this day are hidden by the severity or type filter.`}
-                  </span>
-                  {forDay.length === 0 && nextWarnedDay != null && (
-                    <button type="button" onClick={() => setDayIdx(nextWarnedDay)}
-                      style={{ pointerEvents: 'auto', marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 16px', borderRadius: 99, cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.8rem', fontWeight: 800,
-                        background: sevOf(dayPeak[nextWarnedDay]).hex, color: dayPeak[nextWarnedDay] === 'Red' ? '#fff' : '#0a0f1e', border: 'none', boxShadow: '0 6px 20px rgba(0,0,0,0.35)' }}>
-                      {warnedDays > 1 ? 'View warnings on ' : 'View the warning on '}
-                      {days[nextWarnedDay].toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })}
-                      <ArrowRight style={{ width: 15, height: 15 }} />
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* The full warning, laid out like the Met Office's own page */}
-              <AnimatePresence>
-                {selected && (
-                  <motion.div
-                    key={selected.warningId || selected.type}
-                    initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 30 }}
-                    style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 'min(440px, 100%)', zIndex: 700, display: 'flex', boxShadow: '-12px 0 40px rgba(0,0,0,0.45)' }}
-                  >
-                    <WarningDetailPanel warning={selected} onClose={() => setSelected(null)} style={{ flex: 1, minHeight: 0 }} />
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </div>
+          </div>
+        )}
 
-            {/* Day bar */}
-            <div style={{ display: 'flex', gap: 6, padding: '10px 12px', borderTop: '1px solid rgba(148,163,184,0.14)', background: isDark ? 'rgba(4,9,18,0.7)' : 'rgba(241,245,249,0.9)' }}>
-              {days.map((d, i) => {
-                const peak = dayPeak[i];
-                const on = i === dayIdx;
-                return (
-                  <button key={i} onClick={() => setDayIdx(i)} style={{
-                    flex: 1, padding: '8px 4px', borderRadius: 11, cursor: 'pointer', fontFamily: 'inherit',
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-                    background: on ? 'rgba(56,189,248,0.14)' : 'rgba(148,163,184,0.05)',
-                    border: `1.5px solid ${on ? '#38bdf8' : 'rgba(148,163,184,0.14)'}`,
-                    transition: 'all 0.15s',
-                  }}>
-                    <span style={{ fontSize: '0.68rem', fontWeight: 800, color: on ? '#7dd3fc' : '#cbd5e1' }}>
-                      {dayLabel(d, i)}
-                    </span>
-                    <span style={{ fontSize: '0.6rem', color: '#64748b' }}>
-                      {d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                    </span>
-                    {/* Highest severity that day, so the worst day in the week is
-                        findable without opening each one. */}
-                    {peak ? (
-                      <AlertTriangle style={{ width: 15, height: 15, color: sevOf(peak).hex }} fill={sevOf(peak).hex} fillOpacity={0.25} />
-                    ) : (
-                      <span style={{ width: 15, height: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', color: '#334155' }}>—</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>,
+        {/* the day strip: one day at a time, each marked with its worst warning */}
+        <div className="wg-days wg-glass">
+          {days.map((d, i) => {
+            const peak = dayPeak[i];
+            return (
+              <button key={i} type="button" className={`wg-day${i === dayIdx ? ' is-on' : ''}`} onClick={() => setDayIdx(i)} aria-pressed={i === dayIdx}>
+                <b>{dayLabel(d, i)}</b>
+                <small>{d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</small>
+                <span className="wg-day-sev">
+                  {peak
+                    ? <AlertTriangle style={{ width: 14, height: 14, color: sevOf(peak).hex }} fill={sevOf(peak).hex} fillOpacity={0.3} />
+                    : <span style={{ width: 14, height: 2, borderRadius: 2, background: 'var(--wg-hair)' }} />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* the full warning, in the Met Office's order */}
+        {selected && (
+          <div key={selected.warningId || `${selected.type}${selected.validFrom}`} className="wg-side wg-glass is-strong">
+            <WarningDetailPanel warning={selected} onClose={() => setSelected(null)} style={{ flex: 1, minHeight: 0 }} />
+          </div>
+        )}
+      </div>
+    </div>,
     document.body
   );
 }

@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   AlertTriangle, CloudSun, RefreshCw, Loader2,
-  ExternalLink, Sparkles, Megaphone, Zap,
-  ChevronDown, ChevronLeft, ChevronRight } from
+  ExternalLink, Sparkles, Megaphone, Zap, History } from
 'lucide-react';
 import WarningCard from '@/components/WarningCard';
 import SocialLinks from '@/components/SocialLinks';
@@ -15,8 +14,8 @@ import CombinedBannerStack from '@/components/CombinedBannerStack';
 import SeverityFilter from '@/components/SeverityFilter';
 // SectionNavigation (the old hamburger) removed — SiteNav in the layout now
 // owns page-to-page navigation site-wide.
-import WarningMap from '@/components/WarningMap';
 import WarningsMapModal from '@/components/WarningsMapModal';
+import WarningsArchiveModal from '@/components/warnings/WarningsArchiveModal';
 import CountdownDisplay from '@/components/CountdownDisplay';
 import LocationRadar from '@/components/location/LocationRadar';
 import CookieConsent from '@/components/CookieConsent';
@@ -655,264 +654,6 @@ function Pane({ children, pad = true, strong = false, className = '', style }) {
   );
 }
 
-// ─── Warnings archive ─────────────────────────────────────────────────────────
-/* Every UK warning the site has on record, a day at a time.
- *
- * Reads /api/warning-archive, which merges the permanent archive written on
- * every warnings refresh with the manually-issued warnings (the only history
- * predating the archive, and the ones that carry a drawn area).
- *
- * THE CALENDAR STARTS AT 1 JANUARY 2026 AND NEVER ENDS. Months before the
- * archive began recording are shown greyed with a note rather than as empty
- * squares, because "no warnings that day" and "nobody was writing anything
- * down yet" are completely different claims and a blank square makes the
- * second look like the first.
- */
-const SEV_UI = {
-  red:    { label: 'Red',    dot: '#ef4444', fill: 'rgba(239,68,68,0.22)',  edge: 'rgba(239,68,68,0.55)' },
-  amber:  { label: 'Amber',  dot: '#f59e0b', fill: 'rgba(245,158,11,0.20)', edge: 'rgba(245,158,11,0.5)' },
-  yellow: { label: 'Yellow', dot: '#facc15', fill: 'rgba(250,204,21,0.16)', edge: 'rgba(250,204,21,0.45)' },
-};
-const SEV_ORDER = ['red', 'amber', 'yellow'];
-const ymd = (d) => new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
-}).format(d);
-
-function WarningsArchive() {
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
-  const [cursor, setCursor] = useState(null);   // first of the month on show
-  const [day, setDay] = useState(null);
-  const [openSeverity, setOpenSeverity] = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/warning-archive')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((j) => {
-        if (cancelled) return;
-        setData(j);
-        /* Open on the most recent month that actually has something in it, not
-           on today — an empty current month is a poor first impression of an
-           archive and hides the fact that it holds anything at all. */
-        const withData = Object.keys(j.days || {}).sort();
-        const latest = withData.length ? withData[withData.length - 1] : ymd(new Date());
-        const [y, m] = latest.split('-').map(Number);
-        setCursor(new Date(Date.UTC(y, m - 1, 1)));
-      })
-      .catch((e) => { if (!cancelled) setError(e.message); });
-    return () => { cancelled = true; };
-  }, []);
-
-  const grid = useMemo(() => {
-    if (!cursor) return null;
-    const y = cursor.getUTCFullYear();
-    const m = cursor.getUTCMonth();
-    const first = new Date(Date.UTC(y, m, 1));
-    const total = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-    // Monday-first, the way a UK calendar reads.
-    const lead = (first.getUTCDay() + 6) % 7;
-    const cells = Array.from({ length: lead }, () => null);
-    for (let d = 1; d <= total; d += 1) cells.push(`${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
-    return { cells, label: first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' }) };
-  }, [cursor]);
-
-  /* MEMOISED, AND THAT IS THE WHOLE FIX FOR THE FLICKERING MAP.
-     WarningMap rebuilds its Leaflet instance whenever its `warning` prop
-     changes identity, and this list was being rebuilt — with a fresh object
-     spread into <WarningMap> on top — on every single render. So each map tore
-     itself down and reconstructed on every tick of anything else on the page.
-     Stable references, one build each.
-
-     The severity is capitalised here rather than at the point of use, because
-     WarningMap looks its colours up in a table keyed 'Yellow' / 'Amber' / 'Red'
-     and falls back to Yellow on a miss — so the lower-cased values the archive
-     stores were painting every red warning yellow.
-
-     ABOVE THE EARLY RETURNS, because a hook called after one runs on some
-     renders and not others, and React counts them. */
-  const selected = useMemo(() => {
-    if (!day || !data) return [];
-    return data.warnings
-      .filter((w) => (w.days || []).includes(day))
-      .sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity))
-      .map((w) => ({
-        ...w,
-        /* Two spellings on purpose: `severity` capitalised for WarningMap and
-           the label it prints, `sevKey` lower for this file's own palette.
-           Normalising to one would just move the mismatch somewhere else. */
-        severity: (w.severity || 'yellow').replace(/^./, (c) => c.toUpperCase()),
-        sevKey: (w.severity || 'yellow').toLowerCase(),
-        validFrom: w.valid_from,
-        validTo: w.valid_to,
-      }));
-  }, [data, day]);
-
-  if (error) {
-    return <p className="text-sm" style={{ color: 'var(--ink-2)' }}>The archive is unavailable right now ({error}).</p>;
-  }
-  if (!data || !grid) {
-    return <p className="text-sm" style={{ color: 'var(--ink-2)' }}>Loading the archive…</p>;
-  }
-
-  const epochMonth = data.epoch.slice(0, 7);
-  const thisMonth = grid.cells.find(Boolean)?.slice(0, 7) ?? epochMonth;
-  const todayMonth = ymd(new Date()).slice(0, 7);
-  const shift = (n) => setCursor((c) => new Date(Date.UTC(c.getUTCFullYear(), c.getUTCMonth() + n, 1)));
-
-  const fmtTime = (iso) => {
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? '—'
-      : d.toLocaleString('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  };
-
-  return (
-    <div className="space-y-4">
-      {/* Running totals, each one expandable into the breakdown by warning
-          type — "how many ambers" is the question people ask, "how many of
-          them were rain" is the one they ask next. */}
-      <div className="flex flex-wrap gap-2">
-        {SEV_ORDER.map((s) => {
-          const n = data.totals[s] || 0;
-          const open = openSeverity === s;
-          return (
-            <button
-              key={s} type="button"
-              onClick={() => setOpenSeverity(open ? null : s)}
-              aria-expanded={open}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 8,
-                padding: '8px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'inherit',
-                background: open ? SEV_UI[s].fill : 'var(--glass-fill)',
-                border: `1px solid ${open ? SEV_UI[s].edge : 'var(--glass-hairline)'}`,
-                color: 'var(--ink-1)',
-              }}>
-              <span style={{ width: 9, height: 9, borderRadius: '50%', background: SEV_UI[s].dot }} />
-              <span className="text-[13px] font-bold">{n.toLocaleString()}</span>
-              <span className="text-[12px]" style={{ color: 'var(--ink-2)' }}>{SEV_UI[s].label}</span>
-              <ChevronDown className="w-3.5 h-3.5" style={{ color: 'var(--ink-3)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 180ms' }} />
-            </button>
-          );
-        })}
-      </div>
-
-      {/* No negative margin on this row. The parent is `space-y-4`, which puts
-          a 16px top margin on every child after the first; overriding it with
-          -4px did not tighten that gap, it removed the gap entirely and then
-          pulled the type chips 4px up INTO the totals row above them. */}
-      {openSeverity && (
-        <div className="flex flex-wrap gap-1.5">
-          {Object.entries(data.byType)
-            .filter(([, c]) => c[openSeverity] > 0)
-            .sort((a, b) => b[1][openSeverity] - a[1][openSeverity])
-            .map(([type, c]) => (
-              <span key={type} className="text-[12px]"
-                    style={{ padding: '5px 11px', borderRadius: 99, background: 'var(--glass-fill)', border: '1px solid var(--glass-hairline)', color: 'var(--ink-1)' }}>
-                {type} <strong>{c[openSeverity]}</strong>
-              </span>
-            ))}
-          {!Object.values(data.byType).some((c) => c[openSeverity] > 0) && (
-            <span className="text-[12.5px]" style={{ color: 'var(--ink-2)' }}>
-              No {SEV_UI[openSeverity].label.toLowerCase()} warnings on record yet.
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Month */}
-      <div className="flex items-center justify-between gap-3">
-        <button type="button" onClick={() => shift(-1)} disabled={thisMonth <= epochMonth}
-                style={{ ...quietBtn, opacity: thisMonth <= epochMonth ? 0.4 : 1 }}>
-          <ChevronLeft style={{ width: 14, height: 14 }} />
-        </button>
-        <span className="text-[13.5px] font-bold" style={{ color: 'var(--ink-1)' }}>{grid.label}</span>
-        <button type="button" onClick={() => shift(1)} disabled={thisMonth >= todayMonth}
-                style={{ ...quietBtn, opacity: thisMonth >= todayMonth ? 0.4 : 1 }}>
-          <ChevronRight style={{ width: 14, height: 14 }} />
-        </button>
-      </div>
-
-      <div className="grid grid-cols-7 gap-1.5">
-        {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, i) => (
-          <span key={i} className="text-center text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--ink-3)' }}>{d}</span>
-        ))}
-        {grid.cells.map((iso, i) => {
-          if (!iso) return <span key={`pad${i}`} />;
-          const info = data.days[iso];
-          const future = iso > ymd(new Date());
-          const on = day === iso;
-          const ui = info ? SEV_UI[info.top] : null;
-          return (
-            <button
-              key={iso} type="button" disabled={future}
-              onClick={() => setDay(on ? null : iso)}
-              title={info ? `${Object.entries(info.counts).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ')}` : 'No warnings'}
-              style={{
-                aspectRatio: '1', borderRadius: 11, cursor: future ? 'default' : 'pointer',
-                fontFamily: 'inherit', fontSize: 12.5, fontWeight: info ? 800 : 500,
-                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2,
-                background: ui ? ui.fill : 'var(--glass-fill)',
-                border: `1px solid ${on ? 'var(--ink-1)' : ui ? ui.edge : 'var(--glass-hairline)'}`,
-                color: future ? 'var(--ink-3)' : 'var(--ink-1)',
-                opacity: future ? 0.35 : 1,
-                transition: 'border-color 160ms ease',
-              }}>
-              {Number(iso.slice(-2))}
-              {info && <span style={{ width: 4, height: 4, borderRadius: '50%', background: ui.dot }} />}
-            </button>
-          );
-        })}
-      </div>
-
-      {thisMonth < (data.recordingSince || '').slice(0, 7) && (
-        <p className="text-[12px]" style={{ color: 'var(--ink-3)' }}>
-          Nothing was being recorded this month — the archive only holds what it has seen since it
-          started, plus warnings issued by hand. An empty day here means no record, not no warning.
-        </p>
-      )}
-
-      {/* The selected day */}
-      {day && (
-        <div className="space-y-3" style={{ borderTop: '1px solid var(--glass-hairline)', paddingTop: 16 }}>
-          <h4 className="text-[14px] font-extrabold" style={{ color: 'var(--ink-1)' }}>
-            {new Date(`${day}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}
-          </h4>
-          {selected.length === 0 ? (
-            <p className="text-[13px]" style={{ color: 'var(--ink-2)' }}>No warnings on record for this day.</p>
-          ) : selected.map((w) => (
-            <div key={w.id} style={{ borderRadius: 16, padding: 14, background: 'var(--glass-fill)', border: `1px solid ${SEV_UI[w.sevKey]?.edge || 'var(--glass-hairline)'}` }}>
-              <div className="flex items-center gap-2 flex-wrap mb-1.5">
-                <span style={{ width: 9, height: 9, borderRadius: '50%', background: SEV_UI[w.sevKey]?.dot || '#facc15' }} />
-                <strong className="text-[13.5px]" style={{ color: 'var(--ink-1)' }}>
-                  {SEV_UI[w.sevKey]?.label} warning of {w.type}
-                </strong>
-                {w.issued_by === 'manual' && (
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--ink-3)' }}>Issued here</span>
-                )}
-              </div>
-              <p className="text-[12px] mb-2" style={{ color: 'var(--ink-2)' }}>
-                {fmtTime(w.valid_from)} → {w.valid_to ? fmtTime(w.valid_to) : 'ongoing'}
-              </p>
-              {w.description && (
-                <p className="text-[13px] mb-2" style={{ color: 'var(--ink-1)', lineHeight: 1.5 }}>{w.description}</p>
-              )}
-              {!!(w.regions || []).length && (
-                <p className="text-[11.5px] mb-2" style={{ color: 'var(--ink-3)' }}>{w.regions.join(' · ')}</p>
-              )}
-              {/* How it actually looked, using the same map the live warning
-                  cards use rather than a description of a shape. */}
-              {/* `w` straight through — spreading a fresh object in here was
-                  handing WarningMap a new prop identity on every render and
-                  making it rebuild the map each time. */}
-              <WarningMap warning={w} height={200} />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Divider ──────────────────────────────────────────────────────────────────
 
 
@@ -1021,6 +762,7 @@ export default function Home() {
      in it. Once the reader picks a tab, their pick sticks. */
   const [warnTab, setWarnTab] = useState(null);
   const [showWarningsMap, setShowWarningsMap] = useState(false);
+  const [showWarningsArchive, setShowWarningsArchive] = useState(false);
   const [showBanners, setShowBanners] = useState(false);
   const [cookieConsentReady, setCookieConsentReady] = useState(false);
 
@@ -1253,14 +995,7 @@ export default function Home() {
   const tabs = [
     { id: 'active', label: 'In force', rows: filteredWarnings, upcoming: false },
     { id: 'upcoming', label: 'Upcoming', rows: filteredUpcoming, upcoming: true },
-    /* The archive is a third tab rather than a modal. "Past warnings" used to
-       open a full-screen dialog over the page — a different surface, with its
-       own search, its own filters and its own idea of what a warning card
-       looks like, for something that is simply the same panel at an earlier
-       date. In the tab strip it is one click from the warnings in force and
-       keeps the section's own furniture. */
-    { id: 'archive', label: 'Archive', rows: [], archive: true },
-  ].filter(Boolean);
+  ];
   /* Default to whichever tab has something in it: on a quiet day "In force" is
      empty and "Upcoming" is where the news is. */
   const fallbackTab = filteredWarnings.length === 0 && filteredUpcoming.length > 0 ? 'upcoming' : 'active';
@@ -1346,17 +1081,8 @@ export default function Home() {
             </div>
           </div>
 
-          {/* The archive renders OUTSIDE the AnimatePresence below, not as one
-              of its branches. That block is `mode="wait"`, which holds the new
-              child back until the outgoing one has finished leaving — and the
-              outgoing one here is the warnings spinner, which stays mounted for
-              as long as the live warnings feed is loading. The archive is a
-              different feed with nothing to wait for, so sharing a presence
-              with the spinner just meant it never got to mount. */}
-          {currentTab.archive && <WarningsArchive />}
-
           <AnimatePresence mode="wait">
-            {currentTab.archive ? null : loadingWarnings ? (
+            {loadingWarnings ? (
               <LoadingSpinner key="loading" label="Fetching Met Office warnings…" />
             ) : currentTab.rows.length > 0 ? (
               <motion.div
@@ -1392,9 +1118,11 @@ export default function Home() {
             <button type="button" onClick={() => setShowWarningsMap(true)} style={quietBtn}>
               <AlertTriangle style={{ width: 14, height: 14 }} /> Warning map
             </button>
-            {/* No "Past warnings" button: the Archive tab at the top of this
-                panel is the same destination, and a second control that only
-                switched tabs was just a longer way of pressing it. */}
+            {/* Every warning on record, in its own liquid-glass sheet like the map: a calendar,
+                a year at a glance, search and filters, and each warning's map and full detail. */}
+            <button type="button" onClick={() => setShowWarningsArchive(true)} style={quietBtn}>
+              <History style={{ width: 14, height: 14 }} /> Archive
+            </button>
             <a
               href="https://www.metoffice.gov.uk/weather/warnings-and-advice/uk-warnings"
               target="_blank" rel="noopener noreferrer"
@@ -1751,6 +1479,7 @@ export default function Home() {
       </main>
 
       <WarningsMapModal isOpen={showWarningsMap} onClose={() => setShowWarningsMap(false)} warnings={mergedAll} />
+      <WarningsArchiveModal isOpen={showWarningsArchive} onClose={() => setShowWarningsArchive(false)} />
 
       {/* ══ FOOTER ══════════════════════════════════════════════════════════════
           Where the social links live now. They were in the hero, competing with

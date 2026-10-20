@@ -311,7 +311,7 @@ function daysCovered(validFrom, validTo) {
   const from = new Date(validFrom);
   const to = new Date(validTo || validFrom);
   if (Number.isNaN(from.getTime())) return [];
-  const end = Number.isNaN(to.getTime()) ? from : to;
+  const end = Number.isNaN(to.getTime()) || to < from ? from : to;
   // UK local date, so a warning running 23:00–02:00 counts on both days the
   // reader would call them — not on whatever UTC happened to be at the time.
   const fmt = (d) => new Intl.DateTimeFormat('en-CA', {
@@ -329,24 +329,69 @@ function daysCovered(validFrom, validTo) {
   return out;
 }
 
+/* Everything the archive keeps of a warning, beyond its key and days: the full Met Office detail
+   (what to expect, further detail, likelihood and impact, issue time, version) and its real
+   shape, so an old warning can be shown as it was issued rather than as a list of councils.
+   Coordinates are rounded to 3 decimals (about 100 m), which roughly halves a shape's size and is
+   far finer than any map shows it. */
+const round3 = (c) => (Array.isArray(c[0]) ? c.map(round3) : [Math.round(c[0] * 1000) / 1000, Math.round(c[1] * 1000) / 1000]);
+function archiveGeometry(w) {
+  const g = (Array.isArray(w.polygons) && w.polygons[0]) || w.geometry;
+  if (!g || (g.type !== 'Polygon' && g.type !== 'MultiPolygon') || !Array.isArray(g.coordinates)) return null;
+  try { return { type: g.type, coordinates: round3(g.coordinates) }; } catch { return null; }
+}
+function archiveDetail(w) {
+  const out = {
+    warning_id: w.warningId || null,
+    version: w.warningVersion || null,
+    issued_at: w.issuedDate || null,
+    areas: Array.isArray(w.areas) ? w.areas : null,
+    what_to_expect: Array.isArray(w.whatToExpect) ? w.whatToExpect : null,
+    further_details: w.furtherDetails || null,
+    likelihood: Number.isFinite(Number(w.likelihood)) && w.likelihood !== null ? Number(w.likelihood) : null,
+    impact_level: Number.isFinite(Number(w.impactLevel)) && w.impactLevel !== null ? Number(w.impactLevel) : null,
+    geometry: archiveGeometry(w),
+  };
+  for (const k of Object.keys(out)) if (out[k] == null) delete out[k];
+  return out;
+}
+
 function archiveWarnings(db, warnings, nowIso) {
   if (!Array.isArray(warnings) || !warnings.length) return 0;
   let existing = [];
   try { existing = db.list('WarningArchive') || []; } catch { return 0; }
   const byKey = new Map(existing.map((r) => [r.warning_key, r]));
+  /* The Met Office reissues a warning under the same id when it changes it (a new area, a later
+     end): matched on the id, the archive keeps ONE row holding the latest version, rather than
+     a row per version that would show the same warning twice on the same day. */
+  const byId = new Map(existing.filter((r) => r.warning_id).map((r) => [r.warning_id, r]));
 
   let written = 0;
   for (const w of warnings) {
     if (!w?.validFrom) continue;
     const key = warningKey(w);
     const days = daysCovered(w.validFrom, w.validTo);
-    const prev = byKey.get(key);
+    const detail = archiveDetail(w);
+    const prev = (w.warningId && byId.get(w.warningId)) || byKey.get(key);
     if (prev) {
-      // Seen before: just refresh the sighting window and any new days.
-      const mergedDays = Array.from(new Set([...(prev.days || []), ...days])).sort();
-      if (mergedDays.length !== (prev.days || []).length || prev.last_seen !== nowIso) {
-        try { db.update('WarningArchive', prev.id, { last_seen: nowIso, days: mergedDays }); written += 1; } catch { /* keep going */ }
+      const patch = { last_seen: nowIso };
+      const newVersion = detail.version && prev.version && detail.version !== prev.version;
+      if (newVersion || prev.warning_key !== key) {
+        // A reissue: the latest version's period, areas and wording replace the old.
+        Object.assign(patch, {
+          warning_key: key, type: w.type || prev.type, severity: w.severity || prev.severity,
+          regions: Array.isArray(w.regions) ? w.regions : prev.regions,
+          description: w.description || prev.description, impacts: w.impacts || prev.impacts,
+          valid_from: w.validFrom, valid_to: w.validTo || null, days, ...detail,
+          versions: (prev.versions || 1) + 1,
+        });
+      } else {
+        // Seen again: fill in anything an older archiver did not keep, and any new days.
+        for (const [k, v] of Object.entries(detail)) if (prev[k] == null) patch[k] = v;
+        const mergedDays = Array.from(new Set([...(prev.days || []), ...days])).sort();
+        if (mergedDays.length !== (prev.days || []).length) patch.days = mergedDays;
       }
+      try { db.update('WarningArchive', prev.id, patch); written += 1; } catch { /* keep going */ }
       continue;
     }
     try {
@@ -362,6 +407,7 @@ function archiveWarnings(db, warnings, nowIso) {
         days,
         first_seen: nowIso,
         last_seen: nowIso,
+        ...detail,
       });
       written += 1;
     } catch { /* one bad row must not stop the rest */ }
