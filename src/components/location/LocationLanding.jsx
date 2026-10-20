@@ -109,20 +109,23 @@ export default function LocationLanding({
 
       <div className="lw-glass lw-card" style={{ maxWidth: 680, margin: '0 auto' }}>
         <Label icon={MapPin}>Right now</Label>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+        {/* the name has the whole top line; the weather, its symbol and the temperature sit
+            underneath, so a long name never runs into the symbol */}
+        <div className="lw-cities">
           {POPULAR.map((c, i) => {
             const n = now?.[i];
             const day = sunElevation(Date.now(), c.lat, c.lon) > -0.833;
             const cond = n ? classify({ tcc: n.tcc, precipRate: n.radar ?? 0, span: 0 }) : null;
             return (
-              <button key={c.name} type="button" onClick={() => onSearch({ name: c.name, region: c.region, lat: c.lat, lon: c.lon })}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 16, cursor: 'pointer', textAlign: 'left', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)', color: '#fff', font: 'inherit' }}>
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 15, fontWeight: 600 }}>{c.name}</span>
-                  <span style={{ display: 'block', fontSize: 12, color: 'var(--ink3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cond ? condLabel(cond, day) : c.region}</span>
+              <button key={c.name} type="button" className="lw-city" onClick={() => onSearch({ name: c.name, region: c.region, lat: c.lat, lon: c.lon })}>
+                <span className="lw-city-top">
+                  <span className="lw-city-name">{c.name}</span>
+                  {n?.t2 != null && <span className="lw-city-temp">{Math.round(unit === 'F' ? (n.t2 * 9) / 5 + 32 : n.t2)}°</span>}
                 </span>
-                {cond && <WxIcon cond={cond} day={day} size={28} />}
-                {n?.t2 != null && <span style={{ fontSize: 22, fontWeight: 300 }}>{Math.round(unit === 'F' ? (n.t2 * 9) / 5 + 32 : n.t2)}°</span>}
+                <span className="lw-city-bottom">
+                  {cond && <WxIcon cond={cond} day={day} size={22} />}
+                  <span>{cond ? condLabel(cond, day) : c.region}</span>
+                </span>
               </button>
             );
           })}

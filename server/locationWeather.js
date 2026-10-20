@@ -7,6 +7,7 @@
    observed day it keeps, and the radar is the Met Office composite from the AWS bucket.
 
      GET /api/location/forecast?lat=&lon=[&name=]  or  ?q=     everything the page shows
+     GET /api/location/search?q=                                place suggestions as you type (server/placeSearch.js)
      GET /api/location/now?p=lat,lon|lat,lon…                   now at up to 12 places (the landing cards)
      GET /api/location/radar?lat=&lon=                          past radar times, next hours' UKV rain
      GET /api/location/radar/frame?src=radar&t=YYYYmmddTHHMM&lat=&lon=
@@ -18,6 +19,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { MODELDATA_DIR, POINT_DIR, builtCubes } from './modelData.js';
 import { geocode, reverseName } from './functions/getMetOfficeLocationWeather.js';
+import { searchPlaces } from './placeSearch.js';
 
 const LIVE = path.join(MODELDATA_DIR, 'live');
 const OBS = path.join(MODELDATA_DIR, 'observed');
@@ -252,10 +254,16 @@ export function mountLocationWeather(app) {
     try {
       if (!(Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) {
         if (!q) return res.status(400).json({ error: 'Search for a town, city or postcode.' });
-        const hit = await geocode(q);
-        if (!hit) return res.status(404).json({ error: `Could not find "${q}". Try a nearby town or postcode.` });
-        lat = hit.latitude; lon = hit.longitude; country = hit.country_code;
-        name = hit.name + (hit.admin1 && hit.admin1 !== hit.name ? `, ${hit.admin1}` : '');
+        /* typed and entered without picking a suggestion: the best suggestion, the same engine */
+        const best = (await searchPlaces(q, 1))[0];
+        if (best) {
+          lat = best.lat; lon = best.lon; country = best.cc; name = best.name;
+        } else {
+          const hit = await geocode(q);
+          if (!hit) return res.status(404).json({ error: `Could not find "${q}". Try a nearby town or postcode.` });
+          lat = hit.latitude; lon = hit.longitude; country = hit.country_code;
+          name = hit.name + (hit.admin1 && hit.admin1 !== hit.name ? `, ${hit.admin1}` : '');
+        }
       } else if (!name) {
         const r = await reverseName(lat, lon);
         name = r.name || `${lat.toFixed(3)}, ${lon.toFixed(3)}`;
@@ -271,6 +279,16 @@ export function mountLocationWeather(app) {
     if (fc.error) return res.status(503).json({ error: 'The Met Office UKV forecast is being prepared. Try again in a few minutes.' });
     res.set('Cache-Control', 'no-cache');
     res.json({ location: { name, lat, lon, country }, forecast: fc, now: nowAt(lat, lon), observed: observedAt(lat, lon), generated: new Date().toISOString() });
+  });
+
+  app.get('/api/location/search', async (req, res) => {
+    const q = String(req.query.q || '').slice(0, 60);
+    try {
+      res.set('Cache-Control', 'public, max-age=3600');
+      res.json({ results: await searchPlaces(q, 8) });
+    } catch {
+      res.json({ results: [] });
+    }
   });
 
   app.get('/api/location/now', (req, res) => {
