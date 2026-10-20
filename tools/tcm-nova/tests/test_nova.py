@@ -273,6 +273,62 @@ def test_blender_leaves_a_slow_source_out_and_says_so():
     assert sorted(got) == ['fast', 'slow'] and b.fetch_log[vt3]['errors'] == {}
 
 
+def test_a_stalled_range_is_asked_again_and_logged(monkeypatch):
+    """A byte range trickling in below MIN_RATE after the grace period is abandoned and
+    asked again at once; every attempt is in io_aws.NET for the frame's manifest entry."""
+    import time
+    from nova import io_aws as A
+    calls = []
+
+    class Resp:
+        status = 206
+
+        def __init__(self, slow):
+            self.slow, self.left = slow, [b'x' * 5, b'y' * 5]
+            self.headers = {'Content-Length': '10'}
+
+        def read(self, n=-1):
+            if self.slow:
+                time.sleep(0.15)
+            return self.left.pop(0) if self.left else b''
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout=None):
+        calls.append(req.headers.get('Range'))
+        return Resp(slow=len(calls) == 1)
+    monkeypatch.setattr(A.urllib.request, 'urlopen', urlopen)
+    monkeypatch.setattr(A, 'GRACE_S', 0.1)
+    A.NET.clear()
+    url = 'https://storage.googleapis.com/ecmwf-open-data/20261020/12z/ifs/0p25/enfo/x.grib2'
+    t0 = time.time()
+    assert A.get(url, (0, 9)) == b'x' * 5 + b'y' * 5 and len(calls) == 2
+    http, _ = A.net_summary(t0, time.time())
+    assert http['ifs_ens']['requests'] == 2 and http['ifs_ens']['failed'] == {'slow': 1}
+    assert A.source_of('https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.20261020/12/atmos/x') == 'gfs'
+    assert A.source_of('https://opendata.dwd.de/weather/nwp/icon-eu-eps/grib/12/x') == 'icon_eps'
+
+
+def test_net_summary_windows_by_model_and_reports_lock_use():
+    from nova import io_aws as A
+    A.NET.clear()
+    for q in A.LOCKS.values():
+        q.clear()
+    A.NET.extend([(10.0, 11.0, 'ifs', 206, 2_000_000, 'storage.googleapis.com'),
+                  (12.0, 40.0, 'ifs', 503, 0, 'ecmwf-forecasts.s3.eu-central-1.amazonaws.com'),
+                  (15.0, 16.0, 'gfs', 206, 1_000_000, 'noaa-gfs-bdp-pds.s3.amazonaws.com'),
+                  (99.0, 100.0, 'gfs', 206, 1_000_000, 'noaa-gfs-bdp-pds.s3.amazonaws.com')])   # another frame
+    A.LOCKS['grib'].extend([(10.0, 10.0, 15.0), (11.0, 15.0, 20.0)])
+    http, locks = A.net_summary(10.0, 30.0)
+    assert http['ifs'] == {'requests': 2, 'mb': 2.0, 'slowest_s': 28.0, 'failed': {'503': 1}, 'aws_ecmwf': 1}
+    assert http['gfs']['requests'] == 1
+    assert locks['grib'] == {'decodes': 2, 'busy_frac': 0.5, 'queued_s': 4.0, 'longest_queue_s': 4.0}
+
+
 def test_models_start_processing_as_their_data_arrives():
     """Blender.at hands each model over as it arrives; run_frame then collects the chains
     already started and runs only the rest."""

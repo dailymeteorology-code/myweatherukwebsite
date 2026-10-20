@@ -209,7 +209,8 @@ def compute(product, init, leads, stride, workers, writer_dir: Path, cycles_out:
             continue
         fl = getattr(blender, 'fetch_log', {}).pop(vt, {})
         meta = dict(meta, calibrated='isotonic (V5 era)' if cal else 'uncalibrated', fetch_s=round(t_fetch, 1), seconds=round(time.time() - t0),
-                    fetch_source_s=fl.get('seconds', {}), fetch_errors=fl.get('errors', {}), peak_mem_mb=_peak_mem_mb())
+                    fetch_source_s=fl.get('seconds', {}), fetch_errors=fl.get('errors', {}),
+                    fetch_http=fl.get('http', {}), fetch_locks=fl.get('locks', {}), peak_mem_mb=_peak_mem_mb())
         tmp.frame(lead * 60, vt.isoformat(), fields, meta)
         log(f'T+{lead:3d} {vt:%a %HZ} p_thunder max={fields["p_thunder"].max():.2f} '
             f'(waited {t_fetch:.0f}s for data, total {time.time() - t0:.0f}s, models {meta["sources"]})')

@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 
 from .grid import projected_sampler, regular_sampler
-from .io_aws import BUCKETS, decode_grib, ecmwf_index, exists, fetch_ranges, get, grib_axes, log, open_nc, wgrib_index
+from .io_aws import BUCKETS, LOCKS, decode_grib, ecmwf_index, exists, fetch_ranges, get, grib_axes, log, open_nc, wgrib_index
 
 import threading
 NC_LOCK = threading.Lock()
@@ -104,7 +104,9 @@ class MetOffice(Source):
         # and concurrent decodes were returning another file's array (found 18 Oct 2026: UKV 2 m
         # temperature repeated across hours).
         blob = get(self.key_for(run, vt, name))
+        t_ask = time.time()
         with NC_LOCK:
+            t_got = time.time()
             ds = open_nc(blob)
             var = next(v for v in ds.variables.values() if v.ndim >= 2 and 'bnds' not in v.name)
             S = self.sampler(ds, grid)
@@ -114,6 +116,7 @@ class MetOffice(Source):
                 if c in ds.variables and a.ndim == 3:
                     lev = np.asarray(ds.variables[c][:], float)
             ds.close()
+        LOCKS['netcdf'].append((t_ask, t_got, time.time()))
         return S(a), lev, S.valid
 
     def accum_rate(self, run, vt, grid, dt_h, name='precipitation_accumulation-PT01H'):

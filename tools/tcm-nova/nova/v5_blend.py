@@ -31,7 +31,7 @@ from . import thermo as th
 from . import weights as W
 from .config import BASELINE, GRIDS, LEVELS, MODELS, WINDOWS
 from .grid import Grid
-from .io_aws import log
+from .io_aws import log, net_summary
 from .main_run import NATIVE_STEP, SourceCache, wmean
 from .sources import READERS
 from . import v5_bridge as B
@@ -148,6 +148,7 @@ class Blender:
         source arrives, so its processing can start while slower sources still download."""
         import time
         budget = self.FETCH_BUDGET_S if budget_s is None else budget_s
+        t_start = time.time()
 
         def one(c):
             t0, n = time.time(), len(c.errors)
@@ -183,7 +184,9 @@ class Blender:
                 res[k] = (None, float(budget), [])
                 errors[k] = [f'over the {budget:.0f} s fetch budget: left out of this frame']
                 log(f'{k} {vt:%d %HZ}: over the {budget:.0f} s fetch budget, left out of this frame')
-        self.fetch_log[vt] = {'seconds': {k: r[1] for k, r in res.items()}, 'errors': errors}
+        http, locks = net_summary(t_start, time.time())
+        self.fetch_log[vt] = {'seconds': {k: r[1] for k, r in res.items()}, 'errors': errors,
+                              'http': http, 'locks': locks}
         return {k: r[0] for k, r in res.items() if r[0]}
 
 
