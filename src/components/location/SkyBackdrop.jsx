@@ -6,9 +6,13 @@
    lightning. Everything comes from the hour being shown, so scrubbing through the forecast
    changes the sky.
 
-   Built to stay smooth: one canvas, sprites made once per tone, every streak of rain in a single
-   path, the pixel ratio capped, nothing drawn while the tab is hidden, and a still picture for
-   readers who ask their system for reduced motion. */
+   Built to stay smooth: one canvas, sprites made once per tone (and shared by every sky on the
+   page), every streak of rain in a single path, the pixel ratio capped, nothing drawn while the
+   tab is hidden, and a still picture for readers who ask their system for reduced motion.
+
+   `contained` puts the sky inside its parent instead of behind the whole window (the home page's
+   city cards): sized to the card, with clouds, drops and flakes scaled to it, drawn at about 30
+   frames a second, and paused while the card is off screen. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 const SKIES = {
@@ -118,7 +122,13 @@ const TONES = {
   night: { light: [86, 96, 114], shade: [32, 38, 50] },
 };
 
-export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true, wind = 8, wdir = 240, rate = 0, cloud = 60 }) {
+/* one set of sprites for the page: a card row of skies would otherwise blur sixty cloud canvases */
+const SPRITES = {};
+const spritesFor = (toneKey) => (SPRITES[toneKey] ||= [1, 2, 3, 4].map((s) => cloudSprite(s * 7919, TONES[toneKey])));
+let FOG = null;
+const fogOnce = () => (FOG ||= fogSprite());
+
+export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true, wind = 8, wdir = 240, rate = 0, cloud = 60, contained = false }) {
   const group = skyGroup(cond);
   const phase = skyPhase(sun, morning);
   const [top, bottom] = SKIES[group][phase];
@@ -131,6 +141,7 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
   }, [bg]);
 
   const canvasRef = useRef(null);
+  const wrapRef = useRef(null);
   const params = useMemo(() => ({ cond, group, phase, wind, wdir, rate, cloud }), [cond, group, phase, wind, wdir, rate, cloud]);
   const paramsRef = useRef(params);
   useEffect(() => { paramsRef.current = params; }, [params]);
@@ -140,31 +151,34 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
     if (!cv) return undefined;
     const ctx = cv.getContext('2d');
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    let W = 0, H = 0, dpr = 1, raf = 0, last = performance.now(), clock = 0;
-    const sprites = {};
-    const spritesFor = (toneKey) => {
-      if (!sprites[toneKey]) sprites[toneKey] = [1, 2, 3, 4].map((s) => cloudSprite(s * 7919, TONES[toneKey]));
-      return sprites[toneKey];
-    };
-    const fog = fogSprite();
+    let W = 0, H = 0, dpr = 1, raf = 0, last = performance.now(), clock = 0, onScreen = true;
+    const k = contained ? 0.6 : 1;                         // drop, flake and bolt size on a card
+    const fog = fogOnce();
     let stars = [], clouds = [], drops = [], flakes = [], stones = [], fogs = [];
     let flash = { a: 0, next: 4, bolt: null };
     let built = '';
 
     const resize = () => {
-      dpr = Math.min(window.devicePixelRatio || 1, W > 900 ? 1.5 : 1.25);
-      W = window.innerWidth; H = window.innerHeight;
+      if (contained) {
+        const r = wrapRef.current.getBoundingClientRect();
+        W = Math.max(1, Math.round(r.width)); H = Math.max(1, Math.round(r.height));
+        dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      } else {
+        dpr = Math.min(window.devicePixelRatio || 1, W > 900 ? 1.5 : 1.25);
+        W = window.innerWidth; H = window.innerHeight;
+      }
       cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
       cv.style.width = `${W}px`; cv.style.height = `${H}px`;
       built = '';
     };
     /* (re)populate when the weather or the window changes */
     const build = (p) => {
-      const area = Math.min(1.6, Math.max(0.35, (W * H) / (1440 * 900)));
+      /* how much sky there is: a card gets the same density as the window, so fewer of everything */
+      const area = contained ? Math.max(0.03, (W * H) / (1440 * 900)) : Math.min(1.6, Math.max(0.35, (W * H) / (1440 * 900)));
       const r = rng(Math.round(W + H * 3));
       const night = p.phase === 'night';
       stars = night && ['clear', 'partly'].includes(p.group)
-        ? Array.from({ length: Math.round(150 * area) }, () => ({ x: r() * W, y: r() * H * 0.62, s: 0.5 + r() * 1.3, ph: r() * 6.3, sp: 0.6 + r() * 1.8 }))
+        ? Array.from({ length: contained ? Math.max(12, Math.round(420 * area)) : Math.round(150 * area) }, () => ({ x: r() * W, y: r() * H * 0.62, s: (0.5 + r() * 1.3) * (contained ? 0.8 : 1), ph: r() * 6.3, sp: 0.6 + r() * 1.8 }))
         : [];
       const toneKey = night ? 'night' : p.phase !== 'day' && ['clear', 'partly'].includes(p.group) ? 'warm'
         : p.group === 'storm' ? 'storm' : p.group === 'rain' ? 'dayDark' : p.group === 'cloudy' || p.group === 'snow' || p.group === 'fog' ? 'dayGrey' : 'day';
@@ -175,27 +189,30 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
       const heavy = ['rain', 'storm', 'snow', 'fog'].includes(p.group) || cover > 85;
       clouds = Array.from({ length: n }, (_, i) => {
         const far = p.group === 'clear' || i % 3 !== 0;
-        const sc = (far ? 0.55 + r() * 0.35 : 0.95 + r() * 0.6) * Math.max(0.7, Math.min(1.4, W / 1100)) * (heavy ? 1.3 : 1);
+        const sc = (far ? 0.55 + r() * 0.35 : 0.95 + r() * 0.6) * (contained ? Math.max(0.24, Math.min(0.55, W / 640)) : Math.max(0.7, Math.min(1.4, W / 1100))) * (heavy ? 1.3 : 1);
+        const pad = contained ? W * 0.6 : 300;
         return {
           img: sp[i % sp.length], far, sc,
-          x: r() * (W + 600) - 300, y: (far ? r() * 0.32 : 0.04 + r() * 0.5) * H * (heavy ? 0.9 : 0.75),
+          x: r() * (W + pad * 2) - pad, y: (far ? r() * 0.32 : 0.04 + r() * 0.5) * H * (heavy ? 0.9 : 0.75),
           a: (heavy ? 0.8 : far ? 0.55 : 0.85) * (p.group === 'clear' ? 0.6 : 1), v: (far ? 0.45 : 1) * (0.7 + r() * 0.6),
         };
       }).sort((a, b) => (a.far === b.far ? 0 : a.far ? -1 : 1));
       /* hail comes down with rain; sleet is rain and snow together */
       const wet = ['rain', 'storm'].includes(p.group) || ['sleet', 'hail'].includes(p.cond);
       const nRain = wet ? Math.round((p.cond === 'drizzle' ? 90 : p.cond === 'hail' ? 160 : 120 + Math.min(1, p.rate / 6) * 380) * area) : 0;
-      drops = Array.from({ length: nRain }, () => ({ x: r() * W, y: r() * H, l: 10 + r() * 16, v: 0.75 + r() * 0.5 }));
+      drops = Array.from({ length: nRain }, () => ({ x: r() * W, y: r() * H, l: (10 + r() * 16) * k, v: 0.75 + r() * 0.5 }));
       const snowy = ['snow', 'heavySnow', 'snowShowers', 'sleet'].includes(p.cond);
       const nSnow = snowy ? Math.round((p.cond === 'heavySnow' ? 280 : p.cond === 'sleet' ? 90 : 160) * area) : 0;
       /* flakes in three depths: small, faint and slow far away; big, bright and quicker close by */
-      flakes = Array.from({ length: nSnow }, () => ({ x: r() * W, y: r() * H, s: 0.8 + r() * 2.9, v: 0.7 + r() * 0.5, ph: r() * 6.3 }));
-      stones = p.cond === 'hail' ? Array.from({ length: Math.round(150 * area) }, () => ({ x: r() * W, y: r() * H, l: 5 + r() * 6, v: 0.8 + r() * 0.5, w: 1.6 + r() * 1.6 })) : [];
-      fogs = p.group === 'fog' ? Array.from({ length: 5 }, (_, i) => ({ x: r() * W, y: H * (0.35 + i * 0.13), sc: 1 + r() * 0.8, v: 6 + r() * 8 })) : [];
+      flakes = Array.from({ length: nSnow }, () => ({ x: r() * W, y: r() * H, s: (0.8 + r() * 2.9) * (contained ? 0.75 : 1), v: 0.7 + r() * 0.5, ph: r() * 6.3 }));
+      stones = p.cond === 'hail' ? Array.from({ length: Math.round(150 * area) }, () => ({ x: r() * W, y: r() * H, l: (5 + r() * 6) * k, v: 0.8 + r() * 0.5, w: 1.6 + r() * 1.6 })) : [];
+      fogs = p.group === 'fog' ? Array.from({ length: 5 }, (_, i) => ({ x: r() * W, y: H * (0.35 + i * 0.13), sc: (1 + r() * 0.8) * (contained ? 0.35 : 1), v: (6 + r() * 8) * (contained ? 0.4 : 1) })) : [];
       built = `${p.cond}|${p.group}|${p.phase}|${Math.round(p.cloud / 10)}|${Math.round(p.rate)}|${W}x${H}`;
     };
 
     const frame = (now) => {
+      if (!onScreen) { raf = 0; return; }
+      if (contained && !reduce && now - last < 32) { raf = requestAnimationFrame(frame); return; }   // ~30 fps on a card
       const p = paramsRef.current;
       const key = `${p.cond}|${p.group}|${p.phase}|${Math.round(p.cloud / 10)}|${Math.round(p.rate)}|${W}x${H}`;
       if (key !== built) build(p);
@@ -224,8 +241,9 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
         g.addColorStop(1, 'rgba(255,255,255,0)');
         ctx.fillStyle = g;
         ctx.fillRect(0, 0, W, H);
-      } else if (bright && p.phase === 'night') {
-        const mx = W * 0.8, my = H * 0.13, mr = Math.max(16, Math.min(30, W / 50));
+      } else if (bright && p.phase === 'night' && !contained) {   // a card's symbol already carries the moon
+        const mx = contained ? W * 0.5 : W * 0.8, my = contained ? H * 0.2 : H * 0.13;
+        const mr = contained ? Math.max(6, Math.min(12, W / 22)) : Math.max(16, Math.min(30, W / 50));
         const g = ctx.createRadialGradient(mx, my, mr * 0.6, mx, my, mr * 6);
         g.addColorStop(0, 'rgba(220,230,255,0.22)');
         g.addColorStop(1, 'rgba(220,230,255,0)');
@@ -237,7 +255,7 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
 
       /* clouds, drifting downwind (the far layer slower), wrapping round */
       const towards = Math.sin(((p.wdir ?? 240) + 180) * (Math.PI / 180)) >= 0 ? 1 : -1;
-      const drift = (6 + Math.min(60, p.wind ?? 8) * 0.9) * towards;
+      const drift = (6 + Math.min(60, p.wind ?? 8) * 0.9) * towards * (contained ? 0.45 : 1);
       for (const c of clouds) {
         const w = c.img.width * c.sc * 0.62, h = c.img.height * c.sc * 0.62;
         c.x += drift * c.v * dt;
@@ -260,7 +278,7 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
       /* rain: every streak in one path, slanted downwind */
       if (drops.length) {
         const slant = Math.min(0.5, (p.wind ?? 0) / 60) * towards;
-        const speed = 900 + Math.min(1, (p.rate ?? 0) / 6) * 500;
+        const speed = (900 + Math.min(1, (p.rate ?? 0) / 6) * 500) * (contained ? 0.45 : 1);
         ctx.strokeStyle = p.group === 'storm' ? 'rgba(200,214,235,0.42)' : 'rgba(210,225,245,0.36)';
         ctx.lineWidth = p.cond === 'drizzle' ? 0.8 : 1.15;
         ctx.lineCap = 'round';
@@ -280,7 +298,7 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
       if (flakes.length) {
         for (const f of flakes) {
           const near = f.s / 3.7;
-          f.y += (30 + 55 * near) * f.v * dt;
+          f.y += (30 + 55 * near) * f.v * dt * (contained ? 0.6 : 1);
           f.x += (Math.sin(clock * 0.9 + f.ph) * (8 + 16 * near) + drift * (0.3 + 0.5 * near)) * dt;
           if (f.y > H + 10) { f.y = -10; f.x = Math.random() * W; }
           if (f.x > W + 10) f.x = -10;
@@ -303,8 +321,8 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
       if (stones.length) {
         const slant = Math.min(0.35, (p.wind ?? 0) / 80) * towards;
         for (const s2 of stones) {
-          s2.y += 760 * s2.v * dt;
-          s2.x += 760 * s2.v * dt * slant;
+          s2.y += 760 * s2.v * dt * (contained ? 0.45 : 1);
+          s2.x += 760 * s2.v * dt * slant * (contained ? 0.45 : 1);
           if (s2.y > H + 12) { s2.y = -12 - Math.random() * 40; s2.x = Math.random() * (W + 200) - 100; }
           if (s2.x > W + 30) s2.x -= W + 60;
           if (s2.x < -30) s2.x += W + 60;
@@ -351,24 +369,33 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
     const makeBolt = (w, h) => {
       let x = w * (0.2 + Math.random() * 0.6), y = 0;
       const pts = [[x, y]];
-      while (y < h * (0.45 + Math.random() * 0.25)) { y += 18 + Math.random() * 30; x += (Math.random() - 0.5) * 50; pts.push([x, y]); }
+      while (y < h * (0.45 + Math.random() * 0.25)) { y += (18 + Math.random() * 30) * k; x += (Math.random() - 0.5) * 50 * k; pts.push([x, y]); }
       return pts;
     };
 
     resize();
+    const start = () => { if (!reduce && !raf && onScreen && !document.hidden) { last = performance.now() - 40; raf = requestAnimationFrame(frame); } };
     const onResize = () => { resize(); if (reduce) frame(performance.now()); };
-    window.addEventListener('resize', onResize);
+    let ro = null, io = null;
+    if (contained) {
+      ro = new ResizeObserver(onResize);
+      ro.observe(wrapRef.current);
+      /* a card off screen stops drawing until it is scrolled back */
+      io = new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; start(); });
+      io.observe(wrapRef.current);
+    } else window.addEventListener('resize', onResize);
     const onVis = () => {
-      if (document.hidden) { cancelAnimationFrame(raf); raf = 0; } else if (!reduce && !raf) { last = performance.now(); raf = requestAnimationFrame(frame); }
+      if (document.hidden) { cancelAnimationFrame(raf); raf = 0; } else start();
     };
     document.addEventListener('visibilitychange', onVis);
     raf = requestAnimationFrame(frame);
     return () => {
       cancelAnimationFrame(raf);
-      window.removeEventListener('resize', onResize);
+      ro?.disconnect(); io?.disconnect();
+      if (!contained) window.removeEventListener('resize', onResize);
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, []);
+  }, [contained]);
 
   /* a reduced-motion reader still gets the new sky when the weather changes */
   useEffect(() => {
@@ -376,7 +403,7 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
   }, [params]);
 
   return (
-    <div aria-hidden="true" style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', overflow: 'hidden' }}>
+    <div ref={wrapRef} aria-hidden="true" style={{ position: contained ? 'absolute' : 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', overflow: 'hidden' }}>
       {layers.map((l, i) => (
         <div key={l.k} className={i ? 'lw-sky-in' : undefined} style={{ position: 'absolute', inset: 0, background: l.bg }} />
       ))}

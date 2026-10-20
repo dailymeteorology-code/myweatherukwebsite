@@ -28,7 +28,6 @@ import { loadEdgeFunctions, runEdgeFunction } from './denoAdapter.js';
 import { createBackup, listBackups, formatBytes } from './backup.js';
 import getMetOfficeWarnings, { slotStart, nextSlot } from './functions/getMetOfficeWarnings.js';
 import getMetOfficeLocationWeather from './functions/getMetOfficeLocationWeather.js';
-import ukCityConditions from './ukCityConditions.js';
 import worldWarnings, { worldWarningDetail } from './worldWarnings.js';
 import radarPhase from './radarPhase.js';
 import { mountTcmV5 } from './tcmV5.js';
@@ -40,6 +39,7 @@ import { startLiveScenarios } from './scenarios/live/index.js';
 import { mountPastFuture } from './pastFuture/index.js';
 import { mountModelData } from './modelData.js';
 import { mountLocationWeather } from './locationWeather.js';
+import { mountWorldConditions } from './worldConditions.js';
 import { mountImageSizes, warmImageSizes } from './imageSizes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -342,18 +342,9 @@ app.get('/api/warning-archive', (req, res) => {
   }
 });
 
-/* Home page UK city cards, from Met Office DataHub rather than Open-Meteo.
-   Off unless HOME_CITIES_FROM_DATAHUB=true — see server/ukCityConditions.js for
-   why, and what it costs in daily allowance. */
-app.post('/api/uk-city-conditions', async (req, res) => {
-  try {
-    res.json(await ukCityConditions(req.body || {}));
-  } catch (err) {
-    console.error('[uk-city-conditions]', err);
-    // Never fail the card: the page keeps its Open-Meteo values.
-    res.json({ enabled: false, results: [] });
-  }
-});
+/* The home page's city cards: the UK ones read the UKV analysis (/api/location/now), the rest
+   the Met Office global model through DataHub on the site's key (worldConditions.js, mounted
+   below), cached so it costs a few dozen calls a day however many people visit. */
 
 /* Worldwide severe-weather warnings — the WMO's aggregation of every national
    met service's CAP alerts, with the US National Weather Service's GeoJSON
@@ -475,6 +466,7 @@ mountScenarios(app);
 mountPastFuture(app);
 mountModelData(app);
 mountLocationWeather(app);
+mountWorldConditions(app);
 mountImageSizes(app, UPLOAD_DIR);
 startLiveScenarios(app);
 

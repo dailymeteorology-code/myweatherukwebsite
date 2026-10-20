@@ -1,30 +1,23 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { SKY_CONFIGS } from '@/components/weather/skyConfigs';
-import { WEATHER_CODES } from '@/lib/metOfficeWeatherCodes';
-import { weatherIcons } from '@/components/WeatherIcons';
-import { CloudyIcon } from '@/components/icons/CloudIcons';
 import useBlitzortung from '@/components/tcm/useBlitzortung';
+import { classify, condLabel, sunElevation } from '@/lib/ukvLocation';
 import { LightningBanner, BandHeading, CityCard } from '@/components/home/CityConditionsUI';
 
 /**
- * "Around the World" — current conditions for fifteen cities, in three bands,
- * with live global lightning above them.
+ * "Around the World": the weather right now in fifteen cities, in three bands, with live global
+ * lightning above them.
  *
- * Deliberately *current* only: temperature, what it feels like, wind and
- * humidity for the hour that city is in. The day-by-day breakdown lives on the
- * Location Weather page, and every card deep-links straight to it.
+ * Every number is the Met Office's:
+ *   UK cities      the 15-minute UKV analysis (corrected by station reports) and the radar at each
+ *                  city, from this site's own server in one request (/api/location/now), the same
+ *                  numbers as Location Weather's "Right now"
+ *   everywhere     the Met Office global model through DataHub site-specific, on the site's key,
+ *   else           fetched by the server a few times a day and shared by every visitor
+ *                  (/api/world-conditions); never Open-Meteo
  *
- * Each card draws the site's own animated sky — WeatherScene paints the
- * sun/moon, cloud banks, fog and lightning over the gradient, WeatherParticles
- * adds rain or snow on a canvas. Both size to their container, which is why the
- * full-page scene works unchanged inside a card. The phase (day / night /
- * sunrise / sunset) comes from each city's OWN clock, so Tokyo is dark while
- * London is bright.
- *
- * All fifteen come from one request: Open-Meteo takes a comma-separated
- * coordinate list and answers in order. `ukmo_seamless` is the Met Office's own
- * model — its global component covers the whole world, so every card on the
- * page shares one stated source.
+ * Each card is the Location page's own live sky (clouds, sun or moon, rain, snow, hail, fog and
+ * lightning on a canvas, for that city's weather and the sun's height there now) under its Apple-
+ * style symbol, so the home page and Location Weather draw weather the same way.
  */
 
 const CITY_GROUPS = [
@@ -32,120 +25,72 @@ const CITY_GROUPS = [
     id: 'uk',
     label: 'UK & Ireland',
     cities: [
-      { name: 'London', lat: 51.5074, lon: -0.1278 },
-      { name: 'Cardiff', lat: 51.4816, lon: -3.1791 },
-      { name: 'Edinburgh', lat: 55.9533, lon: -3.1883 },
-      { name: 'Belfast', lat: 54.5973, lon: -5.9301 },
-      { name: 'Dublin', lat: 53.3498, lon: -6.2603 },
+      { id: 'london', name: 'London', lat: 51.5074, lon: -0.1278, tz: 'Europe/London', src: 'ukv' },
+      { id: 'cardiff', name: 'Cardiff', lat: 51.4816, lon: -3.1791, tz: 'Europe/London', src: 'ukv' },
+      { id: 'edinburgh', name: 'Edinburgh', lat: 55.9533, lon: -3.1883, tz: 'Europe/London', src: 'ukv' },
+      { id: 'belfast', name: 'Belfast', lat: 54.5973, lon: -5.9301, tz: 'Europe/London', src: 'ukv' },
+      { id: 'dublin', name: 'Dublin', lat: 53.3498, lon: -6.2603, tz: 'Europe/Dublin', src: 'mo' },
     ],
   },
   {
     id: 'eu',
     label: 'Europe',
     cities: [
-      { name: 'Paris', lat: 48.8566, lon: 2.3522 },
-      { name: 'Berlin', lat: 52.52, lon: 13.405 },
-      { name: 'Madrid', lat: 40.4168, lon: -3.7038 },
-      { name: 'Rome', lat: 41.9028, lon: 12.4964 },
-      { name: 'Amsterdam', lat: 52.3676, lon: 4.9041 },
+      { id: 'paris', name: 'Paris', lat: 48.8566, lon: 2.3522, tz: 'Europe/Paris', src: 'mo' },
+      { id: 'berlin', name: 'Berlin', lat: 52.52, lon: 13.405, tz: 'Europe/Berlin', src: 'mo' },
+      { id: 'madrid', name: 'Madrid', lat: 40.4168, lon: -3.7038, tz: 'Europe/Madrid', src: 'mo' },
+      { id: 'rome', name: 'Rome', lat: 41.9028, lon: 12.4964, tz: 'Europe/Rome', src: 'mo' },
+      { id: 'amsterdam', name: 'Amsterdam', lat: 52.3676, lon: 4.9041, tz: 'Europe/Amsterdam', src: 'mo' },
     ],
   },
   {
     id: 'world',
     label: 'Rest of the world',
     cities: [
-      { name: 'New York', lat: 40.7128, lon: -74.006 },
-      { name: 'Tokyo', lat: 35.6762, lon: 139.6503 },
-      { name: 'Sydney', lat: -33.8688, lon: 151.2093 },
-      { name: 'Dubai', lat: 25.2048, lon: 55.2708 },
-      { name: 'Cape Town', lat: -33.9249, lon: 18.4241 },
+      { id: 'newyork', name: 'New York', lat: 40.7128, lon: -74.006, tz: 'America/New_York', src: 'mo' },
+      { id: 'tokyo', name: 'Tokyo', lat: 35.6762, lon: 139.6503, tz: 'Asia/Tokyo', src: 'mo' },
+      { id: 'sydney', name: 'Sydney', lat: -33.8688, lon: 151.2093, tz: 'Australia/Sydney', src: 'mo' },
+      { id: 'dubai', name: 'Dubai', lat: 25.2048, lon: 55.2708, tz: 'Asia/Dubai', src: 'mo' },
+      { id: 'capetown', name: 'Cape Town', lat: -33.9249, lon: 18.4241, tz: 'Africa/Johannesburg', src: 'mo' },
     ],
   },
 ];
-
 const ALL_CITIES = CITY_GROUPS.flatMap((g) => g.cities.map((c) => ({ ...c, group: g.id })));
-
-const CURRENT_FIELDS = [
-  'temperature_2m',
-  'apparent_temperature',
-  'relative_humidity_2m',
-  'weather_code',
-  'wind_speed_10m',
-  'wind_gusts_10m',
-  'wind_direction_10m',
-  'is_day',
-];
+const UKV_CITIES = ALL_CITIES.filter((c) => c.src === 'ukv');
+/* Location Weather runs on the UKV, which covers the UK and Ireland: those cards open it */
+const OPENS_FORECAST = new Set(['uk']);
 
 const REFRESH_MS = 10 * 60 * 1000;
 
-/**
- * WMO code -> Met Office significantWeatherCode, so the site's own icon and sky
- * tables can be reused as-is. Mirrors the mapping in
- * server/functions/getMetOfficeLocationWeather.js — keep the two in step.
- */
-function wmoToMetOffice(wmo, isDay) {
-  const d = (day, night) => (isDay ? day : night);
-  switch (wmo) {
-    case 0:
-    case 1:
-      return d(1, 0);
-    case 2:
-      return d(3, 2);
-    case 3:
-      return 8;
-    case 45:
-    case 48:
-      return 6;
-    case 51:
-    case 53:
-      return 11;
-    case 55:
-    case 61:
-    case 63:
-      return 12;
-    case 56:
-    case 57:
-    case 66:
-    case 67:
-      return 18;
-    case 65:
-      return 15;
-    case 71:
-    case 73:
-    case 77:
-      return 24;
-    case 75:
-      return 27;
-    case 80:
-    case 81:
-      return d(10, 9);
-    case 82:
-      return d(14, 13);
-    case 85:
-      return d(23, 22);
-    case 86:
-      return d(26, 25);
-    case 95:
-    case 96:
-    case 99:
-      return d(29, 28);
-    default:
-      return 7;
+/* A Met Office significantWeatherCode as the condition the symbols and skies are drawn for. The
+   code already says day or night where it matters; the sky takes that from the sun instead. */
+function moCond(code) {
+  switch (Number(code)) {
+    case -1: case 11: return 'drizzle';
+    case 0: case 1: return 'clear';
+    case 2: case 3: return 'partly';
+    case 5: return 'mist';
+    case 6: return 'fog';
+    case 7: return 'cloudy';
+    case 8: return 'overcast';
+    case 9: case 10: return 'showers';
+    case 12: return 'lightRain';
+    case 13: case 14: return 'heavyShowers';
+    case 15: return 'heavyRain';
+    case 16: case 17: case 18: return 'sleet';
+    case 19: case 20: case 21: return 'hail';
+    case 22: case 23: return 'snowShowers';
+    case 24: return 'snow';
+    case 25: case 26: case 27: return 'heavySnow';
+    case 28: case 29: case 30: return 'thunder';
+    default: return 'cloudy';
   }
 }
+/* the sky's cloud cover for a condition (DataHub's site-specific series has no cloud amount) */
+const CLOUD = { clear: 5, mostlyClear: 25, partly: 50, cloudy: 82, overcast: 100, mist: 90, fog: 95, drizzle: 92, showers: 70, heavyShowers: 75, thunder: 85 };
 
-/**
- * Which of the four sky phases to draw, from the CITY's clock rather than the
- * reader's — `localTime` is that city's own wall clock, straight from the API.
- */
-function phaseFor(iconKey, isDay, localTime) {
-  if (/ Night$/.test(iconKey) || !isDay) return 'night';
-  const hour = Number(String(localTime || '').slice(11, 13));
-  if (!Number.isFinite(hour)) return 'day';
-  if (hour < 8) return 'sunrise';
-  if (hour >= 18) return 'sunset';
-  return 'day';
-}
+const clock = (tz) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const CLOCKS = Object.fromEntries(ALL_CITIES.map((c) => [c.id, clock(c.tz)]));
 
 /* ── live lightning ─────────────────────────────────────────────────────── */
 
@@ -256,135 +201,66 @@ function useLightning() {
   return { stats, live, lastStrikeAt };
 }
 
-/** Everything a card needs to draw itself, derived once per city. */
-function decorate(city) {
-  const isDay = city.current?.is_day === 1;
-  /* A card fed from DataHub already carries a Met Office significantWeatherCode
-     and must not be translated again — WMO 12 is "distant thunderstorm", Met
-     Office 12 is "light rain", so running the mapping twice does not fail
-     loudly, it just quietly shows the wrong weather. */
-  const moCode = !city.current ? 7
-    : city.current.metOfficeCode ? (city.current.weather_code ?? 7)
-      : wmoToMetOffice(city.current.weather_code, isDay);
-  const info = WEATHER_CODES[moCode] || { desc: 'Unknown', icon: 'Cloudy' };
-
-  /* THE MET OFFICE CODE SET HAS NO NIGHT CODE FOR CONTINUOUS PRECIPITATION.
-     Showers do — 10 is a day shower and 9 is the same shower at night — but
-     drizzle, rain, sleet, snow and hail are each a single code used around the
-     clock. Taken literally that put a midday sun on Cardiff at half past
-     seven in the evening, and on every other raining city after dark. The
-     icon set already carries the night variants; nothing was choosing them. */
-  const nightKey = `${info.icon} Night`;
-  const iconKey = !isDay && weatherIcons[nightKey] ? nightKey : info.icon;
-  const sky = SKY_CONFIGS[iconKey] || SKY_CONFIGS.Cloudy;
-  const phase = phaseFor(iconKey, isDay, city.localTime);
-  return {
-    sky,
-    iconKey,
-    phase,
-    gradient: sky?.[phase] || sky?.day,
-    Icon: weatherIcons[iconKey] || CloudyIcon,
-    desc: info.desc,
-  };
-}
+/* ── the cities ─────────────────────────────────────────────────────────── */
 
 export default function CityConditions() {
-  const [cities, setCities] = useState(() => ALL_CITIES.map((c) => ({ ...c, current: null })));
+  const [readings, setReadings] = useState({});   // id -> { current, cond, rate, cloud, valid } | { error }
   const [updatedAt, setUpdatedAt] = useState(null);
+  const [tick, setTick] = useState(() => Date.now());   // each city's clock and sun, once a minute
   const lightning = useLightning();
 
   const load = useCallback(async () => {
-    const params = new URLSearchParams({
-      latitude: ALL_CITIES.map((c) => c.lat).join(','),
-      longitude: ALL_CITIES.map((c) => c.lon).join(','),
-      current: CURRENT_FIELDS.join(','),
-      // The site formats wind itself (mph or km/h), and fmtWind takes mph.
-      wind_speed_unit: 'mph',
-      // Each city answers on its own clock, so the sky phase is right for
-      // Tokyo at midnight as well as London at noon.
-      timezone: 'auto',
-      models: 'ukmo_seamless',
-    });
-
-    try {
-      const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, {
-        signal: AbortSignal.timeout(20000),
+    const [ukv, world] = await Promise.all([
+      fetch(`/api/location/now?p=${UKV_CITIES.map((c) => `${c.lat},${c.lon}`).join('|')}`, { signal: AbortSignal.timeout(20000) })
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('/api/world-conditions', { signal: AbortSignal.timeout(30000) })
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
+    setReadings((prev) => {
+      const next = { ...prev };
+      UKV_CITIES.forEach((c, i) => {
+        const n = ukv?.places?.[i];
+        if (!n || n.t2 == null) { if (!next[c.id]?.current) next[c.id] = { error: true }; return; }
+        const cond = classify({ tcc: n.tcc, precipRate: n.radar ?? 0, span: 0 });
+        next[c.id] = {
+          current: { temperature_2m: n.t2, apparent_temperature: n.feels ?? n.t2, relative_humidity_2m: n.rh2, wind_speed_10m: n.wind10, wind_direction_10m: n.wdir10 },
+          cond, rate: n.radar ?? 0, cloud: n.tcc ?? CLOUD[cond] ?? 90, valid: n.valid,
+        };
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = await res.json();
-      // One coordinate returns an object, several return an array — in the
-      // order the coordinates were sent.
-      const points = Array.isArray(body) ? body : [body];
-      const next = ALL_CITIES.map((c, i) => ({
-        ...c,
-        current: points[i]?.current || null,
-        localTime: points[i]?.current?.time || null,
-      }));
-      setCities(next);
-      setUpdatedAt(new Date());
-
-      /* ── Met Office overlay, for the cities DataHub covers ────────────────
-         Open-Meteo answers all fifteen cities in one keyless request, which is
-         why it draws the row. DataHub site-specific is a call per point and
-         needs a key, so it runs server-side, only over the UK group, and only
-         when the allowance has been budgeted for it — see
-         server/ukCityConditions.js. When it is off, or a point comes back
-         empty, the Open-Meteo value already on screen stands.
-
-         Deliberately after setCities: the row paints on the first source and
-         the Met Office numbers replace them a moment later, rather than the
-         whole row waiting on the slower of the two. */
-      const ukIdx = ALL_CITIES.map((c, i) => [c, i]).filter(([c]) => c.group === 'uk');
-      if (ukIdx.length) {
-        try {
-          const mo = await fetch('/api/uk-city-conditions', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ points: ukIdx.map(([c]) => ({ lat: c.lat, lon: c.lon })) }),
-            signal: AbortSignal.timeout(15000),
-          }).then((r) => (r.ok ? r.json() : null));
-
-          if (mo?.enabled && Array.isArray(mo.results)) {
-            const merged = next.slice();
-            ukIdx.forEach(([, idx], n) => {
-              const cur = mo.results[n];
-              if (!cur) return;
-              merged[idx] = {
-                ...merged[idx],
-                /* Two fields stay Open-Meteo's. The local clock, because
-                   DataHub stamps UTC and the card uses this to pick the sky
-                   phase, which has to be the city's own time. And `is_day`,
-                   which DataHub does not publish at all — without carrying it
-                   over, every UK card would resolve to a night icon and a
-                   night sky at noon. Everything else is Met Office. */
-                current: {
-                  ...cur,
-                  time: merged[idx].current?.time ?? cur.time,
-                  is_day: merged[idx].current?.is_day,
-                },
-                localTime: merged[idx].localTime,
-              };
-            });
-            setCities(merged);
-          }
-        } catch {
-          // An overlay that does not arrive costs provenance, not the row.
-        }
+      for (const w of world?.cities || []) {
+        if (!w.ok) { if (!next[w.id]?.current) next[w.id] = { error: true }; continue; }
+        const cond = moCond(w.code);
+        next[w.id] = {
+          current: { temperature_2m: w.temp, apparent_temperature: w.feels ?? w.temp, relative_humidity_2m: w.rh, wind_speed_10m: w.wind, wind_direction_10m: w.wdir },
+          cond, rate: w.rate ?? 0, cloud: CLOUD[cond] ?? 90, valid: w.valid,
+        };
       }
-    } catch (err) {
-      // Keep whatever is already on screen; only a first failure shows the
-      // "Unavailable" state, so a dropped refresh does not blank the row.
-      setCities((prev) =>
-        prev.map((c) => (c.current ? c : { ...c, error: err.message || 'failed' }))
-      );
-    }
+      if (!world) for (const c of ALL_CITIES) if (c.src === 'mo' && !next[c.id]?.current) next[c.id] = { error: true };
+      return next;
+    });
+    if (ukv || world) setUpdatedAt(new Date());
   }, []);
 
   useEffect(() => {
     load();
     const id = setInterval(load, REFRESH_MS);
-    return () => clearInterval(id);
+    const t = setInterval(() => setTick(Date.now()), 60_000);
+    return () => { clearInterval(id); clearInterval(t); };
   }, [load]);
+
+  /* what each card shows: the reading, plus the city's own clock and sun right now */
+  const cities = useMemo(() => ALL_CITIES.map((c) => {
+    const r = readings[c.id] || {};
+    const sun = sunElevation(tick, c.lat, c.lon);
+    const localTime = CLOCKS[c.id].format(new Date(tick));
+    const day = sun > -0.833;
+    return {
+      ...c, ...r, sun, day, localTime,
+      morning: Number(localTime.slice(0, 2)) < 12,
+      desc: r.cond ? condLabel(r.cond, day) : null,
+      href: OPENS_FORECAST.has(c.group) ? `/LocationWeather?lat=${c.lat}&lon=${c.lon}&name=${encodeURIComponent(c.name)}` : null,
+    };
+  }), [readings, tick]);
 
   const byGroup = useMemo(() => {
     const map = {};
@@ -417,14 +293,7 @@ export default function CityConditions() {
             <BandHeading group={group} cities={list} />
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 md:gap-3.5">
               {list.map((city, i) => (
-                <CityCard
-                  key={city.name}
-                  city={city}
-                  index={i}
-                  bandId={group.id}
-                  isWarmest={warmest?.name === city.name}
-                  {...decorate(city)}
-                />
+                <CityCard key={city.id} city={city} index={i} bandId={group.id} isWarmest={warmest?.id === city.id} />
               ))}
             </div>
           </div>
@@ -432,8 +301,8 @@ export default function CityConditions() {
       })}
 
       {updatedAt && (
-        <p className="mt-4 text-[10.5px] text-slate-400 dark:text-slate-500">
-          Current conditions · Met Office (UKMO) via Open-Meteo · updated{' '}
+        <p className="mt-4 text-[10.5px]" style={{ color: 'var(--ink-3)' }}>
+          Right now · UK: Met Office UKV analysis · elsewhere: Met Office global model · updated{' '}
           {updatedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
           <span className="mx-1.5 opacity-40">·</span>
           lightning © Blitzortung, live

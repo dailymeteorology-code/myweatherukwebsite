@@ -21,8 +21,8 @@ import React, { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Zap, Wind, Droplets, ArrowUpRight } from 'lucide-react';
-import WeatherScene from '@/components/weather/WeatherScene';
-import WeatherParticles from '@/components/weather/WeatherParticles';
+import SkyBackdrop from '@/components/location/SkyBackdrop';
+import WxIcon from '@/components/location/WxIcon';
 import { useUnits } from '@/components/useUnits';
 
 const degToCompass = (deg) => {
@@ -216,10 +216,16 @@ export function BandHeading({ group, cities }) {
 
 /* ── city card ──────────────────────────────────────────────────────────── */
 
-export function CityCard({ city, index, bandId, isWarmest, sky, iconKey, phase, gradient, Icon, desc }) {
+/* The Location page's live sky inside the card (for this city's weather and the sun's height
+   there now) under its Apple-style symbol. UK and Irish cards open the full forecast. */
+export function CityCard({ city, index, bandId, isWarmest }) {
   const { fmtTemp, fmtWind } = useUnits();
-  const { name, current, localTime, error } = city;
+  const { name, current, localTime, error, cond, day, sun, morning, rate, cloud, desc, href } = city;
   const accent = BAND_ACCENT[bandId];
+  const Shell = href ? Link : 'div';
+  const shellProps = href
+    ? { to: href, 'aria-label': `${name}, ${desc || 'loading'}. Open the full forecast.` }
+    : { role: 'group', 'aria-label': `${name}${desc ? `, ${desc}` : ''}` };
 
   return (
     <motion.div
@@ -228,26 +234,17 @@ export function CityCard({ city, index, bandId, isWarmest, sky, iconKey, phase, 
       viewport={{ once: true, margin: '-40px' }}
       transition={{ duration: 0.4, delay: (index % 5) * 0.05 }}
     >
-      <Link
-        /* Straight to that city's full forecast — the page auto-fetches from
-           the `location` query param, so no second search is needed. */
-        to={`/LocationWeather?location=${encodeURIComponent(name)}`}
-        aria-label={`${name}, currently ${desc}. Open the full forecast.`}
-        className="group relative block h-52 rounded-3xl overflow-hidden
-                   ring-1 ring-white/10 hover:ring-white/25
-                   shadow-[0_6px_20px_rgba(2,6,23,0.28)] hover:shadow-[0_14px_36px_rgba(2,6,23,0.45)]
-                   transition-all duration-300 hover:-translate-y-1
-                   focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+      <Shell
+        {...shellProps}
+        className={`group relative block h-52 rounded-3xl overflow-hidden
+                   ring-1 ring-white/10 shadow-[0_6px_20px_rgba(2,6,23,0.28)]
+                   transition-all duration-300
+                   ${href ? 'hover:ring-white/25 hover:shadow-[0_14px_36px_rgba(2,6,23,0.45)] hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400' : ''}`}
       >
-        {/* The sky, drifting very slightly closer on hover. */}
-        <div
-          className="absolute inset-0 transition-transform duration-[900ms] ease-out group-hover:scale-[1.07]"
-          aria-hidden="true"
-        >
-          <WeatherScene name={iconKey} gradient={gradient} phase={phase} />
-          {sky?.particles && (
-            <WeatherParticles type={sky.particles} count={sky.count} speed={sky.speed} />
-          )}
+        {/* the sky, drifting very slightly closer on hover */}
+        <div className="absolute inset-0 transition-transform duration-[900ms] ease-out group-hover:scale-[1.06]" aria-hidden="true">
+          <SkyBackdrop contained cond={cond || 'cloudy'} sun={sun ?? 30} morning={morning}
+            wind={current?.wind_speed_10m ?? 8} wdir={current?.wind_direction_10m ?? 240} rate={rate ?? 0} cloud={cloud ?? 60} />
         </div>
 
         {/* Bottom-weighted scrim: the sky stays visible up top, the numbers get
@@ -257,43 +254,43 @@ export function CityCard({ city, index, bandId, isWarmest, sky, iconKey, phase, 
           aria-hidden="true"
           style={{
             background:
-              'linear-gradient(to top, rgba(2,6,23,0.92) 0%, rgba(2,6,23,0.72) 26%, rgba(2,6,23,0.22) 55%, rgba(2,6,23,0.02) 100%)',
+              'linear-gradient(to top, rgba(2,6,23,0.88) 0%, rgba(2,6,23,0.62) 28%, rgba(2,6,23,0.16) 56%, rgba(2,6,23,0) 100%)',
           }}
         />
 
         <div className="relative h-full p-3.5 flex flex-col justify-between text-white">
           <div className="flex items-start justify-between gap-2">
-            <span className="min-w-0 flex items-center gap-1.5">
-              <span className="text-[13.5px] font-extrabold tracking-tight drop-shadow truncate">
-                {name}
-              </span>
-              {isWarmest && (
-                <span
-                  className="flex-shrink-0 rounded-full px-1.5 py-[1px] text-[8.5px] font-extrabold uppercase tracking-wider"
-                  style={{ background: 'rgba(250,204,21,0.2)', color: '#fde047' }}
-                  title="Warmest in this group"
-                >
-                  Warmest
-                </span>
-              )}
-            </span>
-            <Icon className="w-9 h-9 drop-shadow-lg flex-shrink-0 -mt-0.5 -mr-0.5" />
-          </div>
-
-          {error || !current ? (
-            <span className="text-[11px] text-white/70">{error ? 'Unavailable' : 'Loading…'}</span>
-          ) : (
-            <div>
-              <div className="flex items-end justify-between gap-2">
-                <span className="text-[2.6rem] leading-[0.85] font-black tabular-nums tracking-tight drop-shadow-lg">
-                  {fmtTemp(current.temperature_2m)}
-                </span>
+            <span className="min-w-0 flex flex-col gap-1">
+              <span className="text-[13.5px] font-extrabold tracking-tight drop-shadow truncate">{name}</span>
+              <span className="flex items-center gap-1.5">
                 {localTime && (
-                  <span className="mb-0.5 rounded-full bg-white/10 px-2 py-[2px] text-[9.5px] font-semibold tabular-nums text-white/80 backdrop-blur-sm">
-                    {localTime.slice(11, 16)}
+                  <span className="rounded-full bg-black/25 px-1.5 py-[1px] text-[9.5px] font-semibold tabular-nums text-white/85 backdrop-blur-sm">
+                    {localTime}
                   </span>
                 )}
-              </div>
+                {isWarmest && (
+                  <span
+                    className="flex-shrink-0 rounded-full px-1.5 py-[1px] text-[8.5px] font-extrabold uppercase tracking-wider"
+                    style={{ background: 'rgba(250,204,21,0.22)', color: '#fde047' }}
+                    title="Warmest in this group"
+                  >
+                    Warmest
+                  </span>
+                )}
+              </span>
+            </span>
+            {cond && <WxIcon cond={cond} day={day} size={42} style={{ flex: 'none', marginTop: -4, marginRight: -4, filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.35))' }} />}
+          </div>
+
+          {error && !current ? (
+            <span className="text-[11px] text-white/70">Unavailable</span>
+          ) : !current ? (
+            <span className="text-[11px] text-white/70">Loading…</span>
+          ) : (
+            <div>
+              <span className="block text-[2.6rem] leading-[0.85] font-black tabular-nums tracking-tight drop-shadow-lg">
+                {fmtTemp(current.temperature_2m)}
+              </span>
 
               <div className="mt-1.5 text-[11.5px] font-semibold text-white/90 drop-shadow truncate">
                 {desc}
@@ -303,10 +300,12 @@ export function CityCard({ city, index, bandId, isWarmest, sky, iconKey, phase, 
                 <span className="rounded-md bg-white/10 px-1.5 py-[2px] backdrop-blur-sm">
                   Feels {fmtTemp(current.apparent_temperature)}
                 </span>
-                <span className="flex items-center gap-1">
-                  <Wind className="w-3 h-3 opacity-70" />
-                  {degToCompass(current.wind_direction_10m)} {fmtWind(current.wind_speed_10m)}
-                </span>
+                {current.wind_speed_10m != null && (
+                  <span className="flex items-center gap-1">
+                    <Wind className="w-3 h-3 opacity-70" />
+                    {degToCompass(current.wind_direction_10m)} {fmtWind(current.wind_speed_10m)}
+                  </span>
+                )}
                 {current.relative_humidity_2m != null && (
                   <span className="flex items-center gap-1">
                     <Droplets className="w-3 h-3 opacity-70" />
@@ -324,7 +323,7 @@ export function CityCard({ city, index, bandId, isWarmest, sky, iconKey, phase, 
           className="absolute inset-x-0 bottom-0 h-[3px] opacity-70 group-hover:opacity-100 transition-opacity"
           style={{ background: `linear-gradient(90deg, transparent, ${accent.dot}, transparent)` }}
         />
-      </Link>
+      </Shell>
     </motion.div>
   );
 }
