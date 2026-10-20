@@ -18,9 +18,9 @@ import { attachPlaceLabels, readPlaceLabelsOn, writePlaceLabelsOn } from '@/lib/
                   warnings live at once, and usually only one is being looked
                   for.
 
-   EMPTY DAYS SAY SO. A day with nothing active shows a blurred map behind a
-   plain statement rather than an empty map, which is indistinguishable from a
-   map that failed to load — the exact failure mode the old warning map had.
+   EMPTY DAYS SAY SO. A day with nothing active says so in a banner over a
+   sharp map of the UK, rather than leaving an empty map that is
+   indistinguishable from one that failed to load.
 
    LIQUID GLASS. The map fills the whole sheet and every control floats on it in
    glass (warnings-glass.css): the title bar, the filters, the day strip and the
@@ -28,6 +28,10 @@ import { attachPlaceLabels, readPlaceLabelsOn, writePlaceLabelsOn } from '@/lib/
    phone). Light or dark with the site.
    ════════════════════════════════════════════════════════════════════════════ */
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+/* Leaflet from the site's own bundle (the home page's radar already ships it), not the unpkg
+   CDN: a blocked or slow CDN left this map blank. */
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { useTheme } from '@/components/ThemeContext';
 import { createPortal } from 'react-dom';
 import { X, AlertTriangle, SlidersHorizontal, MapPin, Tag, ArrowRight, Check } from 'lucide-react';
@@ -43,6 +47,8 @@ const sevOf = (s) => SEV[s] || SEV.Yellow;
 const SEV_ORDER = ['Red', 'Amber', 'Yellow'];
 
 const UK_BOUNDS = [[49.85, -8.65], [61.0, 2.05]];
+/* framing clear of the floating glass: the title bar above, the day strip below */
+const FIT = { paddingTopLeft: [24, 86], paddingBottomRight: [24, 92] };
 const DAY_MS = 86400000;
 
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
@@ -88,6 +94,9 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
   const geomsRef = useRef([]);
   const insideWarned = useRef((lat, lon) => insideGeometries(geomsRef.current, lat, lon)).current;
   const fitKeyRef = useRef('');
+  const fitTargetRef = useRef(UK_BOUNDS);   // what the map is framed on: the warnings shown, or the UK
+  const movedRef = useRef(false);           // the reader has panned or zoomed: stop re-framing
+  const roRef = useRef(null);
 
   const days = useMemo(() => {
     const t = startOfDay(new Date());
@@ -155,8 +164,8 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
     /* draw() is declared before build() because build() calls it. Hoisting
        would have covered it, but relying on that hides the dependency. */
     const draw = () => {
-      const L = window.L, map = mapInst.current;
-      if (!L || !map) return;
+      const map = mapInst.current;
+      if (!map) return;
       layersRef.current.forEach(l => { try { map.removeLayer(l); } catch { /* gone */ } });
       layersRef.current = [];
 
@@ -203,62 +212,54 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
       const fitKey = `${dayIdx}|${visible.map(w => w.warningId || `${w.type}${w.validFrom}${w.severity}`).join(',')}`;
       if (fitKeyRef.current !== fitKey) {
         fitKeyRef.current = fitKey;
-        if (drawn.length) {
-          try { map.fitBounds(L.featureGroup(drawn).getBounds().pad(0.2)); } catch { /* noop */ }
-        } else {
-          try { map.fitBounds(UK_BOUNDS, { padding: [10, 10] }); } catch { /* noop */ }
-        }
+        try { fitTargetRef.current = drawn.length ? L.featureGroup(drawn).getBounds() : UK_BOUNDS; } catch { fitTargetRef.current = UK_BOUNDS; }
+        movedRef.current = false;
+        try { map.fitBounds(fitTargetRef.current, FIT); } catch { /* noop */ }
       }
     };
 
     const build = () => {
-      const L = window.L;
-      if (!L || !mapRef.current || cancelled) return;
+      const el = mapRef.current;
+      if (!el || cancelled) return;
       if (!mapInst.current) {
-        const map = L.map(mapRef.current, {
+        const map = L.map(el, {
           center: [54.6, -3.2], zoom: 5, zoomControl: false, attributionControl: false,
         });
         L.control.zoom({ position: 'bottomleft' }).addTo(map);
         L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_${isDark ? 'Dark' : 'Light'}_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
-          { maxZoom: 12, subdomains: 'abcd' }).addTo(map);
-        map.fitBounds(UK_BOUNDS, { padding: [10, 10] });
+          { maxZoom: 12 }).addTo(map);
+        map.fitBounds(UK_BOUNDS, FIT);
         mapInst.current = map;
         labelsRef.current = attachPlaceLabels(L, map, { dark: isDark, visible: labelsOn, extraTiers: 1, filter: insideWarned });
-        // Leaflet measures the container on creation; inside a modal that is
-        // still animating open it reads zero and renders a grey box.
-        setTimeout(() => { try { map.invalidateSize(); } catch { /* gone */ } }, 260);
+        /* The sheet is still opening when the map is made, so its first size is not its last: it
+           was framed on a box of the wrong shape and the UK landed off-centre, half under the
+           message and the glass bars. Re-measure whenever the box changes size, and keep the
+           framing until the reader moves the map themselves. */
+        const mine = () => { movedRef.current = true; };
+        ['mousedown', 'touchstart', 'wheel'].forEach((ev) => el.addEventListener(ev, mine, { passive: true }));
+        const ro = new ResizeObserver(() => {
+          map.invalidateSize({ animate: false });
+          if (!movedRef.current) { try { map.fitBounds(fitTargetRef.current, FIT); } catch { /* noop */ } }
+        });
+        ro.observe(el);
+        roRef.current = () => { ro.disconnect(); ['mousedown', 'touchstart', 'wheel'].forEach((ev) => el.removeEventListener(ev, mine)); };
       }
       draw();
     };
 
-    if (window.L) build();
-    else {
-      if (!document.getElementById('leaflet-css-wm')) {
-        const l = document.createElement('link');
-        l.id = 'leaflet-css-wm'; l.rel = 'stylesheet';
-        l.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-        document.head.appendChild(l);
-      }
-      let s = document.getElementById('leaflet-js-wm');
-      if (!s) {
-        s = document.createElement('script');
-        s.id = 'leaflet-js-wm';
-        s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-        document.head.appendChild(s);
-      }
-      s.addEventListener('load', () => { if (!cancelled) build(); });
-      const poll = setInterval(() => { if (window.L) { clearInterval(poll); if (!cancelled) build(); } }, 90);
-      return () => { cancelled = true; clearInterval(poll); };
-    }
+    build();
     return () => { cancelled = true; };
   }, [isOpen, visible, isDark, namesOn, dayIdx]);
 
   // Tear the map down on close so reopening builds against a live container.
   useEffect(() => {
     if (isOpen) return;
+    roRef.current?.();
+    roRef.current = null;
     if (mapInst.current) { try { mapInst.current.remove(); } catch { /* noop */ } mapInst.current = null; labelsRef.current = null; }
     layersRef.current = [];
     fitKeyRef.current = '';
+    fitTargetRef.current = UK_BOUNDS;
     setSelected(null);
   }, [isOpen]);
 
@@ -287,7 +288,7 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
     <div className={`wg wg-mapmodal${isDark ? '' : ' is-light'}`} role="dialog" aria-modal="true" aria-label="UK weather warnings map" onClick={onClose}>
       <div className="wg-sheet wg-glass" onClick={(e) => e.stopPropagation()}>
         {/* the map fills the whole sheet; everything else floats on it in glass */}
-        <div ref={mapRef} className={`wg-map${visible.length === 0 ? ' is-empty' : ''}`} />
+        <div ref={mapRef} className="wg-map" />
 
         <div className="wg-top wg-glass">
           <div className="wg-top-title">
@@ -335,17 +336,20 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
           </div>
         )}
 
-        {/* An empty day says so in words, over a blurred map, rather than leaving an empty map
-            that looks exactly like one that failed to load. */}
+        {/* An empty day says so in a slim banner under the title, and the map of the UK stays sharp
+            and in full view below it. It used to be blurred behind a card over Britain, which read
+            as a map that had not loaded. */}
         {visible.length === 0 && (
           <div className="wg-empty">
             <div className="wg-empty-card wg-glass is-strong">
               <span className="wg-empty-mark"><Check /></span>
-              <b>{forDay.length === 0 ? 'No warnings in force' : 'Nothing matches those filters'}</b>
-              <span>
-                {forDay.length === 0
-                  ? `The Met Office has no weather warnings for ${dayWord}.`
-                  : `${forDay.length} warning${forDay.length === 1 ? '' : 's'} on this day ${forDay.length === 1 ? 'is' : 'are'} hidden by the filters.`}
+              <span className="wg-empty-text">
+                <b>{forDay.length === 0 ? 'No warnings in force' : 'Nothing matches those filters'}</b>
+                <span>
+                  {forDay.length === 0
+                    ? `The Met Office has no weather warnings for ${dayWord}.`
+                    : `${forDay.length} warning${forDay.length === 1 ? '' : 's'} on this day ${forDay.length === 1 ? 'is' : 'are'} hidden by the filters.`}
+                </span>
               </span>
               {forDay.length === 0 && nextWarnedDay != null && (
                 <button type="button" className="wg-go" onClick={() => setDayIdx(nextWarnedDay)}

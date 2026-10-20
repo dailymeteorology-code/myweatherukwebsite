@@ -91,9 +91,6 @@
 
 /* ── the warning map ─────────────────────────────────────────────────────────────────────── */
 .wg-map, .wg .wg-map.leaflet-container { position: absolute; inset: 0; background: var(--wg-map-bg); }
-/* an empty day blurs the map itself, not its controls */
-.wg-map .leaflet-map-pane { transition: filter 0.3s; }
-.wg-map.is-empty .leaflet-map-pane { filter: blur(5px) saturate(0.6); }
 /* Leaflet stacks its controls at 1000; here they sit under the floating glass */
 .wg .leaflet-top, .wg .leaflet-bottom { z-index: 790; }
 .wg-top {
@@ -135,12 +132,19 @@
   .wg-days { left: 8px; right: 8px; transform: none; max-width: none; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
   .wg-day { flex: 1; min-width: 0; padding: 6px 2px; }
 }
-.wg-empty { position: absolute; inset: 0; z-index: 790; display: grid; place-items: center; padding: 24px; pointer-events: none; }
-.wg-empty-card { pointer-events: auto; max-width: 340px; padding: 22px 24px; border-radius: 24px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.wg-empty-card b { font-size: 1.02rem; }
-.wg-empty-card span { font-size: 0.82rem; line-height: 1.45; color: var(--wg-ink2); }
-.wg-empty-mark { width: 46px; height: 46px; border-radius: 15px; display: grid; place-items: center; background: rgba(52, 199, 89, 0.16); color: #34c759; }
-.wg-go { margin-top: 6px; display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 99px; border: 0; cursor: pointer; font: inherit; font-size: 0.82rem; font-weight: 750; box-shadow: 0 8px 22px -8px rgba(0, 0, 0, 0.5); }
+/* the empty-day banner: under the title bar, clear of the UK */
+.wg-empty { position: absolute; top: 74px; left: 50%; transform: translateX(-50%); z-index: 790; width: min(560px, calc(100% - 24px)); pointer-events: none; }
+.wg-empty-card { pointer-events: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding: 10px 10px 10px 12px; border-radius: 18px; }
+.wg-empty-text { flex: 1; min-width: 170px; display: flex; flex-direction: column; gap: 1px; }
+.wg-empty-text b { font-size: 0.92rem; font-weight: 700; }
+.wg-empty-text span { font-size: 0.78rem; line-height: 1.4; color: var(--wg-ink2); }
+.wg-empty-mark { width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; flex: none; background: rgba(52, 199, 89, 0.16); color: #34c759; }
+.wg-empty-mark svg { width: 18px; height: 18px; }
+.wg-go { display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 99px; border: 0; cursor: pointer; font: inherit; font-size: 0.78rem; font-weight: 750; white-space: nowrap; box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.5); }
+@media (max-width: 640px) {
+  .wg-empty { top: calc(64px + env(safe-area-inset-top, 0px)); left: 8px; right: 8px; width: auto; transform: none; }
+  .wg-go { width: 100%; justify-content: center; }
+}
 .wg-side {
   position: absolute; top: 72px; right: 12px; bottom: 12px; width: min(430px, calc(100% - 24px)); z-index: 820;
   border-radius: 24px; overflow: hidden; display: flex; flex-direction: column;

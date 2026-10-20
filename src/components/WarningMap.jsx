@@ -1,4 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
+/* Leaflet from the site's own bundle, not the unpkg CDN (a blocked or slow CDN left these blank) */
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { useTheme } from '@/components/ThemeContext';
 import { loadWarningAreas, matchAreas } from '@/lib/ukWarningAreas';
 
@@ -121,8 +124,7 @@ export default function WarningMap({ warning, height = 220 }) {
     let cancelled = false;
 
     const build = () => {
-      const L = window.L;
-      if (!L || !mapRef.current || cancelled) return;
+      if (!mapRef.current || cancelled) return;
       if (mapInst.current) { try { mapInst.current.remove(); } catch(_){} mapInst.current = null; }
 
       const map = L.map(mapRef.current, {
@@ -131,7 +133,7 @@ export default function WarningMap({ warning, height = 220 }) {
         scrollWheelZoom: false, dragging: false,
         doubleClickZoom: false, boxZoom: false, keyboard: false,
       });
-      L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_${isDark ? 'Dark' : 'Light'}_Gray_Base/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 10, subdomains: 'abcd' }).addTo(map);
+      L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_${isDark ? 'Dark' : 'Light'}_Gray_Base/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 10 }).addTo(map);
 
       const polys = [];
 
@@ -201,21 +203,7 @@ export default function WarningMap({ warning, height = 220 }) {
       });
     };
 
-    if (window.L) { build(); }
-    else {
-      if (!document.getElementById('leaflet-css-wc2')) {
-        const l = document.createElement('link'); l.id = 'leaflet-css-wc2'; l.rel = 'stylesheet';
-        l.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'; document.head.appendChild(l);
-      }
-      if (!document.getElementById('leaflet-js-wc2')) {
-        const s = document.createElement('script'); s.id = 'leaflet-js-wc2';
-        s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-        s.onload = () => { if (!cancelled) build(); }; document.head.appendChild(s);
-      } else {
-        const poll = setInterval(() => { if (window.L) { clearInterval(poll); if (!cancelled) build(); } }, 80);
-        return () => { cancelled = true; clearInterval(poll); };
-      }
-    }
+    build();
     return () => {
       cancelled = true;
       if (mapInst.current) { try { mapInst.current.remove(); } catch(_){} mapInst.current = null; labelsRef.current = null; }
