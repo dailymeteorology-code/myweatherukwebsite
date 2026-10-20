@@ -76,9 +76,23 @@ function ensureJob(model, run, v, prefetch = false, first = null) {
     return;
   }
   const st = readJson(path.join(frameDir(model, run, v), 'status.json'));
-  if (st?.state === 'complete') return;
+  if (st?.state === 'complete' && !grown(model, run, st)) return;
   queue.push({ key, args: [model, runIso(run), v, ...(first != null ? [String(first)] : [])], prefetch });
   pump();
+}
+
+/* has the run published more steps since this variable's frames were made? (a run reaches AWS
+   step by step, so the first job of a fresh run is partial; it is topped up as steps arrive) */
+let catCache = { at: 0, cat: null };
+function catalogNow() {
+  if (Date.now() - catCache.at > 30000) catCache = { at: Date.now(), cat: readJson(path.join(DATA, 'catalog.json')) };
+  return catCache.cat;
+}
+function grown(model, run, st) {
+  const cat = catalogNow();
+  const m = [...(cat?.models || []), ...(cat?.ensembles || [])].find((x) => x.id === model);
+  const r = m?.runs?.find((x) => x.run.replace(/[-:]/g, '').slice(0, 13) + 'Z' === run);
+  return !!r && Array.isArray(st.steps) && r.steps.length > st.steps.length;
 }
 
 /* the run the page opens on: the newest run that reaches most of the way (UKV runs every
@@ -92,6 +106,16 @@ export function defaultRun(m) {
 const PREFETCH = ['precip_rate', 'precip_total', 't2', 'gust10', 'mslp', 'refc', 'cape_mu'];
 /* Met Office Global files are whole-globe downloads (~7 MB a field a step): warm only the top three */
 const PREFETCH_LIMIT = { mo_global: 3 };
+
+let liveBusy = false;
+function refreshLive() {
+  if (liveBusy) return;
+  liveBusy = true;
+  python(['mdata.live', 'update'], (code, err) => {
+    liveBusy = false;
+    if (code) console.warn(`[modeldata] live update failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
+  });
+}
 
 function refreshCatalog() {
   if (catalogBusy) return;
@@ -113,7 +137,9 @@ export function mountModelData(app) {
   fs.mkdirSync(DATA, { recursive: true });
   if (!fs.existsSync(path.join(DATA, 'static', 'sat_day.jpg'))) python(['mdata.static'], (c, e) => c && console.warn(`[modeldata] static build failed: ${e.slice(-300)}`));
   refreshCatalog();
-  setInterval(refreshCatalog, 10 * 60 * 1000).unref();
+  setInterval(refreshCatalog, 3 * 60 * 1000).unref();      // new runs and new steps within ~3 min of reaching AWS
+  refreshLive();
+  setInterval(refreshLive, 2 * 60 * 1000).unref();         // satellite, radar, lightning
 
   app.get('/api/modeldata/catalog', (req, res) => {
     const f = path.join(DATA, 'catalog.json');
@@ -138,13 +164,38 @@ export function mountModelData(app) {
     const st = readJson(path.join(frameDir(model, run, v), 'status.json'));
     const key = `${model}/${run}/${v}`;
     const first = /^\d{1,3}$/.test(String(req.query.first || '')) ? Number(req.query.first) : null;
-    if (!st || (st.state !== 'complete' && !running.has(key))) ensureJob(model, run, v, false, first);
+    if (!st || (!running.has(key) && (st.state !== 'complete' || grown(model, run, st)))) ensureJob(model, run, v, false, first);
     else if (first != null && st.state !== 'complete' && ENS_MODELS.has(model)) {
       /* a running ensemble job builds around where the viewer is now */
       fs.promises.writeFile(path.join(frameDir(model, run, v), 'focus.json'), JSON.stringify({ step: first })).catch(() => {});
     }
     res.set('Cache-Control', 'no-cache');
     res.json(st ? { ...st, queued: queue.some((q) => q.key === key) } : { state: 'queued', done: [], missing: [] });
+  });
+
+  /* live layers: satellite images, radar frames, lightning */
+  const LIVE_PRODUCTS = new Set(['sat_ir', 'sat_vis', 'sat_geo', 'sat_true', 'sat_fog', 'sat_wv', 'sat_airmass', 'sat_conv', 'sat_cth', 'radar']);
+  app.get('/api/modeldata/live/catalog', (req, res) => {
+    const f = path.join(DATA, 'live', 'catalog.json');
+    if (!fs.existsSync(f)) return res.status(503).json({ error: 'live layers are starting' });
+    res.set('Cache-Control', 'no-cache');
+    res.sendFile(f);
+  });
+  app.get('/api/modeldata/live/lightning', (req, res) => {
+    const f = path.join(DATA, 'live', 'lightning.json');
+    if (!fs.existsSync(f)) return res.json({ strikes: [] });
+    res.set('Cache-Control', 'no-cache');
+    res.sendFile(f);
+  });
+  app.get('/api/modeldata/live/:product/:time', (req, res) => {
+    const { product, time } = req.params;
+    const m = /^(\d{8}T\d{4})\.(jpg|png|bin)$/.exec(time);
+    if (!LIVE_PRODUCTS.has(product) || !m) return res.status(400).end();
+    const f = path.join(DATA, 'live', product, time);
+    if (!fs.existsSync(f)) return res.status(404).end();
+    res.set('Cache-Control', 'public, max-age=86400, immutable');
+    if (m[2] === 'bin') { res.set({ 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip' }); return fs.createReadStream(f).pipe(res); }
+    res.sendFile(f);
   });
 
   app.get('/api/modeldata/frames/:model/:run/:v/:step', (req, res) => {
