@@ -207,7 +207,9 @@ function observedAt(lat, lon) {
 }
 
 /* ── radar ─────────────────────────────────────────────────────────────────── */
-const HALF_KM = 200;                                                         // the crop reaches 200 km each way
+const HALF_KM = 200;                                                         // a place's crop reaches 200 km each way
+/* the home page's UK-wide radar: the UK and Ireland, at 2 km (1 km radar coarsened) */
+const UK_VIEW = { lat: 54.8, lon: -4.0, halfKm: 700, km: 2 };
 function radarIndex() {
   const radar = readJson(path.join(LIVE, 'radar', 'index.json'))?.times || [];
   const past = radar.slice(-12);                                             // the last three hours, every 15 min
@@ -225,20 +227,37 @@ function radarIndex() {
   }
   return { past, future };
 }
-function crop(file, lat, lon) {
+/* A square of a frame round a point, optionally coarsened: each `step` x `step` block keeps its
+   strongest value (so a small heavy shower survives), and 255 (no data) only where all of it is. */
+function crop(file, lat, lon, halfKm = HALF_KM, step = 1) {
   const f = frameAt(file);
   if (!f) return null;
-  const half = Math.round((HALF_KM * 1000) / f.dx);
+  const half = Math.round((halfKm * 1000) / f.dx);
   const [row, col] = cellOf(lon, lat, f.dx);
   const r0 = Math.max(0, row - half), c0 = Math.max(0, col - half);
   const r1 = Math.min(f.ny, row + half + 1), c1 = Math.min(f.nx, col + half + 1);
   if (r1 <= r0 || c1 <= c0) return null;
-  const nx = c1 - c0, ny = r1 - r0;
+  const nx = Math.floor((c1 - c0) / step), ny = Math.floor((r1 - r0) / step);
   const body = Buffer.alloc(nx * ny);
-  for (let r = 0; r < ny; r++) f.q.copy(body, r * nx, (r0 + r) * f.nx + c0, (r0 + r) * f.nx + c1);
+  if (step === 1) {
+    for (let r = 0; r < ny; r++) f.q.copy(body, r * nx, (r0 + r) * f.nx + c0, (r0 + r) * f.nx + c0 + nx);
+  } else {
+    for (let r = 0; r < ny; r++) {
+      for (let c = 0; c < nx; c++) {
+        let best = -1;
+        for (let dr = 0; dr < step; dr++) {
+          const o = (r0 + r * step + dr) * f.nx + c0 + c * step;
+          for (let dc = 0; dc < step; dc++) { const v = f.q[o + dc]; if (v !== 255 && v > best) best = v; }
+        }
+        body[r * nx + c] = best < 0 ? 255 : best;
+      }
+    }
+  }
+  const dx = f.dx * step;
   const head = Buffer.from(JSON.stringify({
-    valid: f.head.valid, lo: f.head.lo, hi: f.head.hi, scale: f.head.scale || 'lin', dx: f.dx, nx, ny,
-    x0: EDGE_X + (c0 + 0.5) * f.dx, y0: EDGE_Y - (r0 + 0.5) * f.dx,       // centre of the crop's first (north-west) cell
+    valid: f.head.valid, lo: f.head.lo, hi: f.head.hi, scale: f.head.scale || 'lin', dx, nx, ny,
+    /* centre of the crop's first (north-west) cell, a coarsened cell being the middle of its block */
+    x0: EDGE_X + c0 * f.dx + dx / 2, y0: EDGE_Y - r0 * f.dx - dx / 2,
   }));
   const len = Buffer.alloc(4);
   len.writeUInt32LE(head.length);
@@ -305,13 +324,16 @@ export function mountLocationWeather(app) {
 
   app.get('/api/location/radar/frame', (req, res) => {
     const lat = Number(req.query.lat), lon = Number(req.query.lon);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).end();
+    if (req.query.scope !== 'uk' && (!Number.isFinite(lat) || !Number.isFinite(lon))) return res.status(400).end();
     let file;
     if (req.query.src === 'radar' && /^\d{8}T\d{4}$/.test(String(req.query.t))) file = path.join(LIVE, 'radar', `${req.query.t}.bin`);
     else if (req.query.src === 'ukv' && RUN_RE.test(String(req.query.run)) && /^\d{1,3}$/.test(String(req.query.h))) {
       file = path.join(FRAMES, 'ukv', String(req.query.run), 'precip_rate', `${req.query.h}.bin`);
     } else return res.status(400).end();
-    const body = crop(file, lat, lon);
+    const uk = req.query.scope === 'uk';
+    const body = uk
+      ? crop(file, UK_VIEW.lat, UK_VIEW.lon, UK_VIEW.halfKm, Math.max(1, Math.round((UK_VIEW.km * 1000) / (frameAt(file)?.dx || 2000))))
+      : crop(file, lat, lon);
     if (!body) return res.status(404).end();
     res.set({ 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip', 'Cache-Control': 'public, max-age=86400, immutable' });
     res.end(body);

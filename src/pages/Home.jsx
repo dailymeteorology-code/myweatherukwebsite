@@ -20,7 +20,7 @@ import SeverityFilter from '@/components/SeverityFilter';
 import WarningMap from '@/components/WarningMap';
 import WarningsMapModal from '@/components/WarningsMapModal';
 import CountdownDisplay from '@/components/CountdownDisplay';
-import WindyRadarEmbed from '@/components/WindyRadarEmbed';
+import LocationRadar from '@/components/location/LocationRadar';
 import CookieConsent from '@/components/CookieConsent';
 import CityConditions from '@/components/home/CityConditions';
 import WarningsRefreshBadge from '@/components/home/WarningsRefreshBadge';
@@ -2002,11 +2002,12 @@ export default function Home() {
 
         {/* ══ RADAR ═════════════════════════════════════════════════════════════ */}
         <Section id="liveRadar">
-          <SectionHeader eyebrow="Observed" title="Rain radar" />
-          {/* The radar brings its own furniture and its own dark ground, so the
-              pane gives it an edge and a shadow and otherwise stays out of it. */}
+          <SectionHeader eyebrow="Met Office" title="Rain radar" />
+          {/* The Met Office 1 km radar for the last three hours, then the UKV's rain for the next
+              few, in the Model Data page's colours, light or dark with the page (it brings its own
+              ground and controls, so the pane only gives it an edge and a shadow). */}
           <Pane pad={false}>
-            <WindyRadarEmbed />
+            <LocationRadar scope="uk" light={!isDark} />
           </Pane>
         </Section>
 

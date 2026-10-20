@@ -187,7 +187,7 @@ export function ConditionChips({ graphic, max = 0, className = '' }) {
 }
 
 /* white or near-black text, whichever reads on a colour (#rgb, #rrggbb or rgb()/rgba()) */
-function inkOn(colour) {
+export function inkOn(colour) {
   let r = 0, g = 0, b = 0;
   const s = String(colour || '').trim();
   const hex = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(s);

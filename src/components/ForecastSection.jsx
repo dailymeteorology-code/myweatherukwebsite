@@ -6,7 +6,7 @@ import {
   CloudSun, X, Upload, Loader2,
   ChevronRight, MapPin, Check, Plus, Archive,
   AlertTriangle, Zap, Wind, Droplets, Snowflake, Flame,
-  Bold, Italic, Palette, Edit2, Flag, RefreshCw, ChevronDown, Maximize2, ExternalLink
+  Bold, Italic, Palette, Edit2, Flag, RefreshCw, ChevronDown, Maximize2
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -16,6 +16,8 @@ import ForecastFurtherInfo from './ForecastFurtherInfo';
 import ThunderstormPanel from './ThunderstormPanel';
 import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GRAPHIC_LEVEL_STYLE, GRAPHIC_LEVEL_LABEL } from '@/components/graphics/GraphicMeta';
 import { sized, sizedSet } from '@/lib/sizedImage';
+import { cleanHtml, plainText } from '@/lib/cleanHtml';
+import GraphicViewer from '@/components/graphics/GraphicViewer';
 
 
 /* ─────────────────────────────────────────────
@@ -305,13 +307,13 @@ function ToolbarBtn({ onClick, children, title }) {
 }
 
 /* ─────────────────────────────────────────────
-   RICH TEXT RENDERER
+   RICH TEXT RENDERER: the description cleaned of whatever page it was pasted from (lib/cleanHtml)
 ───────────────────────────────────────────── */
 function RichText({ html, style = {} }) {
   if (!html) return null;
   return (
     <div
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={{ __html: cleanHtml(html) }}
       style={{ lineHeight: 1.7, display: 'inline', ...style }}
     />
   );
@@ -381,18 +383,6 @@ const FG_CSS = `
 .fg-empty { display: flex; align-items: center; gap: 14px; padding: 20px 22px; color: var(--ink-3); }
 .fg-empty b { display: block; font-size: 1rem; color: var(--ink-1); }
 .fg-empty span { display: block; margin-top: 2px; font-size: .88rem; color: var(--ink-2); }
-.fg-viewer { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; background: rgba(3,6,12,.94); -webkit-backdrop-filter: blur(24px) saturate(140%); backdrop-filter: blur(24px) saturate(140%); animation: fg-fade .2s ease both; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, Roboto, sans-serif; }
-@keyframes fg-fade { from { opacity: 0; } to { opacity: 1; } }
-.fg-viewer-bar { display: flex; align-items: center; gap: 10px; padding: 12px 14px; color: #fff; }
-.fg-viewer-bar span { flex: 1; min-width: 0; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fg-viewer .fg-btn { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.22); }
-/* flex, not grid: a grid cell's height is not definite, so the image's max-height could not fit it to the screen */
-.fg-viewer-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 12px; overflow: hidden; }
-.fg-viewer-stage img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 12px; cursor: zoom-in; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
-.fg-viewer-stage.is-zoom { display: block; overflow: auto; -webkit-overflow-scrolling: touch; }
-.fg-viewer-stage.is-zoom img { max-width: none; max-height: none; width: min(5120px, 300%); cursor: zoom-out; border-radius: 0; }
-.fg-viewer-hint { margin: 0; padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px)); text-align: center; font-size: .78rem; color: rgba(255,255,255,.6); }
-@media (prefers-reduced-motion: reduce) { .fg-viewer { animation: none; } }
 `;
 
 const condsOf = (f) => (f.weather_conditions?.length ? f.weather_conditions : f.weather_condition ? [f.weather_condition] : []);
@@ -425,7 +415,7 @@ function FeaturedGraphic({ forecast, isOwner, onEdit, onArchive, onFurtherInfo, 
   const expiringSoon = forecast.expires_at && !isPast(new Date(forecast.expires_at))
     && new Date(forecast.expires_at) - Date.now() < 3 * 60 * 60 * 1000;
   const subtypes = forecast.condition_subtypes || [];
-  const longText = (forecast.description || '').replace(/<[^>]+>/g, '').length > 380;
+  const longText = plainText(forecast.description).length > 380;
   return (
     <motion.article className="lg-pane fg-feature" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}>
       <div className="fg-media">
@@ -502,33 +492,6 @@ function MiniGraphic({ forecast, active, onSelect }) {
         {forecast.created_date && <span className="fg-mini-time">Issued {formatBST(forecast.created_date)}</span>}
       </span>
     </button>
-  );
-}
-
-/* the graphic full screen: fitted at first, the full-resolution upload once you tap to zoom */
-function GraphicViewer({ forecast, onClose }) {
-  const [zoom, setZoom] = useState(false);
-  useEffect(() => {
-    const key = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', key);
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.removeEventListener('keydown', key); document.body.style.overflow = overflow; };
-  }, [onClose]);
-  return createPortal(
-    <div className="fg-viewer" role="dialog" aria-modal="true" aria-label={forecast.title || 'Forecast graphic'} onClick={onClose}>
-      <div className="fg-viewer-bar" onClick={(e) => e.stopPropagation()}>
-        <span>{forecast.title || 'Forecast graphic'}</span>
-        <a className="fg-btn" href={forecast.image_url} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} />Original</a>
-        <button type="button" className="fg-icon" onClick={onClose} aria-label="Close"><X size={16} /></button>
-      </div>
-      <div className={`fg-viewer-stage${zoom ? ' is-zoom' : ''}`}>
-        <img src={zoom ? forecast.image_url : sized(forecast.image_url, 2400)} alt={forecast.title || 'Forecast graphic'}
-          onClick={(e) => { e.stopPropagation(); setZoom((z) => !z); }} />
-      </div>
-      <p className="fg-viewer-hint">{zoom ? 'Tap the graphic to fit it to the screen' : 'Tap the graphic to see it at full resolution'}</p>
-    </div>,
-    document.body,
   );
 }
 
@@ -1486,7 +1449,7 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
         />
       )}
 
-      {viewing && <GraphicViewer forecast={viewing} onClose={() => setViewing(null)} />}
+      {viewing && <GraphicViewer graphic={viewing} onClose={() => setViewing(null)} />}
     </section>
   );
 }

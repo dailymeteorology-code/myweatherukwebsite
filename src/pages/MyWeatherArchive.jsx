@@ -4,10 +4,15 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import {
-  Archive, ArrowLeft, Search, Image as ImageIcon, Loader2, MapPin, Clock, X,
+  Archive, Search, Image as ImageIcon, Loader2, MapPin, X,
   Edit2, Upload, Plus, Check, Bold, Italic, Palette, RotateCcw, ChevronDown,
+  ChevronLeft, ChevronRight, Maximize2, ArrowUpDown,
 } from 'lucide-react';
-import { Input } from '@/components/ui/input';
+import { useTheme } from '@/components/ThemeContext';
+import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GRAPHIC_LEVEL_STYLE, inkOn } from '@/components/graphics/GraphicMeta';
+import GraphicViewer from '@/components/graphics/GraphicViewer';
+import { sized, sizedSet } from '@/lib/sizedImage';
+import { cleanHtml, plainText } from '@/lib/cleanHtml';
 import { format, isValid } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 
@@ -21,27 +26,12 @@ function formatBST(iso, fmt = 'dd MMM yyyy, HH:mm') {
   return format(zoned, fmt);
 }
 
-/* ─────────────────────────────────────────────
-   RICH TEXT RENDERER — sanitized
-───────────────────────────────────────────── */
-function sanitizeHtml(html) {
-  if (!html || typeof html !== 'string') return '';
-  let out = html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
-    .replace(/<object[\s\S]*?<\/object>/gi, '')
-    .replace(/<embed[^>]*>/gi, '')
-    .replace(/<form[\s\S]*?<\/form>/gi, '');
-  out = out.replace(/(<[^>]+?)\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '$1');
-  out = out.replace(/(<[^>]+?(?:href|src|action)\s*=\s*)["']?\s*javascript:[^"'\s>]*/gi, '$1"#"');
-  return out;
-}
-
+/* a description, cleaned of whatever page it was pasted from (lib/cleanHtml) */
 function RichText({ html, className = '' }) {
   if (!html) return null;
   return (
     <div
-      dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }}
+      dangerouslySetInnerHTML={{ __html: cleanHtml(html) }}
       className={className}
       style={{ lineHeight: 1.7 }}
     />
@@ -63,24 +53,9 @@ function normalizeList(v) {
   return [];
 }
 
-const CONDITIONS = ['All', 'Snow', 'Ice', 'Thunderstorms', 'Rain', 'Wind', 'Heat', 'Daily Risks'];
 const CONDITION_COLOR = {
   Snow: '#38bdf8', Ice: '#22d3ee', Thunderstorms: '#a78bfa', Rain: '#60a5fa',
   Wind: '#2dd4bf', Heat: '#f97316', 'Daily Risks': '#fbbf24',
-};
-
-/* New 7-level risk colours
-   Very Low (dark green) · Low (light green) · Marginal (yellow)
-   · Slight (orange/amber) · Moderate (red) · High (purple)
-   · Severe (black, outlined) */
-const IMPACT_COLOR = {
-  'Very Low': { color: '#86efac', bg: 'rgba(21,128,61,0.14)',  border: 'rgba(21,128,61,0.45)' },
-  Low:        { color: '#bbf7d0', bg: 'rgba(74,222,128,0.12)', border: 'rgba(74,222,128,0.35)' },
-  Marginal:   { color: '#fde047', bg: 'rgba(250,204,21,0.12)', border: 'rgba(250,204,21,0.35)' },
-  Slight:     { color: '#fdba74', bg: 'rgba(249,115,22,0.12)', border: 'rgba(249,115,22,0.35)' },
-  Moderate:   { color: '#fca5a5', bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.4)' },
-  High:       { color: '#d8b4fe', bg: 'rgba(168,85,247,0.14)', border: 'rgba(168,85,247,0.4)' },
-  Severe:     { color: '#f8fafc', bg: 'rgba(10,10,12,0.85)',   border: '#000000' },
 };
 
 /* ─────────────────────────────────────────────
@@ -627,13 +602,291 @@ function ArchiveEditModal({ graphic, onClose, onSave, uploading, onUpload }) {
   );
 }
 
+/* ─────────────────────────────────────────────
+   THE ARCHIVE PAGE — liquid glass
+   Every MyWeatherUK graphic that has ended, month by month, shown whole (they are portrait
+   graphics; the old 16:9 crop cut their titles off). A frosted toolbar filters by search,
+   condition, year and risk level; a glass panel opens a graphic beside everything about it,
+   with ← → through the list; the shared viewer shows it full screen. The glass tokens match the
+   home page's, in a light and a dark set that follow the site's theme.
+───────────────────────────────────────────── */
+const GA_CSS = `
+.ga-page { --glass-fill: rgba(255,255,255,0.055); --glass-fill-strong: rgba(255,255,255,0.09); --glass-hairline: rgba(255,255,255,0.11);
+  --glass-highlight: rgba(255,255,255,0.15); --glass-shadow: 0 1px 2px rgba(0,0,0,.3), 0 16px 40px -12px rgba(0,0,0,.6);
+  --ink-1: #f2f6fc; --ink-2: #9fb0c6; --ink-3: rgba(159,176,198,.62); --page-bg: #070c16; --accent: #56b6f5;
+  --amb-a: rgba(14,165,233,.28); --amb-b: rgba(129,140,248,.22); --amb-c: rgba(45,212,191,.14);
+  position: relative; min-height: 100vh; background: var(--page-bg); color: var(--ink-1);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Segoe UI Variable Display', 'Segoe UI', Inter, Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased; }
+.ga-page.ga-light { --glass-fill: rgba(255,255,255,0.66); --glass-fill-strong: rgba(255,255,255,0.86); --glass-hairline: rgba(15,23,42,0.08);
+  --glass-highlight: rgba(255,255,255,0.92); --glass-shadow: 0 1px 2px rgba(15,23,42,.05), 0 18px 40px -14px rgba(15,23,42,.2);
+  --ink-1: #0b1220; --ink-2: #4a5b70; --ink-3: rgba(74,91,112,.68); --page-bg: #eef3fb; --accent: #1d74c4;
+  --amb-a: rgba(14,165,233,.22); --amb-b: rgba(129,140,248,.18); --amb-c: rgba(45,212,191,.12); }
+.ga-ambient { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.ga-ambient i { position: absolute; display: block; border-radius: 50%; }
+.ga-ambient i:nth-child(1) { width: 70vw; height: 70vw; top: -24vw; left: -20vw; background: radial-gradient(circle, var(--amb-a), transparent 62%); }
+.ga-ambient i:nth-child(2) { width: 62vw; height: 62vw; top: 14vh; right: -22vw; background: radial-gradient(circle, var(--amb-b), transparent 62%); }
+.ga-ambient i:nth-child(3) { width: 60vw; height: 60vw; bottom: -22vw; left: 12vw; background: radial-gradient(circle, var(--amb-c), transparent 62%); }
+.ga-wrap { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; padding: 0 16px 64px; }
+.ga-glass { position: relative; border-radius: 24px; background: var(--glass-fill); border: 1px solid var(--glass-hairline);
+  -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%); box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight); }
+.ga-hero { padding: clamp(22px, 5vw, 48px) 0 clamp(16px, 3vw, 26px); }
+.ga-back { display: inline-flex; align-items: center; gap: 4px; margin-bottom: 18px; padding: 6px 12px 6px 8px; border-radius: 99px; font-size: .84rem; font-weight: 600; color: var(--ink-2); text-decoration: none; background: var(--glass-fill); border: 1px solid var(--glass-hairline); }
+.ga-back:hover { color: var(--ink-1); background: var(--glass-fill-strong); }
+.ga-eyebrow { margin: 0 0 6px; font-size: .7rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); }
+.ga-title { margin: 0; font-size: clamp(2rem, 6vw, 3.4rem); font-weight: 700; letter-spacing: -.035em; line-height: 1.05; }
+.ga-sub { margin: 10px 0 0; max-width: 60ch; font-size: clamp(.95rem, 1.6vw, 1.05rem); line-height: 1.55; color: var(--ink-2); }
+.ga-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 22px; }
+.ga-stat { padding: 14px 16px; min-width: 0; }
+.ga-stat span { display: block; font-size: .66rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.ga-stat b { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 4px; overflow-wrap: anywhere; font-size: clamp(1rem, 4.2vw, 1.35rem); font-weight: 650; letter-spacing: -.02em; }
+.ga-stat small { font-size: .82rem; font-weight: 500; color: var(--ink-2); }
+.ga-toolbar { position: sticky; top: 64px; z-index: 30; display: flex; flex-direction: column; gap: 10px; padding: 12px; margin-bottom: 8px; border-radius: 22px; }
+@media (max-width: 767px) { .ga-toolbar { top: 56px; } }
+.ga-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.ga-search { position: relative; flex: 1; min-width: 0; }
+.ga-search svg { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--ink-3); pointer-events: none; }
+.ga-search input { width: 100%; height: 42px; padding: 0 36px 0 38px; border-radius: 14px; font: inherit; font-size: 16px; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); outline: none; }
+.ga-search input::placeholder { color: var(--ink-3); }
+.ga-search input:focus { border-color: var(--accent); }
+.ga-search button { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: 99px; cursor: pointer; color: var(--ink-2); background: var(--glass-fill); }
+.ga-select { height: 42px; padding: 0 30px 0 12px; border-radius: 14px; font: inherit; font-size: .88rem; font-weight: 600; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); cursor: pointer; appearance: none; -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px; background-repeat: no-repeat; }
+.ga-select option { color: #0b1220; }
+.ga-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 92%, transparent); mask-image: linear-gradient(90deg, #000 92%, transparent); padding-right: 24px; }
+.ga-chips::-webkit-scrollbar { display: none; }
+.ga-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 99px; cursor: pointer; font: inherit; font-size: .82rem; font-weight: 600; white-space: nowrap; color: var(--ink-2); background: var(--glass-fill); border: 1px solid var(--glass-hairline); }
+.ga-chip:hover { color: var(--ink-1); }
+.ga-chip[aria-pressed='true'] { color: var(--page-bg); background: var(--ink-1); border-color: transparent; }
+.ga-chip i { width: 8px; height: 8px; border-radius: 99px; flex-shrink: 0; }
+.ga-chip em { font-style: normal; font-size: .72rem; opacity: .65; }
+.ga-month { position: relative; display: flex; align-items: baseline; gap: 10px; margin: 30px 2px 14px; }
+.ga-month h2 { margin: 0; font-size: clamp(1.15rem, 2.4vw, 1.45rem); font-weight: 650; letter-spacing: -.02em; }
+.ga-month span { font-size: .82rem; color: var(--ink-3); }
+.ga-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 16px; }
+.ga-card { overflow: hidden; transition: transform .26s cubic-bezier(.22,.61,.36,1), box-shadow .26s ease; }
+@media (hover: hover) { .ga-card:hover { transform: translateY(-3px); box-shadow: var(--glass-shadow), 0 26px 52px -18px rgba(0,0,0,.45), inset 0 1px 0 var(--glass-highlight); } }
+.ga-card-hit { display: block; width: 100%; padding: 8px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.ga-thumb { display: block; aspect-ratio: 4 / 5; overflow: hidden; border-radius: 18px; background: rgba(0,0,0,.2); }
+.ga-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; transition: transform .5s ease; }
+@media (hover: hover) { .ga-card:hover .ga-thumb img { transform: scale(1.03); } }
+.ga-thumb-none { display: grid; place-items: center; height: 100%; color: var(--ink-3); }
+.ga-card-body { display: flex; flex-direction: column; gap: 7px; padding: 12px 6px 6px; }
+.ga-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.ga-tag { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 99px; font-size: .72rem; font-weight: 650; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); white-space: nowrap; }
+.ga-tag i { width: 7px; height: 7px; border-radius: 99px; }
+.ga-level { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 99px; font-size: .72rem; font-weight: 700; white-space: nowrap; }
+.ga-card-title { font-size: .98rem; font-weight: 650; line-height: 1.3; letter-spacing: -.01em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ga-card-meta { font-size: .78rem; color: var(--ink-3); }
+.ga-edit { position: absolute; top: 16px; right: 16px; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; cursor: pointer; color: #fff; background: rgba(10,16,28,.5); border: 1px solid rgba(255,255,255,.22); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); opacity: 0; transition: opacity .15s; }
+.ga-card:hover .ga-edit, .ga-edit:focus-visible { opacity: 1; }
+@media (hover: none) { .ga-edit { opacity: 1; } }
+.ga-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 56px 20px; margin-top: 18px; text-align: center; color: var(--ink-2); }
+.ga-empty b { color: var(--ink-1); font-size: 1.05rem; }
+.ga-modal { position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(2,6,14,.55); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); animation: ga-fade .2s ease both; }
+@keyframes ga-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ga-rise { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+.ga-detail { width: min(1080px, 100%); max-height: calc(100vh - 48px); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); overflow: hidden; animation: ga-rise .28s cubic-bezier(.22,1,.36,1) both;
+  --glass-fill: var(--glass-fill-strong); }
+.ga-page:not(.ga-light) .ga-detail { background: rgba(16,24,38,.82); }
+.ga-page.ga-light .ga-detail { background: rgba(255,255,255,.9); }
+.ga-detail-media { display: flex; align-items: center; justify-content: center; padding: 16px; min-height: 0; }
+.ga-detail-media button { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; max-height: 100%; }
+.ga-detail-media img { display: block; max-width: 100%; max-height: calc(100vh - 80px); object-fit: contain; border-radius: 18px; box-shadow: 0 18px 40px -16px rgba(0,0,0,.55); }
+.ga-detail-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 20px 22px 22px 6px; overflow-y: auto; }
+.ga-detail-top { display: flex; align-items: center; gap: 8px; }
+.ga-detail-top .ga-tags { flex: 1; }
+.ga-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: 12px; cursor: pointer; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); }
+.ga-icon:disabled { opacity: .35; cursor: default; }
+.ga-detail h2 { margin: 0; font-size: clamp(1.3rem, 2.6vw, 1.75rem); font-weight: 700; letter-spacing: -.025em; line-height: 1.15; text-wrap: balance; }
+.ga-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.ga-tile { padding: 10px 12px; border-radius: 14px; background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); }
+.ga-tile span { display: block; font-size: .64rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.ga-tile b { display: block; margin-top: 2px; font-size: .92rem; font-weight: 650; }
+.ga-label { margin: 0 0 -6px; font-size: .66rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.ga-desc { font-size: .95rem; line-height: 1.68; color: var(--ink-2); }
+.ga-locs { display: grid; gap: 6px; }
+.ga-loc { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-radius: 14px; font-size: .9rem; background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); }
+.ga-loc svg { color: var(--ink-3); flex-shrink: 0; }
+.ga-loc b { font-weight: 600; margin-right: auto; }
+.ga-note { padding: 10px 12px; border-radius: 14px; font-size: .88rem; line-height: 1.5; background: rgba(56,189,248,.12); border: 1px solid var(--glass-hairline); }
+.ga-note b { display: block; margin-bottom: 2px; font-size: .64rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.ga-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ga-btn { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 14px; border-radius: 12px; cursor: pointer; font: inherit; font-size: .84rem; font-weight: 600; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); }
+.ga-btn.is-primary { color: var(--page-bg); background: var(--ink-1); border-color: transparent; }
+@media (max-width: 860px) {
+  .ga-modal { padding: 0; align-items: flex-end; }
+  .ga-detail { grid-template-columns: minmax(0, 1fr); max-height: 94vh; border-radius: 24px 24px 0 0; overflow-y: auto; }
+  .ga-detail-media { padding: 12px 12px 0; }
+  .ga-detail-media img { max-height: 58vh; }
+  .ga-detail-body { padding: 16px 16px calc(20px + env(safe-area-inset-bottom, 0px)); overflow: visible; }
+}
+/* phones: two graphics a row, like a photo library, so a month fits on a screen */
+@media (max-width: 560px) {
+  .ga-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .ga-card-hit { padding: 6px; }
+  .ga-thumb { border-radius: 14px; }
+  .ga-card-body { gap: 5px; padding: 9px 4px 4px; }
+  .ga-card .ga-tag, .ga-card .ga-level { padding: 2px 7px; font-size: .64rem; }
+  .ga-card-title { font-size: .84rem; }
+  .ga-card-meta { font-size: .7rem; }
+  .ga-edit { top: 12px; right: 12px; width: 30px; height: 30px; border-radius: 10px; }
+  .ga-stat { padding: 12px 14px; }
+}
+@media (prefers-reduced-motion: reduce) { .ga-modal, .ga-detail { animation: none; } .ga-card, .ga-thumb img { transition: none; } }
+`;
+
+const MEASURE = {
+  snow_accumulation_cm: ['Snow accumulation', 'cm'], ice_temp_c: ['Ice temperature', '°C'], storm_rain_mm_hr: ['Storm rain rate', 'mm/h'],
+  rain_total_mm: ['Rain total', 'mm'], wind_gust_mph: ['Wind gusts', 'mph'], temp_range_c: ['Temperature range', '°C'], visibility_m: ['Visibility', 'm'],
+};
+const condsOf = (g) => { const l = normalizeList(g.weather_conditions); return l.length ? l : g.weather_condition ? [g.weather_condition] : []; };
+const levelsOf = (g) => { const l = normalizeList(g.impact_levels); return l.length ? l : g.impact_level ? [g.impact_level] : []; };
+const levelRank = (l) => GRAPHIC_LEVEL_NAMES.indexOf(l);
+const topLevel = (g) => levelsOf(g).reduce((a, b) => (levelRank(b) > levelRank(a) ? b : a), null);
+const issuedOf = (g) => g.created_date || g.expires_at;
+const levelColour = (l) => GRAPHIC_LEVEL_STYLE[l]?.dot || RISK_CFG[l]?.dot || '#94a3b8';
+
+function Level({ level }) {
+  const c = levelColour(level);
+  return <span className="ga-level" style={{ background: c, color: inkOn(c) }}>{level}</span>;
+}
+function Tag({ dot, children }) {
+  return <span className="ga-tag">{dot && <i style={{ background: dot }} />}{children}</span>;
+}
+
+function ArchiveCard({ g, index, onOpen, isOwner, onEdit }) {
+  const top = topLevel(g);
+  return (
+    <motion.article className="ga-glass ga-card" initial={{ opacity: 0, y: 14 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-40px' }}
+      transition={{ delay: Math.min(index * 0.04, 0.24), duration: 0.4, ease: [0.22, 1, 0.36, 1] }}>
+      <button type="button" className="ga-card-hit" onClick={onOpen}>
+        <span className="ga-thumb">
+          {g.image_url
+            ? <img src={sized(g.image_url, 800)} srcSet={sizedSet(g.image_url, [480, 800, 1200])} sizes="(min-width: 1100px) 280px, (min-width: 600px) 45vw, 92vw" alt={g.title || 'Forecast graphic'} loading="lazy" decoding="async" />
+            : <span className="ga-thumb-none"><ImageIcon size={30} /></span>}
+        </span>
+        <span className="ga-card-body">
+          <span className="ga-tags">
+            {condsOf(g).slice(0, 2).map((c) => <Tag key={c} dot={CONDITION_COLOR[c]}>{c}</Tag>)}
+            {top && <Level level={top} />}
+            {g.is_initial_forecast && <Tag dot="#38bdf8">Initial</Tag>}
+          </span>
+          <span className="ga-card-title">{g.title || 'Forecast'}</span>
+          <span className="ga-card-meta">Issued {formatBST(issuedOf(g), 'd MMM yyyy, HH:mm')}</span>
+        </span>
+      </button>
+      {isOwner && <button type="button" className="ga-edit" onClick={() => onEdit(g)} aria-label="Edit graphic" title="Edit graphic"><Edit2 size={14} /></button>}
+    </motion.article>
+  );
+}
+
+function ArchiveDetail({ g, onClose, onPrev, onNext, onView, isOwner, onEdit }) {
+  useEffect(() => {
+    const key = (e) => {
+      if (document.querySelector('.gv')) return;                       // the full-screen viewer has the keys
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowLeft' && onPrev) onPrev();
+      else if (e.key === 'ArrowRight' && onNext) onNext();
+    };
+    document.addEventListener('keydown', key);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', key); document.body.style.overflow = overflow; };
+  }, [onClose, onPrev, onNext]);
+
+  let ranges = g.condition_ranges;
+  if (typeof ranges === 'string') { try { ranges = JSON.parse(ranges); } catch { ranges = null; } }
+  const measures = ranges && typeof ranges === 'object' ? Object.entries(ranges).filter(([, v]) => v != null && v !== '') : [];
+  const subs = normalizeList(g.condition_subtypes);
+  const locs = normalizeList(g.locations_impacted).map((l) => (typeof l === 'string' ? { name: l } : l));
+  return (
+    <div className="ga-modal" onClick={onClose} role="dialog" aria-modal="true" aria-label={g.title || 'Forecast graphic'}>
+      <div className="ga-glass ga-detail" onClick={(e) => e.stopPropagation()}>
+        <div className="ga-detail-media">
+          {g.image_url
+            ? <button type="button" onClick={() => onView(g)} aria-label="View full size"><img src={sized(g.image_url, 1200)} alt={g.title || 'Forecast graphic'} /></button>
+            : <ImageIcon size={40} />}
+        </div>
+        <div className="ga-detail-body">
+          <div className="ga-detail-top">
+            <span className="ga-tags">
+              {condsOf(g).map((c) => <Tag key={c} dot={CONDITION_COLOR[c]}>{c}</Tag>)}
+              {levelsOf(g).map((l) => <Level key={l} level={l} />)}
+              {g.is_initial_forecast && <Tag dot="#38bdf8">Initial forecast</Tag>}
+              {g.forecast_update_label && !g.is_initial_forecast && <Tag dot="#f59e0b">{g.forecast_update_label}</Tag>}
+            </span>
+            <button type="button" className="ga-icon" disabled={!onPrev} onClick={onPrev} aria-label="Previous graphic"><ChevronLeft size={17} /></button>
+            <button type="button" className="ga-icon" disabled={!onNext} onClick={onNext} aria-label="Next graphic"><ChevronRight size={17} /></button>
+            <button type="button" className="ga-icon" onClick={onClose} aria-label="Close"><X size={17} /></button>
+          </div>
+
+          <h2>{g.title || 'Forecast'}</h2>
+
+          <div className="ga-tiles">
+            {g.in_force_from && <div className="ga-tile"><span>In force</span><b>{formatBST(g.in_force_from, 'd MMM, HH:mm')}</b></div>}
+            <div className="ga-tile"><span>Issued</span><b>{formatBST(issuedOf(g), 'd MMM yyyy, HH:mm')}</b></div>
+            {g.expires_at && <div className="ga-tile"><span>Ended</span><b>{formatBST(g.expires_at, 'd MMM yyyy, HH:mm')}</b></div>}
+          </div>
+
+          {measures.length > 0 && (
+            <>
+              <p className="ga-label">Measurements</p>
+              <div className="ga-tiles">
+                {measures.map(([k, v]) => {
+                  const [label, unit] = MEASURE[k] || [k.replace(/_/g, ' '), ''];
+                  return <div key={k} className="ga-tile"><span>{label}</span><b>{v}{unit ? ` ${unit}` : ''}</b></div>;
+                })}
+              </div>
+            </>
+          )}
+
+          <ThunderstormRisks data={g.thunderstorm_data} />
+
+          {subs.length > 0 && <div className="ga-tags">{subs.map((s) => <Tag key={s}>{s}</Tag>)}</div>}
+
+          {g.description && <div className="ga-desc"><RichText html={g.description} /></div>}
+
+          {locs.length > 0 && (
+            <>
+              <p className="ga-label">Places affected</p>
+              <div className="ga-locs">
+                {locs.map((l, i) => (
+                  <div key={`${l.name}${i}`} className="ga-loc">
+                    <MapPin size={14} /><b>{l.name}</b>
+                    {l.overall_risk && <Level level={l.overall_risk} />}
+                    {!l.overall_risk && l.lowest_risk && <Level level={l.lowest_risk} />}
+                    {!l.overall_risk && l.highest_risk && l.highest_risk !== l.lowest_risk && <Level level={l.highest_risk} />}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {g.update_reason && <div className="ga-note"><b>What changed</b>{g.update_reason}</div>}
+
+          <div className="ga-actions">
+            {g.image_url && <button type="button" className="ga-btn is-primary" onClick={() => onView(g)}><Maximize2 size={14} />View full size</button>}
+            {isOwner && <button type="button" className="ga-btn" onClick={() => onEdit(g)}><Edit2 size={14} />Edit</button>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function MyWeatherArchive() {
   const [search, setSearch] = useState('');
-  const [activeCondition, setActiveCondition] = useState('All');
-  const [selected, setSelected] = useState(null);
+  const [cond, setCond] = useState('All');
+  const [year, setYear] = useState('All');
+  const [risk, setRisk] = useState('Any');
+  const [order, setOrder] = useState('newest');
+  const [openId, setOpenId] = useState(null);
+  const [viewing, setViewing] = useState(null);
   const [editing, setEditing] = useState(null);
   const [uploading, setUploading] = useState(false);
   const queryClient = useQueryClient();
+  const { isDark } = useTheme();
 
   // Admin / owner detection via base44 auth
   const { data: currentUser } = useQuery({
@@ -695,7 +948,7 @@ export default function MyWeatherArchive() {
     }, {
       onSuccess: () => {
         setEditing(null);
-        setSelected(null);
+        setOpenId(null);
       },
     });
   };
@@ -703,394 +956,152 @@ export default function MyWeatherArchive() {
   const { data: allGraphics = [], isLoading } = useQuery({
     queryKey: ['graphics-archive'],
     queryFn: () => base44.entities.WeatherGraphic.list('-created_date'),
-    initialData: [],
-  });
+  });   // no initialData: an empty list would read as "nothing has ended yet" while it loads
 
+  /* ended graphics: archived by hand, or past their expiry */
   const archived = useMemo(() => {
     const now = Date.now();
-    return allGraphics.filter(g =>
-      g.is_archived ||
-      (g.expires_at && new Date(g.expires_at).getTime() < now)
-    );
+    return allGraphics.filter((g) => g.is_archived || (g.expires_at && new Date(g.expires_at).getTime() < now));
   }, [allGraphics]);
 
+  const years = useMemo(() => [...new Set(archived.map((g) => new Date(issuedOf(g)).getFullYear()).filter(Boolean))].sort((a, b) => b - a), [archived]);
+  const condCounts = useMemo(() => {
+    const c = {};
+    for (const g of archived) for (const x of condsOf(g)) c[x] = (c[x] || 0) + 1;
+    return c;
+  }, [archived]);
+  const levelsPresent = useMemo(() => GRAPHIC_LEVEL_NAMES.filter((l) => archived.some((g) => levelsOf(g).includes(l))), [archived]);
+
   const filtered = useMemo(() => {
-    return archived.filter(g => {
-      if (activeCondition !== 'All' && g.weather_condition !== activeCondition) return false;
-      if (search && !(`${g.title} ${g.description || ''}`.toLowerCase().includes(search.toLowerCase()))) return false;
+    const q = search.trim().toLowerCase();
+    const list = archived.filter((g) => {
+      if (cond !== 'All' && !condsOf(g).includes(cond)) return false;
+      if (year !== 'All' && new Date(issuedOf(g)).getFullYear() !== Number(year)) return false;
+      if (risk !== 'Any' && !levelsOf(g).includes(risk)) return false;
+      if (q) {
+        const text = `${g.title || ''} ${plainText(g.description)} ${normalizeList(g.locations_impacted).map((l) => (typeof l === 'string' ? l : l.name)).join(' ')}`.toLowerCase();
+        if (!text.includes(q)) return false;
+      }
       return true;
     });
-  }, [archived, activeCondition, search]);
+    return list.sort((a, b) => (order === 'newest' ? -1 : 1) * (new Date(issuedOf(a)) - new Date(issuedOf(b))));
+  }, [archived, cond, year, risk, search, order]);
 
   const grouped = useMemo(() => {
     const map = new Map();
     for (const g of filtered) {
-      const date = g.expires_at || g.created_date;
-      const k = format(new Date(date), 'MMMM yyyy');
+      const k = formatBST(issuedOf(g), 'MMMM yyyy') || 'Undated';
       if (!map.has(k)) map.set(k, []);
       map.get(k).push(g);
     }
     return [...map.entries()];
   }, [filtered]);
 
-  const counts = useMemo(() => {
-    const c = { All: archived.length };
-    for (const cond of CONDITIONS.slice(1)) {
-      c[cond] = archived.filter(g => g.weather_condition === cond).length;
-    }
-    return c;
-  }, [archived]);
+  /* the summary tiles */
+  const topCond = Object.entries(condCounts).sort((a, b) => b[1] - a[1])[0];
+  const highest = archived.reduce((m, g) => { const t = topLevel(g); return t && levelRank(t) > levelRank(m) ? t : m; }, null);
+  const firstIssued = archived.reduce((m, g) => { const t = new Date(issuedOf(g)).getTime(); return t && (!m || t < m) ? t : m; }, null);
+  const filtersOn = cond !== 'All' || year !== 'All' || risk !== 'Any' || search.trim();
+
+  const openIdx = filtered.findIndex((g) => g.id === openId);
+  const open = openIdx >= 0 ? filtered[openIdx] : null;
+  const viewIdx = viewing ? filtered.findIndex((g) => g.id === viewing.id) : -1;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 text-slate-200">
-      {/* Header */}
-      <div className="sticky top-0 z-40 backdrop-blur-xl bg-slate-900/80 border-b border-white/[0.06]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center gap-3 flex-wrap">
-          <Link to="/" className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-sm text-slate-300 transition-colors">
-            <ArrowLeft className="w-4 h-4" /> Back to Home
-          </Link>
-          <div className="flex items-center gap-2.5 ml-1">
-            <div className="w-9 h-9 rounded-xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center">
-              <Archive className="w-4.5 h-4.5 text-sky-400" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-white leading-tight">MyWeather Archive</h1>
-              <p className="text-[11px] text-slate-500">{archived.length} archived graphic{archived.length !== 1 ? 's' : ''}</p>
-            </div>
+    <div className={`ga-page${isDark ? '' : ' ga-light'}`}>
+      <style>{GA_CSS}</style>
+      <div className="ga-ambient" aria-hidden="true"><i /><i /><i /></div>
+      <div className="ga-wrap">
+        <header className="ga-hero">
+          <Link to="/" className="ga-back"><ChevronLeft size={16} />Home</Link>
+          <p className="ga-eyebrow">MyWeatherUK Graphics</p>
+          <h1 className="ga-title">Archive</h1>
+          <p className="ga-sub">Every forecast graphic we have issued, kept once it has ended, so you can look back at what was forecast and when.</p>
+          {!isLoading && <div className="ga-stats">
+            <div className="ga-glass ga-stat"><span>Graphics</span><b>{archived.length}</b></div>
+            {topCond && <div className="ga-glass ga-stat"><span>Most often</span><b><i style={{ width: 9, height: 9, borderRadius: 9, background: CONDITION_COLOR[topCond[0]] }} />{topCond[0]} <small>×{topCond[1]}</small></b></div>}
+            {highest && <div className="ga-glass ga-stat"><span>Highest risk issued</span><b><Level level={highest} /></b></div>}
+            {firstIssued && <div className="ga-glass ga-stat"><span>Since</span><b>{formatBST(new Date(firstIssued).toISOString(), 'MMMM yyyy')}</b></div>}
+          </div>}
+        </header>
+
+        <div className="ga-glass ga-toolbar">
+          <div className="ga-row">
+            <label className="ga-search">
+              <Search />
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search titles, forecasts and places" aria-label="Search the archive" />
+              {search && <button type="button" onClick={() => setSearch('')} aria-label="Clear search"><X size={13} /></button>}
+            </label>
+            <button type="button" className="ga-chip" onClick={() => setOrder((o) => (o === 'newest' ? 'oldest' : 'newest'))} aria-label="Change the order" title="Change the order">
+              <ArrowUpDown size={14} />{order === 'newest' ? 'Newest' : 'Oldest'}
+            </button>
           </div>
-          <div className="flex-1 min-w-[200px] max-w-md ml-auto relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-            <Input
-              placeholder="Search archive…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="pl-9 h-9 bg-white/5 border-white/10 text-slate-200 placeholder:text-slate-600"
-            />
+          <div className="ga-row">
+            <div className="ga-chips" role="group" aria-label="Condition" style={{ flex: 1 }}>
+              <button type="button" className="ga-chip" aria-pressed={cond === 'All'} onClick={() => setCond('All')}>All <em>{archived.length}</em></button>
+              {EDIT_CONDITIONS.filter((c) => condCounts[c]).map((c) => (
+                <button key={c} type="button" className="ga-chip" aria-pressed={cond === c} onClick={() => setCond(c)}>
+                  <i style={{ background: CONDITION_COLOR[c] }} />{c} <em>{condCounts[c]}</em>
+                </button>
+              ))}
+            </div>
+            {years.length > 1 && (
+              <select className="ga-select" value={year} onChange={(e) => setYear(e.target.value)} aria-label="Year">
+                <option value="All">All years</option>
+                {years.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            )}
+            {levelsPresent.length > 1 && (
+              <select className="ga-select" value={risk} onChange={(e) => setRisk(e.target.value)} aria-label="Risk level">
+                <option value="Any">Any risk</option>
+                {levelsPresent.map((l) => <option key={l} value={l}>{l}</option>)}
+              </select>
+            )}
           </div>
         </div>
 
-        {/* Condition filter chips */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-3 flex gap-1.5 flex-wrap">
-          {CONDITIONS.map(c => {
-            const active = activeCondition === c;
-            const color = c === 'All' ? '#94a3b8' : CONDITION_COLOR[c];
-            return (
-              <button
-                key={c}
-                onClick={() => setActiveCondition(c)}
-                className="px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all"
-                style={{
-                  background: active ? `${color}22` : 'rgba(255,255,255,0.03)',
-                  borderColor: active ? `${color}66` : 'rgba(255,255,255,0.08)',
-                  color: active ? color : '#94a3b8',
-                }}
-              >
-                {c}
-                <span className="ml-1.5 opacity-60">{counts[c] || 0}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
-        {isLoading ? (
-          <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-sky-500" /></div>
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-slate-600">
-            <ImageIcon className="w-12 h-12 mb-3 opacity-30" />
-            <p className="text-sm">No archived graphics match your filters.</p>
+        {isLoading && !archived.length ? (
+          <div className="ga-glass ga-empty"><Loader2 className="animate-spin" size={26} /><span>Loading the archive…</span></div>
+        ) : !filtered.length ? (
+          <div className="ga-glass ga-empty">
+            <Archive size={28} />
+            <b>{archived.length ? 'Nothing matches those filters' : 'No graphics have ended yet'}</b>
+            <span>{archived.length ? 'Try another search, or clear the filters.' : 'Graphics move here once they expire or are archived.'}</span>
+            {filtersOn && <button type="button" className="ga-btn" onClick={() => { setSearch(''); setCond('All'); setYear('All'); setRisk('Any'); }}><RotateCcw size={14} />Clear filters</button>}
           </div>
         ) : (
-          <div className="space-y-10">
-            {grouped.map(([month, items]) => (
-              <section key={month}>
-                <h2 className="text-xs font-bold tracking-[0.2em] uppercase text-slate-500 mb-3">{month}</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {items.map((g, i) => {
-                    const color = CONDITION_COLOR[g.weather_condition] || '#64748b';
-                    const impact = IMPACT_COLOR[g.impact_level];
-                    return (
-                      <div key={g.id} className="relative group/card">
-                      {isOwner && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setEditing(g); }}
-                          title="Edit graphic"
-                          className="absolute top-2 right-2 z-10 w-8 h-8 rounded-lg bg-black/60 hover:bg-violet-500/40 border border-white/15 backdrop-blur text-slate-300 hover:text-violet-200 flex items-center justify-center opacity-0 group-hover/card:opacity-100 transition-all"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      <motion.button
-                        onClick={() => setSelected(g)}
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: i * 0.03 }}
-                        className="group relative w-full rounded-2xl overflow-hidden bg-white/[0.03] border border-white/[0.07] hover:border-white/[0.15] transition-all text-left"
-                      >
-                        {g.image_url ? (
-                          <div className="aspect-video overflow-hidden bg-black/30">
-                            <img src={g.image_url} alt={g.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                          </div>
-                        ) : (
-                          <div className="aspect-video flex items-center justify-center" style={{ background: `${color}10`, borderBottom: `1px solid ${color}22` }}>
-                            <Archive className="w-8 h-8" style={{ color }} />
-                          </div>
-                        )}
-                        <div className="p-3.5">
-                          <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
-                            {g.is_initial_forecast && (
-                              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-sky-500/15 border border-sky-500/30 text-sky-300">
-                                <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 16 16"><path d="M4 1s.5 3-1 4.5C1.5 7 1 8 1 8s2-.5 3 0 3 3 3 3 .5-2.5 2-3.5 3-.5 3-.5-1.5-1-2-3-1-4-1-4-1.5 2-3 2.5S4 1 4 1z"/></svg>
-                                Initial Forecast
-                              </span>
-                            )}
-                            {g.weather_condition && (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold border" style={{ color, borderColor: `${color}55`, background: `${color}12` }}>
-                                {g.weather_condition}
-                              </span>
-                            )}
-                            {g.impact_level && impact && (
-                              <span
-                                className="px-2 py-0.5 rounded-full text-[10px] font-bold border"
-                                style={{
-                                  color: impact.color,
-                                  borderColor: impact.border,
-                                  background: impact.bg,
-                                  boxShadow: g.impact_level === 'Severe' ? '0 0 0 1px #000' : 'none',
-                                }}
-                              >
-                                {g.impact_level}
-                              </span>
-                            )}
-                          </div>
-                          <h3 className="text-sm font-bold text-white leading-snug line-clamp-2">{g.title}</h3>
-                          {(() => {
-                            const subs = normalizeList(g.condition_subtypes);
-                            return subs.length > 0 ? (
-                              <div className="mt-1.5 flex flex-wrap gap-1">
-                                {subs.slice(0, 3).map(s => (
-                                  <span key={s} className="px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-white/[0.04] border border-white/[0.08] text-slate-400">
-                                    {s}
-                                  </span>
-                                ))}
-                                {subs.length > 3 && (
-                                  <span className="text-[9px] text-slate-600">+{subs.length - 3}</span>
-                                )}
-                              </div>
-                            ) : null;
-                          })()}
-                          {/* Location risk preview */}
-                          {(() => {
-                            const locs = normalizeList(g.locations_impacted).map(l => typeof l === 'string' ? { name: l } : l);
-                            const locsWithRisk = locs.filter(l => l.highest_risk || l.overall_risk);
-                            if (!locsWithRisk.length) return null;
-                            return (
-                              <div className="mt-1.5 flex flex-wrap gap-1">
-                                {locsWithRisk.slice(0, 2).map(loc => {
-                                  const display = loc.highest_risk || loc.overall_risk;
-                                  const rcfg = RISK_CFG[display];
-                                  return rcfg ? (
-                                    <span key={loc.name} className="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold border"
-                                      style={{ color: rcfg.text, borderColor: rcfg.border, background: rcfg.bg }}>
-                                      {loc.name}: {display}
-                                    </span>
-                                  ) : null;
-                                })}
-                              </div>
-                            );
-                          })()}
-                          {g.expires_at && (
-                            <p className="mt-1.5 text-[10px] text-slate-500 flex items-center gap-1">
-                              <Clock className="w-2.5 h-2.5" /> Expired {formatBST(g.expires_at)}
-                            </p>
-                          )}
-                        </div>
-                      </motion.button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
-          </div>
+          grouped.map(([month, items]) => (
+            <section key={month}>
+              <div className="ga-month"><h2>{month}</h2><span>{items.length} graphic{items.length === 1 ? '' : 's'}</span></div>
+              <div className="ga-grid">
+                {items.map((g, i) => (
+                  <ArchiveCard key={g.id} g={g} index={i} isOwner={isOwner} onEdit={setEditing} onOpen={() => setOpenId(g.id)} />
+                ))}
+              </div>
+            </section>
+          ))
         )}
       </div>
 
-      {/* Detail modal */}
-      <AnimatePresence>
-        {selected && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xl flex items-end sm:items-center justify-center p-0 sm:p-4"
-            onClick={() => setSelected(null)}
-          >
-            <motion.div
-              initial={{ y: 48, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 32, opacity: 0 }}
-              className="w-full sm:max-w-2xl max-h-[92vh] flex flex-col rounded-t-3xl sm:rounded-3xl overflow-hidden bg-slate-900 border border-white/[0.07] shadow-2xl"
-              onClick={e => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between p-4 border-b border-white/[0.06]">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap mb-1">
-                    {selected.is_initial_forecast && (
-                      <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 border border-sky-500/30 text-sky-300">
-                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 16 16"><path d="M4 1s.5 3-1 4.5C1.5 7 1 8 1 8s2-.5 3 0 3 3 3 3 .5-2.5 2-3.5 3-.5 3-.5-1.5-1-2-3-1-4-1-4-1.5 2-3 2.5S4 1 4 1z"/></svg>
-                        Initial Forecast
-                      </span>
-                    )}
-                  </div>
-                  <h3 className="text-base font-bold text-white">{selected.title}</h3>
-                </div>
-                <div className="flex items-center gap-2">
-                  {isOwner && (
-                    <button
-                      onClick={() => setEditing(selected)}
-                      className="flex items-center gap-1.5 px-3 h-8 rounded-lg bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/30 text-violet-300 text-xs font-bold transition-colors"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" /> Edit
-                    </button>
-                  )}
-                  <button onClick={() => setSelected(null)} className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 flex items-center justify-center">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {selected.image_url && (
-                  <img src={selected.image_url} alt={selected.title} className="w-full rounded-2xl border border-white/[0.06]" />
-                )}
-                {selected.description && (
-                  <div className="text-sm text-slate-300 leading-relaxed">
-                    <RichText html={selected.description} />
-                  </div>
-                )}
-
-                {/* Sub-types */}
-                {(() => {
-                  const subs = normalizeList(selected.condition_subtypes);
-                  return subs.length > 0 ? (
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500 mb-2">Forecast Detail</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {subs.map(s => (
-                          <span key={s} className="px-2.5 py-1 rounded-full bg-white/[0.04] border border-white/[0.08] text-xs font-semibold text-slate-300">
-                            {s}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null;
-                })()}
-
-                {/* Measurements */}
-                {(() => {
-                  let r = selected.condition_ranges;
-                  if (typeof r === 'string') { try { r = JSON.parse(r); } catch (_) { r = null; } }
-                  const entries = r && typeof r === 'object'
-                    ? Object.entries(r).filter(([, v]) => v != null && v !== '')
-                    : [];
-                  const META = {
-                    snow_accumulation_cm: ['Snow Accumulation', 'cm'],
-                    ice_temp_c: ['Ice Temp Range', '°C'],
-                    storm_rain_mm_hr: ['Storm Rain Rate', 'mm/hr'],
-                    rain_total_mm: ['Rain Total', 'mm'],
-                    wind_gust_mph: ['Wind Gusts', 'mph'],
-                    temp_range_c: ['Temperature Range', '°C'],
-                    visibility_m: ['Visibility', 'm'],
-                  };
-                  return entries.length > 0 ? (
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500 mb-2">Measurements</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        {entries.map(([k, v]) => {
-                          const [label, unit] = META[k] || [k, ''];
-                          return (
-                            <div key={k} className="rounded-xl bg-white/[0.03] border border-white/[0.07] px-3 py-2.5">
-                              <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500 mb-0.5">{label}</p>
-                              <p className="text-white font-bold text-sm font-mono">{v}{unit ? ` ${unit}` : ''}</p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null;
-                })()}
-
-                {/* Times */}
-                <div className="space-y-1.5">
-                  {selected.in_force_from && (
-                    <p className="text-[11px] text-slate-500 flex items-center gap-1.5">
-                      <Clock className="w-3 h-3" />
-                      <span className="text-slate-600 uppercase tracking-wider text-[9px] font-bold">In force from</span>
-                      <span className="text-slate-400 font-mono">{formatBST(selected.in_force_from)}</span>
-                    </p>
-                  )}
-                  {selected.expires_at && (
-                    <p className="text-[11px] text-slate-500 flex items-center gap-1.5">
-                      <Clock className="w-3 h-3" />
-                      <span className="text-slate-600 uppercase tracking-wider text-[9px] font-bold">Expired</span>
-                      <span className="text-slate-400 font-mono">{formatBST(selected.expires_at)}</span>
-                    </p>
-                  )}
-                </div>
-
-                {selected.locations_impacted?.length > 0 && (
-                  <div>
-                    <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500 mb-2">Locations Impacted</p>
-                    <div className="space-y-1.5">
-                      {normalizeList(selected.locations_impacted).map((rawLoc, i) => {
-                        const loc = typeof rawLoc === 'string' ? { name: rawLoc } : rawLoc;
-                        const hasRiskInfo = loc.overall_risk || loc.highest_risk || loc.lowest_risk;
-                        return (
-                          <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-                            <MapPin className="w-3 h-3 text-slate-500 mt-0.5 flex-shrink-0" />
-                            <div className="flex-1 min-w-0">
-                              <span className="text-sm text-slate-300 font-medium">{loc.name}</span>
-                              {hasRiskInfo && (
-                                <div className="flex flex-wrap gap-1.5 mt-1">
-                                  {loc.overall_risk && (() => {
-                                    const rcfg = RISK_CFG[loc.overall_risk];
-                                    return rcfg ? (
-                                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border"
-                                        style={{ color: rcfg.text, borderColor: rcfg.border, background: rcfg.bg }}>
-                                        Overall: {loc.overall_risk}
-                                      </span>
-                                    ) : null;
-                                  })()}
-                                  {loc.lowest_risk && !loc.overall_risk && (() => {
-                                    const rcfg = RISK_CFG[loc.lowest_risk];
-                                    return rcfg ? (
-                                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border"
-                                        style={{ color: rcfg.text, borderColor: rcfg.border, background: rcfg.bg }}>
-                                        ↓ Low: {loc.lowest_risk}
-                                      </span>
-                                    ) : null;
-                                  })()}
-                                  {loc.highest_risk && !loc.overall_risk && (() => {
-                                    const rcfg = RISK_CFG[loc.highest_risk];
-                                    return rcfg ? (
-                                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border"
-                                        style={{ color: rcfg.text, borderColor: rcfg.border, background: rcfg.bg }}>
-                                        ↑ High: {loc.highest_risk}
-                                      </span>
-                                    ) : null;
-                                  })()}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {open && !viewing && (
+        <ArchiveDetail
+          g={open}
+          isOwner={isOwner}
+          onEdit={setEditing}
+          onClose={() => setOpenId(null)}
+          onPrev={openIdx > 0 ? () => setOpenId(filtered[openIdx - 1].id) : null}
+          onNext={openIdx < filtered.length - 1 ? () => setOpenId(filtered[openIdx + 1].id) : null}
+          onView={setViewing}
+        />
+      )}
+      {viewing && (
+        <GraphicViewer
+          graphic={viewing}
+          onClose={() => setViewing(null)}
+          onPrev={viewIdx > 0 ? () => setViewing(filtered[viewIdx - 1]) : null}
+          onNext={viewIdx >= 0 && viewIdx < filtered.length - 1 ? () => setViewing(filtered[viewIdx + 1]) : null}
+        />
+      )}
 
       {/* Admin edit modal */}
       <AnimatePresence>

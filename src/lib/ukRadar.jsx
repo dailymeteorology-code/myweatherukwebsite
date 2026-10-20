@@ -25,6 +25,20 @@ export function laea(lon, lat) {
   return [bb * DD * Math.cos(b) * Math.sin(dl), (bb / DD) * (Math.cos(B1) * Math.sin(b) - Math.sin(B1) * Math.cos(b) * Math.cos(dl))];
 }
 
+/** display-grid metres -> [lon, lat] (degrees): the inverse of laea(), by Snyder's formulas with
+    the authalic-latitude series; well under a metre off, plenty for plotting a lightning strike. */
+const E4 = E2 * E2, E6 = E4 * E2;
+export function laeaInverse(x, y) {
+  const rho = Math.hypot(x / DD, DD * y);
+  if (rho < 1e-9) return [LAM0 / D, PHI1 / D];
+  const ce = 2 * Math.asin(rho / (2 * RQ));
+  const b = Math.asin(Math.cos(ce) * Math.sin(B1) + (DD * y * Math.sin(ce) * Math.cos(B1)) / rho);
+  const lam = LAM0 + Math.atan2(x * Math.sin(ce), DD * rho * Math.cos(B1) * Math.cos(ce) - DD * DD * y * Math.sin(B1) * Math.sin(ce));
+  const phi = b + (E2 / 3 + (31 * E4) / 180 + (517 * E6) / 5040) * Math.sin(2 * b)
+    + ((23 * E4) / 360 + (251 * E6) / 3780) * Math.sin(4 * b) + ((761 * E6) / 45360) * Math.sin(6 * b);
+  return [lam / D, phi / D];
+}
+
 /* the studios' rain bands, in the motion graphics' colours (mm/h; dBZ by Marshall-Palmer).
    Ids are kept from the old RainViewer key so saved graphics still resolve. */
 const dbz = (r) => Math.round(10 * Math.log10(200 * r ** 1.6));
