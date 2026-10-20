@@ -195,6 +195,25 @@ def test_frame_roundtrip(tmp_data):
     assert np.allclose(a, b.astype(np.float32), atol=1e-3)
 
 
+def test_met_office_steps_go_3_hourly_after_t54(monkeypatch):
+    """A Main Run frame at T+56 from a 03Z UKV must blend the published T+54 and T+57 steps,
+    not ask for a T+56 that only carries screen temperature."""
+    from nova import main_run as MR
+    asked = []
+
+    class Reader:
+        def frame(self, run, vt, grid, dt_h):
+            asked.append(int((vt - run).total_seconds() // 3600))
+            return {'sfc': {'t2': np.full((2, 2), 280.0, np.float32)}, 'valid': np.ones((2, 2), bool)}
+    monkeypatch.setattr(MR, 'prepare', lambda key, f, grid, terr: f)
+    run = datetime(2026, 10, 20, 3, tzinfo=timezone.utc)
+    for key, h, want in (('ukv', 56, [54, 57]), ('ukv', 40, [40]), ('mo_global', 59, [57, 60]),
+                         ('mo_global', 146, [144, 150]), ('ifs', 92, [90, 93])):
+        asked.clear()
+        assert MR.SourceCache(key, Reader(), run, None, None).at(run + timedelta(hours=h)) is not None
+        assert asked == want, (key, h, asked)
+
+
 def test_stored_fields_are_rounded_and_compress(tmp_data):
     """Noise below each field's step is dropped before storage: values stay within half a step
     and a noisy field compresses far better than raw float16."""

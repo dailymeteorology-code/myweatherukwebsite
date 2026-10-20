@@ -72,12 +72,26 @@ def cycle_init(now_utc=None, cycles=None):
     return best.astimezone(timezone.utc)
 
 
+def native_step(key, h):
+    """Hours between a source's published steps at lead h. The Met Office models are hourly
+    only to T+54: beyond it UKV and the Global publish every 3 h (the Global every 6 h past
+    T+144; UKV keeps an HOURLY screen temperature, which made a cycle look present at T+56
+    while its profiles, winds and rain were missing). ECMWF goes 6-hourly past T+144."""
+    step = NATIVE_STEP[key]
+    if key in ('ukv', 'mo_global') and h > 54:
+        step = 3
+    if key in ('mo_global', 'ifs', 'ifs_ens') and h > 144:
+        step = 6
+    return step
+
+
 class SourceCache:
     """Fetch each source's native steps once; linear interpolation in time between
     bracketing native steps (never beyond the last one)."""
     def __init__(self, key, reader, run, grid, terr):
         self.key, self.reader, self.run, self.grid, self.terr = key, reader, run, grid, terr
         self.cache = {}
+        self.errors = []            # why a step came back empty, for the frame's manifest entry
 
     def native(self, vt):
         if vt not in self.cache:
@@ -86,19 +100,20 @@ class SourceCache:
             step = NATIVE_STEP[self.key]
             try:
                 f = self.reader.frame(self.run, vt, self.grid, step if step > 1 else 1)
+                if not f:
+                    self.errors.append(f'T+{(vt - self.run).total_seconds() / 3600:g}: no data')
             except Exception as e:
                 log(f'{self.key} {vt:%m-%d %HZ} failed: {e}')
+                self.errors.append(f'T+{(vt - self.run).total_seconds() / 3600:g}: {type(e).__name__}: {str(e)[:120]}')
                 f = None
             self.cache[vt] = prepare(self.key, f, self.grid, self.terr) if f else None
         return self.cache[vt]
 
     def at(self, vt):
-        step = NATIVE_STEP[self.key]
         h = (vt - self.run).total_seconds() / 3600
         if h < 0 or h > MODELS[self.key]['max_lead_h']:
             return None
-        if self.key in ('ifs', 'ifs_ens') and h > 144:
-            step = 6
+        step = native_step(self.key, h)
         lo = self.run + timedelta(hours=math.floor(h / step) * step)
         if lo == vt:
             return self.native(vt)

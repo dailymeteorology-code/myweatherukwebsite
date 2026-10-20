@@ -113,9 +113,20 @@ class Blender:
         self.caches = {k: SourceCache(k, readers[k], self.cycles[k], self.g, self.terr) for k in self.cycles}
 
     def at(self, vt):
+        """Every source at vt. Each source's fetch time and any failures are kept in
+        self.fetch_log[vt], so a slow or missing model shows in the frame's manifest entry."""
+        import time
+
+        def one(c):
+            t0, n = time.time(), len(c.errors)
+            v = c.at(vt)
+            return v, round(time.time() - t0, 1), c.errors[n:]
         with cf.ThreadPoolExecutor(len(self.caches) or 1) as ex:
-            got = dict(zip(self.caches, ex.map(lambda c: c.at(vt), self.caches.values())))
-        return {k: v for k, v in got.items() if v}
+            res = dict(zip(self.caches, ex.map(one, self.caches.values())))
+        self.fetch_log = getattr(self, 'fetch_log', {})
+        self.fetch_log[vt] = {'seconds': {k: r[1] for k, r in res.items()},
+                              'errors': {k: r[2][-3:] for k, r in res.items() if r[2]}}
+        return {k: r[0] for k, r in res.items() if r[0]}
 
 
 def blend(got, lead, cycles, g, terr):

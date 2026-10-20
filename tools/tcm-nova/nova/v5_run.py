@@ -112,6 +112,15 @@ def _manifest(product, init, horizon_h, stride, cycles, extra=None):
     }, **(extra or {}))
 
 
+def _peak_mem_mb():
+    """This process's peak resident memory (Linux runners; None elsewhere)."""
+    try:
+        import resource
+        return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
+    except Exception:
+        return None
+
+
 def compute(product, init, leads, stride, workers, writer_dir: Path, cycles_out: dict):
     """The V5 engine for `leads`, writing NOVA frames into writer_dir. Returns frame metas."""
     from . import v5_blend as VB
@@ -150,7 +159,9 @@ def compute(product, init, leads, stride, workers, writer_dir: Path, cycles_out:
         except Exception:
             traceback.print_exc()
             continue
-        meta = dict(meta, calibrated='isotonic (V5 era)' if cal else 'uncalibrated', fetch_s=round(t_fetch, 1), seconds=round(time.time() - t0))
+        fl = getattr(blender, 'fetch_log', {}).pop(vt, {})
+        meta = dict(meta, calibrated='isotonic (V5 era)' if cal else 'uncalibrated', fetch_s=round(t_fetch, 1), seconds=round(time.time() - t0),
+                    fetch_source_s=fl.get('seconds', {}), fetch_errors=fl.get('errors', {}), peak_mem_mb=_peak_mem_mb())
         tmp.frame(lead * 60, vt.isoformat(), fields, meta)
         log(f'T+{lead:3d} {vt:%a %HZ} p_thunder max={fields["p_thunder"].max():.2f} '
             f'(waited {t_fetch:.0f}s for data, total {time.time() - t0:.0f}s, models {meta["sources"]})')
