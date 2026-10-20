@@ -41,6 +41,14 @@ const PREFS_KEY = 'md-prefs-v1';
 const readPrefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; } };
 const MODES = ['forecast', 'prob', 'live', 'observed'];
 const OBS_PANEL_W = 320;                                    // the observed side panel, CSS px
+/* the four views: [key, name, what it is] (the phone's view menu says what each one is for) */
+const MODE_INFO = [
+  ['forecast', 'Forecast', 'Every model and every layer, run by run'],
+  ['prob', 'Probability', 'The chance of rain, wind, frost and more, from ensembles'],
+  ['live', 'Live', 'Radar, satellite, lightning and the weather now'],
+  ['observed', 'Observed', 'Each day’s highs, lows and totals, kept day by day'],
+];
+const MODE_SHORT = { forecast: 'Forecast', prob: 'Chance', live: 'Live', observed: 'Observed' };
 const londonToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
 /* rain-type layers: these get the cloud overlay and the smoothing that keeps the radar's colour bands crisp */
 const RAINY = new Set(['radar', 'precip_rate', 'rain_rate', 'conv_rain', 'precip_1h', 'refc', 'snow_rate', 'hail_rate']);
@@ -295,6 +303,36 @@ function LayerRow({ icon, label, note, on, onClick, locked }) {
     </button>
   );
 }
+/* a sheet rising from the bottom of the map (phones): drag the handle down, or tap outside, to
+   close. `clear` keeps the map visible behind it (for switches whose effect you want to see).
+   z-index 44/45: above the site's version badge (40), below its bottom navigation (50). */
+function Sheet({ title, note, onClose, children, tall, clear }) {
+  const t = React.useContext(ThemeCtx);
+  const [dy, setDy] = useState(0);
+  const start = useRef(null);
+  const down = (e) => { if (e.target.closest('button')) return; start.current = e.clientY; e.currentTarget.setPointerCapture?.(e.pointerId); };
+  const move = (e) => { if (start.current != null) setDy(Math.max(0, e.clientY - start.current)); };
+  const up = () => { if (start.current == null) return; start.current = null; if (dy > 70) onClose(); setDy(0); };
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 44, background: clear ? 'transparent' : 'rgba(2,6,14,0.45)' }} />
+      <div role="dialog" aria-modal="true" aria-label={title} style={{ ...t.glass, position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 45, borderRadius: '22px 22px 0 0',
+        maxHeight: tall ? '82%' : '64%', display: 'flex', flexDirection: 'column', transform: `translateY(${dy}px)`,
+        transition: start.current == null ? 'transform .2s ease' : 'none', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+        <div onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} style={{ padding: '8px 14px', touchAction: 'none', cursor: 'grab', flexShrink: 0 }}>
+          <div style={{ width: 40, height: 5, borderRadius: 5, background: t.light ? 'rgba(15,23,34,0.2)' : 'rgba(255,255,255,0.28)', margin: '0 auto 10px' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ flex: 1, fontSize: 15, fontWeight: 800 }}>{title}</span>
+            {note && <span style={{ fontSize: 11.5, color: t.ink2 }}>{note}</span>}
+            <IconBtn title="Close" onClick={onClose} style={{ width: 32, height: 32 }}><X size={15} /></IconBtn>
+          </div>
+        </div>
+        <div style={{ overflowY: 'auto', overscrollBehavior: 'contain', padding: '2px 14px 18px' }}>{children}</div>
+      </div>
+    </>
+  );
+}
+
 /* the value at a point through the steps: a small line, the step on show marked; click a
    point to go to that step */
 function Sparkline({ values, at, onPick, w = 268, h = 54 }) {
@@ -342,7 +380,7 @@ export default function ModelData() {
   const [obsKey, setObsKey] = useState(OBS[prefs.obsKey] ? prefs.obsKey : 't2_max');
   const [obsSummary, setObsSummary] = useState({});
   const [obsStrikes, setObsStrikes] = useState({});
-  const [obsPanel, setObsPanel] = useState(() => typeof window === 'undefined' || !window.matchMedia('(max-width: 900px)').matches);
+  const [obsPanel, setObsPanel] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1000);
   const [mode, setMode] = useState(MODES.includes(prefs.mode) ? prefs.mode : 'forecast');
   const [ensId, setEnsId] = useState('ecmwf_ens');
   const [ensRunIso, setEnsRunIso] = useState(null);
@@ -381,13 +419,16 @@ export default function ModelData() {
   const [mapOpen, setMapOpen] = useState(false);              // the Layers panel
   const [regionsOpen, setRegionsOpen] = useState(false);
   const [pin, setPin] = useState(null);                     // a clicked point: its value through the steps
-  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches);
+  /* phone below 640 px wide, tablet to 1180 px, desktop beyond */
+  const [vw, setVw] = useState(() => (typeof window === 'undefined' ? 1400 : window.innerWidth));
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 900px)');
-    const on = () => setNarrow(mq.matches);
-    mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
+    const on = () => setVw(window.innerWidth);
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
   }, []);
+  const layout = vw < 640 ? 'phone' : vw < 1180 ? 'tablet' : 'desktop';
+  const phone = layout === 'phone', narrow = layout !== 'desktop';
+  const [modeOpen, setModeOpen] = useState(false);            // phones: the view menu
   const [exp, setExp] = useState({ open: false, png: 1080, gif: 720, from: 0, to: null, busy: null });
   useEffect(() => {
     try {
@@ -403,7 +444,7 @@ export default function ModelData() {
   const contourCache = useRef(new Map());
   const shellRef = useRef(null);
   const [shellH, setShellH] = useState('calc(100dvh - 56px)');
-  const sidePanel = isObs && obsPanel && !narrow;           // docked beside the frame, not over it
+  const sidePanel = isObs && obsPanel && (layout === 'desktop' || (layout === 'tablet' && vw >= 1000));   // docked beside the frame
 
   useEffect(() => {
     const measure = () => {
@@ -676,7 +717,7 @@ export default function ModelData() {
     if (topRef.current) ro.observe(topRef.current);
     if (botRef.current) ro.observe(botRef.current);
     return () => ro.disconnect();
-  }, []);
+  }, [layout]);                                             // the bars are different elements per layout
 
   const frameRect = useCallback(() => {
     const c = canvasRef.current, st = stageRef.current;
@@ -714,7 +755,7 @@ export default function ModelData() {
     const hw = old.w / 2 / view.s, hh = old.h / 2 / view.s;
     fit([view.cx - hw, view.cy - hh, view.cx + hw, view.cy + hh], true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frameKey, sidePanel]);
+  }, [frameKey, sidePanel, layout]);
 
   const basemapFor = useCallback((f) => {
     if (style === 'realtime') {
@@ -871,7 +912,7 @@ export default function ModelData() {
       else if (e.key === ' ' && tag !== 'BUTTON') { e.preventDefault(); setPlaying((p) => !p); }
       else if (e.key === '+' || e.key === '=') z?.(1.35);
       else if (e.key === '-' || e.key === '_') z?.(1 / 1.35);
-      else if (e.key === 'Escape') { setPin(null); setVarOpen(false); setMapOpen(false); setRegionsOpen(false); setExp((x) => ({ ...x, open: false })); }
+      else if (e.key === 'Escape') { setPin(null); setVarOpen(false); setMapOpen(false); setRegionsOpen(false); setModeOpen(false); setExp((x) => ({ ...x, open: false })); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -1029,11 +1070,13 @@ export default function ModelData() {
   /* a new set of steps starts the export range afresh */
   useEffect(() => { setExp((e) => (e.from || e.to != null ? { ...e, from: 0, to: null } : e)); }, [mode, key, liveSrc, obsKey]);
   const sel = { ...T.glass, appearance: 'none', borderRadius: 999, padding: '7px 30px 7px 12px', fontSize: 12.5, fontWeight: 600, fontFamily: FONT, cursor: 'pointer', color: T.ink, background: T.track, boxShadow: T.trackShadow };
-  /* loading notices: under the top bar, or (on phones, where that is the title card) above the timeline */
+  /* loading notices: under the top bar, or (phones and tablets, where that is the title card) above the bottom bar */
   const noticePos = narrow ? { bottom: (botRef.current?.offsetHeight || 56) + 18 } : { top: (topRef.current?.offsetHeight || 46) + 18 };
+  const topH = (topRef.current?.offsetHeight || 46) + 18, botH = (botRef.current?.offsetHeight || 56) + 18;
   const validLabel = !frame ? '' : isObs
     ? new Date(frame.head.valid).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
     : new Date(frame.head.valid).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const subLabel = step == null ? '' : isObs ? 'observed day' : isLive ? `${Math.max(0, Math.round((Date.now() - step) / 60e3))} min ago` : `T+${step}`;
   const stepLabel = (s) => (isObs ? new Date(s).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
     : isLive ? new Date(s).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) : `T+${s}`);
 
@@ -1041,11 +1084,59 @@ export default function ModelData() {
   const fmtPoint = (v) => (!Number.isFinite(v) ? '—' : scaleKey === 'wx' ? WX_NAMES[Math.round(v)] ?? '—'
     : scaleKey === 'wdir10' || scaleKey === 'mwd' ? `from the ${compass(v)} · ${Math.round(v)}°` : fmtValue(v, vmeta?.unit));
 
+  /* panels: on a phone one at a time, as sheets from the bottom; elsewhere as cards */
+  const panelOpen = { data: varOpen, layers: mapOpen, regions: regionsOpen, export: exp.open, summary: obsPanel && !sidePanel, mode: modeOpen };
+  const closePanels = () => {
+    setVarOpen(false); setMapOpen(false); setRegionsOpen(false); setModeOpen(false);
+    setExp((e) => (e.open ? { ...e, open: false } : e));
+    if (!sidePanel) setObsPanel(false);
+  };
+  const openPanel = (name) => {
+    const was = panelOpen[name];
+    closePanels();
+    if (was) return;
+    if (name === 'data') { setQ(''); setVarOpen(true); }
+    if (name === 'layers') setMapOpen(true);
+    if (name === 'regions') setRegionsOpen(true);
+    if (name === 'export') setExp((e) => ({ ...e, open: true }));
+    if (name === 'summary') setObsPanel(true);
+    if (name === 'mode') setModeOpen(true);
+  };
+  const setModeTo = (m) => { setMode(m); setVarOpen(false); setModeOpen(false); if (m === 'observed') setShowStar(true); };
+  const layerLabel = isObs ? obsItem.label : isLive ? liveItem.label : isProb ? preset.label : vmeta?.label || 'Choose a layer';
+  const liveTime = run ? new Date(run.run).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) : null;
+  const chipSub = !cat ? (err || 'Finding the latest runs…') : isObs ? (obsDays ? `${obsDays.length} day${obsDays.length === 1 ? '' : 's'} recorded` : 'Loading the archive…')
+    : isLive ? (liveTime ? `Live · latest ${liveTime}` : 'Live · starting…')
+    : model ? `${SHORT_NAMES[model.id] || model.label} · ${MODEL_INFO[model.id]?.[1] || ''}${run ? ` · run ${runLabel(run.run)}` : ''}` : 'Loading…';
+
   const varButton = (
     <button onClick={() => { setVarOpen((o) => !o); setQ(''); setMapOpen(false); }} style={{ ...sel, padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0, background: varOpen ? T.btn : sel.background }}>
-      {isObs ? obsItem.label : isLive ? liveItem.label : isProb ? preset.label : vmeta?.label || 'Variable'} <ChevronDown style={{ width: 14, height: 14, opacity: 0.7, transform: varOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+      {layerLabel} <ChevronDown style={{ width: 14, height: 14, opacity: 0.7, transform: varOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
     </button>
   );
+  /* phones and tablets: one chip names the layer and where it comes from; tap for models, runs and layers */
+  const dataChip = (
+    <button onClick={() => openPanel('data')} aria-label="Choose the model, run and layer" style={{ ...sel, flex: 1, minWidth: 0, padding: '5px 12px 5px 14px', display: 'flex', alignItems: 'center', gap: 8,
+      textAlign: 'left', background: varOpen ? T.btn : sel.background }}>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: 13, fontWeight: 800, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{layerLabel}</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: err && !cat ? '#fca5a5' : T.ink2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {isLive && liveTime && <span style={{ width: 6, height: 6, borderRadius: 99, background: '#ff4d4f', boxShadow: '0 0 6px #ff4d4f', flexShrink: 0 }} />}
+          {!cat && !err && <Loader2 className="animate-spin" style={{ width: 11, height: 11, flexShrink: 0 }} />}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{chipSub}</span>
+        </span>
+      </span>
+      <ChevronDown style={{ width: 16, height: 16, opacity: 0.7, flexShrink: 0, transform: varOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+    </button>
+  );
+  const modeSeg = <Seg items={MODE_INFO.map(([k, l]) => [k, l])} value={mode} onChange={setModeTo} />;
+  const modeBtn = (
+    <button onClick={() => openPanel('mode')} aria-label="Change view" style={{ ...sel, padding: '0 10px 0 13px', height: 42, display: 'flex', alignItems: 'center', gap: 4, fontWeight: 800,
+      flexShrink: 0, background: modeOpen ? T.btn : sel.background }}>
+      {MODE_SHORT[mode]}<ChevronDown style={{ width: 15, height: 15, opacity: 0.7 }} />
+    </button>
+  );
+
   const layerCount = [showCities || wxOn, wxOn, arrowsOn, cloudsOn, canLightning && showLightning, showRoads, canGrid && showGrid,
     canContours && showContours, canStar && showStar].filter(Boolean).length;
   const styleSeg = <Seg small items={Object.entries(MAP_STYLES).map(([k, s]) => [k, s.label])} value={style} onChange={setStyle} />;
@@ -1069,25 +1160,274 @@ export default function ModelData() {
     </div>
   );
   const layersBtn = (
-    <Pill on={mapOpen} title="Layers: places, symbols, arrows, roads, grid…" onClick={() => setMapOpen((o) => !o)} icon={<Layers size={14} />}>
+    <Pill on={mapOpen} title="Layers: places, symbols, arrows, roads, grid…" onClick={() => (narrow ? openPanel('layers') : setMapOpen((o) => !o))} icon={<Layers size={14} />}>
       Layers{layerCount ? ` · ${layerCount}` : ''}
     </Pill>
   );
-  /* the models, grouped by who makes them */
+  /* the models, grouped by who makes them: a picker on desktops, buttons on phones and tablets */
+  const modelGroups = (list) => ['Met Office', 'ECMWF', 'NOAA'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
+  const chooseModel = (id) => (isProb ? (setEnsId(id), setEnsRunIso(null)) : (setModelId(id), setRunIso(null)));
   const modelPicker = (list, value, onChange) => (
     <div style={{ position: 'relative', flexShrink: 0 }}>
       <select value={value} onChange={(e) => onChange(e.target.value)} style={{ ...sel, fontWeight: 700 }} title={model?.source || 'Model'} aria-label="Model">
-        {['Met Office', 'ECMWF', 'NOAA'].map((g) => {
-          const ms = (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g);
-          return ms.length ? (
-            <optgroup key={g} label={g} style={{ color: '#111' }}>
-              {ms.map((m) => <option key={m.id} value={m.id} style={{ color: '#111' }}>{SHORT_NAMES[m.id] || m.label} · {MODEL_INFO[m.id]?.[1] || ''}</option>)}
-            </optgroup>
-          ) : null;
-        })}
+        {modelGroups(list).map(([g, ms]) => (
+          <optgroup key={g} label={g} style={{ color: '#111' }}>
+            {ms.map((m) => <option key={m.id} value={m.id} style={{ color: '#111' }}>{SHORT_NAMES[m.id] || m.label} · {MODEL_INFO[m.id]?.[1] || ''}</option>)}
+          </optgroup>
+        ))}
       </select>
       <ChevronDown style={{ position: 'absolute', right: 10, top: 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
     </div>
+  );
+  const runSelect = model && !timeSteps && (
+    <div style={{ position: 'relative' }}>
+      <select value={run?.run || ''} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} style={{ ...sel, ...(narrow ? { width: '100%', padding: '10px 34px 10px 14px', fontSize: 13.5 } : {}) }}
+        title={model.source || `${model.label} · ${model.members} members`} aria-label="Run">
+        {model.runs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runLabel(r.run)} · T+{r.steps[r.steps.length - 1]}</option>)}
+      </select>
+      <ChevronDown style={{ position: 'absolute', right: 12, top: narrow ? 12 : 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
+    </div>
+  );
+  const chip = (on) => ({
+    border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: narrow ? 13 : 12.5, fontWeight: 600, padding: narrow ? '9px 14px' : '7px 12px', borderRadius: 999,
+    color: on ? '#fff' : T.ink3,
+    background: on ? (T.light ? 'linear-gradient(180deg, #4b95ff, #1f6fe0)' : 'linear-gradient(180deg, rgba(110,180,255,0.55), rgba(60,130,240,0.4))') : T.chip,
+    boxShadow: on ? 'inset 0 1px 0 rgba(255,255,255,0.5)' : T.chipShadow,
+  });
+  const sectionTitle = (t) => <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '4px 4px 7px' }}>{t}</div>;
+  const isSel = (k) => k === (isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey);
+  const pickVar = (k) => { if (isObs) setObsKey(k); else if (isLive) setLiveKey(k); else if (isProb) choosePreset(k); else setVarKey(k); setVarOpen(false); };
+  const searchBox = (autoFocus) => (
+    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, padding: narrow ? '10px 14px' : '7px 12px', borderRadius: 999, background: T.track }}>
+      <Search size={14} style={{ opacity: 0.6 }} />
+      <input autoFocus={autoFocus} value={q} onChange={(e) => setQ(e.target.value)} placeholder={isLive ? 'Search radar, satellite…' : isProb ? 'Search wind, rain, frost, snow…' : isObs ? 'Search highs, lows, rain…' : 'Search layers'}
+        style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: T.ink, fontFamily: FONT, fontSize: narrow ? 16 : 13 }} />
+    </div>
+  );
+  const varGroups = groups.map(([g, list]) => (
+    <div key={g} style={{ marginBottom: 10 }}>
+      {sectionTitle(g)}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {list.map(([k, v]) => <button key={k} onClick={() => pickVar(k)} style={chip(isSel(k))}>{v.label}</button>)}
+      </div>
+    </div>
+  ));
+  const pickerNote = model && (
+    <div style={{ fontSize: 11, color: T.ink2, margin: '4px 4px 0', lineHeight: 1.45 }}>{isObs
+      ? "Each day's highs, lows and totals across the UK and Ireland, kept from 20 October 2026 onwards: step back through the days on the timeline. Temperature, wind, pressure and humidity come from a 15-minute analysis that starts from the Met Office UKV model and is pulled to what the airport weather stations (METAR) measured; rainfall is the Met Office radar's own total."
+      : isLive
+      ? "Live, observed: Met Office 1 km rain radar every 15 minutes (AWS), Meteosat-12 imagery every 10 minutes and Meteosat 0° every 15 (EUMETSAT), lightning from the Met Office LEELA network. 'Now' layers are a 15-minute analysis: the Met Office UKV model corrected to the UK and Irish airport weather reports (METAR), with the radar's rain and LEELA lightning for the weather symbols."
+      : isProb
+      ? `${model.label}: ${model.members} members. The chance is the share of members past your threshold, so drag the slider to ask a different question. Flooding uses 24 h rain or ECMWF runoff (wet ground runs off more); it is a signal, not a river forecast.`
+      : model.source}</div>
+  );
+  /* phones and tablets: models and run first, then the layers */
+  const dataBody = (
+    <div style={{ display: 'grid', gap: 6 }}>
+      {cat && !timeSteps && (
+        <>
+          {modelGroups(isProb ? cat.ensembles : cat.models).map(([g, ms]) => (
+            <div key={g} style={{ marginBottom: 4 }}>
+              {sectionTitle(g)}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {ms.map((m) => (
+                  <button key={m.id} onClick={() => chooseModel(m.id)} style={chip(m.id === (isProb ? ensId : modelId))}>
+                    {SHORT_NAMES[m.id] || m.label}<span style={{ opacity: 0.7, fontWeight: 500 }}> · {MODEL_INFO[m.id]?.[1] || ''}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          {sectionTitle('Run')}
+          {runSelect}
+          <div style={{ height: 1, background: T.line, margin: '8px 2px 4px' }} />
+        </>
+      )}
+      <div style={{ display: 'flex', margin: '2px 0 6px' }}>{searchBox(false)}</div>
+      {varGroups}
+      {pickerNote}
+    </div>
+  );
+  const regionList = (
+    <div style={{ display: 'grid', gap: 2 }}>
+      {Object.entries(REGIONS).map(([k, r]) => (
+        <button key={k} onClick={() => { fit(r.box); setRegionsOpen(false); }} style={{ all: 'unset', cursor: 'pointer', padding: narrow ? '12px 14px' : '7px 12px', borderRadius: 12, fontSize: narrow ? 14 : 12.5, fontWeight: 650, color: T.ink3 }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = T.chip; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>{r.label}</button>
+      ))}
+    </div>
+  );
+  const speedSelect = (
+    <div style={{ position: 'relative' }}>
+      <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} style={{ ...sel, padding: '7px 26px 7px 10px' }} title="Playback and GIF speed" aria-label="Playback speed">
+        {[120, 200, 300, 450, 650, 900, 1300, 2000].map((v) => <option key={v} value={v} style={{ color: '#111' }}>{(1000 / v).toFixed(v > 500 ? 1 : 0)} fps</option>)}
+      </select>
+      <ChevronDown style={{ position: 'absolute', right: 8, top: 9, width: 13, height: 13, pointerEvents: 'none', opacity: 0.7 }} />
+    </div>
+  );
+  const exportBody = (
+    <div style={{ display: 'grid', gap: 12, fontSize: 12.5 }}>
+      <div style={{ color: T.ink2 }}>{FRAMES[frameKey].a ? FRAMES[frameKey].label : 'As framed'} · exactly as previewed</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <Seg small items={[[1080, '1080p'], [2160, '4K']]} value={exp.png} onChange={(v) => setExp((x) => ({ ...x, png: v }))} />
+        <button onClick={exportPng} disabled={!frame} style={{ ...sel, padding: '9px 14px', display: 'flex', gap: 6, alignItems: 'center', background: T.btn }}><ImageIcon size={14} />PNG of this step</button>
+      </div>
+      <div style={{ height: 1, background: T.line }} />
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        <span style={{ color: T.ink2 }}>From</span>
+        <select value={exp.from} onChange={(e) => setExp((x) => ({ ...x, from: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }} aria-label="GIF from">
+          {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>{stepLabel(s)}</option>)}
+        </select>
+        <span style={{ color: T.ink2 }}>to</span>
+        <select value={exp.to ?? steps.length - 1} onChange={(e) => setExp((x) => ({ ...x, to: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }} aria-label="GIF to">
+          {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>{stepLabel(s)}</option>)}
+        </select>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        <span style={{ color: T.ink2 }}>Frame</span>
+        <input type="number" min={40} max={5000} step={10} value={speed} onChange={(e) => setSpeed(Math.max(40, Math.min(5000, Number(e.target.value) || 450)))}
+          style={{ ...sel, width: 84, padding: '6px 10px', cursor: 'text' }} aria-label="Milliseconds per frame" />
+        <span style={{ color: T.ink2 }}>ms</span>
+        <Seg small items={[[540, '540p'], [720, '720p'], [1080, '1080p']]} value={exp.gif} onChange={(v) => setExp((x) => ({ ...x, gif: v }))} />
+      </div>
+      {exp.busy == null
+        ? <button onClick={exportGif} disabled={pending > 0} style={{ ...sel, justifySelf: 'stretch', padding: '11px 14px', display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', color: pending > 0 ? T.ink2 : '#fff', background: pending > 0 ? T.chip : 'linear-gradient(180deg, rgba(110,180,255,0.75), rgba(60,130,240,0.65))' }}>
+            <Film size={14} />{pending > 0 ? `GIF — waiting for ${pending} frames` : isObs ? 'GIF of the days' : isLive ? 'GIF of the last hours' : 'GIF of the run'}
+          </button>
+        : <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ flex: 1, height: 6, borderRadius: 3, background: T.line, overflow: 'hidden' }}><div style={{ height: '100%', width: `${Math.round(exp.busy * 100)}%`, background: 'linear-gradient(90deg,#7cc8ff,#3d8bff)' }} /></div>
+            {Math.round(exp.busy * 100)}%
+            <button onClick={() => { gifCancel.current = true; }} style={{ ...sel, padding: '5px 10px' }}>Cancel</button>
+          </div>}
+    </div>
+  );
+  /* the observed day: its extremes, lightning and station reports */
+  const obsDay = isObs && frame ? obsSummary[dayOf(Date.parse(frame.head.valid))] : null;
+  const summaryBody = obsDay && (() => {
+    const s = obsDay;
+    const rows = ['t2_max', 't2_min', 'precip_total', 'rain_rate_max', 'gust10_max', 'wind10_max', 'mslp_min', 'windchill_min'].map((k) => [k, s.fields?.[k]]).filter(([, v]) => v?.value != null);
+    const st = s.stations || [];
+    const top = (k, fn) => st.filter((x) => x[k] != null).sort((a, b) => fn(a[k], b[k]))[0];
+    const sw = top('tmax', (a, b) => b - a), sc = top('tmin', (a, b) => a - b), sg = top('gust', (a, b) => b - a);
+    return (
+      <div style={{ display: 'grid', gap: 2, fontSize: narrow ? 13 : 12 }}>
+        {rows.map(([k, v]) => (
+          <button key={k} onClick={() => { setObsKey(k); if (phone) setObsPanel(false); }} title={`Show ${v.label.toLowerCase()} on the map`} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer',
+            display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'center', columnGap: 10, padding: narrow ? '8px 8px' : '5px 8px', borderRadius: 10,
+            background: k === obsKey ? T.chip : 'transparent' }}>
+            <span style={{ minWidth: 0 }}>
+              <span style={{ display: 'block', color: T.ink3, fontWeight: 650 }}>{v.label}</span>
+              <span style={{ display: 'block', color: T.ink2, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.place || ''}</span>
+            </span>
+            <span style={{ fontWeight: 800, fontSize: 13.5, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmtValue(v.value, v.unit)}</span>
+          </button>
+        ))}
+        <div style={{ color: T.ink2, padding: '6px 8px 4px' }}>Lightning: <b style={{ color: T.ink }}>{(s.lightning || 0).toLocaleString('en-GB')}</b> strike{s.lightning === 1 ? '' : 's'}</div>
+        {(sw || sc || sg) && <div style={{ height: 1, background: T.line, margin: '4px 8px' }} />}
+        {(sw || sc || sg) && (
+          <div style={{ padding: '2px 8px', display: 'grid', gap: 3, color: T.ink2 }}>
+            <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Station reports (METAR)</span>
+            {sw && <span>Warmest: <b style={{ color: T.ink }}>{sw.tmax}°C</b> {sw.name}</span>}
+            {sc && <span>Coldest: <b style={{ color: T.ink }}>{sc.tmin}°C</b> {sc.name}</span>}
+            {sg && <span>Strongest gust: <b style={{ color: T.ink }}>{Math.round(sg.gust)} mph</b> {sg.name}</span>}
+          </div>
+        )}
+      </div>
+    );
+  })();
+  const summaryTitle = obsDay ? `UK & Ireland · ${new Date(`${obsDay.day}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}` : 'The day';
+  const summaryNote = obsDay ? (obsDay.day === londonToday() ? 'so far today' : `${obsDay.analyses}/96 analyses`) : '';
+
+  /* a clicked point: its value now and through the steps */
+  const pinCard = pin && (() => {
+    const vals = steps.map((s) => (frames[s] ? sampleFrame(disp(frames[s]), pin.gx, pin.gy) : NaN));
+    const at = Math.min(idx, Math.max(0, steps.length - 1));
+    const numeric = !['wx', 'wdir10', 'mwd'].includes(scaleKey);
+    const fin = vals.filter(Number.isFinite);
+    const c = (statics?.cities || []).reduce((b, x) => { const d = Math.hypot(x.x - pin.gx, x.y - pin.gy); return !b || d < b.d ? { d, n: x.name } : b; }, null);
+    const km = c ? c.d * 2 : null;
+    const where = !c ? 'Picked point' : km < 6 ? c.n : km < 20 ? `Near ${c.n}` : `${Math.round(km)} km from ${c.n}`;
+    return (
+      <div style={{ ...T.glass, borderRadius: 20, position: 'absolute', bottom: botH, zIndex: 4, padding: '10px 12px 12px', display: 'grid', gap: 6,
+        ...(narrow ? { left: 10, right: 10, maxWidth: 520, margin: '0 auto' } : { right: 10, width: 300 }) }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <MapPin size={14} style={{ color: '#ffd23f', flexShrink: 0 }} />
+          <span style={{ flex: 1, fontSize: 12.5, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{where}</span>
+          <IconBtn title="Close (Esc)" onClick={() => setPin(null)} style={{ width: narrow ? 30 : 24, height: narrow ? 30 : 24 }}><X size={12} /></IconBtn>
+        </div>
+        {isImg
+          ? <span style={{ fontSize: 12, color: T.ink2 }}>Satellite pictures carry no values: choose a radar, model, “now” or observed layer.</span>
+          : <>
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmtPoint(vals[at])}</div>
+                <div style={{ fontSize: 11.5, color: T.ink2 }}>{vmeta?.label} · {validLabel}</div>
+              </div>
+              {numeric && fin.length > 1 && (
+                <>
+                  <Sparkline values={vals} at={at} w={narrow ? Math.min(496, (stageRef.current?.clientWidth || 360) - 44) : 268}
+                    onPick={(i) => { setPlaying(false); setIdx(Math.max(0, Math.min(steps.length - 1, i))); }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: T.ink2 }}>
+                    <span>{stepLabel(steps[0])}</span>
+                    <span>low {fmtValue(Math.min(...fin), vmeta?.unit)} · high {fmtValue(Math.max(...fin), vmeta?.unit)}</span>
+                    <span>{stepLabel(steps[steps.length - 1])}</span>
+                  </div>
+                </>
+              )}
+              {numeric && fin.length <= 1 && steps.length > 1 && <span style={{ fontSize: 11.5, color: T.ink2 }}>The other steps are still loading.</span>}
+            </>}
+      </div>
+    );
+  })();
+
+  /* a card floating over the map (desktops and tablets) */
+  const card = (title, note, onClose, body, pos) => (
+    <div role="dialog" aria-label={title} style={{ ...T.glass, borderRadius: 22, position: 'absolute', zIndex: 6, padding: '10px 12px 12px', overflowY: 'auto', overflowX: 'hidden',
+      maxHeight: `calc(100% - ${topH + botH + 10}px)`, ...pos }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 0 8px 4px' }}>
+        <span style={{ flex: 1, fontSize: 12.5, fontWeight: 800 }}>{title}</span>
+        {note && <span style={{ color: T.ink2, fontSize: 11 }}>{note}</span>}
+        <IconBtn title="Close" onClick={onClose} style={{ width: 26, height: 26 }}><X size={13} /></IconBtn>
+      </div>
+      {body}
+    </div>
+  );
+  const probBar = isProb && cat && (
+    <div style={{ ...T.capsule, padding: '5px 12px 5px 5px', display: 'flex', alignItems: 'center', gap: 10, pointerEvents: 'auto', flexBasis: '100%', maxWidth: 680 }}>
+      <Seg small items={[['above', phone ? '≥' : '≥ above'], ['below', phone ? '≤' : '≤ below']]} value={dir} onChange={setDir} />
+      <input type="range" className="md-thr" min={Math.min(preset.min, thr)} max={Math.max(preset.max, thr)} step={preset.step} value={thr}
+        onChange={(e) => setThr(Number(e.target.value))} style={{ flex: 1, minWidth: 60, accentColor: T.light ? '#1f6fe0' : '#7cc8ff' }} aria-label="Threshold" />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: 2, borderRadius: 999, background: T.track, boxShadow: T.trackShadow, flexShrink: 0 }}>
+        <IconBtn title="Lower" onClick={() => nudge(-1)} style={{ width: 26, height: 26, background: 'transparent', boxShadow: 'none' }}><Minus size={13} /></IconBtn>
+        <input type="text" inputMode="decimal" value={thrText} aria-label="Threshold value"
+          onChange={(e) => { setThrText(e.target.value); const v = parseFloat(e.target.value); if (Number.isFinite(v)) setThr(v); }}
+          onBlur={() => setThrText(fmtThr(thr))}
+          onKeyDown={(e) => { if (e.key === 'ArrowUp') { e.preventDefault(); nudge(1); } if (e.key === 'ArrowDown') { e.preventDefault(); nudge(-1); } if (e.key === 'Enter') e.currentTarget.blur(); }}
+          style={{ width: `${Math.max(3, thrText.length + 1)}ch`, minWidth: 38, textAlign: 'center', border: 'none', outline: 'none', background: 'transparent',
+            color: T.ink, fontFamily: FONT, fontSize: phone ? 16 : 14, fontWeight: 800, fontVariantNumeric: 'tabular-nums', padding: '4px 0' }} />
+        <span style={{ fontSize: 12, fontWeight: 600, color: T.ink2, paddingRight: 2 }}>{fmeta?.unit || ''}</span>
+        <IconBtn title="Higher" onClick={() => nudge(1)} style={{ width: 26, height: 26, background: 'transparent', boxShadow: 'none' }}><Plus size={13} /></IconBtn>
+      </div>
+      {!narrow && <span style={{ fontSize: 11.5, color: T.ink2, whiteSpace: 'nowrap' }}>{model?.members ? `${model.members} members` : ''}</span>}
+    </div>
+  );
+  const stepBack = () => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); };
+  const stepFwd = () => { setPlaying(false); setIdx((i) => Math.min(steps.length - 1, i + 1)); };
+  const slider = (
+    <input type="range" min={0} max={Math.max(0, steps.length - 1)} value={Math.min(idx, Math.max(0, steps.length - 1))}
+      onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} style={{ flex: 1, minWidth: 60, accentColor: '#7cc8ff', height: phone ? 30 : undefined }} aria-label="Forecast step" />
+  );
+  const playBtn = (
+    <IconBtn on={playing} title={playing ? 'Pause (space)' : 'Play (space)'} onClick={() => setPlaying((p) => !p)} style={{ width: phone ? 42 : 38, height: phone ? 42 : 38, flexShrink: 0 }}>
+      {playing ? <Pause size={17} /> : <Play size={17} />}
+    </IconBtn>
+  );
+  /* a labelled tool on the phone's bottom bar */
+  const tool = (icon, label, on, onClick, badge) => (
+    <button key={label} onClick={onClick} aria-pressed={!!on} style={{ border: 'none', cursor: 'pointer', fontFamily: FONT, flex: 1, minWidth: 0, height: 46, borderRadius: 14,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, fontSize: 10.5, fontWeight: 700,
+      color: on ? T.ink : T.ink2, background: on ? T.on : 'transparent', boxShadow: on ? T.onShadow : 'none', position: 'relative' }}>
+      {icon}<span>{label}</span>
+      {badge ? <span style={{ position: 'absolute', top: 4, right: '50%', marginRight: -18, minWidth: 15, height: 15, borderRadius: 99, fontSize: 9.5, lineHeight: '15px', background: '#3d8bff', color: '#fff' }}>{badge}</span> : null}
+    </button>
   );
 
   return (
@@ -1101,308 +1441,210 @@ export default function ModelData() {
       </div>
 
       {/* top bar */}
-      <div ref={topRef} style={{ position: 'absolute', top: 10, left: 10, right: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', pointerEvents: 'none' }}>
-        <div className="md-noscroll" style={{ ...T.capsule, ...(narrow ? { borderRadius: 22 } : {}), padding: 5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: narrow ? 'wrap' : 'nowrap', overflowX: narrow ? 'visible' : 'auto', minWidth: 0, maxWidth: '100%', pointerEvents: 'auto' }}>
-          {cat ? (
-            <>
-              <Seg items={[['forecast', 'Forecast'], ['prob', 'Probability'], ['live', 'Live'], ['observed', 'Observed']]} value={mode}
-                onChange={(m) => { setMode(m); setVarOpen(false); if (m === 'observed') setShowStar(true); }} />
-              {narrow && varButton}
-              {isObs
-                ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px', fontSize: 12, fontWeight: 700, color: T.ink2, whiteSpace: 'nowrap' }}>
-                    {obsDays ? `${obsDays.length} day${obsDays.length === 1 ? '' : 's'} recorded` : 'Loading the archive…'}
-                  </span>
-                : isLive
-                ? <>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px', fontSize: 12, fontWeight: 700, color: T.ink2, whiteSpace: 'nowrap' }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 99, background: '#ff4d4f', boxShadow: '0 0 8px #ff4d4f' }} />
-                      {run ? `Latest ${new Date(run.run).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })}` : 'Starting…'}
-                    </span>
-                  </>
-                : isProb
-                ? modelPicker(cat.ensembles, ensId, (id) => { setEnsId(id); setEnsRunIso(null); })
-                : modelPicker(cat.models, modelId, (id) => { setModelId(id); setRunIso(null); })}
-              {model && !timeSteps && (
-                <div style={{ position: 'relative' }}>
-                  <select value={run?.run || ''} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} style={sel} title={model.source || `${model.label} · ${model.members} members`}>
-                    {model.runs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runLabel(r.run)} · T+{r.steps[r.steps.length - 1]}</option>)}
-                  </select>
-                  <ChevronDown style={{ position: 'absolute', right: 10, top: 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
-                </div>
+      <div ref={topRef} style={{ position: 'absolute', top: phone ? 8 : 10, left: phone ? 8 : 10, right: phone ? 8 : 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', pointerEvents: 'none' }}>
+        {layout === 'desktop' ? (
+          <>
+            <div className="md-noscroll" style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', overflowX: 'auto', minWidth: 0, maxWidth: '100%', pointerEvents: 'auto' }}>
+              {cat ? (
+                <>
+                  {modeSeg}
+                  {isObs
+                    ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px', fontSize: 12, fontWeight: 700, color: T.ink2, whiteSpace: 'nowrap' }}>{chipSub}</span>
+                    : isLive
+                    ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px', fontSize: 12, fontWeight: 700, color: T.ink2, whiteSpace: 'nowrap' }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 99, background: '#ff4d4f', boxShadow: '0 0 8px #ff4d4f' }} />
+                        {liveTime ? `Latest ${liveTime}` : 'Starting…'}
+                      </span>
+                    : isProb
+                    ? modelPicker(cat.ensembles, ensId, chooseModel)
+                    : modelPicker(cat.models, modelId, chooseModel)}
+                  {runSelect}
+                  {varButton}
+                </>
+              ) : (
+                <span style={{ padding: '6px 10px', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', color: err ? '#fca5a5' : T.ink2 }}>
+                  {!err && <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />}{err || 'Finding the latest runs…'}
+                </span>
               )}
-              {!narrow && varButton}
-            </>
-          ) : (
-            <span style={{ padding: '6px 10px', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', color: err ? '#fca5a5' : T.ink2 }}>
-              {!err && <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />}{err || 'Finding the latest runs…'}
-            </span>
-          )}
-        </div>
-        <div style={{ flex: 1 }} />
-        {narrow
-          ? <div style={{ ...T.capsule, padding: 5, pointerEvents: 'auto', flexShrink: 0 }}><IconBtn on={mapOpen} title="Map, frame and layers" onClick={() => { setMapOpen((o) => !o); setVarOpen(false); }}><Layers size={15} /></IconBtn></div>
-          : <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{styleSeg}{frameSeg}{smoothPill}{layersBtn}</div>}
-        {isProb && cat && (
-          <div style={{ ...T.capsule, padding: '5px 12px 5px 5px', display: 'flex', alignItems: 'center', gap: 10, pointerEvents: 'auto', flexBasis: '100%', maxWidth: 680 }}>
-            <Seg small items={[['above', '≥ above'], ['below', '≤ below']]} value={dir} onChange={setDir} />
-            <input type="range" className="md-thr" min={Math.min(preset.min, thr)} max={Math.max(preset.max, thr)} step={preset.step} value={thr}
-              onChange={(e) => setThr(Number(e.target.value))} style={{ flex: 1, minWidth: 70, accentColor: T.light ? '#1f6fe0' : '#7cc8ff' }} aria-label="Threshold" />
-            <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: 2, borderRadius: 999, background: T.track, boxShadow: T.trackShadow, flexShrink: 0 }}>
-              <IconBtn title="Lower" onClick={() => nudge(-1)} style={{ width: 26, height: 26, background: 'transparent', boxShadow: 'none' }}><Minus size={13} /></IconBtn>
-              <span style={{ fontSize: 13, fontWeight: 800, color: T.ink2 }}>{dir === 'below' ? '≤' : '≥'}</span>
-              <input type="text" inputMode="decimal" value={thrText} aria-label="Threshold value"
-                onChange={(e) => { setThrText(e.target.value); const v = parseFloat(e.target.value); if (Number.isFinite(v)) setThr(v); }}
-                onBlur={() => setThrText(fmtThr(thr))}
-                onKeyDown={(e) => { if (e.key === 'ArrowUp') { e.preventDefault(); nudge(1); } if (e.key === 'ArrowDown') { e.preventDefault(); nudge(-1); } if (e.key === 'Enter') e.currentTarget.blur(); }}
-                style={{ width: `${Math.max(3, thrText.length + 1)}ch`, minWidth: 38, textAlign: 'center', border: 'none', outline: 'none', background: 'transparent',
-                  color: T.ink, fontFamily: FONT, fontSize: 14, fontWeight: 800, fontVariantNumeric: 'tabular-nums', padding: '4px 0' }} />
-              <span style={{ fontSize: 12, fontWeight: 600, color: T.ink2, paddingRight: 2 }}>{fmeta?.unit || ''}</span>
-              <IconBtn title="Higher" onClick={() => nudge(1)} style={{ width: 26, height: 26, background: 'transparent', boxShadow: 'none' }}><Plus size={13} /></IconBtn>
             </div>
-            <span className="hidden md:inline" style={{ fontSize: 11.5, color: T.ink2, whiteSpace: 'nowrap' }}>{model?.members ? `${model.members} members` : ''}</span>
+            <div style={{ flex: 1 }} />
+            <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{styleSeg}{frameSeg}{smoothPill}{layersBtn}</div>
+          </>
+        ) : (
+          <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flex: 1, minWidth: 0 }}>
+            {phone ? modeBtn : modeSeg}
+            {dataChip}
+            {!phone && layersBtn}
           </div>
         )}
+        {probBar}
       </div>
-      {mapOpen && (
-        <div style={{ ...T.glass, borderRadius: 22, position: 'absolute', right: 10, top: (topRef.current?.offsetHeight || 46) + 18, width: 'min(300px, calc(100% - 20px))',
-          maxHeight: `calc(100% - ${(topRef.current?.offsetHeight || 46) + (botRef.current?.offsetHeight || 56) + 46}px)`, overflowY: 'auto', padding: 10, zIndex: 6, display: 'grid', gap: 8 }}>
-          {narrow && <div style={{ display: 'grid', gap: 8, justifyItems: 'start', padding: '2px 2px 8px', borderBottom: `1px solid ${T.line}` }}>{styleSeg}{frameSeg}{smoothPill}</div>}
-          <div style={{ display: 'flex', alignItems: 'center', padding: '0 4px 0 8px' }}>
-            <span style={{ flex: 1, fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: T.ink2 }}>Layers</span>
-            <IconBtn title="Close" onClick={() => setMapOpen(false)} style={{ width: 26, height: 26 }}><X size={13} /></IconBtn>
-          </div>
-          {layerRows}
-        </div>
-      )}
 
-      {/* variable picker */}
-      {varOpen && cat && !mapOpen && (
-        <div style={{ ...T.glass, borderRadius: 24, position: 'absolute', left: 10, top: (topRef.current?.offsetHeight || 46) + 18, width: 'min(560px, calc(100% - 20px))',
-          maxHeight: '62%', overflowY: 'auto', padding: 14, zIndex: 5 }}>
+      {/* desktop: the layer picker and the layers, as cards under the top bar */}
+      {layout === 'desktop' && mapOpen && card('Layers', null, () => setMapOpen(false), layerRows, { right: 10, top: topH, width: 300 })}
+      {layout === 'desktop' && varOpen && cat && !mapOpen && (
+        <div style={{ ...T.glass, borderRadius: 24, position: 'absolute', left: 10, top: topH, width: 'min(560px, calc(100% - 20px))', maxHeight: '62%', overflowY: 'auto', padding: 14, zIndex: 5 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderRadius: 999, background: T.track }}>
-              <Search size={14} style={{ opacity: 0.6 }} />
-              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={isLive ? 'Search radar, satellite…' : isProb ? 'Search wind, rain, frost, snow…' : 'Search variables'}
-                style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: T.ink, fontFamily: FONT, fontSize: 13 }} />
-            </div>
+            {searchBox(true)}
             <IconBtn title="Close" onClick={() => setVarOpen(false)}><X size={15} /></IconBtn>
           </div>
-          {groups.map(([g, list]) => (
-            <div key={g} style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '2px 4px 6px' }}>{g}</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {list.map(([k, v]) => (
-                  <button key={k} onClick={() => { if (isObs) setObsKey(k); else if (isLive) setLiveKey(k); else if (isProb) choosePreset(k); else setVarKey(k); setVarOpen(false); }} style={{
-                    border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 999,
-                    color: k === (isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey) ? '#fff' : T.ink3,
-                    background: k === (isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey) ? (T.light ? 'linear-gradient(180deg, #4b95ff, #1f6fe0)' : 'linear-gradient(180deg, rgba(110,180,255,0.55), rgba(60,130,240,0.4))') : T.chip,
-                    boxShadow: k === (isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey) ? 'inset 0 1px 0 rgba(255,255,255,0.5)' : T.chipShadow,
-                  }}>{v.label}</button>
-                ))}
-              </div>
-            </div>
-          ))}
-          {model && <div style={{ fontSize: 11, color: T.ink2, margin: '4px 4px 0' }}>{isObs
-            ? "Each day's highs, lows and totals across the UK and Ireland, kept from 20 October 2026 onwards: step back through the days on the timeline. Temperature, wind, pressure and humidity come from a 15-minute analysis that starts from the Met Office UKV model and is pulled to what the airport weather stations (METAR) measured; rainfall is the Met Office radar's own total."
-            : isLive
-            ? "Live, observed: Met Office 1 km rain radar every 15 minutes (AWS), Meteosat-12 imagery every 10 minutes and Meteosat 0° every 15 (EUMETSAT), lightning from the Met Office LEELA network. 'Now' layers are a 15-minute analysis: the Met Office UKV model corrected to the UK and Irish airport weather reports (METAR), with the radar's rain and LEELA lightning for the weather symbols."
-            : isProb
-            ? `${model.label}: ${model.members} members. The chance is the share of members past your threshold, so drag the slider to ask a different question. Flooding uses 24 h rain or ECMWF runoff (wet ground runs off more); it is a signal, not a river forecast.`
-            : model.source}</div>}
+          {varGroups}
+          {pickerNote}
         </div>
       )}
+      {/* tablet: the same, as cards */}
+      {layout === 'tablet' && varOpen && card('Model, run and layer', null, closePanels, dataBody, { left: 10, top: topH, width: 'min(460px, calc(100% - 20px))' })}
+      {layout === 'tablet' && mapOpen && card('Map and layers', null, closePanels,
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div style={{ display: 'grid', gap: 8, justifyItems: 'start', paddingBottom: 8, borderBottom: `1px solid ${T.line}` }}>{styleSeg}{frameSeg}{smoothPill}</div>
+          {layerRows}
+        </div>, { right: 10, top: topH, width: 320 })}
+      {layout === 'tablet' && regionsOpen && card('Zoom to', null, closePanels, regionList, { right: 10, bottom: botH, width: 240 })}
+      {layout === 'tablet' && exp.open && card('Export', null, closePanels, <>{exportBody}<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback</span>{speedSelect}</div></>,
+        { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
 
       <style>{'.md-noscroll::-webkit-scrollbar{display:none}.md-noscroll{scrollbar-width:none}'
         + '.md-thr{height:28px;cursor:pointer}.md-thr::-webkit-slider-thumb{width:22px;height:22px}.md-thr::-moz-range-thumb{width:22px;height:22px}'}</style>
-      {/* zoom */}
-      <div className="hidden sm:flex" style={{ ...T.capsule, position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', padding: 5, flexDirection: 'column', gap: 5 }}>
-        <IconBtn title="Zoom in" onClick={() => zoomBy(1.35)}><ZoomIn size={15} /></IconBtn>
-        <IconBtn title="Zoom out" onClick={() => zoomBy(1 / 1.35)}><ZoomOut size={15} /></IconBtn>
-        <IconBtn title="UK & Ireland" onClick={() => fit(REGIONS.uk.box)}><Maximize size={14} /></IconBtn>
-        <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => setRegionsOpen((o) => !o)}><MapIcon size={14} /></IconBtn>
-      </div>
-      {regionsOpen && (
-        <div style={{ ...T.glass, borderRadius: 18, position: 'absolute', right: 58, top: '50%', transform: 'translateY(-50%)', padding: 6, display: 'grid', gap: 2, zIndex: 6 }}>
-          {Object.entries(REGIONS).map(([k, r]) => (
-            <button key={k} onClick={() => { fit(r.box); setRegionsOpen(false); }} style={{ all: 'unset', cursor: 'pointer', padding: '7px 12px', borderRadius: 10, fontSize: 12.5, fontWeight: 650, color: T.ink3 }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = T.chip; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>{r.label}</button>
-          ))}
+
+      {/* desktop: zoom buttons and regions (phones and tablets pinch, and have Regions on the bottom bar) */}
+      {layout === 'desktop' && (
+        <div style={{ ...T.capsule, position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', padding: 5, display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <IconBtn title="Zoom in (+)" onClick={() => zoomBy(1.35)}><ZoomIn size={15} /></IconBtn>
+          <IconBtn title="Zoom out (−)" onClick={() => zoomBy(1 / 1.35)}><ZoomOut size={15} /></IconBtn>
+          <IconBtn title="UK & Ireland" onClick={() => fit(REGIONS.uk.box)}><Maximize size={14} /></IconBtn>
+          <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => setRegionsOpen((o) => !o)}><MapIcon size={14} /></IconBtn>
         </div>
       )}
+      {layout === 'desktop' && regionsOpen && (
+        <div style={{ ...T.glass, borderRadius: 18, position: 'absolute', right: 58, top: '50%', transform: 'translateY(-50%)', padding: 6, zIndex: 6 }}>{regionList}</div>
+      )}
 
-      {hover && vmeta && (
+      {hover && vmeta && layout === 'desktop' && (
         <div style={{ ...T.capsule, position: 'absolute', left: hover.x, top: hover.y + 12, transform: hover.x > hover.w - 200 ? 'translateX(calc(-100% - 14px))' : 'translateX(14px)',
           pointerEvents: 'none', padding: '5px 11px', fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap' }}>
           {fmtPoint(hover.v)}
         </div>
       )}
       {newRun && (
-        <div style={{ ...T.capsule, position: 'absolute', left: 10, bottom: (botRef.current?.offsetHeight || 56) + 18, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ ...T.capsule, position: 'absolute', left: 10, bottom: botH, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center', zIndex: 3 }}>
           <span style={{ width: 8, height: 8, borderRadius: 99, background: '#34d399', boxShadow: '0 0 8px #34d399' }} />{newRun}
         </div>
       )}
       {isObs && (!obsDays || (obsDays.length && !frame)) && (
-        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', whiteSpace: 'nowrap' }}>
           <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />Loading the observed days…
         </div>
       )}
       {isObs && obsDays && !obsDays.length && (
-        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '7px 14px', fontSize: 12.5 }}>
+        <div style={{ ...T.capsule, position: 'absolute', left: 10, right: 10, margin: '0 auto', maxWidth: 520, ...noticePos, padding: '7px 14px', fontSize: 12.5, textAlign: 'center' }}>
           The first observed day is being built from today's radar and station reports — back in a few minutes.
         </div>
       )}
-      {isObs && obsPanel && frame && (() => {
-        const s = obsSummary[dayOf(Date.parse(frame.head.valid))];
-        if (!s) return null;
-        const rows = ['t2_max', 't2_min', 'precip_total', 'rain_rate_max', 'gust10_max', 'wind10_max', 'mslp_min', 'windchill_min'].map((k) => [k, s.fields?.[k]]).filter(([, v]) => v?.value != null);
-        const st = s.stations || [];
-        const top = (k, fn) => st.filter((x) => x[k] != null).sort((a, b) => fn(a[k], b[k]))[0];
-        const sw = top('tmax', (a, b) => b - a), sc = top('tmin', (a, b) => a - b), sg = top('gust', (a, b) => b - a);
-        return (
-          <div style={{ ...T.glass, borderRadius: 20, position: 'absolute', left: 10, width: narrow ? 'min(340px, calc(100% - 20px))' : OBS_PANEL_W,
-            ...(narrow ? { bottom: (botRef.current?.offsetHeight || 56) + 18 } : { top: (topRef.current?.offsetHeight || 46) + 18, maxHeight: `calc(100% - ${(topRef.current?.offsetHeight || 46) + (botRef.current?.offsetHeight || 56) + 46}px)` }),
-            overflowY: 'auto', overflowX: 'hidden', padding: '10px 10px 12px', fontSize: 12, display: 'grid', gap: 2, alignContent: 'start', zIndex: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 0 6px 8px' }}>
-              <span style={{ fontWeight: 800, fontSize: 12.5, flex: 1 }}>UK & Ireland · {new Date(`${s.day}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
-              <span style={{ color: T.ink2, fontSize: 11 }} title="15-minute analyses folded into the day">{s.day === londonToday() ? 'so far today' : `${s.analyses}/96 analyses`}</span>
-              <IconBtn title="Hide" onClick={() => setObsPanel(false)} style={{ width: 24, height: 24 }}><X size={12} /></IconBtn>
-            </div>
-            {rows.map(([k, v]) => (
-              <button key={k} onClick={() => setObsKey(k)} title={`Show ${v.label.toLowerCase()} on the map`} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer',
-                display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'center', columnGap: 10, padding: '5px 8px', borderRadius: 10,
-                background: k === obsKey ? T.chip : 'transparent' }}>
-                <span style={{ minWidth: 0 }}>
-                  <span style={{ display: 'block', color: T.ink3, fontWeight: 650 }}>{v.label}</span>
-                  <span style={{ display: 'block', color: T.ink2, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.place || ''}</span>
-                </span>
-                <span style={{ fontWeight: 800, fontSize: 13.5, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmtValue(v.value, v.unit)}</span>
-              </button>
-            ))}
-            <div style={{ color: T.ink2, padding: '6px 8px 4px' }}>Lightning: <b style={{ color: T.ink }}>{(s.lightning || 0).toLocaleString('en-GB')}</b> strike{s.lightning === 1 ? '' : 's'}</div>
-            {(sw || sc || sg) && <div style={{ height: 1, background: T.line, margin: '4px 8px' }} />}
-            {(sw || sc || sg) && (
-              <div style={{ padding: '2px 8px', display: 'grid', gap: 3, color: T.ink2 }}>
-                <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Station reports (METAR)</span>
-                {sw && <span>Warmest: <b style={{ color: T.ink }}>{sw.tmax}°C</b> {sw.name}</span>}
-                {sc && <span>Coldest: <b style={{ color: T.ink }}>{sc.tmin}°C</b> {sc.name}</span>}
-                {sg && <span>Strongest gust: <b style={{ color: T.ink }}>{Math.round(sg.gust)} mph</b> {sg.name}</span>}
-              </div>
-            )}
-          </div>
-        );
-      })()}
-      {isObs && !obsPanel && (
-        <div style={{ ...T.capsule, position: 'absolute', left: 10, bottom: (botRef.current?.offsetHeight || 56) + 18, padding: 4 }}>
+      {/* the observed day: docked beside the frame where there is room; otherwise a card or a sheet */}
+      {isObs && obsPanel && summaryBody && sidePanel && card(summaryTitle, summaryNote, () => setObsPanel(false), summaryBody, { left: 10, top: topH, width: OBS_PANEL_W })}
+      {isObs && obsPanel && summaryBody && !sidePanel && layout === 'tablet' && card(summaryTitle, summaryNote, closePanels, summaryBody, { left: 10, bottom: botH, width: 'min(340px, calc(100% - 20px))' })}
+      {isObs && !obsPanel && layout === 'desktop' && (
+        <div style={{ ...T.capsule, position: 'absolute', left: 10, bottom: botH, padding: 4 }}>
           <IconBtn title="Show the day's extremes" onClick={() => setObsPanel(true)}><Star size={14} /></IconBtn>
         </div>
       )}
       {isLive && liveProd && !frame && (
-        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', whiteSpace: 'nowrap' }}>
           <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />{liveProd.times?.length ? 'Loading the latest images…' : 'The first images are being fetched…'}
         </div>
       )}
       {(!frame || pending > 0) && key && (
-        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', whiteSpace: 'nowrap' }}>
           <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />
           {!status ? 'Starting…' : `Fetching from AWS · ${loadedCount}/${steps.length}`}
         </div>
       )}
 
-      {/* a clicked point: its value now and through the steps */}
-      {pin && !exp.open && (() => {
-        const vals = steps.map((s) => (frames[s] ? sampleFrame(disp(frames[s]), pin.gx, pin.gy) : NaN));
-        const at = Math.min(idx, Math.max(0, steps.length - 1));
-        const numeric = !['wx', 'wdir10', 'mwd'].includes(scaleKey);
-        const fin = vals.filter(Number.isFinite);
-        const c = (statics?.cities || []).reduce((b, x) => { const d = Math.hypot(x.x - pin.gx, x.y - pin.gy); return !b || d < b.d ? { d, n: x.name } : b; }, null);
-        const km = c ? c.d * 2 : null;
-        const where = !c ? 'Picked point' : km < 6 ? c.n : km < 20 ? `Near ${c.n}` : `${Math.round(km)} km from ${c.n}`;
-        return (
-          <div style={{ ...T.glass, borderRadius: 20, position: 'absolute', right: 10, bottom: (botRef.current?.offsetHeight || 56) + 18, width: 'min(300px, calc(100% - 20px))', padding: '10px 12px 12px', display: 'grid', gap: 6, zIndex: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <MapPin size={14} style={{ color: '#ffd23f', flexShrink: 0 }} />
-              <span style={{ flex: 1, fontSize: 12.5, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{where}</span>
-              <IconBtn title="Close (Esc)" onClick={() => setPin(null)} style={{ width: 24, height: 24 }}><X size={12} /></IconBtn>
-            </div>
-            {isImg
-              ? <span style={{ fontSize: 12, color: T.ink2 }}>Satellite pictures carry no values: choose a radar, model, “now” or observed layer.</span>
-              : <>
-                  <div>
-                    <div style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmtPoint(vals[at])}</div>
-                    <div style={{ fontSize: 11.5, color: T.ink2 }}>{vmeta?.label} · {validLabel}</div>
-                  </div>
-                  {numeric && fin.length > 1 && (
-                    <>
-                      <Sparkline values={vals} at={at} onPick={(i) => { setPlaying(false); setIdx(Math.max(0, Math.min(steps.length - 1, i))); }} />
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: T.ink2 }}>
-                        <span>{stepLabel(steps[0])}</span>
-                        <span>low {fmtValue(Math.min(...fin), vmeta?.unit)} · high {fmtValue(Math.max(...fin), vmeta?.unit)}</span>
-                        <span>{stepLabel(steps[steps.length - 1])}</span>
-                      </div>
-                    </>
-                  )}
-                  {numeric && fin.length <= 1 && steps.length > 1 && <span style={{ fontSize: 11.5, color: T.ink2 }}>The other steps are still loading.</span>}
-                </>}
-          </div>
-        );
-      })()}
+      {!exp.open && !(phone && (varOpen || mapOpen || regionsOpen || obsPanel || modeOpen)) && pinCard}
 
-      {/* export sheet */}
-      {exp.open && (
-        <div style={{ ...T.glass, borderRadius: 24, position: 'absolute', right: 10, bottom: (botRef.current?.offsetHeight || 56) + 18, width: 'min(380px, calc(100% - 20px))', padding: 14, display: 'grid', gap: 12, fontSize: 12.5 }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5 }}>Export <span style={{ color: T.ink2, fontWeight: 500 }}>· {FRAMES[frameKey].a ? FRAMES[frameKey].label : 'as framed'} · exactly as previewed</span></div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
-            <Seg small items={[[1080, '1080p'], [2160, '4K']]} value={exp.png} onChange={(v) => setExp((x) => ({ ...x, png: v }))} />
-            <button onClick={exportPng} disabled={!frame} style={{ ...sel, padding: '7px 14px', display: 'flex', gap: 6, alignItems: 'center', background: T.btn }}><ImageIcon size={14} />PNG of this step</button>
+      {/* desktop: the export card above the timeline */}
+      {layout === 'desktop' && exp.open && card('Export', null, () => setExp((e) => ({ ...e, open: false })), exportBody, { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
+
+      {/* bottom bar */}
+      {layout === 'desktop' ? (
+        <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'min(980px, calc(100% - 20px))', padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <IconBtn title="Previous step (←)" onClick={stepBack}><ChevronLeft size={16} /></IconBtn>
+          {playBtn}
+          <IconBtn title="Next step (→)" onClick={stepFwd}><ChevronRight size={16} /></IconBtn>
+          {slider}
+          <span style={{ fontSize: 12.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', padding: '0 4px' }}>
+            {validLabel}<span style={{ color: T.ink2, fontWeight: 600 }}>{subLabel && !isObs ? ` · ${subLabel}` : ''}</span>
+          </span>
+          {speedSelect}
+          <IconBtn on={exp.open} title="Export PNG / GIF" onClick={() => setExp((e) => ({ ...e, open: !e.open }))} style={{ width: 38, height: 38 }}><Download size={16} /></IconBtn>
+        </div>
+      ) : layout === 'tablet' ? (
+        <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'calc(100% - 20px)', maxWidth: 1060, padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <IconBtn title="Previous step" onClick={stepBack} style={{ width: 38, height: 38 }}><ChevronLeft size={17} /></IconBtn>
+          {playBtn}
+          <IconBtn title="Next step" onClick={stepFwd} style={{ width: 38, height: 38 }}><ChevronRight size={17} /></IconBtn>
+          {slider}
+          <span style={{ display: 'grid', lineHeight: 1.15, padding: '0 4px', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ fontSize: 12.5, fontWeight: 800 }}>{validLabel}</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: T.ink2 }}>{subLabel}</span>
+          </span>
+          <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => openPanel('regions')} style={{ width: 38, height: 38 }}><MapIcon size={16} /></IconBtn>
+          {isObs && <IconBtn on={obsPanel} title="The day's extremes" onClick={() => (sidePanel ? setObsPanel(false) : openPanel('summary'))} style={{ width: 38, height: 38 }}><Star size={16} /></IconBtn>}
+          <IconBtn on={exp.open} title="Export PNG / GIF" onClick={() => openPanel('export')} style={{ width: 38, height: 38 }}><Download size={16} /></IconBtn>
+        </div>
+      ) : (
+        <div ref={botRef} style={{ ...T.glass, position: 'absolute', left: 8, right: 8, bottom: 22, borderRadius: 24, padding: '6px 6px 4px', display: 'grid', gap: 2 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 4px' }}>
+            {playBtn}
+            {slider}
+            <span style={{ display: 'grid', lineHeight: 1.15, textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+              <span style={{ fontSize: 12.5, fontWeight: 800 }}>{validLabel.replace(/^(\w+) (\d+),/, '$1 $2 ·')}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: T.ink2 }}>{subLabel}</span>
+            </span>
           </div>
-          <div style={{ height: 1, background: T.line }} />
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <span style={{ color: T.ink2 }}>From</span>
-            <select value={exp.from} onChange={(e) => setExp((x) => ({ ...x, from: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }}>
-              {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>{stepLabel(s)}</option>)}
-            </select>
-            <span style={{ color: T.ink2 }}>to</span>
-            <select value={exp.to ?? steps.length - 1} onChange={(e) => setExp((x) => ({ ...x, to: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }}>
-              {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>{stepLabel(s)}</option>)}
-            </select>
+          <div style={{ display: 'flex', gap: 2 }}>
+            {tool(<ChevronLeft size={18} />, 'Back', false, stepBack)}
+            {tool(<ChevronRight size={18} />, 'Next', false, stepFwd)}
+            {tool(<Layers size={18} />, 'Layers', mapOpen, () => openPanel('layers'), layerCount)}
+            {tool(<MapIcon size={18} />, 'Regions', regionsOpen, () => openPanel('regions'))}
+            {isObs && tool(<Star size={18} />, 'Day', obsPanel, () => openPanel('summary'))}
+            {tool(<Download size={18} />, 'Export', exp.open, () => openPanel('export'))}
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <span style={{ color: T.ink2 }}>Frame</span>
-            <input type="number" min={40} max={5000} step={10} value={speed} onChange={(e) => setSpeed(Math.max(40, Math.min(5000, Number(e.target.value) || 450)))}
-              style={{ ...sel, width: 84, padding: '6px 10px', cursor: 'text' }} />
-            <span style={{ color: T.ink2 }}>ms</span>
-            <Seg small items={[[540, '540p'], [720, '720p'], [1080, '1080p']]} value={exp.gif} onChange={(v) => setExp((x) => ({ ...x, gif: v }))} />
-          </div>
-          {exp.busy == null
-            ? <button onClick={exportGif} disabled={pending > 0} style={{ ...sel, justifySelf: 'stretch', padding: '9px 14px', display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', color: pending > 0 ? T.ink2 : '#fff', background: pending > 0 ? T.chip : 'linear-gradient(180deg, rgba(110,180,255,0.75), rgba(60,130,240,0.65))' }}>
-                <Film size={14} />{pending > 0 ? `GIF — waiting for ${pending} frames` : 'GIF of the run'}
-              </button>
-            : <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ flex: 1, height: 6, borderRadius: 3, background: T.line, overflow: 'hidden' }}><div style={{ height: '100%', width: `${Math.round(exp.busy * 100)}%`, background: 'linear-gradient(90deg,#7cc8ff,#3d8bff)' }} /></div>
-                {Math.round(exp.busy * 100)}%
-                <button onClick={() => { gifCancel.current = true; }} style={{ ...sel, padding: '5px 10px' }}>Cancel</button>
-              </div>}
         </div>
       )}
 
-      {/* timeline */}
-      <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'min(980px, calc(100% - 20px))', padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <IconBtn title="Previous step (←)" onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }}><ChevronLeft size={16} /></IconBtn>
-        <IconBtn on={playing} title={playing ? 'Pause (space)' : 'Play (space)'} onClick={() => setPlaying((p) => !p)} style={{ width: 38, height: 38 }}>{playing ? <Pause size={16} /> : <Play size={16} />}</IconBtn>
-        <IconBtn title="Next step (→)" onClick={() => { setPlaying(false); setIdx((i) => Math.min(steps.length - 1, i + 1)); }}><ChevronRight size={16} /></IconBtn>
-        <input type="range" min={0} max={Math.max(0, steps.length - 1)} value={Math.min(idx, Math.max(0, steps.length - 1))}
-          onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} style={{ flex: 1, minWidth: 80, accentColor: '#7cc8ff' }} aria-label="Forecast step" />
-        <span style={{ fontSize: 12.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', padding: '0 4px' }}>
-          {validLabel}<span style={{ color: T.ink2, fontWeight: 600 }}>{step == null || isObs ? '' : isLive ? ` · ${Math.max(0, Math.round((Date.now() - step) / 60e3))} min ago` : ` · T+${step}`}</span>
-        </span>
-        <div style={{ position: 'relative' }} className="hidden sm:block">
-          <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} style={{ ...sel, padding: '7px 26px 7px 10px' }} title="Playback and GIF speed">
-            {[120, 200, 300, 450, 650, 900, 1300, 2000].map((v) => <option key={v} value={v} style={{ color: '#111' }}>{(1000 / v).toFixed(v > 500 ? 1 : 0)} fps</option>)}
-          </select>
-          <ChevronDown style={{ position: 'absolute', right: 8, top: 9, width: 13, height: 13, pointerEvents: 'none', opacity: 0.7 }} />
-        </div>
-        <IconBtn on={exp.open} title="Export PNG / GIF" onClick={() => setExp((e) => ({ ...e, open: !e.open }))} style={{ width: 38, height: 38 }}><Download size={16} /></IconBtn>
-      </div>
+      {/* phone: everything else as sheets from the bottom */}
+      {phone && modeOpen && (
+        <Sheet title="View" onClose={closePanels}>
+          <div style={{ display: 'grid', gap: 6 }}>
+            {MODE_INFO.map(([k, l, d]) => (
+              <button key={k} onClick={() => setModeTo(k)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', padding: '12px 14px', borderRadius: 14,
+                background: k === mode ? T.on : T.chip, boxShadow: k === mode ? T.onShadow : 'none' }}>
+                <span style={{ display: 'block', fontSize: 15, fontWeight: 800, color: T.ink }}>{l}</span>
+                <span style={{ display: 'block', fontSize: 12.5, color: T.ink2, marginTop: 2 }}>{d}</span>
+              </button>
+            ))}
+          </div>
+        </Sheet>
+      )}
+      {phone && varOpen && <Sheet title={timeSteps ? 'Layer' : 'Model, run and layer'} onClose={closePanels} tall>{dataBody}</Sheet>}
+      {phone && mapOpen && (
+        <Sheet title="Map and layers" onClose={closePanels} clear>
+          <div style={{ display: 'grid', gap: 10 }}>
+            <div className="md-noscroll" style={{ overflowX: 'auto' }}>{styleSeg}</div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>{frameSeg}{smoothPill}</div>
+            {layerRows}
+          </div>
+        </Sheet>
+      )}
+      {phone && regionsOpen && <Sheet title="Zoom to" onClose={closePanels} clear>{regionList}</Sheet>}
+      {phone && exp.open && (
+        <Sheet title="Export" onClose={closePanels}>
+          {exportBody}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback</span>{speedSelect}</div>
+        </Sheet>
+      )}
+      {phone && isObs && obsPanel && summaryBody && <Sheet title={summaryTitle} note={summaryNote} onClose={closePanels} clear>{summaryBody}</Sheet>}
     </div>
     </ThemeCtx.Provider>
   );
