@@ -15,14 +15,13 @@ UKV IS the display grid and is never resampled.
 """
 from __future__ import annotations
 
-import math
 import re
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
-from .common import NC_LOCK, NX, NY, X0, DX, Y_TOP, regular_frac, smooth_sample
+from .common import NC_LOCK, NX, NY, X0, DX, regular_frac, smooth_sample
 
 from nova.io_aws import decode_grib, ecmwf_index, exists, fetch_ranges, get, open_nc   # noqa: E402
 
@@ -140,6 +139,22 @@ def _wdir(u, v):
     """Meteorological direction (degrees the wind blows FROM) of earth-relative u, v."""
     with np.errstate(invalid='ignore'):
         return np.mod(np.degrees(np.arctan2(-u, -v)), 360.0)
+
+
+_LAND = None
+
+
+def _sea_only(a):
+    """A wave field over the sea only. The smooth resampling of a 0.25-degree wave grid carries
+    sea values up to a grid cell inland, so the display grid's land (Natural Earth) is blanked."""
+    global _LAND
+    if _LAND is None:
+        from .common import STATIC
+        try:
+            _LAND = np.load(STATIC / 'land_mask.npy')
+        except Exception:
+            _LAND = np.zeros((NY, NX), bool)
+    return np.where(_LAND, np.nan, a).astype(np.float32)
 
 
 def _dewpoint(t, rh):
@@ -463,6 +478,8 @@ class ECMWF:
     def field(self, run, h, var, prev_h, prev_raw=None):
         S = self.SPEC[var]
         A = self._get(run, h, S, wave=var in self.WAVE)
+        if var in self.WAVE:
+            return _sea_only(A[0])
         if var in ('t2', 'td2', 'tskin', 't850', 't500'):
             return A[0] - 273.15
         if var == 'wdir10':
@@ -611,6 +628,8 @@ class GFS:
                 A.append(_wdir(-ECMWF._to_display(self, np.sin(r), meta), -ECMWF._to_display(self, np.cos(r), meta)))
                 continue
             A.append(ECMWF._to_display(self, a, meta))
+        if wave:
+            return _sea_only(A[0])
         if var in ('t2', 'td2', 'tskin', 'feels', 't850', 't500'):
             return A[0] - 273.15
         if var == 'wdir10':

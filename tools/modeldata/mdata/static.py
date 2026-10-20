@@ -13,7 +13,6 @@ grid.json     the projection
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -21,7 +20,7 @@ from pyproj import Transformer
 from scipy import ndimage
 
 from .common import DX, NX, NY, PROJ, REPO, STATIC, X0, Y_TOP, grid_meta, write_json
-from .models import UKV, _s3_list
+from .models import UKV
 
 SS = 2                                                   # basemap supersampling
 TOPO = REPO / 'node_modules' / 'world-atlas'
@@ -178,7 +177,6 @@ def land_mask():
 
 def orography():
     """UKV's own 2 km orography (any recent run carries it)."""
-    from .common import NC_LOCK  # noqa: F401
     m = UKV()
     for r, steps in m.runs(n=2):
         try:

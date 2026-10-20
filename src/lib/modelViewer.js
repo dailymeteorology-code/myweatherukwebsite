@@ -1,16 +1,17 @@
-/* Model Data viewer engine: frames, colour scales, contours, the drawn scene and exports.
+/* Model Data viewer engine: frames, colour scales, contours, overlays, the drawn scene and
+   exports.
 
    Every model arrives on ONE display grid: the Met Office UKV grid (Lambert equal-area,
-   1042 x 970 cells of exactly 2 km). UKV is drawn cell for cell; coarser models arrive as
-   blocks of their own cells (nearest neighbour on the server), so nothing looks finer than
-   the model really is. "Native grid" draws each cell as a hard-edged square; "Smooth"
-   only blends neighbouring pixels on screen. */
+   1042 x 970 cells of exactly 2 km). UKV is drawn cell for cell; coarser models arrive
+   interpolated smoothly on the server (clamped cubic), the live radar and satellite at 1 km
+   (2084 x 1940). "Pixels" draws the UKV and radar cells as they are; "Smooth" interpolates
+   the rain values before colouring (smoothCanvas) and blends other fields on screen. */
 import { contours as d3contours } from 'd3-contour';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 
 export const API = '/api/modeldata';
 /* bump when frames are re-made differently (v2: coarse models smooth, not blocks) */
-export const FRAME_V = 2;
+const FRAME_V = 2;
 export const NX = 1042;
 export const NY = 970;
 
@@ -138,6 +139,10 @@ const SCALES = {
     [5, '#efd23a', 230], [6, '#f08b2c', 236], [8, '#dc3a3a', 242], [10, '#a52284', 248], [14, '#f2e6ff', 252]], floor: 0.25, discrete: true,
   ticks: [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 14], contours: [2, 4, 6, 8], label: true, line: 'rgba(236,243,250,0.75)' },
   mwp: { stops: [[2, '#1f2f5c', 150], [5, '#3d5fd0', 170], [8, '#3d93d8', 185], [11, '#6cc04a', 200], [14, '#efd23a', 215], [17, '#f08b2c', 225], [20, '#dc3a3a', 235]], ticks: [3, 5, 8, 11, 14, 17, 20] },
+  pp1d: { stops: [[2, '#1f2f5c', 150], [5, '#3d5fd0', 170], [8, '#3d93d8', 185], [11, '#6cc04a', 200], [14, '#efd23a', 215], [17, '#f08b2c', 225], [22, '#dc3a3a', 235]], ticks: [3, 5, 8, 11, 14, 17, 22] },
+  mwd: { stops: [[0, '#000000', 0], [360, '#000000', 0]], ticks: [] },
+  dust_aod: { stops: [[0.02, '#e9e1c8', 0], [0.05, '#ecd9a6', 120], [0.1, '#e6c27a', 165], [0.2, '#d99a4a', 200], [0.4, '#b8662e', 225], [0.8, '#7a3a1c', 240]], floor: 0.02, ticks: [0.05, 0.1, 0.2, 0.4, 0.8] },
+  pm10: { stops: [[10, '#7cc8a0', 0], [20, '#a6cf3e', 140], [40, '#efd23a', 180], [60, '#f08b2c', 205], [100, '#dc3a3a', 225], [180, '#a52284', 240]], floor: 10, ticks: [20, 40, 60, 100, 180] },
   aod: { stops: [[0.05, '#e9e1c8', 0], [0.1, '#e9d9a8', 110], [0.2, '#e6c27a', 160], [0.4, '#d99a4a', 200], [0.7, '#b8662e', 225], [1.2, '#7a3a1c', 240]], floor: 0.05, ticks: [0.1, 0.2, 0.4, 0.7, 1.2] },
   pm25: { stops: [[5, '#7cc8a0', 0], [10, '#a6cf3e', 140], [20, '#efd23a', 180], [35, '#f08b2c', 205], [55, '#dc3a3a', 225], [100, '#a52284', 240]], floor: 5, ticks: [10, 20, 35, 55, 100] },
   /* chance (%) from an ensemble: quiet below 5 %, warm from 50 % */
@@ -169,7 +174,7 @@ export function colourAt(sc, v) {
 }
 
 /* ── frames ──────────────────────────────────────────────────────────────── */
-export function decodeTable(h) {
+function decodeTable(h) {
   const f = h.scale === 'sqrt' ? Math.sqrt : (v) => v;
   const fi = h.scale === 'sqrt' ? (v) => v * v : (v) => v;
   const flo = h.scale === 'sqrt' ? Math.sqrt(Math.max(h.lo, 0)) : h.lo;
@@ -436,7 +441,7 @@ export const MAP_STYLES = {
 };
 
 const DEG = Math.PI / 180;
-export function sunAt(utcMs) {                      // NOAA solar position (as the motion graphics' core/sun.ts)
+function sunAt(utcMs) {                      // NOAA solar position (as the motion graphics' core/sun.ts)
   const jd = utcMs / 86400000 + 2440587.5;
   const T = (jd - 2451545.0) / 36525;
   const L0 = ((280.46646 + T * (36000.76983 + T * 0.0003032)) % 360 + 360) % 360;
@@ -622,7 +627,7 @@ function drawPyramid(ctx, img, x, y, w, h, coarse) {
 export const fmtValue = (v, unit) => {
   if (v == null || Number.isNaN(v)) return '—';
   const a = Math.abs(v);
-  const s = a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1).replace(/\.0$/, '') : v.toFixed(1);
+  const s = a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1).replace(/\.0$/, '') : a >= 1 || a === 0 ? v.toFixed(1) : String(Number(v.toPrecision(2)));
   return `${s}${unit ? ` ${unit}` : ''}`;
 };
 const timeFmt = (iso, opts) => new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/London', ...opts });
@@ -694,7 +699,7 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   const box = [Math.max(0, gx0), Math.max(0, gy0), Math.min(gx1, NX), Math.min(gy1, NY)];
   if (L.grid?.frame) drawValueGrid(ctx, L.grid, X, Y, ...box, s, u, st);
   if (L.arrows?.frame) drawArrows(ctx, L.arrows, X, Y, ...box, s, u, st);
-  if (L.strikes?.length) drawStrikes(ctx, L.strikes, X, Y, u);
+  if (L.strikes?.length) drawStrikes(ctx, L.strikes, X, Y, u, L.strikesDaily);
   if (L.contours && L.contourLabels) drawContourLabels(ctx, L.contours, X, Y, rect, u, st);
   if (L.cities) drawCities(ctx, L.cities, X, Y, rect, s / u, u, st, L.chrome ? 150 * u : 0, L.wx);
   if (L.star) {
@@ -702,7 +707,7 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
     const top = L.chrome ? 150 * u : 20 * u, bot = L.chrome ? 104 * u : 20 * u;
     const m = L.star.at || frameMax(L.star.frame, (rect.x + 20 * u - ox) / s + cx, (rect.y + top - oy) / s + cy,
       (rect.x + rect.w - 20 * u - ox) / s + cx, (rect.y + rect.h - bot - oy) / s + cy);
-    if (m) drawStar(ctx, X(m.gx), Y(m.gy), u, st, `${fmtValue(m.v, L.star.unit)}${m.place ? ` · ${m.place}` : ''}`, rect);
+    if (m && !(L.star.floor != null && m.v < L.star.floor)) drawStar(ctx, X(m.gx), Y(m.gy), u, st, `${fmtValue(m.v, L.star.unit)}${m.place ? ` · ${m.place}` : ''}`, rect);
   }
   if (L.chrome) drawChrome(ctx, rect, u, L.chrome, st);
   ctx.restore();
@@ -726,8 +731,16 @@ function edgeFade(ctx, x, y, w, h, f, bg) {
 }
 
 /* strikes = [[gx, gy, age minutes]]: the newest as bright crosses, older ones fading dots */
-function drawStrikes(ctx, strikes, X, Y, u) {
+function drawStrikes(ctx, strikes, X, Y, u, daily) {
   ctx.save();
+  if (daily) {
+    ctx.fillStyle = 'rgba(255,196,40,0.9)';
+    ctx.strokeStyle = 'rgba(40,20,0,0.6)';
+    ctx.lineWidth = 0.8 * u;
+    for (const [gx, gy] of strikes) { ctx.beginPath(); ctx.arc(X(gx), Y(gy), 2.4 * u, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+    ctx.restore();
+    return;
+  }
   for (const [gx, gy, age] of strikes) {
     const x = X(gx), y = Y(gy);
     if (age < 5) {
@@ -915,7 +928,7 @@ export function smoothCanvas(frame, varKey, cache) {
 /* ── a grid of values: thin lines on a lattice tied to the map (it does not swim as you pan),
    each box labelled with the layer's value at its centre, formatted for that layer ── */
 const NICE = [0.5, 1, 2, 3, 5, 10, 15, 20, 25, 50, 100, 200];
-export function gridLabel(v, varKey, unit) {
+function gridLabel(v, varKey, unit) {
   if (v == null || Number.isNaN(v)) return null;
   const sc = scaleFor(varKey);
   if (varKey === 'wx') return ['Clear', 'Pt cloud', 'Cloudy', 'Dull', 'Fog', 'Drizzle', 'Lt rain', 'Rain', 'Heavy', 'Sleet', 'Lt snow', 'Snow', 'Hvy snow', 'Thunder', 'Hail'][Math.round(v)] ?? null;
@@ -998,7 +1011,7 @@ function cloudShape(ctx, x, y, r) {
   ctx.arc(x + r * 0.5, y + r * 0.08, r * 0.44, Math.PI * 1.4, Math.PI * 0.5);
   ctx.closePath();
 }
-export function drawWxIcon(ctx, code, x, y, r, night, u) {
+function drawWxIcon(ctx, code, x, y, r, night, u) {
   const sunC = '#ffc93c', moonC = '#e8eefc', cloudC = code >= 5 || code === 3 ? '#c9d2de' : '#f4f7fb';
   const dark = code >= 7 || code === 13;
   ctx.save();
@@ -1066,7 +1079,7 @@ export function drawWxIcon(ctx, code, x, y, r, night, u) {
 /* where the field peaks inside a grid box: the highest value, and among equal highs the
    cell nearest their middle (so a flat-topped maximum gets its star in the middle of it) */
 const maxCache = new WeakMap();
-export function frameMax(frame, gx0, gy0, gx1, gy1) {
+function frameMax(frame, gx0, gy0, gx1, gy1) {
   const K = frame.nx ? frame.k || 8 : 1, W = frame.nx || NX, Hh = frame.ny || NY;
   const x0 = Math.max(0, Math.floor(gx0 / K)), x1 = Math.min(W - 1, Math.ceil(gx1 / K) - 1);
   const y0 = Math.max(0, Math.floor(gy0 / K)), y1 = Math.min(Hh - 1, Math.ceil(gy1 / K) - 1);
@@ -1276,7 +1289,7 @@ function drawChrome(ctx, R, u, C, st) {
 
   // ── title card, top left (below the brand when the frame is too narrow for both) ──
   const day = timeFmt(C.valid, { weekday: 'short', day: 'numeric', month: 'short' });
-  const hour = timeFmt(C.valid, { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
+  const hour = C.dayOnly ? '' : timeFmt(C.valid, { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
   const meta = C.metaLine || `${C.model} · run ${C.runLabel} · T+${C.step}`;
   const vlab = C.variable.toUpperCase();
   ctx.font = `800 ${36 * u}px ${FONT}`;

@@ -22,7 +22,6 @@ import io
 import json
 import logging
 import re
-import shutil
 import struct
 import sys
 import time

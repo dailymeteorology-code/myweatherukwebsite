@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 from .common import DATA, DX, NX, NY, PROJ, STATIC, X0, Y_TOP, read_frame, write_frame, write_json
-from .derived import weather_type, wet_bulb
+from .derived import weather_type
 from .models import UKV, _feels, _windchill
 
 LIVE = DATA / 'live'
@@ -174,11 +174,12 @@ def at_station(a, o):
 
 # ── radar and lightning at t ─────────────────────────────────────────────────
 def radar_2km(t):
+    """The radar at t on the display grid (the 1 km frame averaged 2 x 2), or None."""
     p = LIVE / 'radar' / f'{t:%Y%m%dT%H%M}.bin'
     if not p.exists():
-        return None, None
-    r, _ = read_frame(p)                                         # 1 km: 2 x the display grid
-    return r, np.nanmean(r.reshape(NY, 2, NX, 2), axis=(1, 3))
+        return None
+    r, _ = read_frame(p)
+    return np.nanmean(r.reshape(NY, 2, NX, 2), axis=(1, 3))
 
 
 def strikes_between(t0, t1):
@@ -236,12 +237,12 @@ def analyse(t, reports):
     A['feels'] = _feels(t2, td2, A['wind10'])
     A['wdir10'] = B.get('wdir', np.full((NY, NX), np.nan, np.float32))
     A['tcc'] = B.get('tcc', np.full((NY, NX), np.nan, np.float32))
-    r1, r2 = radar_2km(t)
+    r2 = radar_2km(t)
     pr = np.where(np.isfinite(r2), r2, B.get('precip_rate', 0)) if r2 is not None else B.get('precip_rate', np.zeros((NY, NX)))
     wx = weather_type({'precip_rate': pr, 'tcc': A['tcc'], 't2': t2, 'td2': td2, 'vis': B.get('vis', np.full((NY, NX), 99.0))})
     thunder = near_mask(strikes_between(t - timedelta(minutes=20), t), 7.5)
     A['wx'] = np.where(thunder, 13, wx).astype(np.float32)
-    return A, {'stations': len(near), 'used': used, 'radar': r2 is not None}, near, r1
+    return A, {'stations': len(near), 'used': used, 'radar': r2 is not None}, near
 
 
 # ── observed days ────────────────────────────────────────────────────────────
@@ -310,7 +311,7 @@ def place_near(gx, gy):
     return f'{d:.0f} km from {best[0]}'
 
 
-def update_day(t, A, near, rain1km):
+def update_day(t, A, near):
     day = t.astimezone(LONDON).date().isoformat()
     d = OBS / day
     w = d / 'work'
@@ -514,17 +515,20 @@ def update():
     made = []
     if todo:
         span_h = (datetime.now(timezone.utc) - min(todo)).total_seconds() / 3600 + 1.5
-        reports = metars(min(24, max(3, int(np.ceil(span_h)))))
+        try:
+            reports = metars(min(24, max(3, int(np.ceil(span_h)))))
+        except Exception:
+            reports = []                                  # no station reports: UKV alone
         for t in todo:
             try:
-                A, info, near, r1 = analyse(t, reports)
+                A, info, near = analyse(t, reports)
             except FileNotFoundError:
                 continue
             stamp = f'{t:%Y%m%dT%H%M}'
             if t >= cut:                                        # older slots only feed their day
                 for p, (_, _, enc, _) in NOW.items():
                     write_frame(LIVE / p / f'{stamp}.bin', A[p[4:]], enc, {'product': p, 'valid': t.isoformat(), 'k': 1, **info})
-            update_day(t, A, near, r1)
+            update_day(t, A, near)
             made.append(f'{t:%H:%M}')
     rained = fold_radar()
     for p in NOW:
