@@ -567,52 +567,6 @@ function CityMarkersLayer({ region = null, k = 1 }) {
   );
 }
 
-function RadarOverlayLayer({ opacity = 0.85, bbox = MAP_BBOX }) {
-  const bboxKey = `${bbox.lonMin}-${bbox.lonMax}-${bbox.latMin}-${bbox.latMax}`;
-  const [tiles, setTiles] = useState(null);
-  useEffect(() => {
-    (async () => {
-      try {
-        const meta = await fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json());
-        const frames = meta?.radar?.past || [];
-        const frame = frames[frames.length - 1];
-        if (!frame) return;
-        const z = 6, n = 2 ** z;
-        const lon2x = lon => ((lon + 180) / 360) * n;
-        const lat2y = lat => ((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2) * n;
-        const xMin = Math.floor(lon2x(bbox.lonMin)), xMax = Math.floor(lon2x(bbox.lonMax));
-        const yMin = Math.floor(lat2y(bbox.latMax)), yMax = Math.floor(lat2y(bbox.latMin));
-        const out = [];
-        for (let x = xMin; x <= xMax; x++) {
-          for (let y = yMin; y <= yMax; y++) {
-            const lonW = (x / n) * 360 - 180, lonE = ((x + 1) / n) * 360 - 180;
-            const latN = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
-            const latS = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / n))) * 180 / Math.PI;
-            const [px, py] = projectPt(lonW, latN);
-            const [px2, py2] = projectPt(lonE, latS);
-            out.push({
-              url: `${meta.host}${frame.path}/256/${z}/${x}/${y}/2/1_1.png`,
-              x: px, y: py, w: px2 - px, h: py2 - py,
-            });
-          }
-        }
-        setTiles(out);
-      } catch { /* radar unavailable - just skip the overlay */ }
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bboxKey]);
-  if (!tiles) return null;
-  return (
-    <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} preserveAspectRatio="xMidYMid meet"
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-      {tiles.map((t, i) => (
-        <image key={i} href={t.url} x={t.x} y={t.y} width={t.w} height={t.h}
-          opacity={opacity} preserveAspectRatio="none" crossOrigin="anonymous" />
-      ))}
-    </svg>
-  );
-}
-
 const LIGHTNING_SWATCHES = ['#facc15', '#ffffff', '#f87171', '#ec4899', '#22d3ee', '#a78bfa'];
 
 function HailIcon({ size = 12, color = '#22d3ee' }) {
@@ -1045,7 +999,7 @@ export {
   COUNTY_IE_SOURCE, COUNTY_CACHE_KEY, COUNTY_MIN_GAP_PX, COUNTY_MIN_VERTICES,
   decimateRing, decodeCountyTopo, decodeCountyGeoJSON, fetchJSON, loadAllCountyPaths, pathProjBBox,
   countyCache, CountyLinesLayer, geoCache, UKOutlineMap,
-  STORM_BG_URL, CITY_MARKERS, CityMarkersLayer, RadarOverlayLayer,
+  STORM_BG_URL, CITY_MARKERS, CityMarkersLayer,
   LIGHTNING_SWATCHES, HailIcon, FloodHouseIcon, LightningLayer,
   strikeTimeMs, extractStrike, unwrapStrikeArray,
   decimatePoints, chaikinClosed, smoothPoints, pointsToPath, waitForImages,

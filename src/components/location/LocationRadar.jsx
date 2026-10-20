@@ -14,72 +14,16 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Pause, Play, Radar, Zap } from 'lucide-react';
-import { colourAt, scaleFor } from '@/lib/modelViewer';
-import { laea, laeaInverse, RADAR_BANDS } from '@/lib/ukRadar';
+import {
+  laeaInverse, mercHeight, paintRadarCrop, parseRadarCrop, RADAR_BANDS, radarBox, radarCropMapping, radarStamp, UK_RADAR_VIEW,
+} from '@/lib/ukRadar';
 import { hhmm } from '@/lib/ukvLocation';
 import './location.css';
 
-const D = Math.PI / 180;
 const VIEWS = {
   point: { halfKm: 195, outW: 840, zoom: 8, minZoom: 6, maxZoom: 10 },
-  uk: { halfKm: 690, outW: 820, minZoom: 5, maxZoom: 9, centre: [54.8, -4.0], fit: [[49.8, -10.8], [59.3, 2.3]] },
+  uk: { halfKm: UK_RADAR_VIEW.halfKm, outW: 820, minZoom: 5, maxZoom: 9, centre: [UK_RADAR_VIEW.lat, UK_RADAR_VIEW.lon], fit: [[49.8, -10.8], [59.3, 2.3]] },
 };
-const mercY = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * D) / 2));
-const stampOf = (iso) => iso.replace(/[-:]/g, '').slice(0, 13);
-
-function parseCrop(buf) {
-  const dv = new DataView(buf);
-  const n = dv.getUint32(0, true);
-  const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
-  return { head, q: new Uint8Array(buf, 4 + n, head.nx * head.ny) };
-}
-
-/* per output pixel: where it falls in a crop (top-left index and bilinear weights) */
-function mapping(head, box, W, H) {
-  const idx = new Int32Array(W * H).fill(-1), tx = new Float32Array(W * H), ty = new Float32Array(W * H);
-  const yt = mercY(box.latMax), yb = mercY(box.latMin);
-  for (let py = 0; py < H; py++) {
-    const lat = Math.atan(Math.sinh(yt - ((py + 0.5) / H) * (yt - yb))) / D;
-    for (let px = 0; px < W; px++) {
-      const lon = box.lonMin + ((px + 0.5) / W) * (box.lonMax - box.lonMin);
-      const [x, y] = laea(lon, lat);
-      const fx = (x - head.x0) / head.dx, fy = (head.y0 - y) / head.dx;
-      const i = Math.floor(fx), j = Math.floor(fy);
-      if (i < 0 || j < 0 || i >= head.nx - 1 || j >= head.ny - 1) continue;
-      const k = py * W + px;
-      idx[k] = j * head.nx + i; tx[k] = fx - i; ty[k] = fy - j;
-    }
-  }
-  return { idx, tx, ty };
-}
-
-function paint(crop, map, W, H) {
-  const sc = scaleFor('radar');
-  const { lo, hi, scale } = crop.head;
-  const a = scale === 'sqrt' ? Math.sqrt(Math.max(lo, 0)) : lo, b = scale === 'sqrt' ? Math.sqrt(hi) : hi;
-  const lut = new Uint32Array(256);
-  for (let v = 0; v < 255; v++) {
-    const val = scale === 'sqrt' ? (a + (v / 254) * (b - a)) ** 2 : a + (v / 254) * (b - a);
-    const c = colourAt(sc, val);
-    if (c) lut[v] = (c[3] << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
-  }
-  const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  const ctx = cv.getContext('2d');
-  const img = ctx.createImageData(W, H);
-  const out = new Uint32Array(img.data.buffer);
-  const { q } = crop, nx = crop.head.nx;
-  const qv = (k) => (q[k] === 255 ? 0 : q[k]);
-  for (let k = 0; k < out.length; k++) {
-    const i0 = map.idx[k];
-    if (i0 < 0) continue;
-    const tx = map.tx[k], ty = map.ty[k];
-    const v = Math.round((qv(i0) * (1 - tx) + qv(i0 + 1) * tx) * (1 - ty) + (qv(i0 + nx) * (1 - tx) + qv(i0 + nx + 1) * tx) * ty);
-    out[k] = lut[v];
-  }
-  ctx.putImageData(img, 0, 0);
-  return new Promise((ok) => cv.toBlob((bl) => ok(bl ? URL.createObjectURL(bl) : cv.toDataURL()), 'image/png'));
-}
 
 /* a strike's colour by age: white when new, through yellow and orange, to red after three hours */
 const AGE = [[0, '#ffffff'], [20, '#fde047'], [60, '#fb923c'], [120, '#ef4444'], [180, '#991b1b']];
@@ -108,10 +52,7 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
   const [round, setRound] = useState(0);
   const made = useRef([]);
 
-  const box = useMemo(() => {
-    const dLat = V.halfKm / 111.2, dLon = V.halfKm / (111.2 * Math.cos(cLat * D));
-    return { latMin: cLat - dLat, latMax: cLat + dLat, lonMin: cLon - dLon, lonMax: cLon + dLon };
-  }, [cLat, cLon, V.halfKm]);
+  const box = useMemo(() => radarBox(cLat, cLon, V.halfKm), [cLat, cLon, V.halfKm]);
 
   /* the map, made once */
   useEffect(() => {
@@ -175,12 +116,12 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
         const index = await fetch('/api/location/radar', { signal: ac.signal }).then((r) => r.json());
         const at = uk ? 'scope=uk' : `lat=${cLat.toFixed(3)}&lon=${cLon.toFixed(3)}`;
         const list = [
-          ...index.past.map((t) => ({ kind: 'radar', valid: t, url: `/api/location/radar/frame?src=radar&t=${stampOf(t)}&${at}` })),
+          ...index.past.map((t) => ({ kind: 'radar', valid: t, url: `/api/location/radar/frame?src=radar&t=${radarStamp(t)}&${at}` })),
           ...index.future.map((f) => ({ kind: 'ukv', valid: f.valid, url: `/api/location/radar/frame?src=ukv&run=${f.run}&h=${f.h}&${at}` })),
         ];
         if (!list.length) { if (!layers.current.length) setState('none'); return; }
         const W = V.outW;
-        const H = Math.round((W * (mercY(box.latMax) - mercY(box.latMin))) / ((box.lonMax - box.lonMin) * D));
+        const H = mercHeight(box, W);
         const maps = {};
         const out = new Array(list.length).fill(null);
         const newest = Math.max(0, index.past.length - 1);
@@ -192,10 +133,10 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
             try {
               const buf = await fetch(list[k].url, { signal: ac.signal }).then((r) => (r.ok ? r.arrayBuffer() : null));
               if (!buf || !alive) continue;
-              const crop = parseCrop(buf);
+              const crop = parseRadarCrop(buf);
               const key = `${crop.head.x0}|${crop.head.y0}|${crop.head.dx}|${crop.head.nx}|${crop.head.ny}`;
-              maps[key] = maps[key] || mapping(crop.head, box, W, H);
-              const url = await paint(crop, maps[key], W, H);
+              maps[key] = maps[key] || radarCropMapping(crop.head, box, W, H);
+              const url = await paintRadarCrop(crop, maps[key], W, H);
               urls.push(url);
               out[k] = { ...list[k], img: url };
               if (k === newest && alive && map.current && !layers.current.length) {

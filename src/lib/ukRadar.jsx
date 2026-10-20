@@ -102,6 +102,102 @@ export function radarImage(frame, bbox, W, H, smooth = true) {
   return cv.toDataURL('image/png');
 }
 
+/* ── frames cut by the server (/api/location/radar/frame) ─────────────────────────────────────
+   A crop of one radar scan or UKV rain step: a JSON head (valid time, value encoding, cell size,
+   the centre of its north-west cell on the grid) then one byte a cell, 255 = no data. Drawn into
+   a lon/lat Mercator box the same way radarImage() is, with the Model Data page's colours. Used by
+   the Location and home radar (LocationRadar), the Lightning page and the live stream. */
+
+/** "2026-10-20T19:30:00+00:00" -> "20261020T1930", the server's radar file stamp. */
+export const radarStamp = (iso) => iso.replace(/[-:]/g, '').slice(0, 13);
+
+/** A lon/lat box reaching halfKm each way from a point. */
+export function radarBox(lat, lon, halfKm) {
+  const dLat = halfKm / 111.2, dLon = halfKm / (111.2 * Math.cos(lat * D));
+  return { latMin: lat - dLat, latMax: lat + dLat, lonMin: lon - dLon, lonMax: lon + dLon };
+}
+
+/** The pixel height that keeps a Mercator box `W` wide undistorted. */
+export const mercHeight = (box, W) => Math.round((W * (mercY(box.latMax) - mercY(box.latMin))) / ((box.lonMax - box.lonMin) * D));
+
+export function parseRadarCrop(buf) {
+  const dv = new DataView(buf);
+  const n = dv.getUint32(0, true);
+  const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+  return { head, q: new Uint8Array(buf, 4 + n, head.nx * head.ny) };
+}
+
+/** Per output pixel: where it falls in a crop (top-left cell and bilinear weights). The same for
+    every crop of the same shape, so callers keep it and reuse it frame to frame. */
+export function radarCropMapping(head, box, W, H) {
+  const idx = new Int32Array(W * H).fill(-1), tx = new Float32Array(W * H), ty = new Float32Array(W * H);
+  const yt = mercY(box.latMax), yb = mercY(box.latMin);
+  for (let py = 0; py < H; py++) {
+    const lat = Math.atan(Math.sinh(yt - ((py + 0.5) / H) * (yt - yb))) / D;
+    for (let px = 0; px < W; px++) {
+      const lon = box.lonMin + ((px + 0.5) / W) * (box.lonMax - box.lonMin);
+      const [x, y] = laea(lon, lat);
+      const fx = (x - head.x0) / head.dx, fy = (head.y0 - y) / head.dx;
+      const i = Math.floor(fx), j = Math.floor(fy);
+      if (i < 0 || j < 0 || i >= head.nx - 1 || j >= head.ny - 1) continue;
+      const k = py * W + px;
+      idx[k] = j * head.nx + i; tx[k] = fx - i; ty[k] = fy - j;
+    }
+  }
+  return { idx, tx, ty };
+}
+
+/** A crop painted through its mapping: resolves to an object URL of a PNG (revoke it when done). */
+export function paintRadarCrop(crop, map, W, H) {
+  const sc = scaleFor('radar');
+  const { lo, hi, scale } = crop.head;
+  const a = scale === 'sqrt' ? Math.sqrt(Math.max(lo, 0)) : lo, b = scale === 'sqrt' ? Math.sqrt(hi) : hi;
+  const lut = new Uint32Array(256);
+  for (let v = 0; v < 255; v++) {
+    const val = scale === 'sqrt' ? (a + (v / 254) * (b - a)) ** 2 : a + (v / 254) * (b - a);
+    const c = colourAt(sc, val);
+    if (c) lut[v] = (c[3] << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
+  }
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const out = new Uint32Array(img.data.buffer);
+  const { q } = crop, nx = crop.head.nx;
+  const qv = (k) => (q[k] === 255 ? 0 : q[k]);
+  for (let k = 0; k < out.length; k++) {
+    const i0 = map.idx[k];
+    if (i0 < 0) continue;
+    const tx = map.tx[k], ty = map.ty[k];
+    const v = Math.round((qv(i0) * (1 - tx) + qv(i0 + 1) * tx) * (1 - ty) + (qv(i0 + nx) * (1 - tx) + qv(i0 + nx + 1) * tx) * ty);
+    out[k] = lut[v];
+  }
+  ctx.putImageData(img, 0, 0);
+  return new Promise((ok) => cv.toBlob((bl) => ok(bl ? URL.createObjectURL(bl) : cv.toDataURL()), 'image/png'));
+}
+
+/** The UK and Ireland, as the server's scope=uk crop covers them (the radar coarsened to 2 km). */
+export const UK_RADAR_VIEW = { lat: 54.8, lon: -4.0, halfKm: 690 };
+
+let ukMapping = null;   // { key, map }: the projection is the same for every scan, so it is worked out once
+/** The newest Met Office radar scan over the UK and Ireland, ready for an L.imageOverlay:
+    { url (object URL: revoke it when replaced), bounds, valid } or null when there is none. */
+export async function newestUkRadar({ signal, width = 900 } = {}) {
+  const index = await fetch('/api/location/radar', { signal }).then((r) => r.json());
+  const valid = index?.past?.[index.past.length - 1];
+  if (!valid) return null;
+  const buf = await fetch(`/api/location/radar/frame?src=radar&t=${radarStamp(valid)}&scope=uk`, { signal })
+    .then((r) => (r.ok ? r.arrayBuffer() : null));
+  if (!buf) return null;
+  const crop = parseRadarCrop(buf);
+  const box = radarBox(UK_RADAR_VIEW.lat, UK_RADAR_VIEW.lon, UK_RADAR_VIEW.halfKm);
+  const H = mercHeight(box, width);
+  const key = `${crop.head.x0}|${crop.head.y0}|${crop.head.dx}|${crop.head.nx}|${crop.head.ny}|${width}`;
+  if (ukMapping?.key !== key) ukMapping = { key, map: radarCropMapping(crop.head, box, width, H) };
+  const url = await paintRadarCrop(crop, ukMapping.map, width, H);
+  return { url, valid, bounds: [[box.latMin, box.lonMin], [box.latMax, box.lonMax]] };
+}
+
 /** Drop-in for the studios' old RainViewer layer: the newest radar, placed with the studio's
     own projectPt over `bbox`, in an SVG of the studio's view size. */
 export function UKRadarLayer({ opacity = 0.88, bbox, projectPt, viewW, viewH, smooth = true }) {

@@ -21,6 +21,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadWarningAreas, matchAreas } from '@/lib/ukWarningAreas';
+import { newestUkRadar } from '@/lib/ukRadar';
 
 /* ───────────────────────── Brand tokens ──────────────────────────────── */
 const BRAND = {
@@ -221,7 +222,8 @@ function LiveStreamInner() {
 
   /* ───── map controls ───── */
   const [radarOn, setRadarOn] = useState(true);
-  const [radarSource, setRadarSource] = useState('rainviewer');
+  const [radarTime, setRadarTime] = useState(null);   // the shown scan's time
+  const radarRun = useRef({ gen: 0, url: null });
   const [moWarnOn, setMoWarnOn] = useState(true);
   const [typeFilter, setTypeFilter] = useState(new Set(WARNING_TYPES));
   const [sevFilter, setSevFilter] = useState(new Set(['Red', 'Amber', 'Yellow']));
@@ -347,6 +349,9 @@ function LiveStreamInner() {
       L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
         subdomains: 'abcd', maxZoom: 19, detectRetina: true,
       }).addTo(map);
+      /* the radar gets its own pane between the base map and the overlays, so the warning shapes
+         and drawings always sit on top of it */
+      map.createPane('lsRadar').style.zIndex = 350;
       radarLayerRef.current  = L.layerGroup().addTo(map);
       moWarnLayerRef.current = L.layerGroup().addTo(map);
       drawLayerRef.current   = L.layerGroup().addTo(map);
@@ -356,38 +361,41 @@ function LiveStreamInner() {
     return () => { cancelled = true; };
   }, []);
 
-  /* ─────────────────────── radar overlay ─────────────────────── */
+  /* ─────────────────────── radar overlay ───────────────────────
+     The Met Office 1 km radar (the newest 15-minute scan, from the AWS bucket via this server),
+     in the Model Data page's colours: the same radar the home page and Location Weather show.
+     It covers the UK, Ireland and the near continent. A newer scan replaces the old one only once
+     it is drawn, so the map never blanks; a refresh that loses a race to a newer one is dropped. */
   const refreshRadar = useCallback(async () => {
     const L = window.L;
-    if (!L || !radarLayerRef.current) return;
-    radarLayerRef.current.clearLayers();
-    if (!radarOn) return;
-    const dpr = window.devicePixelRatio >= 1.5 ? 512 : 256;
-    if (radarSource === 'rainviewer') {
-      try {
-        const idx = await fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json());
-        const frames = idx?.radar?.past || [];
-        const latest = frames[frames.length - 1];
-        if (latest) {
-          L.tileLayer(`https://tilecache.rainviewer.com${latest.path}/${dpr}/{z}/{x}/{y}/6/1_1.png`, {
-            tileSize: dpr, opacity: 0.7, maxZoom: 19,
-          }).addTo(radarLayerRef.current);
-        }
-      } catch (_) {}
+    const layer = radarLayerRef.current;
+    if (!L || !layer) return;
+    const run = radarRun.current;
+    const gen = ++run.gen;
+    if (!radarOn) {
+      layer.clearLayers();
+      if (run.url) { URL.revokeObjectURL(run.url); run.url = null; }
+      return;
     }
-    /* The Met Office precipitation tiles that used to be the second source
-       (maps.consumer-digital.api.metoffice.gov.uk) need a commercial key. With
-       none, every tile 403s and the radar just goes blank with no error — so
-       the option was removed rather than left as a button that does nothing.
-       RainViewer is keyless and covers the UK. */
-  }, [radarOn, radarSource]);
+    try {
+      const r = await newestUkRadar({ width: 900 });
+      if (!r) return;
+      if (gen !== run.gen || !radarLayerRef.current) { URL.revokeObjectURL(r.url); return; }
+      layer.clearLayers();
+      if (run.url) URL.revokeObjectURL(run.url);
+      run.url = r.url;
+      L.imageOverlay(r.url, r.bounds, { pane: 'lsRadar', opacity: 0.85, interactive: false }).addTo(layer);
+      setRadarTime(r.valid);
+    } catch (_) { /* radar unavailable: keep the last scan up */ }
+  }, [radarOn]);
 
   useEffect(() => {
-    if (!mapReady) return;
+    if (!mapReady) return undefined;
     refreshRadar();
-    const iv = setInterval(refreshRadar, 3 * 60 * 1000);
+    const iv = setInterval(refreshRadar, 5 * 60 * 1000);
     return () => clearInterval(iv);
   }, [mapReady, refreshRadar]);
+  useEffect(() => () => { const run = radarRun.current; run.gen++; if (run.url) URL.revokeObjectURL(run.url); }, []);
 
   /* ─────────────────────── Met Office warning overlay ───────────────────────
      Each warning in force, in its severity's colour: its own shape from the Met
@@ -645,7 +653,9 @@ function LiveStreamInner() {
           <div style={S.dock}>
             <div style={S.dockGroup}>
               <button style={S.dockBtn(radarOn)} onClick={() => setRadarOn(v => !v)}>Radar</button>
-              <button style={S.dockBtnSm(radarSource === 'rainviewer')} onClick={() => setRadarSource('rainviewer')}>RainViewer</button>
+              <span style={S.dockNote}>
+                Met Office{radarOn && radarTime ? ` · ${new Date(radarTime).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })}` : ''}
+              </span>
             </div>
             <div style={S.dockGroup}>
               <button style={S.dockBtn(moWarnOn)} onClick={() => setMoWarnOn(v => !v)}>MO Warnings</button>
@@ -821,6 +831,7 @@ const S = {
     background: on ? 'rgba(56,189,248,0.18)' : 'rgba(255,255,255,0.04)',
     color: on ? BRAND.sky : BRAND.text,
   }),
+  dockNote: { fontSize: 11, fontWeight: 700, color: BRAND.textMid, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
   dockBtnSm: (on) => ({
     padding: '6px 9px', borderRadius: 7, cursor: 'pointer', fontSize: 11, fontWeight: 700,
     border: `1px solid ${on ? BRAND.sky : BRAND.line}`,
