@@ -152,9 +152,11 @@ jobs:
             --collect '${{ needs.route.outputs.main_chunks }}' --own "${{ matrix.leads }}"
           python -m nova.cloud publish main
 
+  # Runs only when a chunk failed (the gathering chunk fails rather than publish a run short
+  # of a finished chunk); when every chunk succeeded the run is published and this is skipped.
   main-publish:
     needs: [route, main-chunk]
-    if: always() && needs.route.outputs.main == 'true' && needs.main-chunk.result != 'cancelled'
+    if: always() && needs.route.outputs.main == 'true' && needs.main-chunk.result == 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency: { group: nova-main-publish, cancel-in-progress: false }
