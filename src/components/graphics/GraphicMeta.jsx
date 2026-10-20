@@ -1,5 +1,5 @@
 import React from 'react';
-import { RISK_COLOR, RISK_FILL, RISK_BORDER, RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConfig';
+import { RISK_COLOR, RISK_BORDER, RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConfig';
 
 /**
  * What a published graphic says about itself: its weather conditions, the

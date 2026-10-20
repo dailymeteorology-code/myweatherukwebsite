@@ -163,7 +163,6 @@ export default function RadarRasterMap({
   const intervalRef             = useRef(null);
 
   const bbox     = REGIONS[region].bbox;
-  const gridStep  = REGIONS[region].gridStep;
   const grid      = data?.grid ?? [];
 
   // ── Animation loop ──────────────────────────────────────────────────────────

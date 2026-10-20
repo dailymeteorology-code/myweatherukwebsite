@@ -4,11 +4,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Save, Upload, Loader2, X, Palette, Share2, Home,
   ShieldAlert, CloudLightning, Settings, Lock,
-  Menu as MenuIcon, Globe, ChevronRight, Zap, Users,
-  AlertTriangle, Megaphone, Sun, CloudRain, Type, Eye, EyeOff,
-  Check, Info, RefreshCw, ToggleLeft, ToggleRight,
-  Image, Link2, Bell, Layers, Activity, Clock,
-  ChevronDown, Copy, ExternalLink, Shield, Database,
+  Menu as MenuIcon, ChevronRight, Zap,
+  AlertTriangle, Megaphone, Sun, CloudRain, Eye, EyeOff,
+  Check, Info, RefreshCw, Bell, Layers, Activity, Clock,
   Newspaper, History, FileImage, Plus, Trash2, Edit, Thermometer, Radio,
   Pen, Map as MapIcon, Wind, Code, Snowflake, CloudSnow
 } from 'lucide-react';
@@ -130,17 +128,6 @@ function StyledTextarea({ rows = 3, ...props }) {
   return <textarea rows={rows} {...props} style={{ ...inputBase, resize: 'vertical', ...(focused ? { borderColor: C.skyBorder, boxShadow: `0 0 0 3px ${C.skyLow}` } : {}), ...props.style }} onFocus={e => { setFocused(true); props.onFocus?.(e); }} onBlur={e => { setFocused(false); props.onBlur?.(e); }} />;
 }
 
-function StyledSelect({ children, ...props }) {
-  const [focused, setFocused] = useState(false);
-  return (
-    <div style={{ position: 'relative' }}>
-      <select {...props} style={{ ...inputBase, appearance: 'none', paddingRight: 36, cursor: 'pointer', ...(focused ? { borderColor: C.skyBorder, boxShadow: `0 0 0 3px ${C.skyLow}` } : {}), ...props.style }} onFocus={e => { setFocused(true); props.onFocus?.(e); }} onBlur={e => { setFocused(false); props.onBlur?.(e); }}>
-        {children}
-      </select>
-      <ChevronDown style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', width: 14, height: 14, color: C.textDim, pointerEvents: 'none' }} />
-    </div>
-  );
-}
 
 // ─── Toggle ─────────────────────────────────────────────────────────────────────
 function Toggle({ checked, onChange, label, desc, danger }) {
@@ -806,17 +793,6 @@ function ImageSlot({ label, hint, url, uploading, onUpload, onClear, size = 80, 
 }
 
 // ─── Stat Chip ────────────────────────────────────────────────────────────────────
-function StatChip({ emoji, label, value, color }) {
-  return (
-    <div style={{ padding: '14px 16px', borderRadius: 12, background: C.surface2, border: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontSize: 16 }}>{emoji}</span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: color || C.textFaint, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</span>
-      </div>
-      <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: C.text }}>{value}</p>
-    </div>
-  );
-}
 
 // ─── General Tab ─────────────────────────────────────────────────────────────────
 function GeneralTab({ formData, setFormData, saveMutation, handleImageUpload, uploadingLogo, uploadingBanner, setPreviewAnimTier }) {

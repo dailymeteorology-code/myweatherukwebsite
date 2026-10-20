@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, X, AlertTriangle } from 'lucide-react';
+import { Check, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 const BADGE_CONFIG = {
@@ -47,7 +47,6 @@ const PIECES = Array.from({ length: 8 }, (_, i) => ({
 export default function SubscriptionAnimation({ tier, planName, onClose }) {
   const [phase, setPhase] = useState('assembling'); // assembling | zoom | features
   const cfg = BADGE_CONFIG[tier] || BADGE_CONFIG.lite;
-  const audioRef = useRef(null);
 
   useEffect(() => {
     // Gentle chime via Web Audio API

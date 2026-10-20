@@ -55,7 +55,6 @@ function RichText({ html, className = '', style = {} }) {
    · Slight (orange/amber) · Moderate (red) · High (purple)
    · Severe (black, outlined)
 ───────────────────────────────────────────── */
-const IMPACT_LEVELS = ['Very Low', 'Low', 'Marginal', 'Slight', 'Moderate', 'High', 'Severe'];
 
 const IMPACT_CONFIG = {
   'Very Low': {

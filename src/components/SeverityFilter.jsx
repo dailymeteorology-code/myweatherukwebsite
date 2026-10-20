@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useId } from 'react';
-import { motion, AnimatePresence, useMotionValue, useSpring } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useTheme } from '@/components/ThemeContext';
 
 /* ─────────────────────────────────────────────────────────────

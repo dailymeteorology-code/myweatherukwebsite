@@ -656,7 +656,6 @@ function RadarLegend({ mode, lightMode }) {
       {/* Per-band rows (reversed = highest first) */}
       {palette.slice().reverse().map((b, i) => {
         const val = mode === 'radar-rain' ? b.mmHr : b.mm;
-        const unit = mode === 'radar-rain' ? 'mm/hr' : 'mm';
         return (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
             <div style={{

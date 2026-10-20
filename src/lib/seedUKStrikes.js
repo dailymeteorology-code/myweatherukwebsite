@@ -190,10 +190,7 @@ function generateUKStrikes() {
 
   const strikes = [];
   let seq = 0;
-  // v4 clusters are indexed after the original v3 clusters (original had 46 clusters)
-  const V4_CLUSTER_START = 46;
   for (const [cLat, cLon, count, radius] of clusters) {
-    const clusterIdx = clusters.indexOf(clusters.find((c, i) => i === clusters.indexOf([cLat, cLon, count, radius])));
     for (let i = 0; i < count; i++) {
       // Gaussian-ish scatter inside the cluster
       const r = radius * Math.sqrt(Math.random());

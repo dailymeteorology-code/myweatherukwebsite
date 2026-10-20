@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Pencil, Trash2, Loader2, Tag, Users, Zap, Crown, Star, Code2, X, ChevronUp, ChevronDown, Check } from 'lucide-react';
+import { Plus, Pencil, Trash2, Loader2, Zap, Crown, Star, Code2, X, ChevronUp, ChevronDown, Check } from 'lucide-react';
 import { format } from 'date-fns';
 
 const TIERS = [
@@ -551,7 +551,6 @@ function SubscribersTab() {
   const openEdit = (s) => { setForm({ user_email: s.user_email || '', user_name: s.user_name || '', plan_tier: s.plan_tier || 'lite', billing_cycle: s.billing_cycle || 'monthly', status: s.status || 'active', starts_at: s.starts_at ? s.starts_at.slice(0, 10) : '', expires_at: s.expires_at ? s.expires_at.slice(0, 10) : '', notes: s.notes || '' }); setEditingId(s.id); setShowForm(true); };
 
   const statusColors = { active: 'bg-green-100 text-green-800', cancelled: 'bg-red-100 text-red-800', expired: 'bg-slate-100 text-slate-600', pending: 'bg-yellow-100 text-yellow-800' };
-  const TierIcon = TIERS.find(t => t.value === form.plan_tier)?.icon || Star;
 
   return (
     <div>

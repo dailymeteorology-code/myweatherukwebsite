@@ -70,7 +70,7 @@ function normaliseRegion(r) {
 import { attachPlaceLabels, readPlaceLabelsOn, writePlaceLabelsOn } from '@/lib/placeLabels';
 import { insideGeometries } from '@/components/warnings/MetOfficeWarning';
 
-export default function WarningMap({ warning, height = 220, mapUrl }) {
+export default function WarningMap({ warning, height = 220 }) {
   /* The basemap and the ground behind it follow the site theme — this drew a
      dark-grey canvas on a near-black ground whatever the page around it was
      doing, so on the light theme each warning sat in a black box. */
@@ -220,7 +220,7 @@ export default function WarningMap({ warning, height = 220, mapUrl }) {
       cancelled = true;
       if (mapInst.current) { try { mapInst.current.remove(); } catch(_){} mapInst.current = null; labelsRef.current = null; }
     };
-  }, [warning, mapUrl, areas, sev.hex, hasExact, exactPolys, isDark]);
+  }, [warning, areas, sev.hex, hasExact, exactPolys, isDark]);
 
   const regionNames = Array.isArray(warning.regions) ? warning.regions : (warning.region ? [warning.region] : []);
   const hasDrawing = Array.isArray(warning.area_drawing) && warning.area_drawing.some(s => s?.latLngs?.length >= 2);

@@ -3,9 +3,9 @@
  * All derive from the same catalogue the month explorer and library use.
  */
 import React, { useMemo, useState, useEffect } from 'react';
-import { Search, Plus, X, ExternalLink } from 'lucide-react';
+import { Search, Plus, X } from 'lucide-react';
 import { filterScenarios, sortResults, matrixRows, seasonSummary, compareScenarios, filterEvents, SEV_RANK, FREQ_RANK } from './query';
-import { FREQ_STYLE, FreqBadge, SevBadge, SourceLink, ScenarioCard, Empty, MonthStrip, Icon } from './ui';
+import { FREQ_STYLE, FreqBadge, SevBadge, SourceLink, ScenarioCard, Empty, MonthStrip } from './ui';
 import { loadItem } from './scenarioApi';
 import RegionMap from './RegionMap';
 import { ClimatePanel } from './MonthExplorer';

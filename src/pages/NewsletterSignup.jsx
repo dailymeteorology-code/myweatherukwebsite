@@ -63,7 +63,6 @@ export default function NewsletterSignup() {
   const [step, setStep]       = useState('form'); // form | sending | verify | verifying | done | already | error
   const [error, setError]     = useState('');
   const [subId, setSubId]     = useState(null);
-  const [storedCode, setStoredCode] = useState('');
   const [resending, setResending]   = useState(false);
 
   const inp = {
@@ -121,9 +120,8 @@ export default function NewsletterSignup() {
         return;
       }
 
-      const { id, otp } = await sendCode(emailAddr, name.trim(), sub || null);
+      const { id } = await sendCode(emailAddr, name.trim(), sub || null);
       setSubId(id);
-      setStoredCode(otp);
       setCode('');
       setStep('verify');
     } catch (err) {
@@ -158,8 +156,7 @@ export default function NewsletterSignup() {
     setResending(true);
     setError('');
     try {
-      const { otp } = await sendCode(email.trim().toLowerCase(), name.trim(), { id: subId });
-      setStoredCode(otp);
+      await sendCode(email.trim().toLowerCase(), name.trim(), { id: subId });
       setCode('');
     } catch {}
     setResending(false);

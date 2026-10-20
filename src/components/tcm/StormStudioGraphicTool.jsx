@@ -6,7 +6,7 @@
    "Made in @MyWeatherUK Graphic Studio" watermark is always rendered. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Download, Eraser, Eye, EyeOff, Clock, Pen, MousePointer, Undo2, X, Zap, MapPin,
+  Download, Eraser, Eye, EyeOff, Clock, Pen, Undo2, X, Zap, MapPin,
   CloudLightning, Tornado, AlertTriangle, Wind, Save, FolderOpen, Check, Loader2,
   Image as ImageIcon,
 } from 'lucide-react';
@@ -15,7 +15,6 @@ import { base44 } from '@/api/base44Client';
 import { RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConfig';
 import TimelinePill from '@/components/tcm/StormOutlookTimelinePill';
 import {
-  VIEW_W, VIEW_H, MAP_BBOX, UK_REGIONS, projectPt, latLonToNorm,
   UKOutlineMap, CountyLinesLayer, CityMarkersLayer, STORM_BG_URL, HailIcon, FloodHouseIcon,
 } from '@/components/tcm/stormGeo';
 
@@ -42,15 +41,6 @@ function darkenColor(input, amount = 0.45) {
   return `#${[d(r), d(g), d(b)].map(v => v.toString(16).padStart(2, '0')).join('')}`;
 }
 
-function pointInPolygon(pt, poly) {
-  if (!poly || poly.length < 3) return false;
-  const [x, y] = pt; let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [xi, yi] = poly[i], [xj, yj] = poly[j];
-    if (((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-9) + xi)) inside = !inside;
-  }
-  return inside;
-}
 
 const GRAPHIC_LEVELS = (() => {
   const base = RISK_META.filter(r => r.level !== 'No Risk').map(r => {
@@ -223,8 +213,6 @@ export default function StormStudioGraphicTool() {
     if (prev === next) return;
     const used = {}; const byLabelIdx = new Map();
     prev.forEach((s, i) => { const k = `${s.label}#${(used[s.label] = (used[s.label] || 0))}`; byLabelIdx.set(k, stampRisks[i] ?? null); used[s.label]++; });
-    const seen = {};
-    const remap = (arr) => next.map((s) => { const occ = (seen[s.label] = (seen[s.label] || 0)); seen[s.label]++; return byLabelIdx.get(`${s.label}#${occ}`) ?? null; });
     setStampRisks(prev => { const used2 = {}; const m = new Map(); prev.forEach((v, i) => { const kk = `${prev[i].label}#${(used2[prev[i].label] = (used2[prev[i].label] || 0))}`; m.set(kk, v); used2[prev[i].label]++; }); const sn = {}; return next.map(s => { const occ = (sn[s.label] = (sn[s.label] || 0)); sn[s.label]++; return m.get(`${s.label}#${occ}`) ?? null; }); });
     setStampOverlays(prev => { const used2 = {}; const m = new Map(); prev.forEach((v, i) => { const kk = `${prev[i].label}#${(used2[prev[i].label] = (used2[prev[i].label] || 0))}`; m.set(kk, v); used2[prev[i].label]++; }); const sn = {}; return next.map(s => { const occ = (sn[s.label] = (sn[s.label] || 0)); sn[s.label]++; return m.get(`${s.label}#${occ}`) ?? null; }); });
     prevStampsRef.current = next;
@@ -341,8 +329,6 @@ export default function StormStudioGraphicTool() {
   const activeMeta = LEVEL_LOOKUP[activeRisk] || GRAPHIC_LEVELS[0];
   const visibleHazards = HAZARDS.filter(h => hazards.includes(h.id));
   const shapePaths = useMemo(() => shapes.map(s => pointsToPath(s.points)), [shapes]);
-  const anyStamps = useMemo(() => stampRisks.some(Boolean) || stampOverlays.some(Boolean), [stampRisks, stampOverlays]);
-  const SEV = useMemo(() => { const m = {}; GRAPHIC_LEVELS.forEach((l, i) => { m[l.id] = i; }); return m; }, []);
 
   const timelineValid = useMemo(() => {
     const stepH = timelineGran === '1h' ? 1 : timelineGran === '2h' ? 2 : 3;
@@ -360,7 +346,6 @@ export default function StormStudioGraphicTool() {
 
   const leadDays = useMemo(() => { const t = new Date(); t.setHours(0,0,0,0); const o = new Date(validDate + 'T00:00:00'); return Math.round((o - t) / 86400000); }, [validDate]);
   const isExtended = leadDays >= 3;
-  const outlookTitle = isExtended ? 'Extended Thunderstorm Outlook' : 'Thunderstorm Outlook';
   const forecastLabel = forecastType === 'update' ? `Update ${Math.max(1, updateNumber)}` : 'Initial Forecast';
   const tzAbbr = 'BST';
 

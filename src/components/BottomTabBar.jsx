@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Image, Settings, ShieldAlert, Newspaper } from 'lucide-react';
+import { Home, Image, ShieldAlert, Newspaper } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { useTheme } from '@/components/ThemeContext';
 

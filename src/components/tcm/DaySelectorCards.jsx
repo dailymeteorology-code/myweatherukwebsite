@@ -4,7 +4,7 @@
 // for much smoother re-renders when day data updates.
 
 import React, { memo } from 'react';
-import { CloudLightning, CloudRain, Wind, Zap, Calendar } from 'lucide-react';
+import { CloudLightning, CloudRain, Wind, Zap } from 'lucide-react';
 
 const RISK_META = [
   { level: 'No Risk',  min: 0 },

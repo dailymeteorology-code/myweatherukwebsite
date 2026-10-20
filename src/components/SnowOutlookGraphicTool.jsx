@@ -11,11 +11,12 @@
 import { useStormLightning } from '@/components/tcm/stormOutlookHelpers'; import UKVRainLayer from '@/components/tcm/UKVRainLayer'; import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Download, Eraser, Eye, EyeOff, Clock, Pen, MousePointer, Undo2, X, Zap,
-  CloudLightning, Tornado, AlertTriangle, ShieldAlert, MapPin,
-  CloudRain, CloudDrizzle, CloudRainWind, Snowflake, CloudSnow, ThermometerSnowflake, Radar, Save, FolderOpen, Check, Loader2, Circle, RefreshCw,
+  CloudLightning, AlertTriangle, ShieldAlert, MapPin,
+  CloudRain, CloudDrizzle, Snowflake, CloudSnow, ThermometerSnowflake, Radar, Save, FolderOpen, Check, Loader2, Circle, RefreshCw,
   Type, MoveUpRight, Gauge, DownloadCloud, FileText, Crop, Trash2, Wind,
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
+import { toast } from 'sonner';
 // The still-frame export goes through the browser's own renderer rather than
 // html2canvas's re-implementation of it — see the JPG export below for why.
 // (html2canvas is still used for the .webm frame grabs, where per-frame speed
@@ -24,9 +25,8 @@ import { toCanvas } from 'html-to-image';
 import { base44 } from '@/api/base44Client';
 import { RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConfig';
 import { buildOutlookLayers, buildHiResOutlookLayers } from '@/lib/tcmOutlookLayers';
-import { loadLatestTCMFromDB } from '@/lib/tcmForecastCache';
 import TimelinePill from '@/components/tcm/StormOutlookTimelinePill';
-import { SnowBackgroundPicker, snowBackground, readSnowBgId } from '@/lib/snowBackgrounds';
+import { SnowBackgroundPicker, readSnowBgId } from '@/lib/snowBackgrounds';
 import { variantOf } from '@/lib/graphicVariants';
 import { RADAR_BANDS, UKRadarLayer } from '@/lib/ukRadar';
 
@@ -383,27 +383,6 @@ function countPathVertices(ds) {
   return n;
 }
 
-// --- County / local-authority boundary lines (overlaid on the landmass) ---
-// These are the administrative-area outlines drawn as thin GREY stroke-only
-// lines on top of the white landmass, so the map reads like a Met Office /
-// broadcast county map rather than a blank silhouette. Coverage spans the whole
-// map: Great Britain, Northern Ireland AND the Republic of Ireland, each from a
-// separate source (there is no single file with all of them):
-//   • GB  — quantised TopoJSON of 380 local-authority districts (England,
-//           Scotland, Wales). Much smaller over the wire than the equivalent
-//           GeoJSON (~2 MB vs ~10 MB).
-//   • NI  — quantised TopoJSON of the 11 NI local-government districts.
-//   • IE  — GeoJSON of the Republic's 26 counties (+ a few city/county splits).
-// Every source is projected with the SAME projectPt() used for the coastline
-// (so the lines register exactly with the landmass), heavily point-decimated for
-// this ~300 px-wide map, then the combined result is cached. GB has an
-// England-only TopoJSON fallback if the GB file is unreachable; NI and IE are
-// best-effort, so if one is briefly down the others still draw.
-const COUNTY_GB_SOURCES = [
-  'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/gb/topo_lad.json',
-  'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/eng/topo_lad.json',
-];
-const COUNTY_NI_SOURCE = 'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/ni/topo_lgd.json';
 const COUNTY_IE_SOURCE = 'https://raw.githubusercontent.com/codeforgermany/click_that_hood/main/public/data/ireland-counties.geojson';
 // v2: bumped from v1 (GB-only) so a previously-cached GB-only layer is discarded
 // and re-fetched with Northern Ireland + the Republic of Ireland included.
@@ -438,45 +417,6 @@ function decimateRing(proj) {
   return kept.map(([x, y], i) => (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1)).join('') + 'Z';
 }
 
-// Decode a quantised TopoJSON object (GB "lad" or NI "lgd") into an array of
-// decimated, projected SVG path strings (one per area). Returns [] on any
-// malformed input so a bad fetch can never throw inside render.
-function decodeCountyTopo(topo) {
-  try {
-    const t = topo && topo.transform;
-    const obj = topo && topo.objects && Object.values(topo.objects)[0];
-    if (!t || !obj || !Array.isArray(topo.arcs)) return [];
-    const [sx, sy] = t.scale, [tx, ty] = t.translate;
-    // Pre-decode every arc into absolute (delta-summed) lon/lat coordinates.
-    const arcs = topo.arcs.map((arc) => {
-      let x = 0, y = 0; const out = [];
-      for (const [dx, dy] of arc) { x += dx; y += dy; out.push([x * sx + tx, y * sy + ty]); }
-      return out;
-    });
-    const arcCoords = (idx) => (idx >= 0 ? arcs[idx] : arcs[~idx].slice().reverse());
-    const out = [];
-    for (const geom of (obj.geometries || [])) {
-      const polys = geom.type === 'Polygon' ? [geom.arcs]
-        : geom.type === 'MultiPolygon' ? geom.arcs : null;
-      if (!polys) continue;
-      let d = '';
-      for (const poly of polys) {
-        for (const ring of poly) {
-          // Stitch the ring's arcs together (drop each arc's shared first point).
-          const raw = [];
-          ring.forEach((ai, k) => {
-            const c = arcCoords(ai);
-            for (let i = k > 0 ? 1 : 0; i < c.length; i++) raw.push(projectPt(c[i][0], c[i][1]));
-          });
-          const seg = decimateRing(raw);
-          if (seg) d += seg;
-        }
-      }
-      if (d) out.push(d);
-    }
-    return out;
-  } catch { return []; }
-}
 
 // Decode a plain GeoJSON FeatureCollection (the Republic of Ireland counties)
 // into an array of decimated, projected SVG path strings. Returns [] on any
@@ -877,49 +817,8 @@ function LightningLayer({ strikes, color = '#ffffff', outline = false, outlineCo
   );
 }
 
-// Normalise whatever timestamp a strike source gives us to epoch milliseconds.
-function strikeTimeMs(t) {
-  if (t == null) return NaN;
-  if (typeof t === 'string') {
-    const n = Number(t);
-    if (Number.isFinite(n)) return strikeTimeMs(n);
-    const parsed = Date.parse(t);
-    return Number.isFinite(parsed) ? parsed : NaN;
-  }
-  if (t > 1e15) return Math.round(t / 1e6); // nanoseconds  -> ms
-  if (t > 1e12) return t;                    // milliseconds
-  return t * 1000;                           // seconds      -> ms
-}
 
-// Strike records arrive in many shapes across sources (live socket, the
-// localStorage caches the other pages write, the persisted store). Pull
-// lat/lon/time out of whatever shape we're handed.
-function extractStrike(item) {
-  if (item == null) return null;
-  if (Array.isArray(item)) {
-    // [lat, lon, time] (or [lat, lon])
-    if (item.length >= 2) return { lat: item[0], lon: item[1], t: item.length >= 3 ? item[2] : undefined };
-    return null;
-  }
-  if (typeof item !== 'object') return null;
-  const lat = item.lat ?? item.latitude ?? item.la ?? item.y;
-  const lon = item.lon ?? item.lng ?? item.long ?? item.longitude ?? item.lo ?? item.x;
-  const t   = item.t ?? item.time ?? item.timestamp ?? item.ts ?? item.time_ns ?? item.date ?? item.created_date ?? item.created_at;
-  if (lat == null || lon == null) return null;
-  return { lat, lon, t };
-}
 
-// A cache value might be a bare array, or an object wrapping the array under a
-// common key. Return the array of strike records either way.
-function unwrapStrikeArray(parsed) {
-  if (Array.isArray(parsed)) return parsed;
-  if (parsed && typeof parsed === 'object') {
-    for (const k of ['strikes', 'data', 'items', 'list', 'today', 'points', 'features', 'results']) {
-      if (Array.isArray(parsed[k])) return parsed[k];
-    }
-  }
-  return [];
-}
 
 // --- Drawn-area smoothing ---------------------------------------------------
 // Two stages, then a Catmull-Rom spline in pointsToPath:
@@ -1127,9 +1026,8 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
   const [rangeAnchor, setRangeAnchor] = useState(null); // first-clicked cell index, or null
 
   // --- Load risk areas from the latest TCM run ---
-  const [tcmRuns, setTcmRuns] = useState([]);
+  const [, setTcmRuns] = useState([]);
   const [showTcmPanel, setShowTcmPanel] = useState(false);
-  const [loadingTcm, setLoadingTcm] = useState(false);
   const [importingAuto, setImportingAuto] = useState(false);
   const [autoVariant, setAutoVariant] = useState('outlook'); // 'outlook' (SPC) | 'hires' (risk)
 
@@ -1224,7 +1122,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
   // --- Lightning overlay (hook) + timeline animation ------------------------
   const {
     showLightning, setShowLightning, strikes, loadingStrikes, lightningError,
-    liveStatus, toggleLightning, refreshLightning, lightningStats, fmtHour, tzAbbr,
+    liveStatus, refreshLightning, lightningStats, fmtHour, tzAbbr,
     stopLightning,
   } = useStormLightning({ lightningWindow, setLightningWindow, windowMinutes, setWindowMinutes });
 
@@ -1522,7 +1420,6 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
   const openTcmPanel = async () => {
     setShowTcmPanel(true);
     setShowSavePanel(false); setShowLoadPanel(false);
-    setLoadingTcm(true);
     try {
       const list = await base44.entities.TCMOutlook.list('-outlook_date', 30);
       setTcmRuns((list || []).filter(o => Array.isArray(o.risk_areas) && o.risk_areas.length > 0));
@@ -1530,31 +1427,9 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
       console.error('[TCM import] list failed:', e);
       setTcmRuns([]);
     } finally {
-      setLoadingTcm(false);
     }
   };
 
-  const importTcmAreas = (outlook, mode = 'replace') => {
-    const src = outlook?.risk_areas || [];
-    const mapped = [];
-    for (const area of src) {
-      const pts = area?.points || [];
-      if (pts.length < 3) continue;
-      // points are [lat, lon]; project each into normalised drawing space.
-      const norm = pts.map(([lat, lon]) => latLonToNorm(Number(lat), Number(lon)))
-        .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
-      if (norm.length < 3) continue;
-      // Map the TCM risk level onto a graphic tier id (identical names; fall
-      // back to the level itself, then Slight, if an unknown tier appears).
-      const lvl = RISK_BY_ID[area.risk_level] ? area.risk_level : 'Slight';
-      mapped.push({ riskLevel: lvl, points: norm });
-    }
-    if (!mapped.length) { window.alert('That run has no usable risk areas.'); return; }
-    setShapes(prev => (mode === 'append' ? [...prev, ...mapped] : mapped));
-    // Pull the outlook date across too so the header date matches the run.
-    if (outlook.outlook_date) setValidDate(outlook.outlook_date);
-    setShowTcmPanel(false);
-  };
 
   // --- Import the AUTO-generated model outlook (from the latest published run) --
   // Loads the latest TCM grid and rebuilds its risk polygons (SPC-style Outlook,

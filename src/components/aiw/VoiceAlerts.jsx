@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Volume2, VolumeX, Settings2, Repeat, Bell, BellOff, MapPin, Locate, X, Loader2 } from 'lucide-react';
 import { SEV, SEV_ORDER, aiwGet, fmtAt } from './aiwClient';
 

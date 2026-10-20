@@ -66,7 +66,6 @@ const THEMES = {
 };
 
 const ordinal = (n) => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
-const colorFor = (pal, v) => { let i = 0; while (i < pal.steps.length && v >= pal.steps[i]) i++; return pal.colors[i]; };
 const hexRgb = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 
 /** The months of a period starting (y, m) and n long, as [year, monthIndex]. */

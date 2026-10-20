@@ -1,4 +1,5 @@
 import { Toaster } from "@/components/ui/toaster"
+import { Toaster as SonnerToaster } from "@/components/ui/sonner"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import NavigationTracker from '@/lib/NavigationTracker'
@@ -32,7 +33,6 @@ import Login from '@/pages/Login';
 import Register from '@/pages/Register';
 import ForgotPassword from '@/pages/ForgotPassword';
 import ResetPassword from '@/pages/ResetPassword';
-import ProtectedRoute from '@/components/ProtectedRoute';
 import { Navigate } from 'react-router-dom';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -425,7 +425,7 @@ function PageLoader({ compact = false, note }) {
 
 // ─── Main authenticated app ───────────────────────────────────────────────
 const AuthenticatedApp = () => {
-  const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin, user, isAuthenticated } = useAuth();
+  const { isLoadingAuth, isLoadingPublicSettings, authError, user, isAuthenticated } = useAuth();
   const [siteSettings, setSiteSettings] = useState(null);
   const [accessGranted, setAccessGranted] = useState(() => localStorage.getItem('site_access_granted') === 'true');
 
@@ -568,6 +568,7 @@ function App() {
           <AuthenticatedApp />
         </Router>
         <Toaster />
+        <SonnerToaster />
       </QueryClientProvider>
     </AuthProvider>
     </LanguageProvider>

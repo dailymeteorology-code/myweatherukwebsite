@@ -120,13 +120,12 @@ export default function TemperatureMapTool() {
   const samplesRef = useRef([]);
   const [loading, setLoading] = useState(true);
   const [fetchingTemps, setFetchingTemps] = useState(false);
-  const [zoom, setZoom] = useState(6);
+  const [, setZoom] = useState(6);
   const [updatedAt, setUpdatedAt] = useState(null);
   const [exporting, setExporting] = useState(false);
 
   // ── Fetch live temps on a grid covering the current view ────────────────
   const fetchTempsForView = useCallback(async (map) => {
-    const L = window.L;
     const b = map.getBounds();
     const z = map.getZoom();
     const step = gridStepForZoom(z);

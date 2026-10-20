@@ -1,16 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; import { createPortal } from 'react-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link, useLocation } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import {
-  CloudLightning, Wind, Zap, AlertTriangle, ShieldAlert,
-  ChevronDown, ChevronUp, ChevronRight, Home, Menu, X,
-  RefreshCw, Loader2, Clock, Calendar, Archive, Camera,
-  Radio, Trash2, Eye, Image as ImageIcon, Globe, Search, GripVertical,
-  User, Sun, Moon,
+  CloudLightning, Zap, AlertTriangle, ShieldAlert, X, Loader2, Clock, Camera,
+  Radio, Eye, Globe, GripVertical,
 } from 'lucide-react';
-import { AURORA, glassPanel, AuroraRail, rgbStr } from '@/components/tcm/auroraGlass';
+import { AURORA, glassPanel, AuroraRail } from '@/components/tcm/auroraGlass';
 import LightningHeaderBar from '@/components/tcm/LightningHeaderBar';
 import { useTheme } from '@/components/ThemeContext';
 /* The liquid-glass tokens (--glass-*, --ink-*, .lg-pane) live with the home
@@ -24,41 +18,21 @@ import { injectThemeStyles } from '@/pages/Home';
    ═══════════════════════════════════════════════════════════════ */
 // Render worker — used as fallback/snapshot source. Both schemes from the same host.
 const RENDER_WORKER_HOST = 'blitzortungworker-3.onrender.com';
-const RENDER_WORKER_WS   = `wss://${RENDER_WORKER_HOST}`;
 const RENDER_WORKER_HTTP = `https://${RENDER_WORKER_HOST}`;
 
-// Direct Blitzortung — used while a user is on the site
-const BLITZORTUNG_DIRECT_SERVERS = [
-  'wss://ws1.blitzortung.org',
-  'wss://ws7.blitzortung.org',
-  'wss://ws8.blitzortung.org',
-];
 
 /* RISK_LEVEL_GUIDE removed — replaced by RiskLegendPanel import in components/tcm */
 
 /* ═══════════════════════════════════════════════════════════════
    ENHANCED CITY DATABASE — ~350 UK towns for accuracy
    ═══════════════════════════════════════════════════════════════ */
-import { CITY_DB } from '@/components/tcm/cityDB';
 
-const BLITZORTUNG_DATE_IMAGES = {};
-async function fetchBlitzortungArchive(dateStr, hourEnd) {
-  const d = new Date(dateStr + 'T00:00:00Z');
-  const endTs  = Math.floor(d.getTime() / 1000) + hourEnd * 3600;
-  const startTs = endTs - 3600;
-  return `https://www.blitzortung.org/en/archive_data.php?stations_users=0&selected_numbers=&end_date=${endTs}&end_time=0&start_date=${startTs}&start_time=0&north=90&west=-180&east=180&south=-90&rawdata_image=1&map=10&width_orig=640&width_result=640&png_gif=0`;
-}
-function tsToDateHour(ts) {
-  const d = new Date(ts);
-  return { dateStr: d.toISOString().slice(0, 10), hour: d.getUTCHours() };
-}
 
 /* nearestCity / nearestCityShort moved to components/tcm/stormTracker */
 
 /* Storage helpers moved to components/tcm/strikeStorage */
 import {
-  STORE_KEY, DATE_KEY, ARCHIVE_KEY, SNAPSHOT_KEY,
-  todayDateStr, localDateKey,
+  STORE_KEY, SNAPSHOT_KEY, localDateKey,
   loadSnapshots, saveSnapshot,
   loadTodayStrikes, saveTodayStrikes, loadNewStrikesSince,
   loadArchive, saveArchive,
@@ -169,7 +143,6 @@ const RAIN_KEY_TICKS = [10, 20, 30, 40, 50, 60, 70].map((dbz) => {
 
 /* HistoricalLightningPanel moved to components/tcm/HistoricalLightningPanel.jsx */
 
-import AutoForecastPanel from '@/components/tcm/AutoForecastPanelWrapper';
 import USAMonitor from '@/components/USAMonitor';
 
 function hexToRgb(hex) {
@@ -212,23 +185,7 @@ function ageBand(timeMs, now = Date.now()) {
   return AGE_BANDS.length - 1;
 }
 
-function strikeColor(timeMs) {
-  return AGE_BANDS[ageBand(timeMs)].color;
-}
 
-/** The full marker style for a strike: colour, size, and the light-theme rim. */
-function strikeStyle(timeMs, colourMode, light, now = Date.now()) {
-  const band = AGE_BANDS[ageBand(timeMs, now)];
-  const fixed = colourMode && colourMode !== 'age'
-    ? LIVE_STRIKE_COLOUR_OPTIONS.find((o) => o.id === colourMode)?.hex
-    : null;
-  return {
-    fillColor: fixed || band.color,
-    radius: band.r,
-    color: light ? 'rgba(15,23,42,0.55)' : 'transparent',
-    weight: light ? 0.8 : 0,
-  };
-}
 
 /* ── One canvas for every strike dot ──────────────────────────────────
    Each strike used to be its own Leaflet circleMarker. On a busy day that is
@@ -344,7 +301,7 @@ function makeStrikeDotLayer(L, getMode, getLight, onPick) {
 }
 
 /* Storm tracking helpers moved to components/tcm/stormTracker */
-import { nearestCity, nearestCityShort } from '@/components/tcm/stormTracker';
+import { nearestCity } from '@/components/tcm/stormTracker';
 /* ── AI lightning warnings (server-side engine; see server/aiw) ──
    These replace the old in-browser storm warnings, which every visitor's
    browser computed for itself from its own strike feed. */
@@ -359,7 +316,6 @@ import WarningDetail from '@/components/aiw/WarningDetail';
 /* renderGlowFlash moved to components/tcm/lightningAudio */
 
 /* ArchivedDayMap + ArchivePanel moved to components/tcm/LightningArchivePanel */
-import ArchivePanel from '@/components/tcm/LightningArchivePanel';
 import LightningMapControls from '@/components/tcm/LightningMapControls';
 
 /* ═══════════════════════════════════════════════════════════════
@@ -880,7 +836,6 @@ function LightningMap({ region = 'uk', setRegion, isAdmin, archive, setArchive, 
   const audioCtx          = useRef(null);
   const markerPoolRef     = useRef([]);
   const newestLoadedTsRef = useRef(0);
-  const heatRebuildTimer  = useRef(null);
   /* Every strike already in the density field, by the same key the live
      feed dedups on — so a strike that arrives live AND sits in the stored
      archive is counted once, whichever reached the field first. */
@@ -895,10 +850,6 @@ function LightningMap({ region = 'uk', setRegion, isAdmin, archive, setArchive, 
   // O(n) serialize-per-strike that stalled the main thread. We coalesce.
   const saveTimerRef    = useRef(null);
   const dirtyRef        = useRef(false);
-  // Set by the DB-persistence effect to a function that queues strikes for
-  // writing back to the shared base44 DB. Lets the live-socket path (handleStrike)
-  // persist its catch too, so the full-day count never falls behind the feed.
-  const persistStrikesRef = useRef(null);
   const boxSelectLayerRef = useRef(null);
   const boxSelectStateRef = useRef({ active: false, startLL: null, rect: null });
 
@@ -926,7 +877,6 @@ function LightningMap({ region = 'uk', setRegion, isAdmin, archive, setArchive, 
   const [leafletReady,     setLeafletReady]     = useState(false);
   const [wsStatus,         setWsStatus]         = useState('connecting');
   const [metOfficeCount,   setMetOfficeCount]   = useState(0);
-  const [metOfficeDrawn,   setMetOfficeDrawn]   = useState(0);
   /* What the map's movable warning panel is showing, if anything. */
   const [mapPanel,         setMapPanel]         = useState(null);
   /* Worldwide alerts — every national met service's live CAP warnings, via
@@ -941,13 +891,10 @@ function LightningMap({ region = 'uk', setRegion, isAdmin, archive, setArchive, 
      something more specific than "we have not given up yet". */
   const [feedPool,         setFeedPool]         = useState({ live: 0, target: 0 });
   const [lastUpdate,       setLastUpdate]       = useState(new Date());
-  const [strikeCount,      setStrikeCount]      = useState(0);
-  const [lastMinCount, setLastMinCount] = useState(0);
+  const [,      setStrikeCount]      = useState(0);
 const [lastMinUkCount, setLastMinUkCount] = useState(0);
 const [lastMinEuCount, setLastMinEuCount] = useState(0);
 const lastMinBufferRef = useRef([]);
-const lastMinUkRef = useRef([]);
-const lastMinEuRef = useRef([]);
 useEffect(() => {
   const cutoff = Date.now() - 60000;
   lastMinBufferRef.current = lastMinBufferRef.current.filter(s => s.t > cutoff);
@@ -955,7 +902,6 @@ useEffect(() => {
   const euMs = lastMinBufferRef.current.filter(s => inBounds(s.lat, s.lon, 'europe')).length;
   setLastMinUkCount(ukMs);
   setLastMinEuCount(euMs);
-  setLastMinCount(view === 'europe' ? euMs : ukMs);
 }, [view]);
 useEffect(() => {
   if (mapInst.current) {
@@ -1008,7 +954,6 @@ useEffect(() => {
   useEffect(() => { filterActiveRef.current = (filteredStrikes !== null) || last24Mode; }, [filteredStrikes, last24Mode]);
 
   // ── Right-click storm ETA ────────────────────────────────────────────
-  const [etaPopup, setEtaPopup] = useState(null); // { lat, lon, text }
 
   const [liveStrikeColour, setLiveStrikeColour] = useState(() => localStorage.getItem('tcm_live_strike_colour') || 'age');
   const liveStrikeColourRef = useRef(liveStrikeColour);
@@ -1041,11 +986,6 @@ useEffect(() => {
     const renderer = L.canvas({ padding: 0.5, tolerance: 3 });
     const map = L.map(mapRef.current, { center: v.center, zoom: v.zoom, zoomControl: false, attributionControl: false, preferCanvas: true, renderer });
     mapRef.current.style.background = lightMode ? '#dbe6f3' : '#060d1a';
-    // Use devicePixelRatio-aware tiles on HiDPI screens (retina / 2× displays).
-    // {r} in the CartoDB URL resolves to '@2x' when the browser reports DPR ≥ 1.5,
-    // giving sharper text labels and coastlines on modern displays.
-    const dpr = window.devicePixelRatio || 1;
-    const retinaParam = dpr >= 1.5 ? '@2x' : '';
     const tileTheme = lightMode ? 'Canvas/World_Light_Gray_Base' : 'Canvas/World_Dark_Gray_Base';
     L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/${tileTheme}/MapServer/tile/{z}/{y}/{x}`, {
       maxZoom: 19, subdomains: 'abcd',
@@ -1117,7 +1057,6 @@ useEffect(() => {
       } else {
         text = 'No recent lightning activity within range. Low storm risk at this location currently.';
       }
-      setEtaPopup({ lat, lon, text });
       // Also show as a Leaflet popup
       L.popup({ className: 'blitz-popup' })
         .setLatLng(e.latlng)
@@ -1432,8 +1371,6 @@ useEffect(() => {
     const map = mapInst.current;
     if (!map || !window.L) return;
     const L = window.L;
-    const dpr = window.devicePixelRatio || 1;
-    const retinaParam = dpr >= 1.5 ? '@2x' : '';
     const tileTheme = lightMode ? 'Canvas/World_Light_Gray_Base' : 'Canvas/World_Dark_Gray_Base';
     map.eachLayer(layer => { if (layer._url) map.removeLayer(layer); });
     L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/${tileTheme}/MapServer/tile/{z}/{y}/{x}`, {
@@ -1599,7 +1536,6 @@ useEffect(() => {
   // leafletReady fires in the same React cycle as map-init, so allDayLayer may
   // still be null when the old [leafletReady] version ran → silent paint failure.
   if (!mapReady) return;
-  const L = window.L;
   const existing = loadTodayStrikes();
   if (existing.length) {
     const held = strikeKeySetRef.current;
@@ -1655,70 +1591,7 @@ useEffect(() => {
       return out;
     };
 
-    // ── DB PERSISTENCE QUEUE (root fix for the backend undercount) ────────────
-    // The Render worker catches strikes 24/7, but historically nothing wrote its
-    // continuous catch into the shared base44 DB — the page only READ the
-    // worker's rolling /strikes/recent buffer, which expires. So once a strike
-    // aged out of /recent (and if the gappy backend poll missed it) it vanished
-    // from the day's count. Here every strike this client sees — from the live
-    // socket, the worker pull, or a cross-session merge — is queued and flushed
-    // to saveLightningStrikes, so the DB steadily accumulates the FULL day with
-    // no gaps. saveLightningStrikes already dedups server-side, so re-sending a
-    // strike another tab/device already saved is harmless. This makes the count
-    // self-healing: whatever any open client catches becomes permanent.
-    const persistQueueRef = { current: [] };
-    const persistSeenRef  = new Set();           // keys already queued/sent this session
-    let persistTimer = null;
-    let persistInFlight = false;
-
-    const flushPersist = async () => {
-      if (persistInFlight) return;
-      if (!persistQueueRef.current.length) return;
-      // Drain up to 500 per request (saveLightningStrikes batches/dedups).
-      const batch = persistQueueRef.current.splice(0, 500);
-      persistInFlight = true;
-      try {
-        await base44.functions.invoke('saveLightningStrikes', {
-          strikes: batch.map(s => ({ lat: s.lat, lon: s.lon, time: s.time, amp: s.amp || 0 })),
-        });
-      } catch (_) {
-        // On failure, drop the batch rather than retry forever — the next pull
-        // from the worker/DB will re-surface anything important, and the live
-        // feed keeps flowing. (Avoids a stuck queue back-pressuring the page.)
-      } finally {
-        persistInFlight = false;
-        // If more is queued, keep draining promptly.
-        if (persistQueueRef.current.length) {
-          persistTimer = setTimeout(flushPersist, 1500);
-        }
-      }
-    };
-
-    // Queue strikes for DB persistence. Only today's strikes, deduped per session.
-    const queueForPersist = (strikes) => {
-      if (!Array.isArray(strikes) || !strikes.length) return;
-      const todayStart0 = new Date(); todayStart0.setUTCHours(0, 0, 0, 0);
-      const todayStartMs0 = todayStart0.getTime();
-      let added = 0;
-      for (const s of strikes) {
-        if (!s || s.lat == null || s.lon == null) continue;
-        const t = Number(s.time);
-        if (!Number.isFinite(t) || t < todayStartMs0) continue; // server only keeps today
-        const k = strikeKey(s);
-        if (persistSeenRef.has(k)) continue;
-        persistSeenRef.add(k);
-        persistQueueRef.current.push(s);
-        added++;
-      }
-      if (added && !persistTimer && !persistInFlight) {
-        persistTimer = setTimeout(() => { persistTimer = null; flushPersist(); }, 1500);
-      }
-    };
-    // Expose to the live-socket path (handleStrike) via a ref so strikes caught
-    // by the client's own WebSocket are persisted too, not just pulled ones.
-    persistStrikesRef.current = queueForPersist;
-
-    // Merge fresh strikes into ref, register keys, update counts, paint, save
+    // Merge fresh strikes into ref, register keys, update counts, paint
     const commit = (fresh) => {
       if (!fresh.length) return;
       for (const s of fresh) strikeKeySetRef.current.add(strikeKey(s));
@@ -1747,7 +1620,6 @@ useEffect(() => {
       setWorldCount(todayStrikesRef.current.length);
       const L = window.L;
       if (L) paintStrikes(fresh, L);
-      queueForPersist(fresh); // accumulate into the shared DB (gapless full day)
       setTimeout(rebuildStrikeHeatmap, 600);
     };
 
@@ -1790,9 +1662,10 @@ useEffect(() => {
 
     const pullFromRender = async () => {
       try {
-        const r = await fetch(`${RENDER_WORKER_HTTP}/strikes/recent`);
+        const r = await fetch(`${RENDER_WORKER_HTTP}/strikes`);
         if (!r.ok || cancelled) return;
-        const strikes = await r.json();
+        const body = await r.json();
+        const strikes = Array.isArray(body) ? body : body?.strikes;   // the worker now wraps them: { count, serverTime, strikes }
         if (!Array.isArray(strikes) || !strikes.length) return;
         // Normalise time units (Render may emit s / ms / ns). Without this a
         // seconds-based timestamp is < eightDaysAgo and paintStrikeOnMap skips
@@ -1825,10 +1698,6 @@ useEffect(() => {
       clearInterval(iv2);
       window.removeEventListener('focus', onVisible);
       document.removeEventListener('visibilitychange', onVisibilityRefresh);
-      // Best-effort final flush of any queued strikes, then clear the timer.
-      if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
-      if (persistQueueRef.current.length) { flushPersist(); }
-      persistStrikesRef.current = null;
     };
   }, [mapReady, isEuropeMap]); // eslint-disable-line
   // ── Stop all audio when the map unmounts (leaving the TCM page) ──────────
@@ -1921,7 +1790,6 @@ useEffect(() => {
          of it for the clicks — so the colours were a picture that did not
          line up with the base map, and a click anywhere in the Yorkshire box
          opened a warning that might cover a corner of it. */
-      let drawnShapes = 0;
       let count = 0;
 
       (Array.isArray(warnings) ? warnings : []).forEach(w => {
@@ -1946,7 +1814,6 @@ useEffect(() => {
             });
             gj.on('click', () => showMetOfficePanel(w, isFuture, cfg));
             gj.addTo(metOfficeLayer.current);
-            drawnShapes++;
             return;
           } catch (_) { /* fall through to the region outline */ }
         }
@@ -1971,13 +1838,11 @@ useEffect(() => {
             });
             leafPoly.on('click', () => showMetOfficePanel(w, isFuture, cfg));
             leafPoly.addTo(metOfficeLayer.current);
-            drawnShapes++;
           } catch (_) {}
         });
       });
 
       setMetOfficeCount(count);
-      setMetOfficeDrawn(drawnShapes);
     };
 
     const refresh = async () => {
@@ -2000,7 +1865,6 @@ useEffect(() => {
       clearInterval(iv);
       if (metOfficeLayer.current) metOfficeLayer.current.clearLayers();
       setMetOfficeCount(0);
-      setMetOfficeDrawn(0);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLayers.includes('metoffice'), leafletReady]);
@@ -2139,7 +2003,6 @@ useEffect(() => {
     if (strikeKeySetRef.current.has(dupKey)) return;
     strikeKeySetRef.current.add(dupKey);
     // Persist this live-caught strike to the shared DB (gapless full-day store).
-    if (persistStrikesRef.current) { try { persistStrikesRef.current([strike]); } catch (_) {} }
     /* Counters are accumulated here and pushed to the screen ONCE a second
        (see the counter flush effect). Updating eight pieces of state per
        strike re-rendered the entire page several times a second in a storm,
@@ -2467,12 +2330,6 @@ useEffect(() => {
   const euMs = lastMinBufferRef.current.filter(s => inBounds(s.lat, s.lon, 'europe')).length;
   setLastMinUkCount(ukMs);
   setLastMinEuCount(euMs);
-  // Use viewRef (not the captured `view`) so this timer always reflects the
-  // CURRENT region. With the old stale closure, switching UK↔EU left this
-  // showing the previous region's value, which then never updated — the
-  // "number that sits there and never changes".
-  const regionKey = viewRef.current === 'europe' ? 'europe' : viewRef.current === 'world' ? 'world' : 'uk';
-  setLastMinCount(regionKey === 'uk' ? ukMs : euMs);
 }, 1000);
 
     let snapshotDone = false;
@@ -2529,8 +2386,6 @@ useEffect(() => {
 }, []);
 
   const toggleLayer = (id) => setActiveLayers(prev => prev.includes(id) ? prev.filter(l=>l!==id) : [...prev, id]);
-  const fmt = (d) => d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-  const sc = wsStatus==='live' ? { color:'#22c55e', label:'LIVE' } : { color:'#facc15', label:'CONNECTING…' };
   /* ── AI warnings: live data, the map layer, selection ──────────────── */
   const aiw = useAiwLive({ includeTest: !!isAdmin });
   const aiwActiveRef = useRef([]);

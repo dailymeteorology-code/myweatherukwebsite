@@ -20,6 +20,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
+import { loadWarningAreas, matchAreas } from '@/lib/ukWarningAreas';
 
 /* ───────────────────────── Brand tokens ──────────────────────────────── */
 const BRAND = {
@@ -44,8 +45,6 @@ const SEVERITY = {
 
 const WARNING_TYPES = ['Rain', 'Wind', 'Snow', 'Ice', 'Thunderstorm', 'Fog', 'Flood', 'Extreme Heat', 'Lightning'];
 
-const UK_BOUNDS = [[49.8, -10.5], [61.0, 2.1]];
-const MO_WARNING_MAP_PNG = 'https://www.metoffice.gov.uk/public/data/PWSCache/WarningsMaps/UK';
 const RENDER_WORKER_HTTP = 'https://blitzortungworker-3.onrender.com';
 
 /* ───────── UK towns & cities (used for the polygon report) ─────────────
@@ -284,7 +283,7 @@ function LiveStreamInner() {
         const tStart = todayStart();
         const [ukRes, workerRes] = await Promise.allSettled([
           base44.functions.invoke('historicalLightning', { region: 'uk', daysBack: 0 }),
-          fetch(`${RENDER_WORKER_HTTP}/strikes/recent`).then(r => (r.ok ? r.json() : [])).catch(() => []),
+          fetch(`${RENDER_WORKER_HTTP}/strikes`).then(r => (r.ok ? r.json() : [])).then(b => (Array.isArray(b) ? b : b?.strikes || [])).catch(() => []),
         ]);
         const seen = new Set();
         let n = 0;
@@ -390,22 +389,53 @@ function LiveStreamInner() {
     return () => clearInterval(iv);
   }, [mapReady, refreshRadar]);
 
-  /* ─────────────────────── Met Office warning overlay ─────────────────────── */
+  /* ─────────────────────── Met Office warning overlay ───────────────────────
+     Each warning in force, in its severity's colour: its own shape from the Met
+     Office feed where it has one, else the council areas it names (dashed, as
+     they are approximate). This used to lay the Met Office's warning-map PNG
+     over the UK; that image is gone (404), so the toggle showed nothing. */
   useEffect(() => {
     const L = window.L;
-    if (!mapReady || !L || !moWarnLayerRef.current) return;
-    moWarnLayerRef.current.clearLayers();
-    if (!moWarnOn) return;
-    const anyType = typeFilter.size > 0;
-    const anySev = sevFilter.size > 0;
-    if (!anyType || !anySev) return;
-    const hourStamp = Math.floor(Date.now() / 3600000);
-    try {
-      L.imageOverlay(`${MO_WARNING_MAP_PNG}?_=${hourStamp}`, UK_BOUNDS, {
-        opacity: 0.82, interactive: false, crossOrigin: 'anonymous',
-      }).addTo(moWarnLayerRef.current);
-    } catch (_) {}
-  }, [mapReady, moWarnOn, typeFilter, sevFilter]);
+    const layer = moWarnLayerRef.current;
+    if (!mapReady || !L || !layer) return undefined;
+    layer.clearLayers();
+    if (!moWarnOn) return undefined;
+    const t = Date.now();
+    const typeOk = (w) => {
+      const ty = String(w.type || w.weatherType || '').toLowerCase();
+      const known = WARNING_TYPES.find((k) => ty.includes(k.toLowerCase().replace(/s$/, '')));
+      return known ? typeFilter.has(known) : typeFilter.size > 0;
+    };
+    const shown = (warnings || []).filter((w) => {
+      const to = w.validTo ? new Date(w.validTo).getTime() : Infinity;
+      return to >= t && sevFilter.has(SEVERITY[w.severity] ? w.severity : 'Yellow') && typeOk(w);
+    });
+    let live = true;
+    const colour = (w) => (SEVERITY[w.severity] || SEVERITY.Yellow).color;
+    const approx = [];
+    shown.forEach((w) => {
+      const geoms = (Array.isArray(w.polygons) && w.polygons.length ? w.polygons : [w.geometry])
+        .filter((g) => g && (g.type === 'Polygon' || g.type === 'MultiPolygon'));
+      if (!geoms.length) { approx.push(w); return; }
+      geoms.forEach((g) => {
+        try {
+          L.geoJSON(g, { interactive: false, style: { color: colour(w), weight: 2, opacity: 0.95, fillColor: colour(w), fillOpacity: 0.28 } }).addTo(layer);
+        } catch (_) { /* a malformed shape is skipped */ }
+      });
+    });
+    if (approx.length) {
+      loadWarningAreas().then((all) => {
+        if (!live) return;
+        approx.forEach((w) => {
+          const names = Array.isArray(w.counties) && w.counties.length ? w.counties : Array.isArray(w.regions) ? w.regions : (w.region ? [w.region] : []);
+          matchAreas(all, names).forEach((a) => a.rings.forEach((ring) => {
+            L.polygon(ring, { interactive: false, color: colour(w), weight: 1.4, opacity: 0.8, dashArray: '6, 5', fillColor: colour(w), fillOpacity: 0.18 }).addTo(layer);
+          }));
+        });
+      }).catch(() => {});
+    }
+    return () => { live = false; };
+  }, [mapReady, moWarnOn, typeFilter, sevFilter, warnings]);
 
   /* ─────────────────────── drawing interactions ─────────────────────── */
   useEffect(() => {

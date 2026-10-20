@@ -1,23 +1,20 @@
 // Weather Patterns Page — v4 (UK & Europe convective outlook — full redesign)
 
 import React, { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } from 'react';
-import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import {
-  Menu, X, AlertTriangle, Clock, Home, ShieldAlert, CloudLightning,
+import { X, AlertTriangle, Clock, ShieldAlert, CloudLightning,
   ChevronRight, ChevronDown, Wind, Zap, CloudRain, Activity,
-  Play, Pause, RefreshCw, MapPin, Info, Layers, Loader2,
-  Sun, Moon, Database, Radio, Thermometer, Droplets, BarChart2,
-  Eye, TrendingUp, TrendingDown, Minus, AlertCircle, CheckCircle,
+  Play, RefreshCw, MapPin, Layers, Loader2,
+  Sun, Database, Radio, Thermometer, BarChart2,
+  Eye, TrendingUp, CheckCircle,
   CloudSnow, Map as MapIcon, Download, FileText, ToggleLeft, ToggleRight,
-  Pen, Trash2, Save, ChevronLeft, PenLine, Eraser } from
+  Pen, Trash2, Save, PenLine, Eraser } from
 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import TCMApiStatus from '@/components/tcm/TCMApiStatus';
 import TCMLeafletBase from '@/components/tcm/TCMLeafletBase';
 import useBlitzortung from '@/components/tcm/useBlitzortung';
 import AIAuthCard from '@/components/tcm/AIAuthCard';
-import ArchiveSummaryCard from '@/components/tcm/ArchiveSummaryCard';
 import { smoothBlobPath } from '@/components/tcm/smoothBlobPath';
 import { ringToSvgPath, buildFineGrid, buildSmoothedField } from '@/components/tcm/geometryEngine';
 // Canonical outlook-layer builders (single implementation) — the local
@@ -29,8 +26,7 @@ import {
   buildOutlookLayersForStep as _stepLayers,
   buildSevereOverlay as _severeLayers,
 } from '@/lib/tcmOutlookLayers';
-import { isInUKIreland, isInDataBox, UK_IE_DATA_BOX, UK_IRELAND_COUNTIES } from '@/components/tcm/ukIrelandMask';
-import { seedUKStrikesOnce } from '@/lib/seedUKStrikes';
+import { isInUKIreland, UK_IE_DATA_BOX, UK_IRELAND_COUNTIES } from '@/components/tcm/ukIrelandMask';
 import { fetchOpenMeteoTCM, continueTCM, estimateRunSeconds } from '@/lib/openMeteoTCM';
 // Open-Meteo Ensemble is the ONLY data source for the TCM page. The legacy
 // tcmGrid backend, AI fallback and DB-read paths have been removed — every
@@ -38,27 +34,12 @@ import { fetchOpenMeteoTCM, continueTCM, estimateRunSeconds } from '@/lib/openMe
 // URL documented in lib/openMeteoTCM.js. saveTCMRunToDB is retained purely
 // as a write-only archival hook so admin refreshes can still be persisted
 // for verification, but it is never read back as a data source.
-import { loadRunFromCache, loadLatestRunFromCache, saveRunToCache, pruneOldForecastRuns, saveTCMRunToDB, listRunsFromDB, loadRunByKeyFromDB, saveAdminDrawnOutlook, listAdminDrawnOutlooks, deleteAdminDrawnOutlook, loadLatestAdminOutlookFromDB, updateAdminDrawnOutlook, loadLatestTCMFromDB } from '@/lib/tcmForecastCache';
+import { loadRunFromCache, loadLatestRunFromCache, saveRunToCache, pruneOldForecastRuns, saveTCMRunToDB, listRunsFromDB, loadRunByKeyFromDB, saveAdminDrawnOutlook, deleteAdminDrawnOutlook, loadLatestAdminOutlookFromDB, updateAdminDrawnOutlook, loadLatestTCMFromDB } from '@/lib/tcmForecastCache';
 import useTCMData from '@/components/tcm/useTCMData';
 import OMDataSourcePanel from '@/components/tcm/OMDataSourcePanel';
 
-import DaySelectorCards from '@/components/tcm/DaySelectorCards';
-import SkewT from '@/components/tcm/SkewT';
 import MapHoverTooltip from '@/components/tcm/MapHoverTooltip';
-import { isFetchDue, setLastFetch, msUntilNextFetch, formatRemaining, isCurrentUserAdmin } from '@/lib/tcmFetchPolicy'; import { fwdWheel } from '@/lib/forwardWheelToMap'; import RunWaitCountdown from '@/components/tcm/RunWaitCountdown';
-let html2canvasPromise = null;
-function loadHtml2Canvas() {
-  if (!html2canvasPromise) {
-    html2canvasPromise = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-      script.onload  = () => resolve(window.html2canvas);
-      script.onerror = reject;
-      document.head.appendChild(script);
-    });
-  }
-  return html2canvasPromise;
-}
+import { setLastFetch, isCurrentUserAdmin } from '@/lib/tcmFetchPolicy'; import { fwdWheel } from '@/lib/forwardWheelToMap'; import RunWaitCountdown from '@/components/tcm/RunWaitCountdown';
 /* ═══════════════════════════════════════════════════════════════════════════
    CONSTANTS
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -107,7 +88,6 @@ function RegionSwitcher({ t, region, setRegion }) {
   const [open, setOpen] = useState(false);
   const [coffeeUrl, setCoffeeUrl] = useState('');
   const wrapRef = useRef(null);
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
 
   useEffect(() => {
     let cancelled = false;
@@ -408,9 +388,6 @@ function getPalette(riskType, level) {
   return pal[idx] ?? pal[0];
 }
 
-const RISK_FILL = (riskType, level) => getPalette(riskType, level).fill;
-const RISK_BORDER = (riskType, level) => getPalette(riskType, level).border;
-const RISK_COLOR = (riskType, level) => getPalette(riskType, level).border;
 
 const LEVEL_OPACITY = {
   'Very Low': 0.55,
@@ -422,7 +399,6 @@ const LEVEL_OPACITY = {
   'Severe': 0.88
 };
 
-const ORDERED_LEVELS = RISK_META.slice(1).map((r) => r.level);
 
 const RISK_TYPES = [
 { id: 'thunderstorm', label: 'Thunderstorm', shortLabel: 'Storm', icon: CloudLightning, color: '#e65100' },
@@ -434,19 +410,6 @@ const RISK_TYPES = [
 /* ═══════════════════════════════════════════════════════════════════════════
    HELPERS
 ═══════════════════════════════════════════════════════════════════════════ */
-function hashStr(s) {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < s.length; i++) {h ^= s.charCodeAt(i);h = Math.imul(h, 16777619);}
-  return h >>> 0;
-}
-function mulberry32(seed) {
-  return function () {
-    let t = (seed += 0x6D2B79F5) >>> 0;
-    t = Math.imul(t ^ t >>> 15, t | 1);
-    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
 
 function fmtRange(level) {
   const idx = RISK_INDEX[level];
@@ -456,7 +419,6 @@ function fmtRange(level) {
   return `(${RISK_META[idx].min}–${max})`;
 }
 
-const runKey = (d) => `${d.getUTCFullYear()}${(d.getUTCMonth() + 1).toString().padStart(2, '0')}${d.getUTCDate().toString().padStart(2, '0')}_${d.getUTCHours().toString().padStart(2, '0')}Z`;
 
 // ── British Summer Time helpers ────────────────────────────────────────────
 // All run scheduling is keyed to UK local clock time (BST = UTC+1 in summer,
@@ -485,19 +447,7 @@ function utcRunForDate(d) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), run));
 }
 
-// Today's daily 06 UTC run (used as the day's primary outlook + archived entry)
-function dailyOutlookRun(d = new Date()) {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 6));
-}
 
-function pastRuns(n = 28) {
-  const runs = [];const now = new Date();
-  for (let i = 0; i < n; i++) {
-    const d = new Date(now.getTime() - i * 6 * 3600_000);
-    runs.push(utcRunForDate(d));
-  }
-  return runs.filter((r, i, a) => i === 0 || r.getTime() !== a[i - 1].getTime());
-}
 function fmtRun(d) {
   return `${d.getUTCDate().toString().padStart(2, '0')}/${(d.getUTCMonth() + 1).toString().padStart(2, '0')} ${d.getUTCHours().toString().padStart(2, '0')}Z`;
 }
@@ -771,41 +721,7 @@ function getRiskScoreStep(pt, riskType, stepIdx) {
 /* ═══════════════════════════════════════════════════════════════════════════
    GEOMETRY ENGINE
 ═══════════════════════════════════════════════════════════════════════════ */
-function passesRegionMask(p, region, bbox) {
-  if (bbox && (p.lat < bbox.latMin - 0.5 || p.lat > bbox.latMax + 0.5 ||
-  p.lon < bbox.lonMin - 0.5 || p.lon > bbox.lonMax + 0.5)) return false;
-  // Clip tightly to the ACTIVE region's data box (see REGIONS) — the outlook
-  // fills that box and never bleeds outside it, whichever region is selected.
-  if (!inRegionBox(p.lat, p.lon, bbox)) return false;
-  return true;
-}
 
-function clusterPoints(pts, gridStep, minClusterSize = 4) {
-  if (!pts.length) return [];
-  const visited = new Set();
-  const key = (p) => `${Math.round(p.lat * 1000)},${Math.round(p.lon * 1000)}`;
-  const clusters = [];
-  const searchR = gridStep * 2.2; // slightly more than √2 × gridStep to connect diagonal neighbours
-  for (const p of pts) {
-    const k = key(p);
-    if (visited.has(k)) continue;
-    const cluster = [],queue = [p];
-    visited.add(k);
-    while (queue.length) {
-      const cur = queue.shift();
-      cluster.push(cur);
-      for (const pt of pts) {
-        const ck = key(pt);
-        if (visited.has(ck)) continue;
-        if (Math.hypot(pt.lat - cur.lat, pt.lon - cur.lon) <= searchR) {
-          visited.add(ck);queue.push(pt);
-        }
-      }
-    }
-    if (cluster.length >= minClusterSize) clusters.push(cluster);
-  }
-  return clusters;
-}
 
 const LEVEL_PAD_SCALE = {
   'Very Low': 3.2,
@@ -823,37 +739,6 @@ function clusterToPath(cluster, projector, gridStep = 0.3, level = 'Very Low') {
   return smoothBlobPath(cluster, projector, gridStep, pad);
 }
 
-/* Buffer zone enforcement: higher risk must be surrounded by lower risk */
-function enforceBufferZones(pointSetsPerLevel, gridStep) {
-  const enforced = {};
-  const levels = ORDERED_LEVELS;
-  for (let i = levels.length - 1; i >= 0; i--) {
-    const lvl = levels[i];
-    enforced[lvl] = new Set(pointSetsPerLevel[lvl].map((p) => `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`));
-    if (i > 0) {
-      const parentLvl = levels[i - 1];
-      if (!enforced[parentLvl]) enforced[parentLvl] = new Set(pointSetsPerLevel[parentLvl].map((p) => `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`));
-      const parentPoints = pointSetsPerLevel[parentLvl];
-      const parentMap = new Map(parentPoints.map((p) => [`${p.lat.toFixed(2)},${p.lon.toFixed(2)}`, p]));
-      for (const p of pointSetsPerLevel[lvl]) {
-        for (let dlat = -1; dlat <= 1; dlat++) {
-          for (let dlon = -1; dlon <= 1; dlon++) {
-            if (dlat === 0 && dlon === 0) continue;
-            const nLat = +(p.lat + dlat * gridStep).toFixed(2);
-            const nLon = +(p.lon + dlon * gridStep).toFixed(2);
-            const nKey = `${nLat},${nLon}`;
-            if (!enforced[parentLvl].has(nKey)) {
-              enforced[parentLvl].add(nKey);
-              parentMap.set(nKey, { ...p, lat: nLat, lon: nLon });
-            }
-          }
-        }
-      }
-      pointSetsPerLevel[parentLvl] = [...parentMap.values()];
-    }
-  }
-  return pointSetsPerLevel;
-}
 
 // Detect the actual grid step from the data by finding the most common
 // (modal) lat/lon difference. Using the minimum was unreliable — floating
@@ -974,7 +859,6 @@ import { makeGenerateDayDescription } from '@/components/tcm/generateDayDescript
 import { buildImpactedLocations } from '@/components/tcm/impactedLocations'; import DrawnAreaLocationsModal from '@/components/tcm/DrawnAreaLocationsModal';
 const generateDayDescription = makeGenerateDayDescription({ RISK_TYPES, scoreToLevel });
 
-const SkewTWrap = (props) => { const { t, lightMode } = useTCMTheme(); return <SkewT {...props} t={t} lightMode={lightMode} />; };
 
 /* ═══════════════════════════════════════════════════════════════════════════
    PDF EXPORT
@@ -1012,10 +896,9 @@ function _makeTileProjector(bbox, canvasW, canvasH, z, tileSize) {
 async function captureMapImage(captureRef, bbox, lightMode, mapStyle) {
   try {
   // ── Choose zoom level so the bbox fits nicely in ~900×680 logical pixels ──
-  const TARGET_W = 900, TARGET_H = 680;
+  const TARGET_W = 900;
   const TILE_SIZE = 256;
   const lonSpan = bbox.lonMax - bbox.lonMin;
-  const latSpan = bbox.latMax - bbox.latMin;
 
   // Find the zoom where the tile grid spans roughly TARGET_W px
   let z = 5;
@@ -1041,7 +924,6 @@ async function captureMapImage(captureRef, bbox, lightMode, mapStyle) {
   const botRightLon = _tileXToLon(txMax + 1, z);
   const botRightLat = _tileYToLat(tyMax + 1, z);
 
-  const totalPx = Math.pow(2, z) * TILE_SIZE;
   const cropX = Math.round(((bbox.lonMin - topLeftLon) / (botRightLon - topLeftLon)) * stitchW);
   const cropY = Math.round(((topLeftLat - bbox.latMax) / (topLeftLat - botRightLat)) * stitchH);
   const cropW = Math.round(((bbox.lonMax - bbox.lonMin) / (botRightLon - topLeftLon)) * stitchW);
@@ -1094,13 +976,9 @@ async function captureMapImage(captureRef, bbox, lightMode, mapStyle) {
   }
 
   // ── Fetch all tiles in parallel via fetch() to avoid canvas taint ──────────
-  // Using fetch() + createObjectURL bypasses the browser's image cache which
-  // can return non-CORS responses and taint the canvas, blocking toDataURL().
-  const sub = ['a', 'b', 'c', 'd'];
   const tileStyle = lightMode ? 'Canvas/World_Light_Gray_Base' : 'Canvas/World_Dark_Gray_Base';
 
   async function fetchTileImg(tx, ty) {
-    const s = sub[(tx + ty) % sub.length];
     const url = `https://server.arcgisonline.com/ArcGIS/rest/services/${tileStyle}/MapServer/tile/${z}/${ty}/${tx}`;
     try {
       const resp = await fetch(url, { mode: 'cors', cache: 'force-cache' });
@@ -1188,8 +1066,6 @@ function TCMThemeProvider({ children }) {
 }
 
 const INLINE_LOGO = 'https://media.base44.com/images/public/69945c97e07811f2b5427aa6/c5edb1383_IMG_73723.png';
-const MWUK_LOGO = '/mnt/user-data/uploads/1779042529188_IMG_7307.PNG';
-const TCM_LOGO  = '/mnt/user-data/uploads/8B3891B9-EA7B-4280-85A9-908B413A52B7__1_.png';
 const MYWEATHER_LOGO_URL = 'https://media.base44.com/images/public/69945c97e07811f2b5427aa6/3d6c13097_IMG_7307.PNG';
 const TCMLogoContext = createContext({ logoUrl: INLINE_LOGO, refresh: () => {} });
 const useLogo = () => useContext(TCMLogoContext);
@@ -1199,13 +1075,6 @@ function TCMLogoProvider({ children }) {
   return <TCMLogoContext.Provider value={useMemo(() => ({ logoUrl, refresh }), [logoUrl, refresh])}>{children}</TCMLogoContext.Provider>;
 }
 
-async function imgToDataURL(url) {
-  try {
-    const res  = await fetch(url);
-    const blob = await res.blob();
-    return await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
-  } catch { return ''; }
-} 
 
 /* ═══════════════════════════════════════════════════════════════════════════
    UI PRIMITIVES
@@ -1220,14 +1089,6 @@ const Card = ({ children, style, className = '' }) => {
   );
 };
 
-const Pill = ({ active, children, onClick, color = '#38bdf8' }) => {
-  const { t } = useTCMTheme();
-  return (
-    <button onClick={onClick} style={{ padding: '8px 15px', borderRadius: 999, fontSize: '0.78rem', fontWeight: 800, letterSpacing:'0.01em', color: active ? '#070b16' : t.textSecondary, background: active ? `linear-gradient(135deg,${color},${color}bb)` : 'transparent', border: `1px solid ${active ? color : t.inputBorder}`, boxShadow: active ? `0 4px 16px ${color}55, inset 0 1px 0 rgba(255,255,255,0.4)` : 'none', cursor: 'pointer', transition: 'all .2s cubic-bezier(0.4,0,0.2,1)', fontFamily: "'DM Sans',system-ui,sans-serif" }}>
-      {children}
-    </button>);
-
-};
 
 const Section = ({ title, icon: Icon, children, extra, accent = '#6366f1', noPadding = false }) => {
   const { t } = useTCMTheme();
@@ -1269,14 +1130,6 @@ const TitleCard = React.memo(function TitleCard({ w, x = 10, y = 10, h = 50, tit
      Slight→ENH 35 · Moderate→MDT 50 · High→HIGH 65
    Colours still come from RISK_PALETTES so the key follows the active hazard.
 ═══════════════════════════════════════════════════════════════════════════ */
-const LEGEND_CODES = {
-  'Very Low': 'TSTM',
-  'Low':      'MRGL',
-  'Marginal': 'SLGT',
-  'Slight':   'ENH',
-  'Moderate': 'MDT',
-  'High':     'HIGH',
-};
 
 // Percentage band for each key row — derived from RISK_META so it can never
 // drift from the scoring thresholds. The top band always runs to 100.
@@ -1455,7 +1308,7 @@ function TCMLogoWatermark() {
    OUTLOOK MAP
 ═══════════════════════════════════════════════════════════════════════════ */
 const OutlookMap = React.memo(function OutlookMap({ data, region, riskType, dayIdx, onClickPoint, onInspect, pin = null, enableSearch = false, enableLocate = false, enableFullscreen = false, captureRef, showLightning, strikeColour = 'age', strikeStroke = 'none', forceLight, overlayMode = 'none', variant = 'outlook', drawnOutlooks = [], hideAutoLayers = false }) {
-  const { t, lightMode: originalLight } = useTCMTheme();
+  const { lightMode: originalLight } = useTCMTheme();
   const lightMode = forceLight || originalLight;
   const bbox = REGIONS[region]?.bbox;
   const grid = data?.grid ?? [];
@@ -2042,16 +1895,6 @@ function starPath(cx, cy, R, r, points = 5) {
 }
 function _hexRgb(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
 function _lerpHex(a, b, f) { const A = _hexRgb(a), B = _hexRgb(b); return `rgb(${Math.round(A[0] + (B[0] - A[0]) * f)},${Math.round(A[1] + (B[1] - A[1]) * f)},${Math.round(A[2] + (B[2] - A[2]) * f)})`; }
-function tempColor(v) {
-  if (v == null || !Number.isFinite(v)) return 'transparent';
-  if (v <= TEMP_STOPS[0].t) return TEMP_STOPS[0].c;
-  if (v >= TEMP_STOPS[TEMP_STOPS.length - 1].t) return TEMP_STOPS[TEMP_STOPS.length - 1].c;
-  for (let i = 0; i < TEMP_STOPS.length - 1; i++) {
-    const a = TEMP_STOPS[i], b = TEMP_STOPS[i + 1];
-    if (v >= a.t && v <= b.t) return _lerpHex(a.c, b.c, (v - a.t) / (b.t - a.t));
-  }
-  return TEMP_STOPS[TEMP_STOPS.length - 1].c;
-}
 // Numeric [r,g,b] version of the ramp — for per-pixel canvas rasterisation.
 const _STOP_RGB = TEMP_STOPS.map(s => ({ t: s.t, rgb: _hexRgb(s.c) }));
 function tempColorRGB(v) {
@@ -2519,7 +2362,7 @@ function _dayMaxima(data, dayIdx) {
 
 async function _buildCanvas({ mapDataUrl, opts, data, dayIdx, riskType, region, run, strikes, scale = 1, adminOutlooksMeta = [] }) {
   const {
-    darkMode, showKey, showLightningDots, colourPreset,
+    showKey, showLightningDots, colourPreset,
     showOverlaySVR, showOverlayLightning, showOverlayHail, showOverlayFloodFlashing,
   } = opts;
   const pal = PNG_COLOUR_PRESETS.find(p => p.id === colourPreset) || PNG_COLOUR_PRESETS[0];
@@ -3019,7 +2862,7 @@ function PinForecastCard({ pin, data, riskType, run, region, t, onClose, onFullD
 }
 
 function MainMapSection({ data, region, riskType, dayIdx, run, onClickPoint, summary, refreshStartTime, savedOutlooks = [], onViewModeChange }) {
-  const { t, lightMode } = useTCMTheme();
+  const { t } = useTCMTheme();
   const [viewMode,     setViewMode]     = useState(() => { const v = readHashParams().get('view'); return VIEW_MODES.some(m => m.id === v) ? v : 'probability'; });
   const setViewModeAndNotify = (mode) => { setViewMode(mode); if (onViewModeChange) onViewModeChange(mode); };
   // Optional secondary layer drawn on top of the base map. The available
@@ -3052,10 +2895,8 @@ function MainMapSection({ data, region, riskType, dayIdx, run, onClickPoint, sum
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [showColourPicker]);
-  const [hasExported,  setHasExported]  = useState(false);
-  const [isCapturing,  setIsCapturing]  = useState(false);
   const [pngModalOpen, setPngModalOpen] = useState(false);
-  const [forceExportLight, setForceExportLight] = useState(false);
+  const [forceExportLight] = useState(false);
   const mapCaptureRef = useRef(null);
   // Pin-point inspect + consolidated on-map control panel
   const [pin, setPin] = useState(() => { const la = parseFloat(readHashParams().get('plat')); const lo = parseFloat(readHashParams().get('plon')); return (Number.isFinite(la) && Number.isFinite(lo)) ? { lat: la, lon: lo } : null; });
@@ -3069,7 +2910,6 @@ function MainMapSection({ data, region, riskType, dayIdx, run, onClickPoint, sum
   const barPill = (active, color) => ({ padding: '7px 11px', borderRadius: 10, fontSize: '0.72rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', whiteSpace: 'nowrap', background: active ? `${color}26` : 'rgba(10,16,34,0.88)', color: active ? color : '#cbd5e1', border: `1px solid ${active ? color + '88' : 'rgba(255,255,255,0.10)'}`, backdropFilter: 'blur(10px)', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' });
   const barPanel = viewMode === 'radar' ? { position:'absolute', top:'calc(100% + 8px)', bottom:'auto', right:0, zIndex:60, minWidth:214, maxWidth:264, padding:10, borderRadius:12, background:'rgba(10,16,34,0.97)', border:'1px solid rgba(255,255,255,0.12)', backdropFilter:'blur(12px)', boxShadow:'0 8px 36px rgba(0,0,0,0.6)', display:'flex', flexDirection:'column', gap:8 } : { position:'absolute', bottom:'calc(100% + 8px)', right:0, zIndex:60, minWidth:214, maxWidth:264, padding:10, borderRadius:12, background:'rgba(10,16,34,0.97)', border:'1px solid rgba(255,255,255,0.12)', backdropFilter:'blur(12px)', boxShadow:'0 -8px 36px rgba(0,0,0,0.6)', display:'flex', flexDirection:'column', gap:8 };
   const drawnForDay = (() => { const d = new Date(run || Date.now()); d.setDate(d.getDate() + dayIdx); const iso = d.toISOString().slice(0, 10); return savedOutlooks.filter(o => o.data?.isoDate === iso).map(o => o.data).filter(Boolean); })();
-  const visibleViewModes = VIEW_MODES.filter(vm => !(viewMode === 'admin-outlook' && (vm.id === 'outlook' || vm.id === 'hires')));
   const isTempView = viewMode === 'temp-max' || viewMode === 'temp-min';
   const isHocoView = viewMode === 'hoco';
   const overlayVisible = viewMode !== 'radar' && viewMode !== 'admin-outlook' && !isTempView && !isHocoView;
@@ -3090,7 +2930,6 @@ function MainMapSection({ data, region, riskType, dayIdx, run, onClickPoint, sum
       const mapDataUrl = await captureMapImage(null, exportBbox, true, 'counties');
       const impactedLocations = buildImpactedLocations(data?.grid || [], riskType, dayIdx, { getRiskScore, region, maxResults: 24 });
       await exportToPDF({ region, riskType, dayIdx, run, data, summary, mapDataUrl, impactedLocations });
-      setHasExported(true);
     } catch (e) { console.error(e); }
     finally { setExporting(false); }
   };
@@ -3114,7 +2953,6 @@ function MainMapSection({ data, region, riskType, dayIdx, run, onClickPoint, sum
       adminOutlooksMeta: opts.selectedOutlooks || [],
     });
 
-    setHasExported(true);
   };
 
   return (
@@ -4625,7 +4463,6 @@ function LocationPanel(props) { const { t } = useTCMTheme(); return <LocationPan
    HERO + STATUS BAR
 ═══════════════════════════════════════════════════════════════════════════ */
 // TCMHero and DataStatusBar live in components/tcm/TCMHeroSection.jsx
-import { TCMHero, DataStatusBar } from '@/components/tcm/TCMHeroSection';
 
 // The TCM hamburger is gone; SiteNav in the layout handles navigation, and its
 // menu was page links only (Home, Admin, TCM Lightning/Archive/Verification)
@@ -4685,7 +4522,7 @@ export default function TCMPage({ embedded = false }) {
 }
 
 function TCMPageContent({ embedded = false }) {
-  const { t, lightMode } = useTCMTheme();
+  const { t } = useTCMTheme();
 
   // Live regions: UK & Ireland and France (switchable via RegionSwitcher). Each
   // region keeps its own fetch + cache; wider Europe is still "coming soon".
@@ -4734,7 +4571,6 @@ function TCMPageContent({ embedded = false }) {
   const [savingOutlook, setSavingOutlook] = useState(false);
   const [drawOutlookDayIdx, setDrawOutlookDayIdx] = useState(0);
   const [editingOutlookId, setEditingOutlookId] = useState(null);   // id of record being edited, or null for new
-  const [editingOutlookCacheKey, setEditingOutlookCacheKey] = useState(null);
   const [activeViewMode, setActiveViewMode] = useState('outlook'); // mirrors MainMapSection viewMode
   // Extended outlook fields
   const [outlookDescription, setOutlookDescription] = useState('');
@@ -5384,7 +5220,6 @@ function TCMPageContent({ embedded = false }) {
               {RISK_TYPES.map(rt => {
                 const Ic = rt.icon;
                 const sc = Math.round(data?.summary?.[dayIdx]?.[rt.id] ?? 0);
-                const lv = scoreToLevel(sc);
                 const active = riskType === rt.id;
                 return (
                   <button key={rt.id} className="tcmx-haz" onClick={() => setRiskType(rt.id)}
@@ -5598,7 +5433,6 @@ function TCMPageContent({ embedded = false }) {
                                 setDrawOutlookDayIdx(Math.max(0, Math.min(diff, 6)));
                               }
                               setEditingOutlookId(outlookEntry.id || null);
-                              setEditingOutlookCacheKey(outlookEntry.cacheKey || null);
                               setTab('admin');       // draw tool lives in the Admin tab
                               setShowDrawTool(true);
                               // Scroll to the draw tool once the Admin tab has rendered
@@ -5848,7 +5682,6 @@ function TCMPageContent({ embedded = false }) {
               setOutlookThunderstormOverview('');
               setOutlookPeak24h(DEFAULT_PEAK_24H_WP);
               setEditingOutlookId(null);
-              setEditingOutlookCacheKey(null);
               setShowDrawTool(false); if (!editingOutlookId) { base44.functions.invoke('sendOutlookEmailAlert', { overall_risk: outlookOverallRisk?.match(/Severe|High|Moderate|Slight|Marginal|Low|Very Low/i)?.[0] || activeDrawLevel || 'Marginal', label: drawnData.label, description: outlookDescription, peak_window: outlookPeakWindow, thunderstorm_overview: outlookThunderstormOverview, isoDate, region }).then(res => console.info('[OutlookEmailAlert]', res?.data || res)).catch(err => console.warn('[OutlookEmailAlert] failed:', err?.message || err)); }
               alert(editingOutlookId ? 'Outlook updated successfully.' : 'Outlook saved and published to all users.');
             } catch (e) {
@@ -5870,7 +5703,7 @@ function TCMPageContent({ embedded = false }) {
                   </span>
                 )}
                 {editingOutlookId && (
-                  <button onClick={() => { setEditingOutlookId(null); setEditingOutlookCacheKey(null); setDrawShapes([]); setOutlookLabel(''); setOutlookForecastType('initial'); setOutlookDescription(''); setOutlookOverallRisk(''); setOutlookPeakWindow(''); setOutlookThunderstormOverview(''); setOutlookPeak24h(DEFAULT_PEAK_24H_WP); }}
+                  <button onClick={() => { setEditingOutlookId(null); setDrawShapes([]); setOutlookLabel(''); setOutlookForecastType('initial'); setOutlookDescription(''); setOutlookOverallRisk(''); setOutlookPeakWindow(''); setOutlookThunderstormOverview(''); setOutlookPeak24h(DEFAULT_PEAK_24H_WP); }}
                     style={{ padding:'3px 8px', borderRadius:6, fontSize:'0.64rem', fontWeight:700, cursor:'pointer', background:'transparent', border:'1px solid rgba(99,102,241,0.35)', color:'#6366f1', marginLeft:4 }}>
                     Cancel edit
                   </button>

@@ -1,29 +1,11 @@
-"use client";
-import { useTheme } from "next-themes"
-import { Toaster as Sonner } from "sonner"
+/* sonner's toaster. The admin screens and graphic studios call sonner's toast.success() and
+   toast.error(), and nothing showed them: only the other (shadcn) toaster was mounted. Themed with
+   the site's own light/dark setting. */
+import React from 'react';
+import { Toaster as Sonner } from 'sonner';
+import { useTheme } from '@/components/ThemeContext';
 
-const Toaster = ({
-  ...props
-}) => {
-  const { theme = "system" } = useTheme()
-
-  return (
-    (<Sonner
-      theme={theme}
-      className="toaster group"
-      toastOptions={{
-        classNames: {
-          toast:
-            "group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg",
-          description: "group-[.toast]:text-muted-foreground",
-          actionButton:
-            "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground",
-          cancelButton:
-            "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground",
-        },
-      }}
-      {...props} />)
-  );
+export function Toaster(props) {
+  const { isDark } = useTheme();
+  return <Sonner theme={isDark ? 'dark' : 'light'} position="top-center" richColors closeButton {...props} />;
 }
-
-export { Toaster }

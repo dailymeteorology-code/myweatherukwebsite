@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { BarChart2, Thermometer, Wind, Layers, Activity } from 'lucide-react';
+import { BarChart2, Thermometer, Wind, Layers } from 'lucide-react';
 import { useTCMTheme } from './TCMThemeContext';
-import { scoreToLevel, RISK_COLOR, RISK_FILL } from './riskConfig';
+import { scoreToLevel, RISK_COLOR } from './riskConfig';
 
 const HOURS_PER_STEP = 3;
 const STEPS_PER_DAY  = 8;
@@ -72,7 +72,6 @@ const RiskBar = ({ d, peakIdx, idx, maxH, riskType, lightMode }) => {
   const lvl      = scoreToLevel(d.stepMax);
   const rawColor = RISK_COLOR(lvl, riskType);
   const bc       = rawColor === '#64748b' ? 'rgba(255,255,255,0.10)' : rawColor;
-  const ph       = PHASE[d.phase];
 
   return (
     <div
@@ -185,29 +184,11 @@ const RiskBar = ({ d, peakIdx, idx, maxH, riskType, lightMode }) => {
   );
 };
 
-// Micro atmosphere metric bar
-const AtmosBar = ({ value, max, color, h = 32, width = '100%', animated = true }) => {
-  const pct = Math.max(0, Math.min(100, (value / Math.max(max, 1)) * 100));
-  const barH = Math.max(1, Math.round((pct / 100) * h));
-  return animated ? (
-    <motion.div
-      initial={{ height: 0 }}
-      animate={{ height: barH }}
-      transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-      style={{
-        width, borderRadius: '3px 3px 0 0',
-        background: `linear-gradient(0deg, ${color}44, ${color}99)`,
-        border: `1px solid ${color}44`, borderBottom: 'none',
-        minHeight: 1,
-      }}
-    />
-  ) : <div style={{ width, height: barH, borderRadius: '3px 3px 0 0', background: `${color}66`, minHeight: 1 }} />;
-};
 
 // ─── main component ──────────────────────────────────────────────────────────
 
 export default function DiurnalTimingSection({ data, dayIdx, riskType, peakStep, peakLocation, summary, run }) {
-  const { t, lightMode } = useTCMTheme();
+  const { lightMode } = useTCMTheme();
   const runStartHour = getRunStartHour(run);
   const BAR_H = 110;
 

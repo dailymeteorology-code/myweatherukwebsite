@@ -3,12 +3,12 @@
  * Shows archived lightning events with TCM probability outlooks
  * overlaid on actual strike data, with strike-count context.
  */
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  ChevronLeft, Zap, ZapOff, X, CloudLightning, Calendar,
-  Maximize2, Info, Loader2, AlertCircle, Search, MapPin
+  ChevronLeft, Zap, ZapOff, X, CloudLightning,
+  Maximize2, Info, AlertCircle, Search, MapPin
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
@@ -555,11 +555,6 @@ function EventCard({ event, onClick }) {
   const dateShort = safeDate(event.date, { day: 'numeric', month: 'short', year: 'numeric' });
   const weekday = safeDate(event.date, { weekday: 'long' });
 
-  // Compute region for strike breakdown
-  const ukStrikes = useMemo(() => strikes.filter(s =>
-    s.lat >= UK_BBOX.latMin && s.lat <= UK_BBOX.latMax &&
-    s.lon >= UK_BBOX.lonMin && s.lon <= UK_BBOX.lonMax
-  ).length, [strikes]);
 
   const regionLabel = event.uk_count >= 5 ? 'UK' : (event.eu_count > 0 ? 'EU' : null);
 

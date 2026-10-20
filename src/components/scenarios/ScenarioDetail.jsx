@@ -7,7 +7,7 @@
 import React, { useEffect, useRef } from 'react';
 import { X, MapPin, Activity, AlertTriangle, History, Thermometer, Shield, BookOpen, Link2, Layers, CalendarDays, Scale, Loader2 } from 'lucide-react';
 import { useItem } from './scenarioApi';
-import { FreqBadge, SevBadge, SourceLink, Icon, MonthStrip, FREQ_STYLE } from './ui';
+import { SevBadge, SourceLink, Icon, MonthStrip, FREQ_STYLE } from './ui';
 import Diagram from './Diagrams';
 import RegionMap from './RegionMap';
 

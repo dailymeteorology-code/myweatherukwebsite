@@ -855,14 +855,14 @@ export function useStormLightning({
 
   const seedTodayBackfill = async () => {
     let added = 0;
-    const RENDER_WORKER_RECENT = 'https://blitzortungworker-3.onrender.com/strikes/recent';
+    const RENDER_WORKER_RECENT = 'https://blitzortungworker-3.onrender.com/strikes';   // { count, serverTime, strikes }
     const todayDateStr = new Date().toISOString().slice(0, 10);
     const ydayDateStr  = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
     const safe = async (fn) => { try { return await fn(); } catch { return []; } };
     const [ukRes, euRes, renderRes, archiveRes, ukYRes, euYRes, archiveYRes] = await Promise.allSettled([
       safe(() => base44.functions.invoke('historicalLightning', { region: 'uk', daysBack: 0 })),
       safe(() => base44.functions.invoke('historicalLightning', { region: 'europe', daysBack: 0 })),
-      safe(() => fetch(RENDER_WORKER_RECENT).then(r => (r.ok ? r.json() : []))),
+      safe(() => fetch(RENDER_WORKER_RECENT).then(r => (r.ok ? r.json() : [])).then(b => (Array.isArray(b) ? b : b?.strikes || []))),
       safe(() => base44.entities.LightningArchive.filter({ date: todayDateStr })),
       safe(() => base44.functions.invoke('historicalLightning', { region: 'uk', daysBack: 1 })),
       safe(() => base44.functions.invoke('historicalLightning', { region: 'europe', daysBack: 1 })),

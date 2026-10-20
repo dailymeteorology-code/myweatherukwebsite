@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
-import { ShieldAlert, Lock, Home } from 'lucide-react';
+import { Lock, Home } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 /**

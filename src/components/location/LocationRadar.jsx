@@ -98,7 +98,7 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
   const V = VIEWS[scope] || VIEWS.point;
   const uk = scope === 'uk';
   const cLat = uk ? V.centre[0] : lat, cLon = uk ? V.centre[1] : lon;
-  const el = useRef(null), map = useRef(null), pin = useRef(null), layers = useRef([]), boltLayer = useRef(null), tiles = useRef([]);
+  const el = useRef(null), map = useRef(null), pin = useRef(null), layers = useRef([]), boltLayer = useRef(null);
   const [frames, setFrames] = useState([]);
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(true);
@@ -121,12 +121,9 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
       dragging: !touch, scrollWheelZoom: false, doubleClickZoom: true, touchZoom: true,
     });
     L.control.zoom({ position: 'bottomright' }).addTo(m);
-    const [baseUrl, labelUrl] = BASEMAP[light ? 'light' : 'dark'];
-    const base = L.tileLayer(baseUrl, { attribution: '© Esri · radar and lightning © Met Office' }).addTo(m);
     m.createPane('labels');
     m.getPane('labels').style.zIndex = 650;
     m.getPane('labels').style.pointerEvents = 'none';
-    tiles.current = [base, L.tileLayer(labelUrl, { pane: 'labels' }).addTo(m)];
     if (scope === 'uk') m.fitBounds(V.fit, { animate: false });
     map.current = m;
     /* the box can change size after the map is made (the page still laying out, a phone turned):
@@ -143,10 +140,18 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* the page's theme changed: swap the base map, keep everything else */
+  /* the base map, dark or light, and swapped whole when the page's theme changes. Not setUrl():
+     its redraw asks for tiles at the map's fractional zoom ("tile/5.5/…"), which the tile server
+     reads as zoom 5, so the UK's place on the map filled with tiles of India. */
   useEffect(() => {
-    const urls = BASEMAP[light ? 'light' : 'dark'];
-    tiles.current.forEach((t, i) => { if (t._url !== urls[i]) t.setUrl(urls[i]); });
+    const m = map.current;
+    if (!m) return undefined;
+    const [baseUrl, labelUrl] = BASEMAP[light ? 'light' : 'dark'];
+    const made = [
+      L.tileLayer(baseUrl, { attribution: '© Esri · radar and lightning © Met Office' }).addTo(m),
+      L.tileLayer(labelUrl, { pane: 'labels' }).addTo(m),
+    ];
+    return () => made.forEach((t) => t.remove());
   }, [light]);
 
   useEffect(() => {

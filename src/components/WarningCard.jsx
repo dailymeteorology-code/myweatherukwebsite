@@ -185,7 +185,7 @@ function useCountdown(targetDate) {
 }
 
 /* ─── MAIN CARD ────────────────────────────────────────────────── */
-export default function WarningCard({ warning, index, isUpcoming = false, mapUrl, isOwner = false, onDelete }) {
+export default function WarningCard({ warning, index, isUpcoming = false, isOwner = false, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const sev     = getSev(warning.severity);
@@ -577,7 +577,6 @@ export default function WarningCard({ warning, index, isUpcoming = false, mapUrl
           warning={warning}
           isUpcoming={isUpcoming}
           onClose={() => setExpanded(false)}
-          mapUrl={mapUrl}
         />
       )}
     </>

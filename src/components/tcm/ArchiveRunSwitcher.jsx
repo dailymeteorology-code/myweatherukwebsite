@@ -2,7 +2,7 @@
 // Runs stay until manually deleted by an admin in admin settings.
 // Non-existent runs are never shown — only runs with real saved data appear.
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Clock, Loader2, CheckCircle2, AlertTriangle, Trash2, RefreshCw } from 'lucide-react';
 import { loadRunFromCache, listSavedRuns, deleteRunFromCache } from '@/lib/tcmForecastCache';
 

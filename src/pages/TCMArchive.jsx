@@ -15,22 +15,18 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   ChevronLeft, ChevronRight, Search, X, Calendar, Zap, CloudLightning,
-  Clock, Map as MapIcon, CheckCircle2, AlertTriangle, List, Grid3x3,
-  Database, PenLine, Trash2, Loader2, RefreshCw } from
+  Clock, CheckCircle2, AlertTriangle, List, Grid3x3,
+  Database, PenLine, Trash2, Loader2 } from
 'lucide-react';
 import ArchiveSummaryCard from '@/components/tcm/ArchiveSummaryCard';
 import ArchiveMapPanel from '@/components/tcm/ArchiveMapPanel';
 import ArchiveRunSwitcher from '@/components/tcm/ArchiveRunSwitcher';
-import { RISK_META, RISK_COLOR, RISK_FILL, RISK_BORDER } from '@/components/tcm/riskConfig';
+import { RISK_COLOR, RISK_FILL, RISK_BORDER } from '@/components/tcm/riskConfig';
 import { base44 } from '@/api/base44Client';
-import { listRunsFromDB, loadRunByKeyFromDB, loadAdminDrawnOutlooksForDate, deleteAdminDrawnOutlook } from '@/lib/tcmForecastCache';
-import TCMLeafletBase from '@/components/tcm/TCMLeafletBase';
+import { listRunsFromDB, loadAdminDrawnOutlooksForDate, deleteAdminDrawnOutlook } from '@/lib/tcmForecastCache';
 
 // ─── constants ──────────────────────────────────────────────────────────────
 
-const REGIONS = {
-  uk: { label: 'UK & Ireland', flag: '🇬🇧', short: 'UK' }
-};
 
 // Mesocast watch-category taxonomy (lowest → highest), incl. "No Forecast".
 // `match` lists the entry.level strings that map onto each category so this
@@ -235,31 +231,6 @@ function VerificationBadge({ entry }) {
 
 }
 
-function DetailMapSlot({ label, icon: Icon, accent }) {
-  return (
-    <div style={{
-      flex: 1, borderRadius: 10, overflow: 'hidden',
-      background: 'rgba(0,0,0,0.3)',
-      border: `1px solid ${accent}30`,
-      minHeight: 160, display: 'flex', flexDirection: 'column'
-    }}>
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 7,
-        padding: '8px 12px',
-        borderBottom: `1px solid ${accent}20`,
-        background: `${accent}10`
-      }}>
-        <Icon style={{ width: 12, height: 12, color: accent }} />
-        <span style={{ fontSize: '0.65rem', fontWeight: 800, color: accent, letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: "'Space Mono', monospace" }}>
-          {label}
-        </span>
-      </div>
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-        <span style={{ fontSize: '0.7rem', color: '#334155', fontStyle: 'italic' }}>Map not available</span>
-      </div>
-    </div>);
-
-}
 
 // ─── Calendar grid ───────────────────────────────────────────────────────────
 
@@ -377,7 +348,6 @@ export default function TCMArchive() {
   const [params, setParams] = useSearchParams();
   // Archive is UK-only now — Europe archive removed per request.
   const region = 'uk';
-  const setRegion = () => {};
 
   // Local-first (instant render) + DB merge (cross-device sync)
   const [localArchive, setLocalArchive] = useState(() => loadArchive(region));

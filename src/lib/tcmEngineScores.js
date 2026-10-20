@@ -215,8 +215,7 @@ export function engineScores(env) {
     rh850, rh700, rh500,
     z850, z700, z500,
     spd850, spd700, spd500, spd300,
-    dir850, dir700, dir500, dir300,
-    w700, oroLift,
+    dir850, dir700, dir500, w700, oroLift,
   } = env;
 
   const hr = ((localHour % 24) + 24) % 24;

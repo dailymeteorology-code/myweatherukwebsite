@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { MapPin, Clock, Gauge, Navigation, History, ShieldCheck, Database, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import { MapPin, Gauge, Navigation, History, ShieldCheck, Database, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { SEV, aiwGet, fmtAt, fmtRemaining, fmtAgo, STATUS_LABEL, sevText } from './aiwClient';
 
 /** Severity badge: icon + word + level, never colour alone. */

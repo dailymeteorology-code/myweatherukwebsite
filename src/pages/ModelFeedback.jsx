@@ -2,8 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Plus, Star, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp,
-  Calendar, Zap, BarChart3, Edit3, Trash2, X, Save, Tag, MapPin,
+  Plus, Star, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, Zap, BarChart3, Edit3, Trash2, X, Save, Tag, MapPin,
 } from 'lucide-react';
 
 const RISK_LEVELS = ['No Risk', 'Very Low', 'Low', 'Marginal', 'Slight', 'Moderate', 'High', 'Severe'];

@@ -16,7 +16,7 @@
  * a LOCATE (device GPS) button, and a FULLSCREEN toggle. An optional `pin`
  * ({lat,lon}) drops a marker.
  */
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { UK_IRELAND_COUNTIES } from '@/components/tcm/ukIrelandMask';
 
 // ── Base-map style registry ──────────────────────────────────────────────────
@@ -154,7 +154,7 @@ export default function TCMLeafletBase({
   const searchRef = useRef(null);
   const [projector, setProjector] = useState(null);
   const [mapObj, setMapObj] = useState(null);
-  const [tick, setTick] = useState(0);
+  const [, setTick] = useState(0);
   const [styleMenuOpen, setStyleMenuOpen] = useState(false);
   const [cw, setCw] = useState(0);              // container width for responsive controls
   const [isFullscreen, setIsFullscreen] = useState(false);

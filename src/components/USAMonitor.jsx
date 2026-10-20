@@ -6,9 +6,8 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { base44 } from '@/api/base44Client';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, AlertTriangle, Bell, Volume2, VolumeX, RefreshCw, Clock, MapPin } from 'lucide-react';
+import { X, Bell, Volume2, VolumeX, RefreshCw, Clock, MapPin } from 'lucide-react';
 
 // ── USA GRID POINTS ────────────────────────────────────────────────────────────
 const USA_GRID = [
@@ -443,9 +442,6 @@ export default function USAMonitor({ isAdmin = false, lightMode = false }) {
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('tcm_usa_sound') !== 'false');
   const [selectedAlert, setSelectedAlert] = useState(null);
   const audioCtxRef = useRef(null);
-  const overridesRef = useRef(() => {
-    try { return JSON.parse(localStorage.getItem('tcm_risk_overrides_usa') || '{}'); } catch { return {}; }
-  });
 
   // Persist sound preference
   useEffect(() => { localStorage.setItem('tcm_usa_sound', String(soundEnabled)); }, [soundEnabled]);
@@ -563,7 +559,6 @@ export default function USAMonitor({ isAdmin = false, lightMode = false }) {
   const typeObj = RISK_TYPES_USA.find(t => t.id === activeType) ?? RISK_TYPES_USA[0];
   const dayFc = forecasts?.[activeType]?.[activeDay] ?? null;
   const topColor = dayFc ? (RISK_COLORS_ARR[RISK_ORDER.indexOf(dayFc.overallRisk)] || '#64748b') : '#64748b';
-  const typeColors = RISK_TYPES_USA.find(t => t.id === activeType) ? RISK_COLORS_ARR : RISK_COLORS_ARR;
 
   const tornadoWarnings = alerts.filter(a => a.event === 'Tornado Warning');
   const tornadoWatches = alerts.filter(a => a.event === 'Tornado Watch');

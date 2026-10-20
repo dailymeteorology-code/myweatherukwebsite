@@ -5,10 +5,9 @@
    TCMNova.jsx — it replaced TCM V5 here) and TCM V3, rendered unchanged under
    its own tab because it still works.
    ════════════════════════════════════════════════════════════════════════════ */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Layers, ChevronDown, AlertTriangle, Clock, MapPin, Activity,
-  ShieldAlert, Loader2, RefreshCw, Info,
+  Layers, ChevronDown,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import WeatherPatterns from './WeatherPatterns';
@@ -38,71 +37,14 @@ const MONO = "'DM Mono','SFMono-Regular',ui-monospace,monospace";
    and unreadable. These are the places those coordinates are, matched to two
    decimal places so a rounding change upstream does not silently orphan a row —
    an unmatched point still renders, just under its coordinates. */
-const PLACES = [
-  [51.51, -0.14, 'London'], [52.47, -1.91, 'Birmingham'], [53.48, -2.23, 'Manchester'],
-  [53.80, -1.56, 'Leeds'], [52.63, 1.31, 'Norwich'], [51.45, -2.59, 'Bristol'],
-  [50.73, -3.52, 'Exeter'], [50.81, -0.15, 'Brighton'], [51.48, -3.19, 'Cardiff'],
-  [52.41, -4.09, 'Aberystwyth'], [53.06, -3.96, 'Llandudno'], [54.99, -1.63, 'Newcastle'],
-  [54.88, -2.94, 'Carlisle'], [55.86, -4.26, 'Glasgow'], [55.96, -3.20, 'Edinburgh'],
-  [57.48, -4.23, 'Inverness'], [56.81, -5.12, 'Fort William'], [54.60, -5.94, 'Belfast'],
-  [53.35, -6.26, 'Dublin'], [52.21, 0.13, 'Cambridge'],
-];
 
-function placeFor(lat, lon) {
-  const hit = PLACES.find(([a, b]) => Math.abs(a - lat) < 0.06 && Math.abs(b - lon) < 0.06);
-  return hit ? hit[2] : `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
-}
 
-/** "51.514,-0.138@T+12" → { lat, lon, lead, place } */
-function parsePointKey(key) {
-  const m = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)@T\+(\d+)$/.exec(key);
-  if (!m) return null;
-  const lat = Number(m[1]); const lon = Number(m[2]);
-  return { lat, lon, lead: Number(m[3]), place: placeFor(lat, lon) };
-}
 
 /* ── formatting ──────────────────────────────────────────────────────────── */
-const pct = (v) => (v == null ? '—' : `${(v * 100).toFixed(v < 0.1 ? 1 : 0)}%`);
 
-function whenText(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleString('en-GB', {
-    weekday: 'short', day: 'numeric', month: 'short',
-    hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
-  }) + 'Z';
-}
 
-function ageText(iso) {
-  if (!iso) return null;
-  const hours = (Date.now() - new Date(iso).getTime()) / 3600000;
-  if (!Number.isFinite(hours)) return null;
-  if (hours < 1) return 'less than an hour old';
-  if (hours < 48) return `${Math.round(hours)} hours old`;
-  return `${Math.round(hours / 24)} days old`;
-}
 
 /* ── small building blocks ───────────────────────────────────────────────── */
-function Panel({ title, icon: Icon, accent = C.sky, right, children, style }) {
-  return (
-    <section style={{
-      background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16,
-      padding: '15px 17px', ...style,
-    }}>
-      {(title || right) && (
-        <header style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-          {Icon && <Icon style={{ width: 14, height: 14, color: accent }} />}
-          <h2 style={{
-            margin: 0, fontSize: '0.68rem', fontWeight: 800, letterSpacing: '0.14em',
-            textTransform: 'uppercase', color: C.mid, fontFamily: MONO,
-          }}>{title}</h2>
-          {right && <div style={{ marginLeft: 'auto' }}>{right}</div>}
-        </header>
-      )}
-      {children}
-    </section>
-  );
-}
 
 function Tag({ tone = 'neutral', children, title }) {
   const tones = {

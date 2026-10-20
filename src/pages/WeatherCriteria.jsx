@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { CloudLightning, Snowflake, Info, ChevronLeft } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { useTheme } from '@/components/ThemeContext';
 
 const THUNDERSTORM_CRITERIA = [
   { parameter: 'CAPE (Convective Available Potential Energy)', threshold: '> 500 J/kg', significance: 'Marginal convective potential; isolated storms possible', severity: 'marginal' },
@@ -70,7 +69,6 @@ function CriteriaTable({ criteria }) {
 
 export default function WeatherCriteria() {
   const [activeTab, setActiveTab] = useState('thunderstorm');
-  const { isDark } = useTheme();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-sky-900 px-4 py-10">

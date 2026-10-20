@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Zap, MapPin, BarChart3, Loader2, TrendingUp, TrendingDown, Minus, CheckCircle, Target, Crosshair, ArrowRight } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend, ReferenceLine } from 'recharts';
+import { motion } from 'framer-motion';
+import { Zap, MapPin, BarChart3, Loader2, TrendingUp, TrendingDown, Minus, CheckCircle, Target, Crosshair } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { base44 } from '@/api/base44Client';
 
 // ─── UK region definitions ───────────────────────────────────────────────────
@@ -362,7 +362,7 @@ function RegionalSummaryGrid({ enrichedData, onSelectRegion }) {
             onClick={() => onSelectRegion(s.region.id)}
             style={{
               textAlign: 'left', width: '100%', cursor: 'pointer', fontFamily: 'inherit',
-              padding: '14px 16px', borderRadius: 14, border: 'none', outline: 'none',
+              padding: '14px 16px', borderRadius: 14, outline: 'none',
               background: `linear-gradient(155deg, ${color}0e, ${color}04)`,
               border: `1px solid ${color}20`,
             }}>
@@ -412,7 +412,6 @@ function RegionalSummaryGrid({ enrichedData, onSelectRegion }) {
 
 // ─── Daily detail table ──────────────────────────────────────────────────────
 function DailyDetailTable({ enrichedData, selectedRegion }) {
-  const region = UK_REGIONS.find(r => r.id === selectedRegion);
   const color = REGION_COLORS[selectedRegion];
 
   return (

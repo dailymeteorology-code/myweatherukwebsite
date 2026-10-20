@@ -1,7 +1,7 @@
 // TCMHeroSection — extracted from WeatherPatterns to keep the page editable.
 // Contains TCMHero, DataStatusBar, and the Hamburger wrapper.
 
-import React, { useContext } from 'react';
+import React from 'react';
 import { motion } from 'framer-motion';
 import { CloudLightning } from 'lucide-react';
 import { useTCMTheme } from '@/components/tcm/TCMThemeContext';

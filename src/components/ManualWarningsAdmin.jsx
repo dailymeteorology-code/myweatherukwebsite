@@ -4,8 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Loader2, Plus, Trash2, Pencil, X, Save,
-  ShieldAlert, Clock, CheckCircle2, History, AlertTriangle, MapPin,
-  ChevronDown, Eye, EyeOff, Download, CloudDownload,
+  ShieldAlert, Clock, CheckCircle2, History, AlertTriangle, MapPin, EyeOff, Download, CloudDownload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { format, isValid } from 'date-fns';
@@ -144,13 +143,6 @@ function Field({ label, hint, required, children }) {
   );
 }
 
-function SectionLabel({ children }) {
-  return (
-    <p style={{ margin: '0 0 10px', fontSize: 10.5, fontWeight: 700, color: C.textFaint, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-      {children}
-    </p>
-  );
-}
 
 // ─── Warning Row ──────────────────────────────────────────────────────────────
 function WarningRow({ warning: w, onEdit, onDelete, deleting }) {

@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
-import { Maximize2, Minimize2, Trash2, Pen, MousePointer, Check, Undo2, X } from 'lucide-react';
+import { Maximize2, Minimize2, Trash2, Pen, Check, Undo2, X } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 
 const DRAW_COLORS = {

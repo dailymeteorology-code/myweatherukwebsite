@@ -1,10 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import {
-  Info, FileText, BarChart2, ChevronDown, MapPin, Filter,
+import { FileText, BarChart2, ChevronDown, MapPin,
   Zap, CloudRain, Wind, Shield, AlertTriangle, TrendingUp,
-  Clock, Activity, Eye, Droplets, Gauge, Layers, Thermometer,
-  Navigation, Target, Radar,
+  Clock, Activity, Eye, Droplets, Gauge, Layers, Thermometer, Target, Radar,
 } from 'lucide-react';
 import DiurnalTimingSection from '@/components/tcm/DiurnalTimingSection';
 import SkewT from '@/components/tcm/SkewT';
@@ -553,7 +551,6 @@ export default function DayOverview({
   const [showSounding,       setShowSounding]       = useState(false);
   const [locationRiskFilter, setLocationRiskFilter] = useState('All');
   const [descExpanded,       setDescExpanded]       = useState(false);
-  const [hazardView,         setHazardView]         = useState('bars');
   const [ingredientsOpen,    setIngredientsOpen]    = useState(false);
 
   const identity  = getRiskIdentity(riskType);
@@ -637,7 +634,6 @@ export default function DayOverview({
   const peakGust   = r.gust?.max ?? 0;
 
   const isCritical = ['High', 'Severe'].includes(level);
-  const isWarning  = level === 'Moderate';
 
   // ── Storm-intelligence values from the peak cell ──────────────────────────
   const pm          = peakScores?.metrics || {};
@@ -654,7 +650,6 @@ export default function DayOverview({
   // scenario spread). Populated once the engine has scored ≥2 ensemble members.
   const poeSevere    = pm.poeSevere ?? null;
   const poeSigSevere = pm.poeSigSevere ?? null;
-  const poeThunder   = pm.poeThunder ?? null;
   const ensAgree     = pm.ensembleAgreement ?? null;
   const tpHigh       = pm.thunderProbHigh ?? null;
   const tpLow        = pm.thunderProbLow ?? null;

@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { motion } from 'framer-motion';
 import { Radio, Zap, Loader2 } from 'lucide-react';
 import TCMLeafletBase from '@/components/tcm/TCMLeafletBase';
 import useBlitzortung from '@/components/tcm/useBlitzortung';
@@ -134,7 +133,6 @@ export default function MyWeatherLightningVerification() {
           {({ projector }) => {
             if (!projector) return null;
             const { x: w, y: h } = projector.size;
-            const now = Date.now();
             return (
               <svg
                 width={w}

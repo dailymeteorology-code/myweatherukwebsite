@@ -5,12 +5,6 @@
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function descs(level) {
-  return ({
-    'Very Low': 'very low', 'Low': 'low', 'Marginal': 'marginal',
-    'Slight': 'slight', 'Moderate': 'moderate', 'High': 'high', 'Severe': 'severe',
-  })[level] ?? (level || '').toLowerCase();
-}
 
 // Returns a rich, unique CAPE characterisation based on exact value buckets
 function capeProfile(cape) {

@@ -1,14 +1,12 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { motion, useScroll, useTransform, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   AlertTriangle, CloudSun, RefreshCw, Loader2,
-  ExternalLink,
-  Newspaper, Sparkles, Megaphone, Zap, Pencil, Check, X, MapPin,
+  ExternalLink, Sparkles, Megaphone, Zap,
   ChevronDown, ChevronLeft, ChevronRight } from
 'lucide-react';
-import { Button } from "@/components/ui/button";
 import WarningCard from '@/components/WarningCard';
 import SocialLinks from '@/components/SocialLinks';
 import ForecastSection from '@/components/ForecastSection';
@@ -589,328 +587,12 @@ function classifyManualWarnings(warnings, now) {
   return { active, upcoming, past };
 }
 
-// ─── Particles ────────────────────────────────────────────────────────────────
-
-const particleData = Array.from({ length: 16 }, (_, i) => ({
-  id: i,
-  x: Math.random() * 100,
-  y: Math.random() * 100,
-  size: Math.random() * 50 + 12,
-  duration: Math.random() * 6 + 5,
-  delay: Math.random() * 4
-}));
-
-function Particle({ x, y, size, duration, delay }) {
-  return (
-    <motion.div
-      className="absolute rounded-full pointer-events-none"
-      style={{
-        left: `${x}%`, top: `${y}%`,
-        width: size, height: size,
-        background: 'var(--particle-color)'
-      }}
-      animate={{ y: [0, -28, 0], opacity: [0.4, 0.8, 0.4], scale: [1, 1.15, 1] }}
-      transition={{ duration, delay, repeat: Infinity, ease: 'easeInOut' }} />);
-
-
-}
 
 // ─── Summer decorations ───────────────────────────────────────────────────────
-// A full-width palm tree SVG designed to sit naturally at the edges of the hero.
-// Viewbox is wide (600×500) so the tree sits at the left/right edge with sky above it.
-function SummerPalmLeft() {
-  return (
-    <svg style={{ position:'absolute', bottom:0, left:0, width:'clamp(240px,34vw,500px)', height:'auto', pointerEvents:'none', zIndex:4, filter:'drop-shadow(0 12px 28px rgba(0,0,0,0.22))' }}
-         viewBox="0 0 520 650" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <defs>
-        <linearGradient id="sp-trunk" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%"   stopColor="#713f12"/>
-          <stop offset="35%"  stopColor="#92400e"/>
-          <stop offset="70%"  stopColor="#a16207"/>
-          <stop offset="100%" stopColor="#78350f"/>
-        </linearGradient>
-        <linearGradient id="sp-trunk2" x1="0" y1="1" x2="0" y2="0">
-          <stop offset="0%"   stopColor="#431407"/>
-          <stop offset="100%" stopColor="#92400e"/>
-        </linearGradient>
-        <linearGradient id="sp-leaf-d" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%"   stopColor="#14532d"/>
-          <stop offset="50%"  stopColor="#166534"/>
-          <stop offset="100%" stopColor="#15803d"/>
-        </linearGradient>
-        <linearGradient id="sp-leaf-l" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%"   stopColor="#16a34a"/>
-          <stop offset="100%" stopColor="#4ade80"/>
-        </linearGradient>
-        <linearGradient id="sp-leaf-d2" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%"   stopColor="#052e16"/>
-          <stop offset="100%" stopColor="#14532d"/>
-        </linearGradient>
-        <filter id="sp-shadow" x="-20%" y="-20%" width="140%" height="140%">
-          <feDropShadow dx="2" dy="4" stdDeviation="4" floodColor="rgba(0,0,0,0.25)"/>
-        </filter>
-      </defs>
-      {/* Curved trunk with texture */}
-      <path d="M55,650 Q72,560 95,480 Q115,408 132,340 Q150,270 162,210 Q172,162 178,118"
-            stroke="url(#sp-trunk)" strokeWidth="26" fill="none" strokeLinecap="round"/>
-      <path d="M65,650 Q80,560 103,480 Q122,408 138,340 Q156,270 166,210 Q176,162 182,118"
-            stroke="url(#sp-trunk2)" strokeWidth="10" fill="none" strokeLinecap="round" opacity="0.4"/>
-      {/* Bark rings */}
-      {[600,555,510,465,420,375,330,285,240,195,160].map((y,i) => {
-        const cx = 55 + (650-y)*0.19;
-        return <ellipse key={i} cx={cx} cy={y} rx={14} ry={3.5} fill="none" stroke="#6b2c02" strokeWidth="2" opacity="0.45"/>;
-      })}
-      {/* Coconuts */}
-      <circle cx="178" cy="128" r="16" fill="#7c3b0f"/>
-      <circle cx="162" cy="122" r="13" fill="#5c2d09"/>
-      <circle cx="194" cy="125" r="12" fill="#92400e"/>
-      <circle cx="180" cy="112" r="10" fill="#6b3410"/>
-      {/* Crown fronds — 8 sweeping leaves */}
-      {/* Far-left drooping frond */}
-      <path d="M178,118 Q108,92 28,52 Q38,108 52,142 Q118,128 178,124 Z" fill="url(#sp-leaf-d2)" stroke="#052e16" strokeWidth="0.8"/>
-      <path d="M178,118 Q108,92 28,52 Q42,100 54,132 Q118,125 178,122 Z" fill="url(#sp-leaf-l)" opacity="0.28"/>
-      {/* Left drooping */}
-      <path d="M178,118 Q128,76 68,28 Q84,92 96,132 Q140,124 178,122 Z" fill="url(#sp-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-      <path d="M178,118 Q128,76 68,28 Q86,88 97,128 Q140,122 178,121 Z" fill="url(#sp-leaf-l)" opacity="0.34"/>
-      {/* Upper-left */}
-      <path d="M178,118 Q156,62 138,-8 Q162,54 172,106 Q175,113 178,118 Z" fill="url(#sp-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-      <path d="M178,118 Q156,62 138,-8 Q164,58 174,108 Z" fill="url(#sp-leaf-l)" opacity="0.30"/>
-      {/* Straight up */}
-      <path d="M178,118 Q186,54 196,-14 Q188,52 184,106 Q182,113 180,118 Z" fill="url(#sp-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-      {/* Upper-right */}
-      <path d="M178,118 Q218,68 264,22 Q238,82 216,112 Q196,120 182,120 Z" fill="url(#sp-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-      <path d="M178,118 Q218,68 264,22 Q240,85 218,114 Q198,120 182,120 Z" fill="url(#sp-leaf-l)" opacity="0.30"/>
-      {/* Right */}
-      <path d="M178,118 Q248,108 318,128 Q274,128 228,130 Q200,126 184,122 Z" fill="url(#sp-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-      <path d="M178,118 Q248,108 318,128 Q275,125 230,127 Q202,124 185,121 Z" fill="url(#sp-leaf-l)" opacity="0.26"/>
-      {/* Far-right drooping */}
-      <path d="M178,118 Q268,148 368,202 Q302,164 242,158 Q204,144 186,128 Z" fill="url(#sp-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-    </svg>
-  );
-}
 
-function SummerPalmRight() {
-  return (
-    <svg style={{ position:'absolute', bottom:0, right:0, width:'clamp(210px,30vw,440px)', height:'auto', pointerEvents:'none', zIndex:4, transform:'scaleX(-1)', filter:'drop-shadow(0 12px 28px rgba(0,0,0,0.20))' }}
-         viewBox="0 0 480 620" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <defs>
-        <linearGradient id="sp2-trunk" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%"   stopColor="#713f12"/>
-          <stop offset="40%"  stopColor="#a16207"/>
-          <stop offset="100%"  stopColor="#78350f"/>
-        </linearGradient>
-        <linearGradient id="sp2-trunk2" x1="0" y1="1" x2="0" y2="0">
-          <stop offset="0%"   stopColor="#431407"/>
-          <stop offset="100%" stopColor="#92400e"/>
-        </linearGradient>
-        <linearGradient id="sp2-leaf-d" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%"   stopColor="#14532d"/>
-          <stop offset="100%" stopColor="#15803d"/>
-        </linearGradient>
-        <linearGradient id="sp2-leaf-l" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%"   stopColor="#16a34a"/>
-          <stop offset="100%" stopColor="#4ade80"/>
-        </linearGradient>
-        <linearGradient id="sp2-leaf-d2" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%"   stopColor="#052e16"/>
-          <stop offset="100%" stopColor="#14532d"/>
-        </linearGradient>
-      </defs>
-      <path d="M50,620 Q65,535 88,455 Q106,385 122,315 Q138,250 148,192 Q156,148 160,108"
-            stroke="url(#sp2-trunk)" strokeWidth="24" fill="none" strokeLinecap="round"/>
-      <path d="M59,620 Q73,535 95,455 Q112,385 128,315 Q143,250 152,192 Q160,148 163,108"
-            stroke="url(#sp2-trunk2)" strokeWidth="10" fill="none" strokeLinecap="round" opacity="0.38"/>
-      {[575,530,488,445,402,360,318,276,234,193,158].map((y,i) => {
-        const cx = 50 + (620-y)*0.17;
-        return <ellipse key={i} cx={cx} cy={y} rx={13} ry={3.2} fill="none" stroke="#6b2c02" strokeWidth="1.8" opacity="0.42"/>;
-      })}
-      <circle cx="160" cy="118" r="15" fill="#7c3b0f"/>
-      <circle cx="146" cy="112" r="12" fill="#5c2d09"/>
-      <circle cx="174" cy="115" r="11" fill="#92400e"/>
-      <circle cx="162" cy="104" r="9"  fill="#6b3410"/>
-      <path d="M160,108 Q88,82 12,44 Q24,100 38,135 Q104,120 160,116 Z" fill="url(#sp2-leaf-d2)" stroke="#052e16" strokeWidth="0.8"/>
-      <path d="M160,108 Q110,66 54,22 Q70,84 82,124 Q126,118 160,116 Z" fill="url(#sp2-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-      <path d="M160,108 Q140,52 126,-16 Q150,50 157,100 Z" fill="url(#sp2-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-      <path d="M160,108 Q172,48 182,-20 Q172,46 168,98 Z" fill="url(#sp2-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-      <path d="M160,108 Q204,60 252,16 Q226,76 202,106 Q180,116 166,114 Z" fill="url(#sp2-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-      <path d="M160,108 Q204,60 252,16 Q228,78 204,108 Q181,116 167,114 Z" fill="url(#sp2-leaf-l)" opacity="0.30"/>
-      <path d="M160,108 Q232,98 304,118 Q260,118 212,120 Q184,116 168,112 Z" fill="url(#sp2-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-      <path d="M160,108 Q250,138 350,192 Q286,154 224,148 Q188,136 170,120 Z" fill="url(#sp2-leaf-d)" stroke="#14532d" strokeWidth="0.8"/>
-    </svg>
-  );
-}
 
-// Tiny seagull — double-wing M shape with body dot
-function Seagull({ x, y, scale = 1 }) {
-  const s = scale;
-  return (
-    <svg style={{ position:'absolute', left:x, top:y, width:34*s, height:14*s, pointerEvents:'none' }}
-         viewBox="0 0 34 14" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <path d="M0,10 Q5,3 9,6 Q12,9 17,5 Q22,1 26,6 Q29,9 34,6"
-            fill="none" stroke="rgba(255,255,255,0.90)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-      <circle cx="17" cy="5" r="1.5" fill="rgba(255,255,255,0.70)"/>
-    </svg>
-  );
-}
 
-// Fluffy cloud drifting across the hero sky
-function SummerCloud({ style }) {
-  return (
-    <div aria-hidden="true" style={{
-      position:'absolute', pointerEvents:'none', zIndex:2,
-      ...style,
-    }}>
-      <svg viewBox="0 0 140 56" xmlns="http://www.w3.org/2000/svg" style={{width:'100%',height:'100%'}}>
-        <ellipse cx="70" cy="36" rx="62" ry="20" fill="rgba(255,255,255,0.82)"/>
-        <ellipse cx="48" cy="30" rx="32" ry="22" fill="rgba(255,255,255,0.88)"/>
-        <ellipse cx="85" cy="28" rx="38" ry="26" fill="rgba(255,255,255,0.90)"/>
-        <ellipse cx="64" cy="24" rx="28" ry="22" fill="rgba(255,255,255,0.95)"/>
-        <ellipse cx="92" cy="22" rx="24" ry="19" fill="rgba(255,255,255,0.92)"/>
-      </svg>
-    </div>
-  );
-}
 
-// Full summer hero decoration wrapper — everything inside the hero when summer is on
-function SummerHeroDecorations() {
-  return (
-    <>
-      {/* Wide rotating sun rays fan — far behind everything */}
-      <div aria-hidden="true" style={{
-        position:'absolute', top:'-130px', left:'50%',
-        transform:'translateX(-50%)',
-        width:'clamp(600px,110vw,1500px)', height:'clamp(600px,110vw,1500px)',
-        background: `conic-gradient(from 0deg at 50% 50%,
-          transparent 0deg,   rgba(253,224,71,0.15) 8deg,  transparent 16deg,
-          transparent 26deg,  rgba(253,224,71,0.12) 34deg, transparent 42deg,
-          transparent 52deg,  rgba(253,224,71,0.15) 60deg, transparent 68deg,
-          transparent 78deg,  rgba(253,224,71,0.12) 86deg, transparent 94deg,
-          transparent 104deg, rgba(253,224,71,0.15) 112deg,transparent 120deg,
-          transparent 130deg, rgba(253,224,71,0.12) 138deg,transparent 146deg,
-          transparent 156deg, rgba(253,224,71,0.15) 164deg,transparent 172deg,
-          transparent 182deg, rgba(253,224,71,0.12) 190deg,transparent 198deg,
-          transparent 208deg, rgba(253,224,71,0.15) 216deg,transparent 224deg,
-          transparent 234deg, rgba(253,224,71,0.12) 242deg,transparent 250deg,
-          transparent 260deg, rgba(253,224,71,0.15) 268deg,transparent 276deg,
-          transparent 286deg, rgba(253,224,71,0.12) 294deg,transparent 302deg,
-          transparent 312deg, rgba(253,224,71,0.15) 320deg,transparent 328deg,
-          transparent 338deg, rgba(253,224,71,0.12) 346deg,transparent 354deg)`,
-        borderRadius:'50%',
-        pointerEvents:'none', zIndex:0,
-        animation:'s-rays-rotate 120s linear infinite',
-      }}/>
-      {/* Outer corona ring */}
-      <div aria-hidden="true" style={{
-        position:'absolute', top:'-110px', left:'50%',
-        transform:'translateX(-50%)',
-        width:'clamp(380px,60vw,780px)', height:'clamp(380px,60vw,780px)',
-        background:'radial-gradient(circle, transparent 35%, rgba(251,191,36,0.18) 45%, transparent 58%)',
-        borderRadius:'50%', pointerEvents:'none', zIndex:1,
-        animation:'s-corona-spin 40s linear infinite',
-      }}/>
-      {/* Inner corona ring — spins opposite */}
-      <div aria-hidden="true" style={{
-        position:'absolute', top:'-105px', left:'50%',
-        transform:'translateX(-50%)',
-        width:'clamp(300px,48vw,620px)', height:'clamp(300px,48vw,620px)',
-        background:'radial-gradient(circle, transparent 42%, rgba(253,224,71,0.22) 50%, transparent 60%)',
-        borderRadius:'50%', pointerEvents:'none', zIndex:1,
-        animation:'s-corona-spin-rev 28s linear infinite',
-      }}/>
-      {/* Glowing sun disc — crisp white-yellow core */}
-      <div aria-hidden="true" style={{
-        position:'absolute', top:'-95px', left:'50%',
-        transform:'translateX(-50%)',
-        width:'clamp(260px,40vw,520px)', height:'clamp(260px,40vw,520px)',
-        background:'radial-gradient(circle, #fff9c4 0%, rgba(253,224,71,1) 12%, rgba(251,191,36,0.90) 22%, rgba(251,146,60,0.50) 42%, rgba(234,88,12,0.12) 64%, transparent 78%)',
-        borderRadius:'50%', pointerEvents:'none', zIndex:2,
-        animation:'s-sun-beat 6s ease-in-out infinite',
-        boxShadow:'0 0 60px 20px rgba(251,191,36,0.25), 0 0 120px 40px rgba(251,191,36,0.10)',
-      }}/>
-      {/* Drifting clouds */}
-      <SummerCloud style={{ top:'14%', left:'-8%', width:'clamp(100px,18vw,220px)', height:'auto', animation:'s-wave-scroll 55s linear infinite', animationDelay:'-18s', opacity:0.70 }}/>
-      <SummerCloud style={{ top:'22%', left:'-5%', width:'clamp(70px,12vw,160px)', height:'auto', animation:'s-wave-scroll 70s linear infinite', animationDelay:'-35s', opacity:0.55 }}/>
-      <SummerCloud style={{ top:'8%', left:'-12%', width:'clamp(120px,22vw,280px)', height:'auto', animation:'s-wave-scroll 45s linear infinite', animationDelay:'-8s', opacity:0.60 }}/>
-      {/* Horizon gold shimmer line */}
-      <div aria-hidden="true" style={{
-        position:'absolute', bottom:'112px', left:0, right:0, height:'48px',
-        background:'linear-gradient(to right, transparent 0%, rgba(251,191,36,0.25) 20%, rgba(253,224,71,0.55) 50%, rgba(251,191,36,0.25) 80%, transparent 100%)',
-        pointerEvents:'none', zIndex:2,
-        filter:'blur(8px)',
-      }}/>
-      {/* Beach sand strip at base of hero */}
-      <div aria-hidden="true" style={{
-        position:'absolute', bottom:'100px', left:0, right:0, height:'22px',
-        background:'linear-gradient(to bottom, transparent, rgba(254,243,199,0.55))',
-        pointerEvents:'none', zIndex:2,
-      }}/>
-      {/* Left palm tree */}
-      <SummerPalmLeft />
-      {/* Right palm tree */}
-      <SummerPalmRight />
-      {/* 3-layer animated ocean waves */}
-      <div className="s-wave" aria-hidden="true">
-        <div className="s-wave-inner">
-          <svg viewBox="0 0 1440 120" style={{width:'100%',height:'120px'}} preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <linearGradient id="w-deep" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="rgba(14,165,233,0.75)"/>
-                <stop offset="100%" stopColor="rgba(3,105,161,0.85)"/>
-              </linearGradient>
-              <linearGradient id="w-mid" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="rgba(56,189,248,0.60)"/>
-                <stop offset="100%" stopColor="rgba(14,165,233,0.70)"/>
-              </linearGradient>
-            </defs>
-            <path d="M0,44 C100,88 220,14 360,44 C500,74 620,8 720,44 C820,80 960,12 1080,44 C1200,76 1340,10 1440,44 L1440,120 L0,120 Z" fill="url(#w-deep)"/>
-            <path d="M0,62 C150,32 320,92 520,62 C720,32 900,85 1080,62 C1260,39 1380,76 1440,60 L1440,120 L0,120 Z" fill="url(#w-mid)"/>
-            <path d="M0,80 C80,62 180,94 280,80 C380,66 480,94 580,80 C680,66 780,92 880,80 C980,68 1080,92 1180,80 C1280,68 1370,88 1440,80 L1440,120 L0,120 Z" fill="rgba(125,211,252,0.55)"/>
-            <path d="M0,96 C60,88 140,104 220,96 C300,88 380,104 460,96 C540,88 620,104 700,96 C780,88 860,104 940,96 C1020,88 1100,104 1180,96 C1260,88 1350,102 1440,96 L1440,120 L0,120 Z" fill="rgba(186,230,253,0.50)"/>
-          </svg>
-          <svg viewBox="0 0 1440 120" style={{width:'100%',height:'120px'}} preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M0,44 C100,88 220,14 360,44 C500,74 620,8 720,44 C820,80 960,12 1080,44 C1200,76 1340,10 1440,44 L1440,120 L0,120 Z" fill="url(#w-deep)"/>
-            <path d="M0,62 C150,32 320,92 520,62 C720,32 900,85 1080,62 C1260,39 1380,76 1440,60 L1440,120 L0,120 Z" fill="url(#w-mid)"/>
-            <path d="M0,80 C80,62 180,94 280,80 C380,66 480,94 580,80 C680,66 780,92 880,80 C980,68 1080,92 1180,80 C1280,68 1370,88 1440,80 L1440,120 L0,120 Z" fill="rgba(125,211,252,0.55)"/>
-            <path d="M0,96 C60,88 140,104 220,96 C300,88 380,104 460,96 C540,88 620,104 700,96 C780,88 860,104 940,96 C1020,88 1100,104 1180,96 C1260,88 1350,102 1440,96 L1440,120 L0,120 Z" fill="rgba(186,230,253,0.50)"/>
-          </svg>
-        </div>
-        <div className="s-wave-inner2">
-          <svg viewBox="0 0 1440 120" style={{width:'100%',height:'120px'}} preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M0,52 C160,22 340,84 520,52 C700,20 880,78 1060,52 C1240,26 1340,72 1440,54 L1440,120 L0,120 Z" fill="rgba(56,189,248,0.28)"/>
-            <path d="M0,70 C120,52 260,88 400,70 C540,52 680,88 820,70 C960,52 1100,88 1240,70 C1320,60 1390,78 1440,72 L1440,120 L0,120 Z" fill="rgba(14,165,233,0.22)"/>
-          </svg>
-          <svg viewBox="0 0 1440 120" style={{width:'100%',height:'120px'}} preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M0,52 C160,22 340,84 520,52 C700,20 880,78 1060,52 C1240,26 1340,72 1440,54 L1440,120 L0,120 Z" fill="rgba(56,189,248,0.28)"/>
-            <path d="M0,70 C120,52 260,88 400,70 C540,52 680,88 820,70 C960,52 1100,88 1240,70 C1320,60 1390,78 1440,72 L1440,120 L0,120 Z" fill="rgba(14,165,233,0.22)"/>
-          </svg>
-        </div>
-        <div className="s-wave-inner3">
-          <svg viewBox="0 0 1440 120" style={{width:'100%',height:'120px'}} preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M0,86 C200,72 400,100 600,86 C800,72 1000,100 1200,86 C1300,80 1380,92 1440,88 L1440,120 L0,120 Z" fill="rgba(186,230,253,0.38)"/>
-          </svg>
-          <svg viewBox="0 0 1440 120" style={{width:'100%',height:'120px'}} preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M0,86 C200,72 400,100 600,86 C800,72 1000,100 1200,86 C1300,80 1380,92 1440,88 L1440,120 L0,120 Z" fill="rgba(186,230,253,0.38)"/>
-          </svg>
-        </div>
-      </div>
-      {/* Flying seagulls — 4 birds at different speeds & sizes */}
-      <div className="s-birds" aria-hidden="true">
-        <div className="s-bird" style={{top:4}}>
-          <Seagull x={0} y={0} scale={1.2}/>
-        </div>
-        <div className="s-bird" style={{animationDuration:'25s',animationDelay:'-9s',top:16}}>
-          <Seagull x={0} y={0} scale={0.85}/>
-        </div>
-        <div className="s-bird" style={{animationDuration:'32s',animationDelay:'-16s',top:32}}>
-          <Seagull x={0} y={0} scale={0.65}/>
-        </div>
-        <div className="s-bird" style={{animationDuration:'42s',animationDelay:'-4s',top:54}}>
-          <Seagull x={0} y={0} scale={0.50}/>
-        </div>
-      </div>
-    </>
-  );
-}
 
 // ─── Section header ──────────────────────────────────────────────────────────
 
@@ -996,7 +678,7 @@ const ymd = (d) => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(d);
 
-function WarningsArchive({ mapUrl }) {
+function WarningsArchive() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [cursor, setCursor] = useState(null);   // first of the month on show
@@ -1222,7 +904,7 @@ function WarningsArchive({ mapUrl }) {
               {/* `w` straight through — spreading a fresh object in here was
                   handing WarningMap a new prop identity on every render and
                   making it rebuild the map each time. */}
-              <WarningMap warning={w} height={200} mapUrl={mapUrl} />
+              <WarningMap warning={w} height={200} />
             </div>
           ))}
         </div>
@@ -1233,17 +915,6 @@ function WarningsArchive({ mapUrl }) {
 
 // ─── Divider ──────────────────────────────────────────────────────────────────
 
-function Divider() {
-  return (
-    <motion.div
-      className="max-w-6xl mx-auto px-4"
-      initial={{ scaleX: 0 }} whileInView={{ scaleX: 1 }}
-      viewport={{ once: true }} transition={{ duration: 0.8 }}>
-      
-      <div className="h-px" style={{ background: `linear-gradient(to right, transparent, var(--divider) 30%, var(--border) 50%, var(--divider) 70%, transparent)` }} />
-    </motion.div>);
-
-}
 
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
@@ -1298,7 +969,7 @@ export default function Home() {
   // isDark that the toggle never updated, so switching theme didn't refresh
   // Home's custom `light-mode` variables until a full reload. Reading from the
   // shared context keeps the whole page in sync the moment the theme flips.
-  const { isDark, toggleTheme } = useTheme();
+  const { isDark } = useTheme();
 
   useEffect(() => {
     injectThemeStyles();
@@ -1336,18 +1007,14 @@ export default function Home() {
   // ── Met Office warnings ──
   const [warnings, setWarnings] = useState([]);
   const [upcomingWarnings, setUpcomingWarnings] = useState([]);
-  const [pastWarnings, setPastWarnings] = useState([]);
   const [allWarnings, setAllWarnings] = useState([]);
   const [loadingWarnings, setLoadingWarnings] = useState(true);
-  const [warningMapUrl, setWarningMapUrl] = useState('https://www.metoffice.gov.uk/public/data/PWSCache/WarningsMaps/UK');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [nextUpdate, setNextUpdate] = useState(null);
   const [warningsSource, setWarningsSource] = useState(null);
-  const [timeUntilUpdate, setTimeUntilUpdate] = useState('');
 
   // ── UI ──
   const [isOwner, setIsOwner] = useState(false);
-  const [userRole, setUserRole] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [severityFilter, setSeverityFilter] = useState(null);
   /* null = follow the content: whichever of in-force / upcoming has something
@@ -1356,8 +1023,6 @@ export default function Home() {
   const [showWarningsMap, setShowWarningsMap] = useState(false);
   const [showBanners, setShowBanners] = useState(false);
   const [cookieConsentReady, setCookieConsentReady] = useState(false);
-  const [lastScrollY, setLastScrollY] = useState(0);
-  const [scrollDirection, setScrollDirection] = useState('down');
 
 
   const [now, setNow] = useState(() => new Date());
@@ -1367,24 +1032,7 @@ export default function Home() {
   }, []);
 
 
-  // ── Scroll direction ── (ref-tracked so the listener is attached once,
-  //    not re-subscribed on every scroll frame)
-  const lastScrollRef = useRef(0);
-  useEffect(() => {
-    const handle = () => {
-      const cur = window.scrollY;
-      setScrollDirection(cur > lastScrollRef.current ? 'down' : 'up');
-      lastScrollRef.current = cur;
-      setLastScrollY(cur);
-    };
-    window.addEventListener('scroll', handle, { passive: true });
-    return () => window.removeEventListener('scroll', handle);
-  }, []);
 
-  const { scrollY } = useScroll();
-  const heroOpacity = useTransform(scrollY, [0, 300], [1, 0]);
-  const heroScale = useTransform(scrollY, [0, 300], [1, 0.95]);
-  const heroY = useTransform(scrollY, [0, 300], [0, 50]);
 
   // ── Announcements — must be declared before the useEffect that reads announcementsLoaded ──
   const { data: announcements = [], isSuccess: announcementsLoaded } = useQuery({
@@ -1396,7 +1044,7 @@ export default function Home() {
   // ── Auth bootstrap ──
   useEffect(() => {
     base44.auth.me().
-    then((user) => {setIsOwner(user?.role === 'admin');setUserRole(user?.role);}).
+    then((user) => setIsOwner(user?.role === 'admin')).
     catch(() => setIsOwner(false));
     localStorage.removeItem('warnings_cache');
     localStorage.removeItem('upcoming_warnings_cache');
@@ -1423,21 +1071,6 @@ export default function Home() {
     document.head.appendChild(s);
   }, []);
 
-  useEffect(() => {
-    if (!nextUpdate) return;
-    const tick = setInterval(() => {
-      const diff = nextUpdate - new Date();
-      if (diff <= 0) {
-        setTimeUntilUpdate('Updating...');
-      } else {
-        const mins = Math.floor(diff % (1000 * 3600) / 60000);
-        const secs = Math.floor(diff % 60000 / 1000);
-        setTimeUntilUpdate(`${nextUpdate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${mins}m ${secs}s)`);
-      }
-    }, 1000);
-    return () => clearInterval(tick);
-  }, [nextUpdate]);
-
   const loadWarningsFromDB = useCallback(async (retries = 2) => {
     setLoadingWarnings(true);
     try {
@@ -1445,14 +1078,12 @@ export default function Home() {
       const record = records?.[0];
       if (record) {
         const all = Array.isArray(record.all_warnings) ? record.all_warnings : [];
-        const { active, upcoming, past } = classifyWarnings(all);
-        setWarnings(active);setUpcomingWarnings(upcoming);
-        setPastWarnings(past);setAllWarnings(all);
+        const { active, upcoming } = classifyWarnings(all);
+        setWarnings(active);setUpcomingWarnings(upcoming);setAllWarnings(all);
         setLastUpdated(record.fetched_at ? new Date(record.fetched_at) : null);
         setWarningsSource(record.source || null);
-        if (record.map_url) setWarningMapUrl(record.map_url);
       } else {
-        setWarnings([]);setUpcomingWarnings([]);setPastWarnings([]);setAllWarnings([]);
+        setWarnings([]);setUpcomingWarnings([]);setAllWarnings([]);
       }
       setNextUpdate(getNextRefreshTime(record));
     } catch (error) {
@@ -1499,12 +1130,10 @@ export default function Home() {
       if (event.type === 'create' || event.type === 'update') {
         try {
           const all = Array.isArray(event.data?.all_warnings) ? event.data.all_warnings : [];
-          const { active, upcoming, past } = classifyWarnings(all);
-          setWarnings(active);setUpcomingWarnings(upcoming);
-          setPastWarnings(past);setAllWarnings(all);
+          const { active, upcoming } = classifyWarnings(all);
+          setWarnings(active);setUpcomingWarnings(upcoming);setAllWarnings(all);
           setLastUpdated(event.data?.fetched_at ? new Date(event.data.fetched_at) : new Date());
           setWarningsSource(event.data?.source || null);
-          if (event.data?.map_url) setWarningMapUrl(event.data.map_url);
           setNextUpdate(getNextRefreshTime(event.data));
         } catch (err) {console.error('Warning update error:', err);}
       }
@@ -1512,7 +1141,7 @@ export default function Home() {
     return () => { cancelled = true; unsub(); };
   }, [loadWarningsFromDB]);
 
-  const { isPulling, isRefreshing, pullProgress, pullDistance, onTouchStart, onTouchMove, onTouchEnd } =
+  const { isPulling, isRefreshing, pullProgress, onTouchStart, onTouchMove, onTouchEnd } =
   usePullToRefresh(loadWarningsFromDB);
 
   // ── Remote queries ──
@@ -1546,12 +1175,6 @@ export default function Home() {
     initialData: [], retry: 1, retryDelay: 2000
   });
 
-  const { data: publishedFeatures = [] } = useQuery({
-    queryKey: ['publishedFeatures'],
-    queryFn: async () => { return []; }, // Feature flags not in schema — always return empty
-    initialData: [], retry: false
-  });
-
   const { data: rawManualWarnings = [] } = useQuery({
     queryKey: ['manualWarnings'],
     queryFn: async () => {try {return (await base44.entities.ManualWarning.list('-valid_from')) || [];} catch {return [];}},
@@ -1559,7 +1182,7 @@ export default function Home() {
   });
 
   const normalisedManual = rawManualWarnings.filter((w) => w.is_published).map(normaliseManualWarning);
-  const { active: manualActive, upcoming: manualUpcoming, past: manualPast } = classifyManualWarnings(normalisedManual, now);
+  const { active: manualActive, upcoming: manualUpcoming } = classifyManualWarnings(normalisedManual, now);
 
   // ── Manual warnings with a hand-drawn area OVERRIDE the auto Met Office ones ──
   // When an admin updates a warning and draws the exact area on the map, that
@@ -1573,7 +1196,6 @@ export default function Home() {
 
   const mergedActive = [...warnings.filter((w) => !isOverridden(w)), ...manualActive];
   const mergedUpcoming = [...upcomingWarnings.filter((w) => !isOverridden(w)), ...manualUpcoming];
-  const mergedPast = [...pastWarnings, ...manualPast];
   const mergedAll = [...allWarnings.filter((w) => !isOverridden(w)), ...normalisedManual];
 
   // ── Admin-only delete of a manual warning straight from the home page ──
@@ -1731,7 +1353,7 @@ export default function Home() {
               as long as the live warnings feed is loading. The archive is a
               different feed with nothing to wait for, so sharing a presence
               with the spinner just meant it never got to mount. */}
-          {currentTab.archive && <WarningsArchive mapUrl={warningMapUrl} />}
+          {currentTab.archive && <WarningsArchive />}
 
           <AnimatePresence mode="wait">
             {currentTab.archive ? null : loadingWarnings ? (
@@ -1747,7 +1369,7 @@ export default function Home() {
                     className="relative">
                     <WarningCard
                       warning={warning} index={index} isUpcoming={currentTab.upcoming}
-                      mapUrl={warningMapUrl} isOwner={isOwner} onDelete={deleteManualWarning} />
+                      isOwner={isOwner} onDelete={deleteManualWarning} />
                   </div>
                 ))}
               </motion.div>

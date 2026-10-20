@@ -30,10 +30,6 @@ export default function AccessRequestPanel() {
       );
       return { previous };
     },
-    onError: (_err, _vars, ctx) => {
-      // Roll back if the network request fails
-      if (ctx?.previous) queryClient.setQueryData(['accessRequests'], ctx.previous);
-    },
     mutationFn: async ({ request_id, status }) => {
       const request = requests.find(r => r.id === request_id);
       if (!request) throw new Error('Request not found');
@@ -93,7 +89,10 @@ export default function AccessRequestPanel() {
       setAdminNotes('');
       toast.success('Request processed and email sent');
     },
-    onError: (error) => {
+    /* one handler: a second onError key further up used to be silently replaced by this one,
+       so a failed request never rolled the optimistic badge back */
+    onError: (error, _vars, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(['accessRequests'], ctx.previous);
       console.error('[AccessRequest] Error:', error);
       toast.error(error.message || 'Failed to process request');
     }

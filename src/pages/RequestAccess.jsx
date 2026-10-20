@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Loader2, CheckCircle2 } from 'lucide-react';
 import { useTheme } from '@/components/ThemeContext';
 
 export default function RequestAccess() {

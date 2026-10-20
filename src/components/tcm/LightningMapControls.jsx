@@ -1,8 +1,6 @@
 import React from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Clock, RefreshCw, Camera, Radio, X,
-  Layers, CloudLightning, Droplets, Zap, Wind,
+  Clock, RefreshCw, Camera,
   ShieldAlert, Palette,
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
@@ -34,12 +32,6 @@ export const MAP_MODE_HEAT     = 'heatmap';   // Strike density heat overlay
 export const MAP_MODE_RADAR    = 'radar';     // Radar only (no strike markers)
 export const MAP_MODE_COMBINED = 'combined';  // All layers visible
 
-const MAP_MODES = [
-  { id: MAP_MODE_STRIKES,  label: 'Strikes',  icon: CloudLightning, color: '#facc15' },
-  { id: MAP_MODE_HEAT,     label: 'Heat',     icon: Zap,            color: '#f97316' },
-  { id: MAP_MODE_RADAR,    label: 'Radar',    icon: Droplets,       color: '#38bdf8' },
-  { id: MAP_MODE_COMBINED, label: 'All',      icon: Layers,         color: '#a78bfa' },
-];
 
 export default function LightningMapControls({
   lightMode = false,

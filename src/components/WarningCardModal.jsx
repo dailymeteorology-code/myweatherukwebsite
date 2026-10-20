@@ -63,7 +63,7 @@ const extractImpacts = (w) => {
 
 function useCountdown(targetDate) {
   const [remaining, setRemaining] = React.useState('');
-  const [elapsed, setElapsed] = React.useState(null);
+  const [elapsed] = React.useState(null);
 
   React.useEffect(() => {
     if (!targetDate) return;
@@ -85,7 +85,7 @@ function useCountdown(targetDate) {
   return { remaining, elapsed };
 }
 
-export default function WarningCardModal({ warning, isUpcoming, onClose, mapUrl }) {
+export default function WarningCardModal({ warning, isUpcoming, onClose }) {
   const sev     = getSev(warning.severity);
   const Icon    = ICONS[warning.type] || AlertTriangle;
   const impacts = extractImpacts(warning);
@@ -198,7 +198,7 @@ export default function WarningCardModal({ warning, isUpcoming, onClose, mapUrl 
               <p style={{ margin: '0 0 8px', fontSize: '0.58rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em', display: 'flex', alignItems: 'center', gap: 5 }}>
                 <Navigation2 style={{ width: 9, height: 9 }} /> Warning Area
               </p>
-              <WarningMap warning={warning} height={230} mapUrl={mapUrl} />
+              <WarningMap warning={warning} height={230} />
             </motion.div>
 
             {/* Summary — the Met Office headline */}

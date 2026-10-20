@@ -14,7 +14,7 @@ import { CloudLightning, Map as MapIcon, Zap, ZapOff } from 'lucide-react';
 import TCMLeafletBase from '@/components/tcm/TCMLeafletBase';
 import { smoothBlobPath } from '@/components/tcm/smoothBlobPath';
 import { isInUKIreland } from '@/components/tcm/ukIrelandMask';
-import { RISK_PALETTES, LEVEL_OPACITY, scoreToLevel, MIN_SCORE_PER_LEVEL } from '@/components/tcm/riskConfig';
+import { RISK_PALETTES, LEVEL_OPACITY, MIN_SCORE_PER_LEVEL } from '@/components/tcm/riskConfig';
 
 const REGION_BBOX = {
   uk: { lonMin: -10.5, lonMax: 2.0, latMin: 49.5, latMax: 61.5 },
