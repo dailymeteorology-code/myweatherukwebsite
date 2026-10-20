@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 import zlib
@@ -25,6 +26,30 @@ import numpy as np
 from .config import DATA
 
 STATES = ['scheduled', 'collecting', 'analysing', 'running', 'validating', 'published', 'degraded', 'failed']
+
+
+# Each float field is rounded to a step well below what the page shows or verification uses
+# before it is stored. float16 otherwise keeps noise in its low bits (probabilities of 1e-5,
+# heights to 0.5 m) that zlib cannot compress: a Hyper-Short frame was 23 MB and a run 1.1 GB,
+# more than the site's mirror could fetch every hour. Rounded, a frame is ~9 MB.
+QUANTA = [(re.compile(p), q) for p, q in (
+    (r'^p_|^confidence$|^uncertainty$', 0.0005),          # probability, 0-1
+    (r'cape|cin$', 1.0),                                   # J/kg
+    (r'^srh', 1.0),                                        # m2/s2
+    (r'^precip', 0.01),                                    # mm, mm/h
+    (r'^(u10|v10|gust|shear|motion)', 0.05),               # m/s
+    (r'_z$|height|level$|^wbz$', 5.0),                     # m
+    (r'^pw$', 0.1),                                        # mm
+    (r'^lapse', 0.02),                                     # K/km
+    (r'^(stp|scp)$', 0.01),                                # composite indices
+)]
+
+
+def quantise(name, a):
+    for pat, q in QUANTA:
+        if pat.search(name):
+            return np.round(np.asarray(a, np.float32) / q) * q
+    return a
 
 
 def run_id(product, init):
@@ -67,7 +92,7 @@ class RunWriter:
             if a.dtype.kind in 'iub':
                 buf, dt = a.astype(np.int8).tobytes(), 'int8'
             else:
-                buf, dt = np.clip(a, -65000, 65000).astype(np.float16).tobytes(), 'float16'   # float16 range
+                buf, dt = np.clip(quantise(name, a), -65000, 65000).astype(np.float16).tobytes(), 'float16'   # float16 range
             (d / f'{name}.bin').write_bytes(zlib.compress(buf, 6))
             fin = a[np.isfinite(a)] if a.dtype.kind == 'f' else a.ravel()
             stats[name] = {'min': float(fin.min()) if fin.size else None, 'max': float(fin.max()) if fin.size else None,

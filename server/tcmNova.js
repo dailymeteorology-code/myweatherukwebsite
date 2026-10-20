@@ -143,15 +143,27 @@ const MODE = process.env.NOVA_MODE || 'cloud';
 let syncState = { last: null, error: null, downloaded: [] };
 
 /* Downloads stream to disk and archives unpack in a child process: run archives are tens
-   of MB, and doing either synchronously froze the whole site for over a minute per sync. */
+   of MB, and doing either synchronously froze the whole site for over a minute per sync.
+   A download that stops receiving bytes for 90 s is abandoned rather than left hanging. */
 async function fetchTo(url, file) {
-  const r = await fetch(url, { headers: { 'User-Agent': 'MyWeatherUK-NOVA' } });
-  if (!r.ok) throw new Error(`${r.status} ${url}`);
-  await fs.promises.mkdir(path.dirname(file), { recursive: true });
-  const { pipeline } = await import('node:stream/promises');
-  const { Readable } = await import('node:stream');
-  await pipeline(Readable.fromWeb(r.body), fs.createWriteStream(file + '.part'));
-  await fs.promises.rename(file + '.part', file);
+  const ac = new AbortController();
+  let stall = setTimeout(() => ac.abort(new Error(`stalled: ${path.basename(file)}`)), 90000);
+  const alive = () => { clearTimeout(stall); stall = setTimeout(() => ac.abort(new Error(`stalled: ${path.basename(file)}`)), 90000); };
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': 'MyWeatherUK-NOVA' }, signal: ac.signal });
+    if (!r.ok) throw new Error(`${r.status} ${url}`);
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    const { pipeline } = await import('node:stream/promises');
+    const { Readable, Transform } = await import('node:stream');
+    const tick = new Transform({ transform(chunk, _e, cb) { alive(); cb(null, chunk); } });
+    await pipeline(Readable.fromWeb(r.body), tick, fs.createWriteStream(file + '.part'), { signal: ac.signal });
+    await fs.promises.rename(file + '.part', file);
+  } catch (e) {
+    await fs.promises.rm(file + '.part', { force: true }).catch(() => {});
+    throw e;
+  } finally {
+    clearTimeout(stall);
+  }
 }
 
 function untar(tgz, dir) {
@@ -176,15 +188,41 @@ function replaced(a, runDir) {
   }
 }
 
-export async function syncFromGitHub() {
+/* Only the newest runs are mirrored, newest first: a Hyper-Short archive is hundreds of MB,
+   and after the site was offline overnight on 19-20 Oct the mirror spent the morning
+   fetching every missed hour oldest-first, so the newest run never arrived. Older copies on
+   D: beyond LOCAL_KEEP are removed (they stay in the GitHub release while it keeps them). */
+const MIRROR_NEWEST = { main: 3, hyper: 1 };
+const LOCAL_KEEP = { main: 28, hyper: 48 };    // a week of Main Runs, two days of Hyper-Short
+let syncing = null;
+
+export function syncFromGitHub() {
+  if (!syncing) syncing = syncOnce().finally(() => { syncing = null; });   // never two at once
+  return syncing;
+}
+
+function pruneLocal(product) {
+  const dir = path.join(DATA, product);
+  const runs = fs.readdirSync(dir).filter((n) => SAFE_ID.test(n) && n.startsWith(`${product}-`)).sort();
+  const latest = readJson(path.join(dir, 'latest.json'))?.run_id;
+  for (const n of runs.slice(0, Math.max(0, runs.length - LOCAL_KEEP[product]))) {
+    if (n !== latest) fs.rmSync(path.join(dir, n), { recursive: true, force: true });
+  }
+}
+
+async function syncOnce() {
   const got = [];
   try {
+    await fs.promises.rm(path.join(DATA, '_dl'), { recursive: true, force: true });   // leftovers of an interrupted sync
     for (const product of ['main', 'hyper']) {
       const dir = path.join(DATA, product);
       fs.mkdirSync(dir, { recursive: true });
-      for (const a of await releaseAssets(`nova-${product}`)) {
+      const assets = (await releaseAssets(`nova-${product}`))
+        .filter((a) => /^(main|hyper)-\d{8}T\d{4}Z\.tar\.gz$/.test(a.name))
+        .sort((a, b) => b.name.localeCompare(a.name))
+        .slice(0, MIRROR_NEWEST[product]);
+      for (const a of assets) {
         const m = /^((main|hyper)-\d{8}T\d{4}Z)\.tar\.gz$/.exec(a.name);
-        if (!m) continue;
         const runDir = path.join(dir, m[1]);
         if (fs.existsSync(path.join(runDir, 'manifest.json')) && !replaced(a, runDir)) continue;
         const tgz = path.join(DATA, '_dl', a.name);
@@ -206,6 +244,7 @@ export async function syncFromGitHub() {
       const runs = fs.readdirSync(dir).filter((n) => SAFE_ID.test(n) && fs.existsSync(path.join(dir, n, 'manifest.json'))).sort();
       const newest = runs.reverse().find((n) => ['published', 'degraded'].includes(readJson(path.join(dir, n, 'manifest.json'))?.status));
       if (newest) fs.writeFileSync(path.join(dir, 'latest.json'), JSON.stringify({ run_id: newest }));
+      pruneLocal(product);
     }
     for (const a of await releaseAssets('nova-state')) {
       if (a.name.endsWith('.json') && a.name !== 'latest.json') await fetchTo(a.browser_download_url, path.join(DATA, a.name));

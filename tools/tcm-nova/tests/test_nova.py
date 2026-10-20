@@ -195,6 +195,22 @@ def test_frame_roundtrip(tmp_data):
     assert np.allclose(a, b.astype(np.float32), atol=1e-3)
 
 
+def test_stored_fields_are_rounded_and_compress(tmp_data):
+    """Noise below each field's step is dropped before storage: values stay within half a step
+    and a noisy field compresses far better than raw float16."""
+    import zlib
+    from nova import store
+    rng = np.random.default_rng(1)
+    p = (rng.random((200, 200)) * 1e-3).astype(np.float32)               # near-zero probabilities
+    z = (1000 + rng.random((200, 200)) * 3000).astype(np.float32)        # heights, m
+    for name, a, q in (('p_thunder', p, 0.0005), ('freezing_level', z, 5.0)):
+        assert np.abs(store.quantise(name, a) - a).max() <= q / 2 + 1e-6
+    size = lambda a: len(zlib.compress(a.astype(np.float16).tobytes(), 6))
+    assert size(store.quantise('p_thunder', p)) < 0.2 * size(p)
+    t = rng.random((4, 4)).astype(np.float32)
+    assert store.quantise('t2', t) is t                                  # fields without a step are untouched
+
+
 # 12 lineage: Hyper-Short uses observations + the latest UKV, and NO other model --------
 def test_hyper_lineage_is_obs_plus_ukv_only():
     allowed = {'sources': {'UKV'}, 'main_run': {'SourceCache'}}
