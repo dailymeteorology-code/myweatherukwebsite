@@ -1,27 +1,24 @@
-/* The Location Weather landing state — what you see before searching.
- *
- * It used to be a 100px emoji, one line of text and five city buttons. This
- * gives it something to do: a prominent search, your own recent places, a
- * one-tap "use my location", and an honest statement of what the page covers.
- *
- * NOTHING HERE INVENTS A NUMBER. It would be easy to put a temperature on each
- * city card, but that is a Met Office call per card on a page nobody has asked
- * for a forecast on yet. The cards are navigation, and they look like it.
- */
-import React from 'react';
-import { motion } from 'framer-motion';
+/* The Location Weather landing state, before a search: the search itself, "use my location",
+   your recent places, and the big cities with the weather there right now.
+
+   The city cards' numbers are the 15-minute Met Office UKV analysis (corrected by station
+   reports) and the radar at each city, read from this site's own server in one request; no
+   per-card forecast call. */
+import React, { useEffect, useState } from 'react';
 import { MapPin, Clock, Crosshair, X, Loader2, ShieldCheck } from 'lucide-react';
 import LocationSearchBox from './LocationSearchBox';
+import WxIcon from './WxIcon';
+import { classify, condLabel, sunElevation } from '@/lib/ukvLocation';
 
 const POPULAR = [
-  { name: 'London', region: 'Greater London' },
-  { name: 'Manchester', region: 'Greater Manchester' },
-  { name: 'Birmingham', region: 'West Midlands' },
-  { name: 'Edinburgh', region: 'Scotland' },
-  { name: 'Cardiff', region: 'Wales' },
-  { name: 'Belfast', region: 'Northern Ireland' },
-  { name: 'Glasgow', region: 'Scotland' },
-  { name: 'Leeds', region: 'West Yorkshire' },
+  { name: 'London', region: 'Greater London', lat: 51.5074, lon: -0.1278 },
+  { name: 'Manchester', region: 'Greater Manchester', lat: 53.4808, lon: -2.2426 },
+  { name: 'Birmingham', region: 'West Midlands', lat: 52.4862, lon: -1.8904 },
+  { name: 'Edinburgh', region: 'Scotland', lat: 55.9533, lon: -3.1883 },
+  { name: 'Cardiff', region: 'Wales', lat: 51.4816, lon: -3.1791 },
+  { name: 'Belfast', region: 'Northern Ireland', lat: 54.5973, lon: -5.9301 },
+  { name: 'Glasgow', region: 'Scotland', lat: 55.8642, lon: -4.2518 },
+  { name: 'Leeds', region: 'West Yorkshire', lat: 53.8008, lon: -1.5491 },
 ];
 
 const timeAgo = (iso) => {
@@ -36,18 +33,11 @@ const timeAgo = (iso) => {
   return days === 1 ? 'yesterday' : `${days}d ago`;
 };
 
-function SectionLabel({ icon: Icon, children, action }) {
+function Label({ icon: Icon, children, action }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-      {Icon && <Icon style={{ width: 13, height: 13, color: 'rgba(255,255,255,0.5)' }} />}
-      <span style={{
-        fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.13em',
-        textTransform: 'uppercase', color: 'rgba(255,255,255,0.55)',
-      }}>
-        {children}
-      </span>
-      <span style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.12)' }} />
-      {action}
+    <div className="lw-title" style={{ marginBottom: 10 }}>
+      {Icon && <Icon />}{children}
+      {action && <span className="lw-title-aside">{action}</span>}
     </div>
   );
 }
@@ -56,162 +46,88 @@ export default function LocationLanding({
   query, onQueryChange, onSearch, loading,
   recent = [], onForget, onClearAll,
   user, authChecked,
-  onUseMyLocation, locating, geoError,
+  onUseMyLocation, locating, geoError, unit = 'C',
 }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-      style={{ paddingTop: 18, paddingBottom: 40 }}
-    >
-      {/* ── Hero ─────────────────────────────────────────────────── */}
-      <div style={{ textAlign: 'center', marginBottom: 26 }}>
-        <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: 7,
-          padding: '4px 12px', borderRadius: 99, marginBottom: 14,
-          background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.18)',
-        }}>
-          <ShieldCheck style={{ width: 12, height: 12, color: '#7dd3fc' }} />
-          <span style={{ fontSize: '0.66rem', fontWeight: 700, letterSpacing: '0.05em', color: 'rgba(255,255,255,0.85)' }}>
-            Official Met Office data
-          </span>
-        </div>
+  const [now, setNow] = useState(null);
+  useEffect(() => {
+    const ac = new AbortController();
+    fetch(`/api/location/now?p=${POPULAR.map((p) => `${p.lat},${p.lon}`).join('|')}`, { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : null)).then((j) => j && setNow(j.places)).catch(() => {});
+    return () => ac.abort();
+  }, []);
 
-        <h2 style={{
-          margin: 0, fontSize: 'clamp(1.6rem, 5vw, 2.4rem)', fontWeight: 800,
-          letterSpacing: '-0.03em', color: '#fff', lineHeight: 1.1,
-        }}>
-          What&rsquo;s the weather where you are?
-        </h2>
-        <p style={{ margin: '10px auto 0', maxWidth: 440, fontSize: '0.95rem', lineHeight: 1.5, color: 'rgba(255,255,255,0.65)' }}>
-          Hour-by-hour and daily forecasts for anywhere in the UK and Ireland —
-          and anywhere else in the world.
+  return (
+    <div style={{ paddingTop: 8, paddingBottom: 40 }}>
+      <div style={{ textAlign: 'center', margin: '18px 0 26px' }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 12px', borderRadius: 99, marginBottom: 14, background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
+          <ShieldCheck size={12} color="#bfe6ff" />
+          <span style={{ fontSize: 12, fontWeight: 600 }}>Met Office UKV · 2 km · updated through the day</span>
+        </div>
+        <h1 style={{ margin: 0, fontSize: 'clamp(30px, 6vw, 46px)', fontWeight: 600, letterSpacing: '-0.025em', lineHeight: 1.08, textShadow: '0 2px 18px rgba(0,10,30,0.25)' }}>
+          The weather, wherever you are
+        </h1>
+        <p style={{ margin: '10px auto 0', maxWidth: 470, fontSize: 16, lineHeight: 1.5, color: 'var(--ink2)' }}>
+          Hour by hour for five days, rain radar, and every detail the Met Office&rsquo;s high-resolution model has, for anywhere in the UK and Ireland.
         </p>
       </div>
 
-      {/* ── Search ───────────────────────────────────────────────── */}
-      <div style={{ maxWidth: 520, margin: '0 auto 12px', display: 'flex', gap: 8 }}>
-        <LocationSearchBox
-          value={query}
-          onChange={onQueryChange}
-          onSearch={onSearch}
-          loading={loading}
-          size="large"
-        />
+      <div style={{ maxWidth: 540, margin: '0 auto 12px', display: 'flex', gap: 8 }}>
+        <LocationSearchBox value={query} onChange={onQueryChange} onSearch={onSearch} loading={loading} size="large" autoFocus />
       </div>
-
-      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 34 }}>
-        <button
-          type="button"
-          onClick={onUseMyLocation}
-          disabled={locating}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 7,
-            padding: '7px 16px', borderRadius: 99, cursor: locating ? 'default' : 'pointer',
-            background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.18)',
-            color: 'rgba(255,255,255,0.85)', fontSize: '0.8rem', fontWeight: 600, fontFamily: 'inherit',
-          }}>
-          {locating
-            ? <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
-            : <Crosshair style={{ width: 13, height: 13, color: '#7dd3fc' }} />}
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 30 }}>
+        <button type="button" className="lw-chip" onClick={onUseMyLocation} disabled={locating}>
+          {locating ? <Loader2 size={13} className="animate-spin" /> : <Crosshair size={13} />}
           {locating ? 'Finding you…' : 'Use my location'}
         </button>
       </div>
+      {geoError && <p style={{ textAlign: 'center', margin: '-18px 0 24px', fontSize: 13, color: '#fecaca' }}>{geoError}</p>}
 
-      {geoError && (
-        <p style={{ textAlign: 'center', margin: '-22px 0 28px', fontSize: '0.78rem', color: '#fca5a5' }}>
-          {geoError}
-        </p>
-      )}
-
-      {/* ── Recent searches ──────────────────────────────────────── */}
       {recent.length > 0 && (
-        <div style={{ maxWidth: 620, margin: '0 auto 30px' }}>
-          <SectionLabel
-            icon={Clock}
-            action={
-              <button type="button" onClick={onClearAll}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                               fontSize: '0.66rem', fontWeight: 700, color: 'rgba(255,255,255,0.45)' }}>
-                Clear
-              </button>
-            }>
-            Your recent searches
-          </SectionLabel>
-
+        <div className="lw-glass lw-card" style={{ maxWidth: 680, margin: '0 auto 16px' }}>
+          <Label icon={Clock} action={<button type="button" onClick={onClearAll} style={{ background: 'none', border: 0, color: 'var(--ink2)', cursor: 'pointer', font: 'inherit', fontSize: 12 }}>Clear</button>}>
+            Your recent places
+          </Label>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {recent.map((r) => (
-              <div key={`${r.name}|${r.lat}|${r.lon}`}
-                   style={{
-                     display: 'inline-flex', alignItems: 'center',
-                     background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.16)',
-                     borderRadius: 99, overflow: 'hidden',
-                   }}>
-                <button
-                  type="button"
-                  onClick={() => onSearch({ name: r.name, region: r.region, lat: r.lat, lon: r.lon })}
-                  style={{
-                    display: 'inline-flex', alignItems: 'baseline', gap: 7,
-                    padding: '7px 6px 7px 14px', background: 'none', border: 'none',
-                    cursor: 'pointer', color: '#fff', fontSize: '0.84rem', fontWeight: 600, fontFamily: 'inherit',
-                  }}>
-                  {r.name}
-                  {r.region && (
-                    <span style={{ fontSize: '0.68rem', fontWeight: 500, color: 'rgba(255,255,255,0.45)' }}>
-                      {r.region}
-                    </span>
-                  )}
-                  {r.at && (
-                    <span style={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.32)' }}>
-                      {timeAgo(r.at)}
-                    </span>
-                  )}
+              <span key={`${r.name}|${r.lat}|${r.lon}`} className="lw-chip" style={{ padding: 0 }}>
+                <button type="button" onClick={() => onSearch({ name: r.name, region: r.region, lat: r.lat, lon: r.lon })}
+                  style={{ background: 'none', border: 0, color: '#fff', font: 'inherit', fontWeight: 600, padding: '6px 4px 6px 12px', cursor: 'pointer' }}>
+                  {r.name}{r.at && <span style={{ fontWeight: 500, color: 'var(--ink3)', marginLeft: 6, fontSize: 11 }}>{timeAgo(r.at)}</span>}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => onForget(r)}
-                  aria-label={`Remove ${r.name} from recent searches`}
-                  style={{ padding: '7px 11px 7px 5px', background: 'none', border: 'none',
-                           cursor: 'pointer', color: 'rgba(255,255,255,0.35)', lineHeight: 1 }}>
-                  <X style={{ width: 12, height: 12 }} />
+                <button type="button" onClick={() => onForget(r)} aria-label={`Remove ${r.name}`}
+                  style={{ background: 'none', border: 0, color: 'var(--ink3)', padding: '6px 10px 6px 2px', cursor: 'pointer', lineHeight: 0 }}>
+                  <X size={12} />
                 </button>
-              </div>
+              </span>
             ))}
           </div>
         </div>
       )}
-
-      {/* Only say this once we actually know they are signed out, so the line
-          does not flash at a signed-in reader while auth is still resolving. */}
       {authChecked && !user && (
-        <p style={{ maxWidth: 620, margin: '0 auto 30px', textAlign: 'center', fontSize: '0.78rem', color: 'rgba(255,255,255,0.42)' }}>
-          Sign in and this page will remember the places you look up.
-        </p>
+        <p style={{ textAlign: 'center', margin: '0 0 16px', fontSize: 13, color: 'var(--ink3)' }}>Sign in and this page will remember the places you look up.</p>
       )}
 
-      {/* ── Popular ──────────────────────────────────────────────── */}
-      <div style={{ maxWidth: 620, margin: '0 auto' }}>
-        <SectionLabel icon={MapPin}>Popular places</SectionLabel>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
-          {POPULAR.map((c) => (
-            <button
-              key={c.name}
-              type="button"
-              onClick={() => onSearch({ name: c.name })}
-              style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1,
-                padding: '11px 14px', borderRadius: 14, cursor: 'pointer', textAlign: 'left',
-                background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.14)',
-                fontFamily: 'inherit', transition: 'background 0.15s, border-color 0.15s',
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.13)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}>
-              <span style={{ color: '#fff', fontSize: '0.9rem', fontWeight: 700 }}>{c.name}</span>
-              <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.7rem' }}>{c.region}</span>
-            </button>
-          ))}
+      <div className="lw-glass lw-card" style={{ maxWidth: 680, margin: '0 auto' }}>
+        <Label icon={MapPin}>Right now</Label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+          {POPULAR.map((c, i) => {
+            const n = now?.[i];
+            const day = sunElevation(Date.now(), c.lat, c.lon) > -0.833;
+            const cond = n ? classify({ tcc: n.tcc, precipRate: n.radar ?? 0, span: 0 }) : null;
+            return (
+              <button key={c.name} type="button" onClick={() => onSearch({ name: c.name, region: c.region, lat: c.lat, lon: c.lon })}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 16, cursor: 'pointer', textAlign: 'left', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)', color: '#fff', font: 'inherit' }}>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 15, fontWeight: 600 }}>{c.name}</span>
+                  <span style={{ display: 'block', fontSize: 12, color: 'var(--ink3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cond ? condLabel(cond, day) : c.region}</span>
+                </span>
+                {cond && <WxIcon cond={cond} day={day} size={28} />}
+                {n?.t2 != null && <span style={{ fontSize: 22, fontWeight: 300 }}>{Math.round(unit === 'F' ? (n.t2 * 9) / 5 + 32 : n.t2)}°</span>}
+              </button>
+            );
+          })}
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 }

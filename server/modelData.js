@@ -8,6 +8,10 @@
      GET /api/modeldata/static/:file                    basemap.png, lines.json, cities.json, grid.json
      GET /api/modeldata/frames/:model/:run/:var/status  starts the job if needed; progress
      GET /api/modeldata/frames/:model/:run/:var/:step   one gzip frame (uint8 grid + JSON header)
+
+   It also keeps the UKV "point cubes" the Location page reads (mdata/point.py, read by
+   server/locationWeather.js): the frames of POINT_VARS are queued as ordinary background jobs,
+   and once they are all made the cube is assembled.
 */
 import fs from 'fs';
 import os from 'os';
@@ -19,6 +23,7 @@ import { resolveEnsPython } from './pastFuture/index.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TOOL = path.resolve(HERE, '..', 'tools', 'modeldata');
 const DATA = process.env.MODELDATA_DIR || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/modeldata' : path.join(HERE, 'data', 'modeldata'));
+export const MODELDATA_DIR = DATA;
 const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg', 'night_lights.png', 'lines.json', 'cities.json', 'grid.json', 'roads.json', 'roads.bin']);
 const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer']);
 const ENS_MODELS = new Set(['ecmwf_ens', 'aifs_ens', 'gefs']);
@@ -26,6 +31,8 @@ const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
 const MAX_USER_JOBS = 3;               // what someone is waiting for
 const MAX_PREFETCH_JOBS = 1;           // background warming, never in the way
+const MAX_POINT_JOBS = 1;              // the Location page's UKV frames: their own lane, not behind the warming
+const LIMIT = (p) => (p === 'point' ? MAX_POINT_JOBS : p ? MAX_PREFETCH_JOBS : MAX_USER_JOBS);
 
 const running = new Map();            // key -> { child, prefetch }
 const queue = [];                     // [{key, args, prefetch}]
@@ -52,7 +59,7 @@ function pump() {
   for (let i = 0; i < queue.length;) {
     const job = queue[i];
     if (running.has(job.key)) { queue.splice(i, 1); continue; }
-    if (count(job.prefetch) >= (job.prefetch ? MAX_PREFETCH_JOBS : MAX_USER_JOBS)) { i++; continue; }
+    if (count(job.prefetch) >= LIMIT(job.prefetch)) { i++; continue; }
     queue.splice(i, 1);
     const child = python([ENS_MODELS.has(job.args[0]) ? 'mdata.ens' : 'mdata.job', ...job.args], (code, err) => {
       running.delete(job.key);
@@ -71,6 +78,9 @@ function ensureJob(model, run, v, prefetch = false, first = null) {
     if (!prefetch && queued.prefetch) {                 // someone is now waiting for it
       queued.prefetch = false;
       if (first != null) queued.args = [model, runIso(run), v, String(first)];
+      pump();
+    } else if (prefetch === 'point' && queued.prefetch === true) {
+      queued.prefetch = 'point';                        // the Location page needs it: into its own lane
       pump();
     }
     return;
@@ -98,8 +108,9 @@ function grown(model, run, st) {
 /* the run the page opens on: the newest run that reaches most of the way (UKV runs every
    hour, but only some go beyond T+12) */
 export function defaultRun(m) {
-  const most = Math.max(0, ...m.runs.map((r) => r.steps.length));
-  return m.runs.find((r) => r.steps.length >= 0.6 * most) || m.runs[0];
+  const runs = m.runs.filter((r) => !r.kept);                      // a run kept only for its reach is never the default
+  const most = Math.max(0, ...runs.map((r) => r.steps.length));
+  return runs.find((r) => r.steps.length >= 0.6 * most) || runs[0] || m.runs[0];
 }
 
 /* warmed in the background (one job at a time) for each model's default run, most-used first */
@@ -130,7 +141,57 @@ function refreshCatalog() {
       const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';
       for (const v of PREFETCH.filter((x) => m.variables?.includes(x)).slice(0, PREFETCH_LIMIT[m.id] ?? 99)) ensureJob(m.id, tag, v, true);
     }
+    refreshPoint(cat);
   });
+}
+
+/* ── point cubes for the Location page ───────────────────────────────────── */
+export const POINT_DIR = path.join(DATA, 'point');
+/* must match mdata/point.py POINT_VARS */
+const POINT_VARS = ['t2', 'td2', 'rh2', 'tskin', 'wind10', 'gust10', 'wdir10', 'mslp', 'precip_rate', 'precip_step',
+  'snow_rate', 'snow_step', 'hail_rate', 'tcc', 'lcc', 'mcc', 'hcc', 'cloud_base', 'vis', 'fog', 'cape_mu', 'lightning',
+  'frz', 'snow_swe', 'sw_down', 'uv_down'];
+const runTag = (iso) => iso.replace(/[-:]/g, '').slice(0, 13) + 'Z';
+const tagMs = (t) => Date.UTC(+t.slice(0, 4), +t.slice(4, 6) - 1, +t.slice(6, 8), +t.slice(9, 11), +t.slice(11, 13));
+export function builtCubes() {
+  try { return fs.readdirSync(POINT_DIR).filter((t) => RUN_RE.test(t) && fs.existsSync(path.join(POINT_DIR, t, 'manifest.json'))).sort(); } catch { return []; }
+}
+
+/* Which UKV runs to cube: the newest that reaches T+120 (03Z and 15Z), and the newest that reaches
+   T+54 once it is six hours newer than both that and every cube already built. A place's first two
+   days then come from a run at most about nine hours old, without cubing every run. */
+function pointTargets(cat) {
+  const m = cat?.models?.find((x) => x.id === 'ukv');
+  if (!m?.runs?.length) return [];
+  const top = (r) => Math.max(...r.steps);
+  const long = m.runs.find((r) => top(r) >= 120);
+  const short = m.runs.find((r) => top(r) >= 54);
+  const built = builtCubes();
+  const ref = Math.max(built.length ? tagMs(built[built.length - 1]) : 0, long ? tagMs(runTag(long.run)) : 0);
+  const out = long ? [long] : [];
+  if (short && short !== long && tagMs(runTag(short.run)) - ref >= 6 * 3600e3) out.unshift(short);
+  return out;
+}
+
+let pointBusy = false;
+function refreshPoint(cat) {
+  for (const r of pointTargets(cat)) {
+    const tag = runTag(r.run);
+    const man = readJson(path.join(POINT_DIR, tag, 'manifest.json'));
+    if (man && man.steps.length >= r.steps.length) continue;            // built, and the run has not grown since
+    const ready = POINT_VARS.every((v) => {
+      const st = readJson(path.join(frameDir('ukv', tag, v), 'status.json'));
+      return st?.state === 'complete' && !grown('ukv', tag, st);
+    });
+    if (!ready) { POINT_VARS.forEach((v) => ensureJob('ukv', tag, v, 'point')); continue; }
+    if (pointBusy) return;
+    pointBusy = true;
+    python(['mdata.point', 'cube', runIso(tag)], (code, err) => {
+      pointBusy = false;
+      if (code) console.warn(`[modeldata] point cube ${tag} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
+    });
+    return;                                                              // one cube at a time
+  }
 }
 
 export function mountModelData(app) {

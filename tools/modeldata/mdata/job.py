@@ -19,7 +19,7 @@ from datetime import timedelta
 import numpy as np
 
 from .common import FRAMES, write_frame, write_json, DATA
-from .models import ACCUM, DIFFERENCED, MODELS, VARIABLES, _utc
+from .models import ACCUM, DIFFERENCED, MODELS, STEP_VARS, VARIABLES, _utc
 
 
 def run_dir(model, run, var):
@@ -139,7 +139,7 @@ def main(model, run_s, var, first=None):
                     status['missing'].append(h)
                     continue
                 out = total
-            elif cov not in (None, 0, 1):
+            elif cov not in (None, 0, 1) and var not in STEP_VARS:
                 status['missing'].append(h)        # a 'past hour' field that is really 3-hourly
                 continue
             if diff:

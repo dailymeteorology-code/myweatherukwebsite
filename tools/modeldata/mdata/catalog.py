@@ -21,7 +21,8 @@ def model_entry(m):
     except Exception as e:
         return {'id': m.id, 'error': str(e)[:200], 'runs': []}
     return {'id': m.id, 'label': m.label, 'res_km': m.res_km, 'source': SOURCES[m.id], 'variables': m.variables,
-            'runs': [{'run': r.isoformat(), 'steps': s} for r, s in runs]}
+            'runs': [dict({'run': r.isoformat(), 'steps': s}, **({'kept': True} if r in getattr(m, 'kept_runs', ()) else {}))
+                     for r, s in runs]}
 
 
 def prune(keep_hours=36):

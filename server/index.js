@@ -39,6 +39,7 @@ import { mountScenarios } from './scenarios/api.js';
 import { startLiveScenarios } from './scenarios/live/index.js';
 import { mountPastFuture } from './pastFuture/index.js';
 import { mountModelData } from './modelData.js';
+import { mountLocationWeather } from './locationWeather.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(here, '..');
@@ -467,6 +468,7 @@ startAiw(app);
 mountScenarios(app);
 mountPastFuture(app);
 mountModelData(app);
+mountLocationWeather(app);
 startLiveScenarios(app);
 
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y' }));

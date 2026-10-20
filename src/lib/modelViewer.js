@@ -125,7 +125,7 @@ const SCALES = {
   trop_p: { stops: [[120, '#dc3a3a', 200], [200, '#f08b2c', 190], [280, '#efd23a', 180], [350, '#6cc04a', 180], [420, '#3d93d8', 190], [500, '#5b2a86', 210]], ticks: [150, 200, 250, 300, 350, 400, 450] },
   sw_down: { stops: RAD, ticks: [50, 200, 400, 700, 1000] },
   lw_down: { stops: [[200, '#1f2f5c', 180], [260, '#3d5fd0', 170], [300, '#5aa7e8', 160], [340, '#efd23a', 180], [380, '#f08b2c', 200], [420, '#dc3a3a', 220]], ticks: [220, 260, 300, 340, 380, 420] },
-  uv_down: { stops: RAD.map(([v, c, a]) => [v / 15, c, a]), ticks: [3, 13, 27, 47, 67] },
+  uv_down: { stops: RAD.map(([v, c, a]) => [v / 550, c, a]), ticks: [0.1, 0.4, 0.8, 1.2, 1.6] },   // UKV/Global UV is ~UV-B: 0-2 W/m²
   shf: { stops: DIVERGE(-150, 450), ticks: [-150, -75, 0, 150, 300, 450] },
   windchill: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22], zero: true },
   wdir10: { stops: [[0, '#000000', 0], [360, '#000000', 0]], ticks: [] },

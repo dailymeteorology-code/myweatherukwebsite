@@ -205,8 +205,9 @@ function companionOf(map, raw, live, tolMin = 10) {
 const fmtThr = (v) => (Math.abs(v) >= 10 || Number.isInteger(v) ? String(Math.round(v * 10) / 10) : v.toFixed(v < 1 ? 2 : 1));
 
 function defaultRun(m) {
-  const most = Math.max(0, ...m.runs.map((r) => r.steps.length));
-  return m.runs.find((r) => r.steps.length >= 0.6 * most) || m.runs[0];
+  const runs = m.runs.filter((r) => !r.kept);                      // a run kept only for its reach is never the default
+  const most = Math.max(0, ...runs.map((r) => r.steps.length));
+  return runs.find((r) => r.steps.length >= 0.6 * most) || runs[0] || m.runs[0];
 }
 const runLabel = (iso) => new Date(iso).toLocaleString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', hour: '2-digit' }).replace(',', '') + 'Z';
 const imgCache = {};

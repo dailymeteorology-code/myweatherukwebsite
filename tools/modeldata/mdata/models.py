@@ -33,6 +33,9 @@ VARIABLES = {
     'precip_rate':  dict(label='Precipitation rate', unit='mm/h', group='Precipitation', lo=0, hi=100, scale='sqrt'),
     'precip_1h':    dict(label='Precipitation (past hour)', unit='mm', group='Precipitation', lo=0, hi=100, scale='sqrt'),
     'precip_total': dict(label='Total precipitation', unit='mm', group='Precipitation', lo=0, hi=400, scale='sqrt'),
+    # the amount since the run's previous step (1 h to T+54, 3 h beyond): exact per-step amounts for
+    # the Location page, where differencing the byte-quantised running total would be too coarse
+    'precip_step':  dict(label='Precipitation since the previous step', unit='mm', group='Precipitation', lo=0, hi=150, scale='sqrt'),
     'rain_rate':    dict(label='Rain rate', unit='mm/h', group='Precipitation', lo=0, hi=100, scale='sqrt'),
     'conv_rain':    dict(label='Convective rain rate', unit='mm/h', group='Precipitation', lo=0, hi=100, scale='sqrt'),
     'refc':         dict(label='Simulated radar (composite)', unit='dBZ', group='Precipitation', lo=-10, hi=75),
@@ -41,6 +44,7 @@ VARIABLES = {
     'snow_rate':    dict(label='Snowfall rate (water equiv.)', unit='mm/h', group='Snow & ice', lo=0, hi=30, scale='sqrt'),
     'snow_1h':      dict(label='Snowfall (past hour, water equiv.)', unit='mm', group='Snow & ice', lo=0, hi=30, scale='sqrt'),
     'snow_total':   dict(label='Total snowfall (water equiv.)', unit='mm', group='Snow & ice', lo=0, hi=200, scale='sqrt'),
+    'snow_step':    dict(label='Snowfall since the previous step (water equiv.)', unit='mm', group='Snow & ice', lo=0, hi=60, scale='sqrt'),
     'snow_swe':     dict(label='Lying snow (water equiv.)', unit='mm', group='Snow & ice', lo=0, hi=500, scale='sqrt'),
     'snow_depth':   dict(label='Snow depth', unit='cm', group='Snow & ice', lo=0, hi=300, scale='sqrt'),
     'frz':          dict(label='Freezing level', unit='m', group='Snow & ice', lo=0, hi=5000),
@@ -91,7 +95,8 @@ VARIABLES = {
     # radiation & surface
     'sw_down':      dict(label='Solar radiation (downward)', unit='W/m²', group='Radiation & surface', lo=0, hi=1100),
     'lw_down':      dict(label='Longwave radiation (downward)', unit='W/m²', group='Radiation & surface', lo=150, hi=480),
-    'uv_down':      dict(label='UV radiation (downward)', unit='W/m²', group='Radiation & surface', lo=0, hi=80),
+    # the Met Office UV flux is close to the UV-B band: about 0.3 W/m² at a clear October noon, ~1.5 in summer
+    'uv_down':      dict(label='UV radiation (downward)', unit='W/m²', group='Radiation & surface', lo=0, hi=3, scale='sqrt'),
     'shf':          dict(label='Sensible heat flux', unit='W/m²', group='Radiation & surface', lo=-200, hi=600),
     # wind direction (drawn as arrows over any layer), wind chill and the weather type (symbols)
     'wdir10':       dict(label='Wind direction (10 m)', unit='°', group='Wind & pressure', lo=0, hi=360),
@@ -111,6 +116,7 @@ VARIABLES = {
 
 # accumulated-from-T+0 quantities and how they are built
 ACCUM = {'precip_total', 'snow_total'}
+STEP_VARS = {'precip_step', 'snow_step'}       # an amount over whatever span the step covers (1 or 3 h)
 
 
 def _utc(s):
@@ -202,6 +208,19 @@ class MetOffice:
                 out.append((r, steps))
             if len(out) >= n:
                 break
+        # UKV reaches T+120 only from 03Z and 15Z: once those fall out of the newest n, keep the
+        # newest of them listed anyway (marked `kept`), so the Location page always has days 3-5
+        self.kept_runs = set()
+        if self.id == 'ukv' and not any(max(s) >= 120 for _, s in out):
+            listed = {r for r, _ in out}
+            for r in runs:
+                if r in listed or r.hour % 12 != 3:
+                    continue
+                steps = self.steps(r)
+                if steps and max(steps) >= 120:
+                    out.append((r, steps))
+                    self.kept_runs.add(r)
+                    break
         return out
 
     def steps(self, run):
@@ -259,7 +278,7 @@ class MetOffice:
     def field(self, run, h, var, prev_h):
         """-> float32 (NY, NX) in display units, plus the raw accumulation for running totals."""
         F = self.files
-        if var in ('precip_total', 'precip_1h', 'snow_total', 'snow_1h'):
+        if var in ('precip_total', 'precip_1h', 'snow_total', 'snow_1h', 'precip_step', 'snow_step'):
             stem = 'precipitation_accumulation' if var.startswith('precip') else 'snowfall_accumulation'
             if h == 0:
                 return np.zeros((NY, NX), np.float32), 0

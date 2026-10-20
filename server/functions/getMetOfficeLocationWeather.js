@@ -117,7 +117,7 @@ async function getJson(url, { timeout = 15000 } = {}) {
  * caller can report OUTSIDE_UK rather than silently forecasting the wrong
  * continent (there is a London in Ontario).
  */
-async function geocode(query) {
+export async function geocode(query) {
   const url = `${GEOCODE_URL}?name=${encodeURIComponent(query)}&count=10&language=en&format=json`;
   const body = await getJson(url).catch(() => null);
   const results = body?.results || [];
@@ -127,7 +127,7 @@ async function geocode(query) {
 }
 
 /** Name a coordinate pair the user supplied from the suggestion list. */
-async function reverseName(lat, lon) {
+export async function reverseName(lat, lon) {
   try {
     const body = await getJson(
       `${NOMINATIM_REVERSE}?lat=${lat}&lon=${lon}&format=json&zoom=10&addressdetails=1`,

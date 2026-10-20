@@ -202,13 +202,13 @@ def write_frame(path: Path, a, enc, meta):
     ny, nx = np.shape(a)
     head = json.dumps(dict(meta, nx=nx, ny=ny, lo=enc['lo'], hi=enc['hi'], scale=enc.get('scale', 'lin'))).encode()
     raw = struct.pack('<I', len(head)) + head + encode(a, enc).tobytes()
-    tmp = path.with_suffix('.tmp')
+    tmp = path.with_suffix(f'.{os.getpid()}.{threading.get_ident()}.tmp')   # own name: two writers never share one
     tmp.write_bytes(gzip.compress(raw, 6))
     _replace(tmp, path)
 
 
 def write_json(path: Path, obj):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp = path.with_suffix(f'{path.suffix}.{os.getpid()}.{threading.get_ident()}.tmp')
     tmp.write_text(json.dumps(obj, separators=(',', ':')))
     _replace(tmp, path)

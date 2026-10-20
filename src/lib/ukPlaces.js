@@ -15,15 +15,16 @@
    you tapped is what you get. Typing a name and pressing enter still goes
    through the old text path.
 
-   The four country codes are the same set the forecast function accepts, so a
-   suggestion can never be offered that the forecast would then refuse — the
-   Crown Dependencies (Isle of Man, Jersey, Guernsey) are Met Office territory
-   and are deliberately included.
+   The countries offered are the ones the Location page's Met Office UKV
+   forecast covers (server/locationWeather.js), so a suggestion can never be
+   offered that the forecast would then refuse: the UK, the Crown Dependencies
+   (Isle of Man, Jersey, Guernsey) and Ireland.
    ════════════════════════════════════════════════════════════════════════════ */
 
 const ENDPOINT = 'https://geocoding-api.open-meteo.com/v1/search';
 
 export const UK_COUNTRY_CODES = new Set(['GB', 'IM', 'JE', 'GG']);
+const COVERED = new Set([...UK_COUNTRY_CODES, 'IE']);
 
 /** The bit under the name that tells two identically-named villages apart. */
 export function regionOf(place) {
@@ -75,7 +76,7 @@ export async function searchUkPlaces(query, { signal, limit = 7 } = {}) {
   const lower = q.toLowerCase();
   const seen = new Set();
   return results
-    .filter((r) => UK_COUNTRY_CODES.has(r.country_code))
+    .filter((r) => COVERED.has(r.country_code))
     .map(toSuggestion)
     .filter((s) => {
       if (seen.has(s.key)) return false;

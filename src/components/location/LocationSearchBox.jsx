@@ -23,6 +23,7 @@ export default function LocationSearchBox({
   const [cursor, setCursor] = useState(-1);
 
   const boxRef = useRef(null);
+  const inputRef = useRef(null);
   const abortRef = useRef(null);
   // Set when a suggestion is chosen, so the resulting value change does not
   // immediately reopen the dropdown with the name that was just picked.
@@ -43,7 +44,8 @@ export default function LocationSearchBox({
       setSuggestions(hits);
       setCursor(-1);
       setBusy(false);
-      setOpen(hits.length > 0);
+      // only while someone is typing here: a name filled in by a link must not pop the list open
+      setOpen(hits.length > 0 && document.activeElement === inputRef.current);
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
@@ -90,17 +92,18 @@ export default function LocationSearchBox({
           width: big ? 18 : 15, height: big ? 18 : 15, color: 'rgba(255,255,255,0.45)', pointerEvents: 'none',
         }} />
         <input
+          ref={inputRef}
           type="text"
           value={value}
           autoFocus={autoFocus}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
           onFocus={() => suggestions.length && setOpen(true)}
-          placeholder="Search a UK town, city or village…"
-          aria-label="Search for a UK location"
+          placeholder="Search a town, city or postcode…"
+          aria-label="Search for a place in the UK or Ireland"
           aria-autocomplete="list"
           aria-expanded={open}
-          className="w-full bg-white/10 backdrop-blur-sm border border-white/20 text-white placeholder-white/40 focus:outline-none focus:border-white/50 focus:bg-white/15"
+          className="w-full bg-white/15 backdrop-blur-xl border border-white/25 text-white placeholder-white/55 focus:outline-none focus:border-white/60 focus:bg-white/20"
           style={{
             borderRadius: big ? 16 : 12,
             padding: big ? '15px 44px 15px 46px' : '10px 38px 10px 38px',
@@ -132,7 +135,7 @@ export default function LocationSearchBox({
           style={{
             position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 60,
             margin: 0, padding: 6, listStyle: 'none',
-            background: 'rgba(9,14,28,0.97)', backdropFilter: 'blur(14px)',
+            background: 'rgba(14,22,36,0.86)', backdropFilter: 'blur(24px) saturate(160%)', WebkitBackdropFilter: 'blur(24px) saturate(160%)',
             border: '1px solid rgba(255,255,255,0.16)', borderRadius: 14,
             boxShadow: '0 24px 60px rgba(0,0,0,0.55)',
             maxHeight: 320, overflowY: 'auto',
