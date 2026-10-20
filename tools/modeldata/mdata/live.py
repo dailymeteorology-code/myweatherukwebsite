@@ -169,6 +169,20 @@ def make_radar(t):
     out = LIVE / 'radar' / f'{t:%Y%m%dT%H%M}.bin'
     if out.exists():
         return out
+    rate = radar_rate(t)
+    P = PRODUCTS['radar']
+    enc = {'lo': P['lo'], 'hi': P['hi'], 'scale': P['scale']}
+    head = json.dumps({'product': 'radar', 'valid': t.isoformat(), 'nx': LW, 'ny': LH, 'k': 1 / SS,
+                       'lo': enc['lo'], 'hi': enc['hi'], 'scale': enc['scale']}).encode()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix('.tmp')
+    tmp.write_bytes(gzip.compress(struct.pack('<I', len(head)) + head + encode(rate, enc).tobytes(), 6))
+    tmp.replace(out)
+    return out
+
+
+def radar_rate(t):
+    """The Met Office composite at t (mm/h) on the 1 km display grid (NaN outside coverage)."""
     from nova.hyper.obs import read_radar
     R = read_radar(t)
     key = (R['projdef'], R['x'].size, R['y'].size, float(R['x'][0]), float(R['y'][0]))
@@ -183,16 +197,7 @@ def make_radar(t):
         _RIDX.clear()
         _RIDX[key] = (np.clip(rj, 0, R['y'].size - 1), np.clip(ci, 0, R['x'].size - 1), ok)
     rj, ci, ok = _RIDX[key]
-    rate = np.where(ok, R['rate'][rj, ci], np.nan).astype(np.float32)
-    P = PRODUCTS['radar']
-    enc = {'lo': P['lo'], 'hi': P['hi'], 'scale': P['scale']}
-    head = json.dumps({'product': 'radar', 'valid': t.isoformat(), 'nx': LW, 'ny': LH, 'k': 1 / SS,
-                       'lo': enc['lo'], 'hi': enc['hi'], 'scale': enc['scale']}).encode()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix('.tmp')
-    tmp.write_bytes(gzip.compress(struct.pack('<I', len(head)) + head + encode(rate, enc).tobytes(), 6))
-    tmp.replace(out)
-    return out
+    return np.where(ok, R['rate'][rj, ci], np.nan).astype(np.float32)
 
 
 def radar_latest(now):
@@ -277,6 +282,8 @@ def catalog():
                   'times': idx['times'], 'ext': idx.get('ext')}
         if P['kind'] == 'grid':
             out[k].update(lo=P['lo'], hi=P['hi'], scale=P['scale'], unit='mm/h')
+    from . import now
+    out.update(now.catalog_entries())
     write_json(LIVE / 'catalog.json', {'updated': datetime.now(timezone.utc).isoformat(), 'products': out})
 
 
@@ -292,8 +299,14 @@ def update():
         n = lightning()
     except Exception as e:
         n = f'failed: {e}'
+    try:                                       # current conditions + the observed day (mdata/now.py)
+        from . import now
+        nw = now.update()
+    except Exception as e:
+        nw = f'failed: {type(e).__name__}: {e}'
+        traceback.print_exc()
     catalog()
-    print(f'live: {res} lightning={n} in {time.time() - t0:.0f} s')
+    print(f'live: {res} lightning={n} now={nw} in {time.time() - t0:.0f} s')
 
 
 if __name__ == '__main__':

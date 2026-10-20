@@ -19,9 +19,9 @@ import { resolveEnsPython } from './pastFuture/index.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TOOL = path.resolve(HERE, '..', 'tools', 'modeldata');
 const DATA = process.env.MODELDATA_DIR || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/modeldata' : path.join(HERE, 'data', 'modeldata'));
-const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg', 'night_lights.png', 'lines.json', 'cities.json', 'grid.json']);
-const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs']);
-const ENS_MODELS = new Set(['ecmwf_ens', 'gefs']);
+const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg', 'night_lights.png', 'lines.json', 'cities.json', 'grid.json', 'roads.json', 'roads.bin']);
+const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer']);
+const ENS_MODELS = new Set(['ecmwf_ens', 'aifs_ens', 'gefs']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
 const MAX_USER_JOBS = 3;               // what someone is waiting for
@@ -105,7 +105,7 @@ export function defaultRun(m) {
 /* warmed in the background (one job at a time) for each model's default run, most-used first */
 const PREFETCH = ['precip_rate', 'precip_total', 't2', 'gust10', 'mslp', 'refc', 'cape_mu'];
 /* Met Office Global files are whole-globe downloads (~7 MB a field a step): warm only the top three */
-const PREFETCH_LIMIT = { mo_global: 3 };
+const PREFETCH_LIMIT = { mo_global: 3, gefs_mean: 2 };
 
 let liveBusy = false;
 function refreshLive() {
@@ -174,7 +174,34 @@ export function mountModelData(app) {
   });
 
   /* live layers: satellite images, radar frames, lightning */
-  const LIVE_PRODUCTS = new Set(['sat_ir', 'sat_vis', 'sat_geo', 'sat_true', 'sat_fog', 'sat_wv', 'sat_airmass', 'sat_conv', 'sat_cth', 'radar']);
+  const LIVE_PRODUCTS = new Set(['sat_ir', 'sat_vis', 'sat_geo', 'sat_true', 'sat_fog', 'sat_wv', 'sat_airmass', 'sat_conv', 'sat_cth', 'radar',
+    'now_t2', 'now_td2', 'now_rh2', 'now_wind10', 'now_wdir10', 'now_gust10', 'now_mslp', 'now_windchill', 'now_feels', 'now_tcc', 'now_wx']);
+
+  /* observed days (mdata/now.py): each day's extremes, rainfall total and lightning, kept for good */
+  const OBS_DIR = path.join(DATA, 'observed');
+  const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const OBS_FILE_RE = /^(t2_max|t2_min|td2_max|td2_min|rh2_max|rh2_min|wind10_max|gust10_max|mslp_max|mslp_min|windchill_min|feels_max|feels_min|precip_total|rain_rate_max)\.bin$/;
+  app.get('/api/modeldata/observed/days', (req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.json(readJson(path.join(OBS_DIR, 'days.json')) || { days: [] });
+  });
+  app.get('/api/modeldata/observed/:day/:file', (req, res) => {
+    const { day, file } = req.params;
+    if (!DAY_RE.test(day)) return res.status(400).end();
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+    const cache = day < today ? 'public, max-age=3600' : 'no-cache';           // today's keep changing
+    if (file === 'summary.json' || file === 'strikes.json') {
+      const f = path.join(OBS_DIR, day, file);
+      if (!fs.existsSync(f)) return res.status(404).end();
+      res.set('Cache-Control', cache);
+      return res.sendFile(f);
+    }
+    if (!OBS_FILE_RE.test(file)) return res.status(400).end();
+    const f = path.join(OBS_DIR, day, file);
+    if (!fs.existsSync(f)) return res.status(404).end();
+    res.set({ 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip', 'Cache-Control': cache });
+    fs.createReadStream(f).pipe(res);
+  });
   app.get('/api/modeldata/live/catalog', (req, res) => {
     const f = path.join(DATA, 'live', 'catalog.json');
     if (!fs.existsSync(f)) return res.status(503).json({ error: 'live layers are starting' });

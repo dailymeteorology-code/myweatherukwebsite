@@ -10,16 +10,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
-  LayoutGrid, Waves, MapPin, Search, ChevronDown, X, Layers, Star, Minus, Plus, Zap,
+  Waves, MapPin, Search, ChevronDown, X, Layers, Star, Minus, Plus, Zap, Route, Grid3x3, Navigation, CloudSun, Cloud,
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, frameCanvas, frameContours, drawScene,
-  realtimeBasemap, fmtValue, download, makeGif, probFrame, loadLive,
+  realtimeBasemap, fmtValue, download, makeGif, probFrame, loadLive, loadRoads, smoothCanvas, loadObserved, WX_NAMES,
 } from '@/lib/modelViewer';
 
-const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Upper air', 'Radiation & surface'];
+const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Fit', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', ecmwf_ens: 'ECMWF ENS', gefs: 'GEFS' };
+const SHORT_NAMES = { ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS' };
+/* rain-type layers: these get the cloud overlay and the smoothing that keeps the radar's colour bands crisp */
+const RAINY = new Set(['radar', 'precip_rate', 'rain_rate', 'conv_rain', 'precip_1h', 'refc', 'snow_rate', 'hail_rate']);
 
 /* Probability products: [group, key, label, ensemble field, above|below, default, min, max, step]. The chance is the
    share of ensemble members past the threshold; the threshold and direction can be changed freely. */
@@ -55,6 +57,16 @@ const PRESET = Object.fromEntries(PRESETS.map((x) => [x.key, x]));
 /* Live: [group, key, label, catalogue product]. Some views are drawn from the same images
    (infrared as plain, as a cloud-top colour scale, or as clouds over the map). */
 const LIVE_LIST = [
+  ['Now: observed + UKV', 'now_wx', 'Current weather', 'now_wx', 'wx'],
+  ['Now: observed + UKV', 'now_t2', 'Temperature', 'now_t2', 't2'],
+  ['Now: observed + UKV', 'now_feels', 'Feels like', 'now_feels', 'feels'],
+  ['Now: observed + UKV', 'now_windchill', 'Wind chill', 'now_windchill', 'windchill'],
+  ['Now: observed + UKV', 'now_td2', 'Dew point', 'now_td2', 'td2'],
+  ['Now: observed + UKV', 'now_rh2', 'Humidity', 'now_rh2', 'rh2'],
+  ['Now: observed + UKV', 'now_wind10', 'Wind speed & direction', 'now_wind10', 'wind10'],
+  ['Now: observed + UKV', 'now_gust10', 'Wind gusts', 'now_gust10', 'gust10'],
+  ['Now: observed + UKV', 'now_mslp', 'Pressure', 'now_mslp', 'mslp'],
+  ['Now: observed + UKV', 'now_tcc', 'Cloud cover', 'now_tcc', 'tcc'],
   ['Radar & lightning', 'radar', 'Rain radar', 'radar'],
   ['Satellite', 'sat_clouds', 'Clouds over the map', 'sat_ir'],
   ['Satellite', 'sat_ir', 'Infrared', 'sat_ir'],
@@ -67,8 +79,99 @@ const LIVE_LIST = [
   ['Satellite RGB', 'sat_airmass', 'Airmass', 'sat_airmass'],
   ['Satellite RGB', 'sat_conv', 'Severe convection', 'sat_conv'],
   ['Satellite RGB', 'sat_fog', 'Fog & low cloud', 'sat_fog'],
-].map(([group, key, label, src]) => ({ group, key, label, src }));
+].map(([group, key, label, src, scale]) => ({ group, key, label, src, scale }));
 const LIVE = Object.fromEntries(LIVE_LIST.map((x) => [x.key, x]));
+const NOW_UNITS = { now_t2: '°C', now_feels: '°C', now_windchill: '°C', now_td2: '°C', now_rh2: '%', now_wind10: 'mph', now_gust10: 'mph', now_mslp: 'hPa', now_tcc: '%', now_wx: '' };
+
+/* Observed: each day's extremes (mdata/now.py), kept from 20 Oct 2026 onwards. [group, key, label, scale, unit] */
+const OBS_LIST = [
+  ['Temperature', 't2_max', 'Highest temperature', 't2', '°C'],
+  ['Temperature', 't2_min', 'Lowest temperature', 't2', '°C'],
+  ['Temperature', 'feels_max', 'Highest feels-like', 'feels', '°C'],
+  ['Temperature', 'feels_min', 'Lowest feels-like', 'feels', '°C'],
+  ['Temperature', 'windchill_min', 'Lowest wind chill', 'windchill', '°C'],
+  ['Rain', 'precip_total', 'Rainfall total (radar)', 'precip_total', 'mm'],
+  ['Rain', 'rain_rate_max', 'Heaviest rain rate (radar)', 'radar', 'mm/h'],
+  ['Wind', 'gust10_max', 'Strongest gust', 'gust10', 'mph'],
+  ['Wind', 'wind10_max', 'Strongest wind (mean)', 'wind10', 'mph'],
+  ['Moisture & pressure', 'td2_max', 'Highest dew point', 'td2', '°C'],
+  ['Moisture & pressure', 'td2_min', 'Lowest dew point', 'td2', '°C'],
+  ['Moisture & pressure', 'rh2_max', 'Highest humidity', 'rh2', '%'],
+  ['Moisture & pressure', 'rh2_min', 'Lowest humidity', 'rh2', '%'],
+  ['Moisture & pressure', 'mslp_max', 'Highest pressure', 'mslp', 'hPa'],
+  ['Moisture & pressure', 'mslp_min', 'Lowest pressure', 'mslp', 'hPa'],
+].map(([group, key, label, scale, unit]) => ({ group, key, label, scale, unit }));
+const OBS = Object.fromEntries(OBS_LIST.map((x) => [x.key, x]));
+const dayMs = (d) => Date.parse(`${d}T12:00:00Z`);
+const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/* frames of one more variable of the same model run (wind direction, weather type, cloud),
+   fetched the way the main layer is: made on demand, the step on screen first */
+function useCompanion(model, run, v, wantStep, on) {
+  const [frames, setFrames] = useState({});
+  const key = on && model && run && model.variables?.includes(v) ? `${model.id}/${runTag(run.run)}/${v}` : null;
+  useEffect(() => {
+    setFrames({});
+    if (!key) return undefined;
+    const [m, rt, vv] = key.split('/');
+    const ac = new AbortController();
+    const want = new Set();
+    let alive = true;
+    const poll = async () => {
+      if (!alive) return;
+      try {
+        const st = await fetch(`${API}/frames/${m}/${rt}/${vv}/status?first=${Math.max(0, wantStep.current || 0)}`, { signal: ac.signal }).then((r) => r.json());
+        if (!alive) return;
+        const todo = (st.done || []).filter((s) => !want.has(s)).sort((a, b) => Math.abs(a - wantStep.current) - Math.abs(b - wantStep.current));
+        const batch = todo.slice(0, 6);
+        await Promise.all(batch.map(async (s) => {
+          want.add(s);
+          try { const f = await loadFrame(m, rt, vv, s, ac.signal); if (alive) setFrames((o) => ({ ...o, [s]: f })); } catch { want.delete(s); }
+        }));
+        if (st.state !== 'complete' || todo.length > batch.length) setTimeout(poll, todo.length > batch.length ? 0 : 1200);
+      } catch { if (alive) setTimeout(poll, 3000); }
+    };
+    poll();
+    return () => { alive = false; ac.abort(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return key ? frames : null;
+}
+
+/* a live product's frames by time (ms), for overlays: cloud under the radar, arrows, symbols */
+function useLiveCompanion(liveCat, product, on) {
+  const [frames, setFrames] = useState({});
+  const prod = on && product ? liveCat?.products?.[product] : null;
+  const times = prod?.times?.join(',') || '';
+  const got = useRef(new Set());
+  useEffect(() => { got.current = new Set(); setFrames({}); }, [product]);
+  useEffect(() => {
+    if (!prod?.times?.length) return undefined;
+    const ac = new AbortController();
+    let alive = true;
+    const todo = prod.times.filter((t) => !got.current.has(t)).reverse();
+    (async () => {
+      for (let i = 0; i < todo.length && alive; i += 6) {
+        await Promise.all(todo.slice(i, i + 6).map(async (t) => {
+          got.current.add(t);
+          try { const f = await loadLive(product, t, prod.ext, ac.signal); if (alive) setFrames((o) => ({ ...o, [Date.parse(t)]: f })); } catch { got.current.delete(t); }
+        }));
+      }
+    })();
+    return () => { alive = false; ac.abort(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product, times]);
+  return prod ? frames : null;
+}
+/* the companion frame for a main frame: same step, or the nearest time within `tolMin` */
+function companionOf(map, raw, live, tolMin = 10) {
+  if (!map || !raw) return null;
+  if (!live) return map[raw.head.step] || null;
+  const ms = Date.parse(raw.head.valid);
+  let best = null, bd = tolMin * 60e3 + 1;
+  for (const k of Object.keys(map)) { const d = Math.abs(Number(k) - ms); if (d < bd) { bd = d; best = map[k]; } }
+  return best;
+}
 const fmtThr = (v) => (Math.abs(v) >= 10 || Number.isInteger(v) ? String(Math.round(v * 10) / 10) : v.toFixed(v < 1 ? 2 : 1));
 
 function defaultRun(m) {
@@ -154,7 +257,18 @@ export default function ModelData() {
   const [showContours, setShowContours] = useState(true);
   const [showCities, setShowCities] = useState(true);
   const [showStar, setShowStar] = useState(false);
-  const [mode, setMode] = useState('forecast');              // forecast | prob
+  const [showRoads, setShowRoads] = useState(false);
+  const [showGrid, setShowGrid] = useState(false);
+  const [showArrows, setShowArrows] = useState(false);
+  const [showWx, setShowWx] = useState(false);
+  const [showClouds, setShowClouds] = useState(false);
+  const [roads, setRoads] = useState(null);
+  useEffect(() => { if (showRoads && !roads) loadRoads().then(setRoads).catch(() => setShowRoads(false)); }, [showRoads, roads]);
+  const [obsDays, setObsDays] = useState(null);
+  const [obsKey, setObsKey] = useState('t2_max');
+  const [obsSummary, setObsSummary] = useState({});
+  const [obsPanel, setObsPanel] = useState(true);
+  const [mode, setMode] = useState('forecast');              // forecast | prob | live | observed
   const [ensId, setEnsId] = useState('ecmwf_ens');
   const [ensRunIso, setEnsRunIso] = useState(null);
   const [presetKey, setPresetKey] = useState('gust');
@@ -162,6 +276,8 @@ export default function ModelData() {
   const [dir, setDir] = useState('above');
   const isProb = mode === 'prob';
   const isLive = mode === 'live';
+  const isObs = mode === 'observed';
+  const obsItem = OBS[obsKey];
   const [liveKey, setLiveKey] = useState('radar');
   const [liveCat, setLiveCat] = useState(null);
   const [strikes, setStrikes] = useState(null);
@@ -178,6 +294,8 @@ export default function ModelData() {
   const T = THEMES[style === 'light' ? 'light' : 'dark'];
   const [frameKey, setFrameKey] = useState('screen');
   const [view, setView] = useState(null);
+  const [interacting, setInteracting] = useState(false);        // the map is being dragged or zoomed
+  const interactingRef = useRef(false);
   const [size, setSize] = useState(0);
   const [hover, setHover] = useState(null);
   const [imgs, setImgs] = useState({});
@@ -259,31 +377,45 @@ export default function ModelData() {
       .catch(() => { delete imgCache[`${API}/static/${f}`]; setTimeout(() => setImgs((o) => ({ ...o })), 5000); }));
   }, [style, imgs]);
 
+  /* observed: the archive's days, and each day's summary (extremes, stations, lightning) */
+  useEffect(() => {
+    if (!isObs) return undefined;
+    let stop = false;
+    const get = () => fetch(`${API}/observed/days`).then((r) => r.json()).then((j) => !stop && setObsDays([...(j.days || [])].sort())).catch(() => {});
+    get();
+    const t = setInterval(get, 5 * 60 * 1000);
+    return () => { stop = true; clearInterval(t); };
+  }, [isObs]);
+
   const liveRun = useMemo(() => (liveProd?.times?.length
     ? { run: liveProd.times[liveProd.times.length - 1], steps: liveProd.times.map((t) => Date.parse(t)) } : null), [liveProd]);
-  const model = isLive ? (liveProd ? { id: 'live', label: liveProd.source, runs: [] } : null)
+  const obsRun = useMemo(() => (obsDays?.length ? { run: obsDays[obsDays.length - 1], steps: obsDays.map(dayMs) } : null), [obsDays]);
+  const timeSteps = isLive || isObs;                       // steps are times (ms), not forecast hours
+  const model = isObs ? (obsDays?.length ? { id: 'observed', label: 'Observed', runs: [] } : null)
+    : isLive ? (liveProd ? { id: 'live', label: liveProd.source, runs: [] } : null)
     : isProb ? cat?.ensembles?.find((m) => m.id === ensId) : cat?.models?.find((m) => m.id === modelId);
   const curRunIso = isProb ? ensRunIso : runIso;
-  const run = isLive ? liveRun : model?.runs?.find((r) => r.run === curRunIso) || (model?.runs?.length ? defaultRun(model) : null);
+  const run = isObs ? obsRun : isLive ? liveRun : model?.runs?.find((r) => r.run === curRunIso) || (model?.runs?.length ? defaultRun(model) : null);
   const fieldKey = isProb ? preset.field : varKey;
   const fmeta = isProb ? cat?.ens_fields?.[preset.field] : null;
-  const vmeta = isLive ? { label: liveItem.label, unit: liveItem.src === 'radar' ? 'mm/h' : '' }
+  const vmeta = isObs ? { label: obsItem.label, unit: obsItem.unit }
+    : isLive ? { label: liveItem.label, unit: liveItem.src === 'radar' ? 'mm/h' : NOW_UNITS[liveItem.src] ?? '' }
     : isProb
       ? { label: `Chance of ${preset.label.toLowerCase()} ${dir === 'below' ? '≤' : '≥'} ${fmtThr(thr)}${fmeta?.unit ? ` ${fmeta.unit}` : ''}`, unit: '%', group: preset.group }
       : cat?.variables?.[varKey];
-  const scaleKey = isLive ? (liveItem.src === 'radar' ? 'radar' : liveKey) : isProb ? 'prob' : varKey;
+  const scaleKey = isObs ? obsItem.scale : isLive ? (liveItem.scale || (liveItem.src === 'radar' ? 'radar' : liveKey)) : isProb ? 'prob' : varKey;
 
   useEffect(() => {
-    if (isLive) return;
+    if (timeSteps) return;
     if (!isProb && model && !model.variables.includes(varKey)) setVarKey(model.variables.includes('precip_rate') ? 'precip_rate' : model.variables[0]);
     if (isProb && model && !model.fields.includes(preset.field)) {
       const p = PRESETS.find((x) => model.fields.includes(x.field));
       if (p) { setPresetKey(p.key); setThr(p.thr); setDir(p.dir); }
     }
-  }, [isProb, model, varKey, preset]);
+  }, [isProb, model, varKey, preset, timeSteps]);
   const lastRunOf = useRef({});
   useEffect(() => {
-    if (isLive || !model || !run || curRunIso) return;
+    if (timeSteps || !model || !run || curRunIso) return;
     const prev = lastRunOf.current[model.id];
     lastRunOf.current[model.id] = run.run;
     if (prev && prev !== run.run && Date.parse(run.run) > Date.parse(prev)) {
@@ -292,11 +424,11 @@ export default function ModelData() {
       return () => clearTimeout(t);
     }
     return undefined;
-  }, [isLive, model, run, curRunIso]);
+  }, [timeSteps, model, run, curRunIso]);
   const choosePreset = (k) => { const p = PRESET[k]; setPresetKey(k); setThr(p.thr); setDir(p.dir); };
 
   /* frames for this model / run / variable (made on demand on the server) */
-  const key = !isLive && run && model ? `${model.id}/${runTag(run.run)}/${fieldKey}` : null;
+  const key = !timeSteps && run && model ? `${model.id}/${runTag(run.run)}/${fieldKey}` : null;
   /* switching variable, model or run keeps the same valid time: remember it before the
      switch, then land on that time (or the nearest the new run has) once its steps are known */
   const lastValid = useRef(null);
@@ -363,6 +495,41 @@ export default function ModelData() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLive, liveSrc, liveProd]);
 
+  /* observed: the chosen field for each day, the day on screen first; today's is refetched
+     as it fills in, past days are fixed */
+  const obsTick = useRef(0);
+  const [obsRefresh, setObsRefresh] = useState(0);
+  useEffect(() => {
+    if (!isObs) return undefined;
+    const t = setInterval(() => setObsRefresh((n) => n + 1), 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [isObs]);
+  useEffect(() => { if (isObs) { setFrames({}); colourCache.current.clear(); } }, [isObs, obsKey]);
+  useEffect(() => {
+    if (!isObs || !obsDays?.length) return undefined;
+    const ac = new AbortController();
+    let alive = true;
+    const tick = ++obsTick.current;
+    const at = wantStep.current && obsDays.some((d) => dayMs(d) === wantStep.current) ? wantStep.current : dayMs(obsDays[obsDays.length - 1]);
+    const order = [...obsDays].sort((a, b) => Math.abs(dayMs(a) - at) - Math.abs(dayMs(b) - at));
+    (async () => {
+      for (let i = 0; i < order.length && alive; i += 4) {
+        await Promise.all(order.slice(i, i + 4).map(async (d) => {
+          try {
+            const [f, s] = await Promise.all([loadObserved(d, obsKey, ac.signal),
+              fetch(`${API}/observed/${d}/summary.json`, { signal: ac.signal }).then((r) => (r.ok ? r.json() : null))]);
+            if (!alive || tick !== obsTick.current) return;
+            f.head.valid = `${d}T12:00:00Z`;
+            setFrames((o) => ({ ...o, [dayMs(d)]: f }));
+            if (s) setObsSummary((o) => ({ ...o, [d]: s }));
+          } catch { /* that day has no such field yet */ }
+        }));
+      }
+    })();
+    return () => { alive = false; ac.abort(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isObs, obsKey, obsDays, obsRefresh]);
+
   const steps = useMemo(() => {
     if (!run) return [];
     const miss = new Set(status?.missing || []);
@@ -373,14 +540,14 @@ export default function ModelData() {
   const loadedCount = steps.filter((s) => frames[s]).length;
   const atLatest = useRef(true);
   useEffect(() => {
-    if (!isLive || !steps.length) return;
+    if (!timeSteps || !steps.length) return;
     const goLatest = atLatest.current;                   // read now: the updater runs after the next effects
     setIdx((i) => (goLatest ? steps.length - 1 : Math.min(i, steps.length - 1)));
-  }, [isLive, steps]);
-  useEffect(() => { if (isLive) atLatest.current = idx >= steps.length - 1; }, [isLive, idx, steps.length]);
-  useEffect(() => { if (isLive) atLatest.current = true; }, [isLive, liveSrc]);
+  }, [timeSteps, steps]);
+  useEffect(() => { if (timeSteps) atLatest.current = idx >= steps.length - 1; }, [timeSteps, idx, steps.length]);
+  useEffect(() => { if (timeSteps) atLatest.current = true; }, [timeSteps, liveSrc]);
   useEffect(() => {
-    if (isLive || !run || !steps.length) return;
+    if (timeSteps || !run || !steps.length) return;
     if (targetValid.current == null) { setIdx((i) => Math.min(i, steps.length - 1)); return; }
     const runMs = Date.parse(run.run);
     let best = 0;
@@ -389,11 +556,11 @@ export default function ModelData() {
     });
     setIdx(best);
     if (status) targetValid.current = null;              // settled once the run's real steps are known
-  }, [isLive, steps, run, status]);
+  }, [timeSteps, steps, run, status]);
   useEffect(() => {
-    if (isLive) { wantStep.current = step; if (step != null) lastValid.current = step; return; }
+    if (timeSteps) { wantStep.current = step; if (step != null && isLive) lastValid.current = step; return; }
     if (run && step != null && targetValid.current == null) { lastValid.current = Date.parse(run.run) + step * 3600e3; wantStep.current = step; }
-  }, [isLive, run, step]);
+  }, [timeSteps, isLive, run, step]);
 
   /* canvas follows the stage; the frame sits between the top and bottom bars */
   useEffect(() => {
@@ -457,29 +624,61 @@ export default function ModelData() {
     for (const [t, gx, gy] of strikes || []) if (t <= ms && t > ms - 3600e3) out.push([gx, gy, (ms - t) / 60e3]);
     return out.sort((a, b) => b[2] - a[2]);
   }, [strikes]);
-  const credit = !model ? '' : isLive
-    ? (liveItem.src === 'radar' ? 'Met Office radar via AWS' : liveProd?.source?.startsWith('Meteosat') ? `${liveProd.source} · EUMETSAT` : 'EUMETSAT')
+  /* companions: wind arrows, weather symbols and cloud, from the same run (forecast) or the
+     nearest time (live) */
+  const fcModel = !timeSteps && !isProb ? model : null;
+  const arrowsOn = showArrows || (isLive && liveKey === 'now_wind10') || (!timeSteps && !isProb && varKey === 'wdir10');
+  const wxOn = showWx || (isLive && liveKey === 'now_wx') || (!timeSteps && !isProb && varKey === 'wx');
+  const cloudsOn = showClouds && (isLive ? liveItem.src === 'radar' : !isProb && !isObs && RAINY.has(varKey));
+  const fcArrows = useCompanion(fcModel, run, 'wdir10', wantStep, arrowsOn && varKey !== 'wdir10');
+  const fcWx = useCompanion(fcModel, run, 'wx', wantStep, wxOn && varKey !== 'wx');
+  const fcCloud = useCompanion(fcModel, run, 'tcc', wantStep, cloudsOn);
+  const lvArrows = useLiveCompanion(liveCat, 'now_wdir10', isLive && arrowsOn);
+  const lvWx = useLiveCompanion(liveCat, 'now_wx', isLive && wxOn && liveKey !== 'now_wx');
+  const lvCloud = useLiveCompanion(liveCat, 'sat_ir', isLive && cloudsOn);
+  const smoothCache = useRef(new Map());
+  const overlayCache = useRef(new Map());
+  const credit = !model ? '' : isObs
+    ? (['precip_total', 'rain_rate_max'].includes(obsKey) ? 'Met Office radar via AWS' : 'UKV analysis + METAR station reports')
+    : isLive
+    ? (liveItem.src === 'radar' ? 'Met Office radar via AWS' : liveItem.src.startsWith('now_') ? 'UKV + METAR + Met Office radar' : liveProd?.source?.startsWith('Meteosat') ? `${liveProd.source} · EUMETSAT` : 'EUMETSAT')
     : isProb
     ? `${model.label} · ${model.members} members · ${model.id === 'gefs' ? 'NOAA via AWS' : 'ECMWF open data'}`
     : model.id === 'ukv' ? 'UKV 2 km native grid · Met Office via AWS' : `${model.label} · ${model.id === 'mo_global' ? '10 km' : '0.25°'} · via AWS`;
   const chromeFor = useCallback((f) => (f && model && vmeta ? {
     variable: vmeta.label, unit: vmeta.unit, valid: f.head.valid, step: f.head.step, model: model.label,
-    runLabel: run ? runLabel(run.run) : '', scale: isLive && liveItem.src !== 'radar' ? {} : scaleFor(scaleKey), logo: statics?.logo, credit,
-    metaLine: isLive ? `${liveProd?.source || ''} · ${new Date(f.head.valid).toISOString().slice(11, 16)} UTC · observed` : null,
-  } : null), [model, vmeta, run, scaleKey, statics, credit, isLive, liveItem, liveProd]);
+    runLabel: run ? runLabel(run.run) : '', scale: (isLive && liveItem.src.startsWith('sat_')) || scaleKey === 'wdir10' ? {} : scaleFor(scaleKey), logo: statics?.logo, credit,
+    metaLine: isObs ? `${new Date(f.head.valid).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · observed`
+      : isLive ? `${liveItem.src.startsWith('now_') ? 'UKV + METAR + radar analysis' : liveProd?.source || ''} · ${new Date(f.head.valid).toISOString().slice(11, 16)} UTC · ${liveItem.src.startsWith('now_') ? 'now' : 'observed'}` : null,
+  } : null), [model, vmeta, run, scaleKey, statics, credit, isLive, isObs, liveItem, liveProd]);
 
   const layersFor = useCallback((raw) => {
     const f = disp(raw);
+    const sc = scaleFor(scaleKey);
+    const smoothRain = smooth && sc.discrete && f?.q && !f.prob && RAINY.has(scaleKey);
+    const arrowsF = !arrowsOn || !raw ? null : !timeSteps && varKey === 'wdir10' ? f : companionOf(isLive ? lvArrows : fcArrows, raw, isLive, 16);
+    const wxF = !wxOn || !raw ? null : (!timeSteps && varKey === 'wx') || (isLive && liveKey === 'now_wx') ? f : companionOf(isLive ? lvWx : fcWx, raw, isLive, 16);
+    const cloudF = cloudsOn && raw ? companionOf(isLive ? lvCloud : fcCloud, raw, isLive, 60) : null;   // satellite runs ~30-40 min behind the radar
+    const day = isObs && raw ? dayOf(Date.parse(raw.head.valid)) : null;
+    const ext = day ? obsSummary[day]?.fields?.[obsKey] : null;
     return {
-      style, basemap: basemapFor(raw), lines: statics?.lines, cities: showCities ? statics?.cities : null,
-      data: f ? frameCanvas(f, scaleKey, colourCache.current) : null, smooth,
+      style, basemap: basemapFor(raw), lines: statics?.lines, cities: showCities || wxF ? statics?.cities : null,
+      data: f ? (smoothRain ? smoothCanvas(f, scaleKey, smoothCache.current) : frameCanvas(f, scaleKey, colourCache.current)) : null, smooth,
+      overlay: cloudF ? { canvas: frameCanvas(cloudF, isLive ? 'sat_clouds' : 'tcc', overlayCache.current), alpha: isLive ? 0.92 : 0.85 } : null,
+      roads: showRoads ? roads : null,
+      grid: showGrid && f?.q && scaleKey !== 'wdir10' ? { frame: f, varKey: scaleKey, unit: vmeta?.unit } : null,
+      arrows: arrowsF ? { frame: arrowsF } : null,
+      wx: wxF ? { frame: wxF, utcMs: Date.parse(raw.head.valid) } : null,
       contours: f && showContours ? frameContours(f, scaleKey, model?.res_km, contourCache.current) : null,
-      contourLabels: true, chrome: chromeFor(raw), star: showStar && f?.q ? { frame: f, unit: vmeta?.unit } : null,
+      contourLabels: true, chrome: chromeFor(raw),
+      star: isObs && showStar && ext?.value != null ? { at: { gx: ext.gx, gy: ext.gy, v: ext.value, place: ext.place }, unit: vmeta?.unit }
+        : showStar && f?.q && !isObs && !['wx', 'wdir10', 'mwd'].includes(scaleKey) ? { frame: f, unit: vmeta?.unit } : null,
       strikes: isLive && showLightning && raw && strikes ? strikesAt(Date.parse(raw.head.valid)) : null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [disp, style, basemapFor, statics, showCities, scaleKey, smooth, showContours, model, chromeFor, fontsOk, showStar, vmeta, isLive, showLightning, strikes]);
-  useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); }, [thr, dir, scaleKey]);
+  }, [disp, style, basemapFor, statics, showCities, scaleKey, smooth, showContours, model, chromeFor, fontsOk, showStar, vmeta, isLive, isObs, showLightning, strikes,
+    arrowsOn, wxOn, cloudsOn, lvArrows, fcArrows, lvWx, fcWx, lvCloud, fcCloud, showRoads, roads, showGrid, varKey, liveKey, timeSteps, obsSummary, obsKey]);
+  useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); smoothCache.current.clear(); }, [thr, dir, scaleKey]);
 
   /* draw: the map everywhere, dimmed outside the frame, the finished graphic inside it */
   useEffect(() => {
@@ -489,7 +688,9 @@ export default function ModelData() {
     const full = { x: 0, y: 0, w: c.width, h: c.height };
     const L = layersFor(frame);
     ctx.clearRect(0, 0, c.width, c.height);
-    drawScene(ctx, R, view, { ...L, chrome: null, cities: null, contours: null }, { clip: full });
+    // the dimmed map around the frame: map and data only (roads, grid, arrows and symbols are
+    // for the graphic itself, and drawing them twice doubled the cost of every pan)
+    drawScene(ctx, R, view, { ...L, chrome: null, cities: null, contours: null, roads: null, grid: null, arrows: null, wx: null, star: null }, { clip: full, coarse: true });
     ctx.save();
     ctx.fillStyle = 'rgba(3,6,12,0.62)';
     ctx.beginPath();
@@ -498,7 +699,7 @@ export default function ModelData() {
     ctx.roundRect ? ctx.roundRect(R.x, R.y, R.w, R.h, r) : ctx.rect(R.x, R.y, R.w, R.h);
     ctx.fill('evenodd');
     ctx.restore();
-    drawScene(ctx, R, view, L, { round: r });
+    drawScene(ctx, R, view, { ...L, interacting }, { round: r });
     ctx.save();
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = 1;
@@ -506,7 +707,7 @@ export default function ModelData() {
     ctx.roundRect ? ctx.roundRect(R.x + 0.5, R.y + 0.5, R.w - 1, R.h - 1, r) : ctx.rect(R.x, R.y, R.w, R.h);
     ctx.stroke();
     ctx.restore();
-  }, [view, frame, layersFor, frameRect]);
+  }, [view, frame, layersFor, frameRect, interacting]);
 
   /* playback */
   useEffect(() => {
@@ -518,9 +719,16 @@ export default function ModelData() {
     return () => clearInterval(t);
   }, [playing, steps, frames, speed]);
 
-  /* zoom, pan, pinch, hover */
+  /* zoom, pan, pinch, hover. While the map moves, heavy layers (roads) are moved as a picture
+     and redrawn properly ~0.2 s after it stops. */
   const pointers = useRef(new Map());
   const gesture = useRef(null);
+  const settle = useRef(null);
+  const poke = () => {
+    if (!interactingRef.current) { interactingRef.current = true; setInteracting(true); }
+    clearTimeout(settle.current);
+    settle.current = setTimeout(() => { interactingRef.current = false; setInteracting(false); }, 180);
+  };
   const toGrid = (clientX, clientY) => {
     const c = canvasRef.current, rr = c.getBoundingClientRect(), R = frameRect();
     const dpr = c.width / rr.width;
@@ -529,6 +737,7 @@ export default function ModelData() {
   };
   const zoomAt = (clientX, clientY, k) => {
     if (!view) return;
+    poke();
     const { px, py, R, gx, gy } = toGrid(clientX, clientY);
     const s = Math.max(0.3, Math.min(30, view.s * k));
     setView({ s, cx: gx - (px - (R.x + R.w / 2)) / s, cy: gy - (py - (R.y + R.h / 2)) / s });
@@ -554,12 +763,14 @@ export default function ModelData() {
     const g = gesture.current;
     const dpr = canvasRef.current.width / canvasRef.current.getBoundingClientRect().width;
     if (g && pointers.current.size === 2 && g.pinch) {
+      poke();
       const pts = [...pointers.current.values()];
       const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       setView({ ...g.v, s: Math.max(0.3, Math.min(30, g.v.s * (d / g.pinch))) });
       return;
     }
     if (g && pointers.current.size === 1 && !g.pinch) {
+      poke();
       setView({ ...g.v, cx: g.v.cx - ((e.clientX - g.x) * dpr) / g.v.s, cy: g.v.cy - ((e.clientY - g.y) * dpr) / g.v.s });
       return;
     }
@@ -586,7 +797,7 @@ export default function ModelData() {
     const k = W / R.w;
     drawScene(ctx, { x: 0, y: 0, w: W, h: H }, { cx: view.cx, cy: view.cy, s: view.s * k }, layersFor(f));
   }, [view, layersFor, frameRect]);
-  const fileBase = () => (isLive ? `MyWeatherUK_live_${liveKey}_${frameKey}`
+  const fileBase = () => (isObs ? `MyWeatherUK_observed_${obsKey}_${frameKey}` : isLive ? `MyWeatherUK_live_${liveKey}_${frameKey}`
     : `MyWeatherUK_${model.id}_${runTag(run.run)}_${isProb ? `${presetKey}_${dir}${fmtThr(thr)}` : varKey}_${frameKey}`);
   const exportPng = () => {
     if (!frame) return;
@@ -594,7 +805,7 @@ export default function ModelData() {
     const cv = document.createElement('canvas');
     cv.width = W; cv.height = H;
     renderAt(frame, cv.getContext('2d'), W, H);
-    cv.toBlob((b) => download(b, `${fileBase()}_T${frame.head.step}.png`), 'image/png');
+    cv.toBlob((b) => download(b, `${fileBase()}_${isObs ? dayOf(Date.parse(frame.head.valid)) : isLive ? frame.head.valid.slice(0, 16).replace(/[-:]/g, '') : `T${frame.head.step}`}.png`), 'image/png');
   };
   if (import.meta.env.DEV) window.__mdExport = (short = 1080) => { const [W, H] = exportSize(short); const cv = document.createElement('canvas'); cv.width = W; cv.height = H; renderAt(frame, cv.getContext('2d'), W, H); return cv.toDataURL('image/jpeg', 0.85); };
   const gifCancel = useRef(false);
@@ -621,6 +832,12 @@ export default function ModelData() {
     if (!model || !cat) return [];
     const g = {};
     const qq = q.trim().toLowerCase();
+    if (isObs) {
+      for (const it of OBS_LIST) {
+        if (!qq || it.label.toLowerCase().includes(qq) || it.group.toLowerCase().includes(qq)) (g[it.group] ||= []).push([it.key, it]);
+      }
+      return Object.entries(g);
+    }
     if (isLive) {
       for (const it of LIVE_LIST) {
         if (!qq || it.label.toLowerCase().includes(qq) || it.group.toLowerCase().includes(qq)) (g[it.group] ||= []).push([it.key, it]);
@@ -638,25 +855,46 @@ export default function ModelData() {
       if (v && (!qq || v.label.toLowerCase().includes(qq) || v.group.toLowerCase().includes(qq))) (g[v.group] ||= []).push([k, v]);
     }
     return GROUP_ORDER.filter((n) => g[n]).map((n) => [n, g[n]]);
-  }, [model, cat, q, isProb, isLive]);
+  }, [model, cat, q, isProb, isLive, isObs]);
   const pending = status && status.state !== 'complete' ? Math.max(0, steps.length - loadedCount) : 0;
   const sel = { ...T.glass, appearance: 'none', borderRadius: 999, padding: '7px 30px 7px 12px', fontSize: 12.5, fontWeight: 600, fontFamily: FONT, cursor: 'pointer', color: T.ink, background: T.track, boxShadow: T.trackShadow };
-  const validLabel = frame ? new Date(frame.head.valid).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  const validLabel = !frame ? '' : isObs
+    ? new Date(frame.head.valid).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+    : new Date(frame.head.valid).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const stepLabel = (s) => (isObs ? new Date(s).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+    : isLive ? new Date(s).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) : `T+${s}`);
+  const hasVar = (v) => !!model?.variables?.includes(v);
+  const canArrows = isLive || (!isProb && !isObs && hasVar('wdir10'));
+  const canWx = isLive || (!isProb && !isObs && hasVar('wx'));
+  const canClouds = isLive ? liveItem.src === 'radar' : !isProb && !isObs && hasVar('tcc') && RAINY.has(varKey);
 
   const varButton = (
     <button onClick={() => setVarOpen((o) => !o)} style={{ ...sel, padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0, background: varOpen ? T.btn : sel.background }}>
-      {isLive ? liveItem.label : isProb ? preset.label : vmeta?.label || 'Variable'} <ChevronDown style={{ width: 14, height: 14, opacity: 0.7, transform: varOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+      {isObs ? obsItem.label : isLive ? liveItem.label : isProb ? preset.label : vmeta?.label || 'Variable'} <ChevronDown style={{ width: 14, height: 14, opacity: 0.7, transform: varOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
     </button>
+  );
+  /* a labelled on/off pill, for the toggles whose icon alone would not say what they do */
+  const Pill = ({ on, onClick, icon, children, title }) => (
+    <button title={title} onClick={onClick} style={{
+      border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: 11.5, fontWeight: 700, padding: '0 10px', height: 32, borderRadius: 999,
+      display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap',
+      color: on ? T.ink : T.ink2, background: on ? T.on : T.idle, boxShadow: on ? T.onShadow : T.trackShadow,
+    }}>{icon}{children}</button>
   );
   const mapControls = (
     <>
       <Seg small items={Object.entries(MAP_STYLES).map(([k, s]) => [k, s.label])} value={style} onChange={setStyle} />
       <Seg small items={Object.entries(FRAMES).map(([k, f]) => [k, f.label])} value={frameKey} onChange={setFrameKey} />
-      <div style={{ display: 'flex', gap: 6 }}>
-        <IconBtn on={!smooth} title={smooth ? 'Smooth (click for the native grid)' : 'Native grid cells (click to smooth)'} onClick={() => setSmooth((x) => !x)}><LayoutGrid size={15} /></IconBtn>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <Pill on={smooth} title={smooth ? 'Smoothed (click for the native radar / grid cells)' : 'Native cells (click to smooth)'} onClick={() => setSmooth((x) => !x)}>{smooth ? 'Smooth' : 'Pixels'}</Pill>
+        <IconBtn on={showRoads} title="Roads: motorways, then A roads as you zoom in" onClick={() => setShowRoads((x) => !x)}><Route size={15} /></IconBtn>
+        <IconBtn on={showGrid} title="Value grid: the number at each point" onClick={() => setShowGrid((x) => !x)}><Grid3x3 size={15} /></IconBtn>
+        {canArrows && <IconBtn on={showArrows} title="Wind direction arrows" onClick={() => setShowArrows((x) => !x)}><Navigation size={15} /></IconBtn>}
+        {canWx && <IconBtn on={showWx} title="Weather symbols over the places" onClick={() => { setShowWx((x) => !x); setShowCities(true); }}><CloudSun size={15} /></IconBtn>}
+        {canClouds && <IconBtn on={showClouds} title={isLive ? 'Cloud from the satellite under the radar' : 'Model cloud cover under the rain'} onClick={() => setShowClouds((x) => !x)}><Cloud size={15} /></IconBtn>}
         <IconBtn on={showContours} title="Contours" onClick={() => setShowContours((x) => !x)}><Waves size={15} /></IconBtn>
         <IconBtn on={showCities} title="Places" onClick={() => setShowCities((x) => !x)}><MapPin size={15} /></IconBtn>
-        <IconBtn on={showStar} title="Star the highest value in view" onClick={() => setShowStar((x) => !x)}><Star size={15} /></IconBtn>
+        <IconBtn on={showStar} title={isObs ? "Star the day's extreme" : 'Star the highest value in view'} onClick={() => setShowStar((x) => !x)}><Star size={15} /></IconBtn>
       </div>
     </>
   );
@@ -676,22 +914,29 @@ export default function ModelData() {
         <div className="md-noscroll" style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', overflowX: 'auto', minWidth: 0, maxWidth: '100%', pointerEvents: 'auto' }}>
           {cat ? (
             <>
-              <Seg items={[['forecast', 'Forecast'], ['prob', 'Probability'], ['live', 'Live']]} value={mode} onChange={(m) => { setMode(m); setVarOpen(false); }} />
+              <Seg items={[['forecast', 'Forecast'], ['prob', 'Probability'], ['live', 'Live'], ['observed', 'Observed']]} value={mode}
+                onChange={(m) => { setMode(m); setVarOpen(false); if (m === 'observed') setShowStar(true); }} />
               {narrow && varButton}
-              {isLive
+              {isObs
+                ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px', fontSize: 12, fontWeight: 700, color: T.ink2, whiteSpace: 'nowrap' }}>
+                    {obsDays ? `${obsDays.length} day${obsDays.length === 1 ? '' : 's'} recorded` : 'Loading the archive…'}
+                  </span>
+                : isLive
                 ? <>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px', fontSize: 12, fontWeight: 700, color: T.ink2, whiteSpace: 'nowrap' }}>
                       <span style={{ width: 8, height: 8, borderRadius: 99, background: '#ff4d4f', boxShadow: '0 0 8px #ff4d4f' }} />
                       {run ? `Latest ${new Date(run.run).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })}` : 'Starting…'}
                     </span>
                     <IconBtn on={showLightning} title="Lightning strikes (last hour)" onClick={() => setShowLightning((x) => !x)}><Zap size={15} /></IconBtn>
+                    {liveItem.src === 'radar' && <Pill on={smooth} title="Smooth the radar, or show its 1 km cells" onClick={() => setSmooth((x) => !x)}>{smooth ? 'Smooth' : 'Pixels'}</Pill>}
+                    {liveItem.src === 'radar' && <Pill on={showClouds} title="Cloud from the satellite under the radar" onClick={() => setShowClouds((x) => !x)} icon={<Cloud size={13} />}>Clouds</Pill>}
                   </>
                 : isProb
                 ? <Seg items={(cat.ensembles || []).filter((m) => m.runs?.length).map((m) => [m.id, SHORT_NAMES[m.id] || m.label])} value={ensId}
                     onChange={(id) => { setEnsId(id); setEnsRunIso(null); }} />
                 : <Seg items={cat.models.filter((m) => m.runs?.length).map((m) => [m.id, SHORT_NAMES[m.id] || m.label])} value={modelId}
                     onChange={(id) => { setModelId(id); setRunIso(null); }} />}
-              {model && !isLive && (
+              {model && !timeSteps && (
                 <div style={{ position: 'relative' }}>
                   <select value={run?.run || ''} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} style={sel} title={model.source || `${model.label} · ${model.members} members`}>
                     {model.runs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runLabel(r.run)} · T+{r.steps[r.steps.length - 1]}</option>)}
@@ -755,18 +1000,20 @@ export default function ModelData() {
               <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '2px 4px 6px' }}>{g}</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {list.map(([k, v]) => (
-                  <button key={k} onClick={() => { if (isLive) setLiveKey(k); else if (isProb) choosePreset(k); else setVarKey(k); setVarOpen(false); }} style={{
+                  <button key={k} onClick={() => { if (isObs) setObsKey(k); else if (isLive) setLiveKey(k); else if (isProb) choosePreset(k); else setVarKey(k); setVarOpen(false); }} style={{
                     border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 999,
-                    color: k === (isLive ? liveKey : isProb ? presetKey : varKey) ? '#fff' : T.ink3,
-                    background: k === (isLive ? liveKey : isProb ? presetKey : varKey) ? (T.light ? 'linear-gradient(180deg, #4b95ff, #1f6fe0)' : 'linear-gradient(180deg, rgba(110,180,255,0.55), rgba(60,130,240,0.4))') : T.chip,
-                    boxShadow: k === (isLive ? liveKey : isProb ? presetKey : varKey) ? 'inset 0 1px 0 rgba(255,255,255,0.5)' : T.chipShadow,
+                    color: k === (isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey) ? '#fff' : T.ink3,
+                    background: k === (isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey) ? (T.light ? 'linear-gradient(180deg, #4b95ff, #1f6fe0)' : 'linear-gradient(180deg, rgba(110,180,255,0.55), rgba(60,130,240,0.4))') : T.chip,
+                    boxShadow: k === (isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey) ? 'inset 0 1px 0 rgba(255,255,255,0.5)' : T.chipShadow,
                   }}>{v.label}</button>
                 ))}
               </div>
             </div>
           ))}
-          {model && <div style={{ fontSize: 11, color: T.ink2, margin: '4px 4px 0' }}>{isLive
-            ? 'Live, observed: Met Office 1 km rain radar every 15 minutes (AWS), Meteosat-12 imagery every 10 minutes and Meteosat 0° every 15 (EUMETSAT), lightning from the Met Office LEELA network. The last few hours, newest first; it updates on its own.'
+          {model && <div style={{ fontSize: 11, color: T.ink2, margin: '4px 4px 0' }}>{isObs
+            ? "Each day's highs, lows and totals across the UK and Ireland, kept from 20 October 2026 onwards: step back through the days on the timeline. Temperature, wind, pressure and humidity come from a 15-minute analysis that starts from the Met Office UKV model and is pulled to what the airport weather stations (METAR) measured; rainfall is the Met Office radar's own total."
+            : isLive
+            ? "Live, observed: Met Office 1 km rain radar every 15 minutes (AWS), Meteosat-12 imagery every 10 minutes and Meteosat 0° every 15 (EUMETSAT), lightning from the Met Office LEELA network. 'Now' layers are a 15-minute analysis: the Met Office UKV model corrected to the UK and Irish airport weather reports (METAR), with the radar's rain and LEELA lightning for the weather symbols."
             : isProb
             ? `${model.label}: ${model.members} members. The chance is the share of members past your threshold, so drag the slider to ask a different question. Flooding uses 24 h rain or ECMWF runoff (wet ground runs off more); it is a signal, not a river forecast.`
             : model.source}</div>}
@@ -784,12 +1031,65 @@ export default function ModelData() {
 
       {hover && vmeta && (
         <div style={{ ...T.capsule, position: 'absolute', left: hover.x + 14, top: hover.y + 12, pointerEvents: 'none', padding: '5px 11px', fontSize: 12.5, fontWeight: 700 }}>
-          {fmtValue(hover.v, vmeta.unit)}
+          {scaleKey === 'wx' ? (WX_NAMES[Math.round(hover.v)] ?? '—')
+            : scaleKey === 'wdir10' || scaleKey === 'mwd' ? (Number.isFinite(hover.v) ? `${Math.round(hover.v)}° · from the ${['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(hover.v / 22.5) % 16]}` : '—')
+            : fmtValue(hover.v, vmeta.unit)}
         </div>
       )}
       {newRun && (
         <div style={{ ...T.capsule, position: 'absolute', right: 10, bottom: (botRef.current?.offsetHeight || 56) + 18, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ width: 8, height: 8, borderRadius: 99, background: '#34d399', boxShadow: '0 0 8px #34d399' }} />{newRun}
+        </div>
+      )}
+      {isObs && (!obsDays || (obsDays.length && !frame)) && (
+        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: (topRef.current?.offsetHeight || 46) + 18, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />Loading the observed days…
+        </div>
+      )}
+      {isObs && obsDays && !obsDays.length && (
+        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: (topRef.current?.offsetHeight || 46) + 18, padding: '7px 14px', fontSize: 12.5 }}>
+          The first observed day is being built from today's radar and station reports — back in a few minutes.
+        </div>
+      )}
+      {isObs && obsPanel && frame && (() => {
+        const s = obsSummary[dayOf(Date.parse(frame.head.valid))];
+        if (!s) return null;
+        const rows = ['t2_max', 't2_min', 'precip_total', 'rain_rate_max', 'gust10_max', 'wind10_max', 'mslp_min', 'windchill_min'].map((k) => [k, s.fields?.[k]]).filter(([, v]) => v?.value != null);
+        const st = s.stations || [];
+        const top = (k, fn) => st.filter((x) => x[k] != null).sort((a, b) => fn(a[k], b[k]))[0];
+        const sw = top('tmax', (a, b) => b - a), sc = top('tmin', (a, b) => a - b), sg = top('gust', (a, b) => b - a);
+        return (
+          <div style={{ ...T.glass, borderRadius: 20, position: 'absolute', left: 10, bottom: (botRef.current?.offsetHeight || 56) + 18, width: 'min(340px, calc(100% - 20px))',
+            padding: '10px 12px', fontSize: 12, display: 'grid', gap: 6, zIndex: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontWeight: 800, fontSize: 12.5, flex: 1 }}>UK & Ireland · {new Date(`${s.day}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
+              <span style={{ color: T.ink2, fontSize: 11 }}>{s.analyses}/96 analyses</span>
+              <IconBtn title="Hide" onClick={() => setObsPanel(false)} style={{ width: 24, height: 24 }}><X size={12} /></IconBtn>
+            </div>
+            {rows.map(([k, v]) => (
+              <button key={k} onClick={() => setObsKey(k)} style={{ all: 'unset', cursor: 'pointer', display: 'flex', gap: 8, alignItems: 'baseline', padding: '2px 4px', borderRadius: 8,
+                background: k === obsKey ? T.chip : 'transparent' }}>
+                <span style={{ color: T.ink2, width: 128, flexShrink: 0 }}>{v.label}</span>
+                <span style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{fmtValue(v.value, v.unit)}</span>
+                <span style={{ color: T.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.place || ''}</span>
+              </button>
+            ))}
+            <div style={{ color: T.ink2, padding: '0 4px' }}>Lightning: <b style={{ color: T.ink }}>{(s.lightning || 0).toLocaleString('en-GB')}</b> strikes</div>
+            {(sw || sc || sg) && <div style={{ height: 1, background: T.line }} />}
+            {(sw || sc || sg) && (
+              <div style={{ padding: '0 4px', display: 'grid', gap: 2, color: T.ink2 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Station reports (METAR)</span>
+                {sw && <span>Warmest: <b style={{ color: T.ink }}>{sw.tmax}°C</b> {sw.name}</span>}
+                {sc && <span>Coldest: <b style={{ color: T.ink }}>{sc.tmin}°C</b> {sc.name}</span>}
+                {sg && <span>Strongest gust: <b style={{ color: T.ink }}>{Math.round(sg.gust)} mph</b> {sg.name}</span>}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+      {isObs && !obsPanel && (
+        <div style={{ ...T.capsule, position: 'absolute', left: 10, bottom: (botRef.current?.offsetHeight || 56) + 18, padding: 4 }}>
+          <IconBtn title="Show the day's extremes" onClick={() => setObsPanel(true)}><Star size={14} /></IconBtn>
         </div>
       )}
       {isLive && liveProd && !frame && (
@@ -816,11 +1116,11 @@ export default function ModelData() {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
             <span style={{ color: T.ink2 }}>From</span>
             <select value={exp.from} onChange={(e) => setExp((x) => ({ ...x, from: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }}>
-              {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>T+{s}</option>)}
+              {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>{stepLabel(s)}</option>)}
             </select>
             <span style={{ color: T.ink2 }}>to</span>
             <select value={exp.to ?? steps.length - 1} onChange={(e) => setExp((x) => ({ ...x, to: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }}>
-              {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>T+{s}</option>)}
+              {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>{stepLabel(s)}</option>)}
             </select>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
@@ -850,7 +1150,7 @@ export default function ModelData() {
         <input type="range" min={0} max={Math.max(0, steps.length - 1)} value={Math.min(idx, Math.max(0, steps.length - 1))}
           onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} style={{ flex: 1, minWidth: 80, accentColor: '#7cc8ff' }} aria-label="Forecast step" />
         <span style={{ fontSize: 12.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', padding: '0 4px' }}>
-          {validLabel}<span style={{ color: T.ink2, fontWeight: 600 }}>{step == null ? '' : isLive ? ` · ${Math.max(0, Math.round((Date.now() - step) / 60e3))} min ago` : ` · T+${step}`}</span>
+          {validLabel}<span style={{ color: T.ink2, fontWeight: 600 }}>{step == null || isObs ? '' : isLive ? ` · ${Math.max(0, Math.round((Date.now() - step) / 60e3))} min ago` : ` · T+${step}`}</span>
         </span>
         <div style={{ position: 'relative' }} className="hidden sm:block">
           <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} style={{ ...sel, padding: '7px 26px 7px 10px' }} title="Playback and GIF speed">

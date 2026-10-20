@@ -126,6 +126,20 @@ const SCALES = {
   lw_down: { stops: [[200, '#1f2f5c', 180], [260, '#3d5fd0', 170], [300, '#5aa7e8', 160], [340, '#efd23a', 180], [380, '#f08b2c', 200], [420, '#dc3a3a', 220]], ticks: [220, 260, 300, 340, 380, 420] },
   uv_down: { stops: RAD.map(([v, c, a]) => [v / 15, c, a]), ticks: [3, 13, 27, 47, 67] },
   shf: { stops: DIVERGE(-150, 450), ticks: [-150, -75, 0, 150, 300, 450] },
+  windchill: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22], zero: true },
+  wdir10: { stops: [[0, '#000000', 0], [360, '#000000', 0]], ticks: [] },
+  /* weather type: one colour per code (mdata/derived.py WX_NAMES) */
+  wx: { stops: [[0, '#f6d860', 70], [1, '#cfdcea', 70], [2, '#aab8c8', 110], [3, '#8995a6', 140], [4, '#d8d2c4', 170], [5, '#a9d8f7', 170],
+    [6, '#5aa7e8', 190], [7, '#2f6fd4', 210], [8, '#1d3fa8', 225], [9, '#9a8fe0', 210], [10, '#d9e4f7', 200], [11, '#b9c8f2', 215],
+    [12, '#8a7fe0', 230], [13, '#f2a93a', 235], [14, '#e2322e', 240]], discrete: true, keySteps: [...Array(15).keys()],
+  ticks: [0, 2, 4, 6, 8, 9, 11, 13], keyLabel: (v) => ['Clear', 'Part cloud', 'Cloudy', 'Overcast', 'Fog', 'Drizzle', 'Lt rain', 'Rain', 'Heavy', 'Sleet', 'Lt snow', 'Snow', 'Hvy snow', 'Thunder', 'Hail'][Math.round(v)] },
+  /* sea state */
+  swh: { stops: [[0.25, '#cfe8f7', 120], [0.5, '#9fd3ef', 160], [1, '#5aa7e8', 185], [2, '#2f6fd4', 205], [3, '#1d9f8e', 215], [4, '#6cc04a', 222],
+    [5, '#efd23a', 230], [6, '#f08b2c', 236], [8, '#dc3a3a', 242], [10, '#a52284', 248], [14, '#f2e6ff', 252]], floor: 0.25, discrete: true,
+  ticks: [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 14], contours: [2, 4, 6, 8], label: true, line: 'rgba(236,243,250,0.75)' },
+  mwp: { stops: [[2, '#1f2f5c', 150], [5, '#3d5fd0', 170], [8, '#3d93d8', 185], [11, '#6cc04a', 200], [14, '#efd23a', 215], [17, '#f08b2c', 225], [20, '#dc3a3a', 235]], ticks: [3, 5, 8, 11, 14, 17, 20] },
+  aod: { stops: [[0.05, '#e9e1c8', 0], [0.1, '#e9d9a8', 110], [0.2, '#e6c27a', 160], [0.4, '#d99a4a', 200], [0.7, '#b8662e', 225], [1.2, '#7a3a1c', 240]], floor: 0.05, ticks: [0.1, 0.2, 0.4, 0.7, 1.2] },
+  pm25: { stops: [[5, '#7cc8a0', 0], [10, '#a6cf3e', 140], [20, '#efd23a', 180], [35, '#f08b2c', 205], [55, '#dc3a3a', 225], [100, '#a52284', 240]], floor: 5, ticks: [10, 20, 35, 55, 100] },
   /* chance (%) from an ensemble: quiet below 5 %, warm from 50 % */
   prob: { stops: [[5, '#8fd0f5', 140], [10, '#56acec', 175], [20, '#2f80d8', 195], [30, '#1f9f8a', 205], [40, '#7cc243', 212],
     [50, '#efd23a', 222], [60, '#f3a43a', 230], [70, '#ea6a32', 236], [80, '#d93838', 242], [90, '#a3247e', 248]],
@@ -293,17 +307,27 @@ export async function loadLive(product, iso, ext, signal) {
   const stamp = iso.replace(/[-:]/g, '').slice(0, 13);
   const url = `${API}/live/${product}/${stamp}.${ext}`;
   const valid = new Date(iso).toISOString();
-  if (ext === 'bin') {
-    const r = await fetch(url, { signal });
-    if (!r.ok) throw new Error(`${product} ${stamp}: ${r.status}`);
-    const buf = await r.arrayBuffer();
-    const n = new DataView(buf).getUint32(0, true);
-    const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
-    return { head: { ...head, valid }, q: new Uint8Array(buf, 4 + n, head.nx * head.ny), table: decodeTable(head), nx: head.nx, ny: head.ny, k: head.k, live: product };
-  }
+  if (ext === 'bin') return loadBin(url, signal, { valid, live: product });
   const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
   return { head: { valid }, img, k: 0.5, live: product };
 }
+
+/* a gridded frame file: on the 2 km display grid (k = 1) it is an ordinary frame; on the 1 km
+   grid it carries its own size and k */
+async function loadBin(url, signal, extra = {}) {
+  const r = await fetch(url, { signal });
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  const buf = await r.arrayBuffer();
+  const n = new DataView(buf).getUint32(0, true);
+  const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+  const h = { ...head, ...(extra.valid ? { valid: extra.valid } : {}) };
+  const f = { head: h, q: new Uint8Array(buf, 4 + n, head.nx * head.ny), table: decodeTable(head), live: extra.live };
+  if (head.k && head.k !== 1) Object.assign(f, { nx: head.nx, ny: head.ny, k: head.k });
+  return f;
+}
+
+/* one observed day's field (mdata/now.py), and its summary */
+export const loadObserved = (day, name, signal) => loadBin(`${API}/observed/${day}/${name}.bin`, signal);
 
 const UP = 4;
 function coarseCanvas(frame, varKey, cache) {
@@ -494,50 +518,104 @@ function luts() {
   return (LUTS = { E, C });
 }
 
-/* the real-time basemap for one instant (cached per 10 minutes) */
+/* The real-time basemap for one instant (cached per 10 minutes), blended on the GPU:
+     out = night·(1 − day) + satellite·sunlight·day + blue-hour + city glow·dark
+   The light terms only change slowly across the map (the sun's elevation, sampled every 16 px),
+   so each is a tiny canvas the GPU stretches over the map; the per-pixel parts that never
+   change (the moonlit night ground and the sodium-gold city glow from Black Marble) are made
+   once. It used to be one JavaScript loop over 4 million pixels per time step. */
+let RT_STATIC = null;
+function rtStatic(night) {
+  if (RT_STATIC?.night === night) return RT_STATIC;
+  const N = pixelsOf(night);
+  const { C } = luts();
+  const mk = () => { const c = document.createElement('canvas'); c.width = BW; c.height = BH; return c; };
+  const base = mk(), glow = mk();
+  const bi = base.getContext('2d').createImageData(BW, BH), gi = glow.getContext('2d').createImageData(BW, BH);
+  const b = bi.data, g = gi.data;
+  for (let p = 0; p < b.length; p += 4) {
+    const n = N[p], moon = Math.min(1, n / 85), c = n * 4;
+    b[p] = 7 + 12 * moon; b[p + 1] = 11 + 14 * moon; b[p + 2] = 22 + 18 * moon; b[p + 3] = 255;
+    g[p] = C[c]; g[p + 1] = C[c + 1]; g[p + 2] = C[c + 2]; g[p + 3] = 255;
+  }
+  base.getContext('2d').putImageData(bi, 0, 0);
+  glow.getContext('2d').putImageData(gi, 0, 0);
+  const tmp = mk();
+  return (RT_STATIC = { night, base, glow, tmp });
+}
 const rtCache = new Map();
 export function realtimeBasemap(day, night, utcMs) {
   const key = Math.round(utcMs / 600000);
   if (rtCache.has(key)) return rtCache.get(key);
-  const D = pixelsOf(day), N = pixelsOf(night);
   const { cw, ch, lon, lat } = coarseLonLat();
   const sun = sunAt(utcMs);
-  const el = new Float32Array(cw * ch);
   const sd = Math.sin(sun.dec), cd = Math.cos(sun.dec);
-  for (let k = 0; k < el.length; k++) {
+  const { E } = luts();
+  // the four light fields at the coarse points
+  const small = () => { const c = document.createElement('canvas'); c.width = cw; c.height = ch; const x = c.getContext('2d'); return [c, x, x.createImageData(cw, ch)]; };
+  const [mulC, mulX, mul] = small(), [dayC, dayX, dayA] = small(), [blueC, blueX, blue] = small(), [darkC, darkX, darkA] = small();
+  for (let k = 0; k < cw * ch; k++) {
     const phi = lat[k] * DEG, H = (lon[k] - sun.subLon) * DEG;
-    el[k] = Math.asin(Math.sin(phi) * sd + Math.cos(phi) * cd * Math.cos(H)) / DEG;
+    const e = Math.asin(Math.sin(phi) * sd + Math.cos(phi) * cd * Math.cos(H)) / DEG;
+    const q = Math.max(0, Math.min(EN - 1, Math.round((e + 20) * 10))) * 7, p = k * 4;
+    const sunI = E[q + 1];
+    mul.data[p] = Math.min(255, 255 * sunI * E[q + 5]); mul.data[p + 1] = Math.min(255, 255 * sunI * E[q + 6]);
+    mul.data[p + 2] = 255 * sunI * (1 - 0.22 * E[q + 2]); mul.data[p + 3] = 255;
+    dayA.data[p + 3] = 255 * E[q];
+    blue.data[p] = 12.8 * E[q + 3]; blue.data[p + 1] = 13.2 * E[q + 3]; blue.data[p + 2] = 30.8 * E[q + 3]; blue.data[p + 3] = 255;
+    darkA.data[p + 3] = 255 * E[q + 4];
   }
-  const { E, C } = luts();
+  mulX.putImageData(mul, 0, 0); dayX.putImageData(dayA, 0, 0); blueX.putImageData(blue, 0, 0); darkX.putImageData(darkA, 0, 0);
+  const S = rtStatic(night);
   const out = document.createElement('canvas');
   out.width = BW; out.height = BH;
-  const ctx = out.getContext('2d');
-  const img = ctx.createImageData(BW, BH);
-  const o = img.data;
-  for (let y = 0; y < BH; y++) {
-    const fy = y / CS, j0 = Math.min(ch - 2, Math.floor(fy)), ty = fy - j0;
-    for (let x = 0; x < BW; x++) {
-      const fx = x / CS, i0 = Math.min(cw - 2, Math.floor(fx)), tx = fx - i0;
-      const k = j0 * cw + i0;
-      const e = (el[k] * (1 - tx) + el[k + 1] * tx) * (1 - ty) + (el[k + cw] * (1 - tx) + el[k + cw + 1] * tx) * ty;
-      const q = Math.max(0, Math.min(EN - 1, Math.round((e + 20) * 10))) * 7;
-      const dayF = E[q], sunI = E[q + 1], dark = E[q + 4];
-      const p = (y * BW + x) * 4;
-      const n = N[p], c = n * 4;
-      const moon = Math.min(1, n / 85);
-      const nr = 7 + 12 * moon, ng = 11 + 14 * moon, nb = 22 + 18 * moon;
-      const dr = D[p] * sunI * E[q + 5], dg = D[p + 1] * sunI * E[q + 6], db = D[p + 2] * sunI * (1 - 0.22 * E[q + 2]);
-      const bl = E[q + 3];
-      o[p] = nr + (dr - nr) * dayF + 12.8 * bl + C[c] * dark;
-      o[p + 1] = ng + (dg - ng) * dayF + 13.2 * bl + C[c + 1] * dark;
-      o[p + 2] = nb + (db - nb) * dayF + 30.8 * bl + C[c + 2] * dark;
-      o[p + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
+  const o = out.getContext('2d'), t = S.tmp.getContext('2d');
+  const stretch = (ctx, c) => ctx.drawImage(c, -CS / 2, -CS / 2, cw * CS, ch * CS);      // coarse point k sits at k*CS
+  o.imageSmoothingEnabled = true; t.imageSmoothingEnabled = true;
+  o.drawImage(S.base, 0, 0);
+  t.globalCompositeOperation = 'copy'; t.drawImage(day, 0, 0, BW, BH);
+  t.globalCompositeOperation = 'multiply'; stretch(t, mulC);
+  t.globalCompositeOperation = 'destination-in'; stretch(t, dayC);
+  o.drawImage(S.tmp, 0, 0);                                    // satellite·sunlight over the night, by daylight
+  o.globalCompositeOperation = 'lighter'; stretch(o, blueC);   // the blue hour
+  t.globalCompositeOperation = 'copy'; t.drawImage(S.glow, 0, 0);
+  t.globalCompositeOperation = 'destination-in'; stretch(t, darkC);
+  o.drawImage(S.tmp, 0, 0);                                    // city lights, by darkness
+  o.globalCompositeOperation = 'source-over'; t.globalCompositeOperation = 'source-over';
   rtCache.set(key, out);
   if (rtCache.size > 8) rtCache.delete(rtCache.keys().next().value);
   return out;
+}
+
+/* Smaller copies of a big image (made once, with good downscaling), so drawing it zoomed
+   out is a near-1:1 copy instead of a costly 'high quality' shrink of 4 million pixels. */
+const pyrCache = new WeakMap();
+function pyramid(img) {
+  let L = pyrCache.get(img);
+  if (L) return L;
+  const w0 = img.naturalWidth || img.width, h0 = img.naturalHeight || img.height;
+  L = [{ src: img, w: w0 }];
+  let prev = img, w = w0, h = h0;
+  for (let k = 0; k < 3; k++) {
+    w = Math.max(1, Math.round(w / 2)); h = Math.max(1, Math.round(h / 2));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const x = c.getContext('2d');
+    x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+    x.drawImage(prev, 0, 0, w, h);
+    L.push({ src: c, w });
+    prev = c;
+  }
+  pyrCache.set(img, L);
+  return L;
+}
+function drawPyramid(ctx, img, x, y, w, h, coarse) {
+  const L = pyramid(img), need = coarse ? w / 2 : w;
+  let lv = L[0];
+  for (const l of L) if (l.w >= need) lv = l;                 // the smallest copy still as wide as drawn
+  ctx.imageSmoothingQuality = 'low';
+  ctx.drawImage(lv.src, x, y, w, h);
+  ctx.imageSmoothingQuality = 'high';
 }
 
 /* ── the scene: one renderer for the screen preview and every export ───────── */
@@ -569,13 +647,25 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   ctx.fillRect(clip.x, clip.y, clip.w, clip.h);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  if (L.basemap) ctx.drawImage(L.basemap, X(0), Y(0), NX * s, NY * s);
-  if (L.data) {
-    const dk = L.data.dataK;
-    ctx.imageSmoothingEnabled = dk && dk >= 1 ? true : !!L.smooth;     // coarse grids blend; 1 km and 2 km follow the toggle
-    ctx.drawImage(L.data, X(0), Y(0), dk ? L.data.width * dk * s : NX * s, dk ? L.data.height * dk * s : NY * s);
+  if (L.basemap) drawPyramid(ctx, L.basemap, X(0), Y(0), NX * s, NY * s, opts.coarse);
+  const put = (cv, smoothOn, alpha = 1) => {
+    const dk = cv.dataK;
+    const w = dk ? cv.width * dk * s : NX * s, h = dk ? cv.height * dk * s : NY * s;
+    ctx.imageSmoothingEnabled = dk && dk >= 1 ? true : !!smoothOn;      // coarse grids blend; 1 km and 2 km follow the toggle
+    // 'high' quality only where a big grid is shrunk a lot for an export-quality look; else cheap
+    ctx.imageSmoothingQuality = !opts.coarse && w < cv.width * 0.6 ? 'medium' : 'low';
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(cv, X(cv.dataX0 || 0), Y(cv.dataY0 || 0), w, h);
+    ctx.globalAlpha = 1;
     ctx.imageSmoothingEnabled = true;
-  }
+    ctx.imageSmoothingQuality = 'high';
+  };
+  if (L.overlay) put(L.overlay.canvas, true, L.overlay.alpha ?? 1);   // cloud under the rain
+  if (L.data) put(L.data, L.smooth);
+  /* the grid box in view (2 km cells), for culling roads, grid and arrows */
+  const gx0 = (clip.x - ox) / s + cx, gx1 = (clip.x + clip.w - ox) / s + cx;
+  const gy0 = (clip.y - oy) / s + cy, gy1 = (clip.y + clip.h - oy) / s + cy;
+  if (L.roads) cachedRoads(ctx, L.roads, clip, view, X, Y, gx0, gy0, gx1, gy1, s / u, u, st, ox, oy, L.interacting);
   if (L.contours) {
     ctx.lineJoin = 'round';
     ctx.lineWidth = 1.7 * u;
@@ -601,15 +691,18 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
     ctx.restore();
   }
   edgeFade(ctx, X(0), Y(0), NX * s, NY * s, 36 * s, st.bg);
+  const box = [Math.max(0, gx0), Math.max(0, gy0), Math.min(gx1, NX), Math.min(gy1, NY)];
+  if (L.grid?.frame) drawValueGrid(ctx, L.grid, X, Y, ...box, s, u, st);
+  if (L.arrows?.frame) drawArrows(ctx, L.arrows, X, Y, ...box, s, u, st);
   if (L.strikes?.length) drawStrikes(ctx, L.strikes, X, Y, u);
   if (L.contours && L.contourLabels) drawContourLabels(ctx, L.contours, X, Y, rect, u, st);
-  if (L.cities) drawCities(ctx, L.cities, X, Y, rect, s / u, u, st, L.chrome ? 150 * u : 0);
+  if (L.cities) drawCities(ctx, L.cities, X, Y, rect, s / u, u, st, L.chrome ? 150 * u : 0, L.wx);
   if (L.star) {
     /* the highest value in view, kept clear of the title card and the key */
     const top = L.chrome ? 150 * u : 20 * u, bot = L.chrome ? 104 * u : 20 * u;
-    const m = frameMax(L.star.frame, (rect.x + 20 * u - ox) / s + cx, (rect.y + top - oy) / s + cy,
+    const m = L.star.at || frameMax(L.star.frame, (rect.x + 20 * u - ox) / s + cx, (rect.y + top - oy) / s + cy,
       (rect.x + rect.w - 20 * u - ox) / s + cx, (rect.y + rect.h - bot - oy) / s + cy);
-    if (m) drawStar(ctx, X(m.gx), Y(m.gy), u, st, `${fmtValue(m.v, L.star.unit)}`, rect);
+    if (m) drawStar(ctx, X(m.gx), Y(m.gy), u, st, `${fmtValue(m.v, L.star.unit)}${m.place ? ` · ${m.place}` : ''}`, rect);
   }
   if (L.chrome) drawChrome(ctx, rect, u, L.chrome, st);
   ctx.restore();
@@ -661,6 +754,315 @@ function strokeLines(ctx, lines, X, Y) {
   ctx.stroke();
 }
 
+/* ── roads: the motion graphics' network (OpenStreetMap) and its look — blue motorways with a
+   dark casing, warm A roads — gaining detail as you zoom: motorways always, trunk roads from
+   about 2x, primary roads close in (mwuk-graphics core/tokens ROADS) ── */
+let roadsP = null;
+export function loadRoads() {
+  if (roadsP) return roadsP;
+  roadsP = Promise.all([fetch(`${API}/static/roads.json`).then((r) => r.json()), fetch(`${API}/static/roads.bin`).then((r) => r.arrayBuffer())])
+    .then(([idx, buf]) => {
+      const out = {};
+      for (const [k, e] of Object.entries(idx.classes)) {
+        const xy = new Int16Array(buf, e.xy[0], e.xy[1]), off = new Uint32Array(buf, e.off[0], e.off[1]);
+        const n = off.length - 1, box = new Float32Array(n * 4), sc = 1 / idx.scale;
+        for (let i = 0; i < n; i++) {
+          let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+          for (let p = off[i]; p < off[i + 1]; p++) {
+            const x = xy[2 * p] * sc, y = xy[2 * p + 1] * sc;
+            if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+          }
+          box.set([x0, y0, x1, y1], i * 4);
+        }
+        out[k] = { xy, off, box, sc };
+      }
+      return out;
+    })
+    .catch((e) => { roadsP = null; throw e; });
+  return roadsP;
+}
+const ROAD_STYLE = {
+  motorway: { color: '#2F63D6', inZ: [0, 0], width: [1.5, 4.6], alpha: 0.95, casing: 1.1 },
+  trunk: { color: '#C9A57E', inZ: [2.2, 4.4], width: [0.75, 3.2], alpha: 0.62, casing: 0.8 },
+  primary: { color: '#C9A57E', inZ: [7.5, 15], width: [0.75, 2.9], alpha: 0.62, casing: 0 },
+};
+/* the road layer for one view, kept: playback, toggles and GIF frames redraw the same roads.
+   While the map is being dragged or zoomed, the last layer is moved and scaled with it, and the
+   roads are drawn afresh once it settles. */
+const roadCache = [];
+function cachedRoads(ctx, roads, clip, view, X, Y, gx0, gy0, gx1, gy1, z, u, st, ox, oy, interacting) {
+  const frameKey = [clip.x, clip.y, clip.w, clip.h, ox, oy, st.glass, ctx.canvas.width].join(',');
+  const key = [view.cx, view.cy, view.s, frameKey].join(',');
+  let hit = roadCache.find((c) => c.key === key && c.roads === roads);
+  if (!hit && interacting) {
+    const near = roadCache.find((c) => c.frameKey === frameKey && c.roads === roads);
+    if (near) {
+      const k = view.s / near.view.s;
+      const dx = (clip.x - ox) * k + ox + (near.view.cx - view.cx) * view.s;
+      const dy = (clip.y - oy) * k + oy + (near.view.cy - view.cy) * view.s;
+      ctx.drawImage(near.cv, dx, dy, near.cv.width * k, near.cv.height * k);
+      return;
+    }
+  }
+  if (!hit) {
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.ceil(clip.w)); cv.height = Math.max(1, Math.ceil(clip.h));
+    const rc = cv.getContext('2d');
+    rc.translate(-clip.x, -clip.y);
+    drawRoads(rc, roads, X, Y, gx0, gy0, gx1, gy1, z, u, st);
+    hit = { key, frameKey, view: { ...view }, roads, cv };
+    roadCache.unshift(hit);
+    roadCache.length = Math.min(roadCache.length, 3);
+  }
+  ctx.drawImage(hit.cv, clip.x, clip.y);
+}
+function drawRoads(ctx, roads, X, Y, gx0, gy0, gx1, gy1, z, u, st) {
+  const light = st.glass === 'light';
+  for (const cls of ['primary', 'trunk', 'motorway']) {
+    const S = ROAD_STYLE[cls];
+    const vis = S.inZ[1] > S.inZ[0] ? Math.min(1, Math.max(0, (z - S.inZ[0]) / (S.inZ[1] - S.inZ[0]))) : 1;
+    if (vis <= 0.02) continue;
+    // the simplified national set until well zoomed in: canvas strokes tens of thousands of
+    // full-detail A-road pieces in seconds (the films draw them on the GPU)
+    const set = roads[`${cls}.${z >= (cls === 'motorway' ? 2.2 : cls === 'trunk' ? 14 : 26) ? 'fine' : 'coarse'}`] || roads[`${cls}.fine`];
+    if (!set) continue;
+    const t = Math.min(1, Math.max(0, Math.log10(z / 2) / 2));   // design width at z = 2 .. 200, as the films
+    const w = (S.width[0] + (S.width[1] - S.width[0]) * t) * u;
+    const path = new Path2D();
+    const { xy, off, box, sc } = set;
+    for (let i = 0, n = off.length - 1; i < n; i++) {
+      if (box[i * 4 + 2] < gx0 || box[i * 4] > gx1 || box[i * 4 + 3] < gy0 || box[i * 4 + 1] > gy1) continue;
+      const a = off[i];
+      path.moveTo(X(xy[2 * a] * sc), Y(xy[2 * a + 1] * sc));
+      for (let p = a + 1; p < off[i + 1]; p++) path.lineTo(X(xy[2 * p] * sc), Y(xy[2 * p + 1] * sc));
+    }
+    ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
+    if (S.casing) {
+      ctx.globalAlpha = vis * (light ? 0.75 : 0.85);
+      ctx.strokeStyle = light ? 'rgba(255,255,255,0.9)' : 'rgba(3,7,15,0.55)';
+      ctx.lineWidth = w + 2 * S.casing * u;
+      ctx.stroke(path);
+    }
+    ctx.globalAlpha = vis * S.alpha;
+    ctx.strokeStyle = S.color;
+    ctx.lineWidth = w;
+    ctx.stroke(path);
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* a frame's value at a grid point (2 km display cells), or NaN */
+export function sampleFrame(f, gx, gy) {
+  if (!f?.q) return NaN;
+  const K = f.nx ? f.k || 1 : 1, W = f.nx || NX, H = f.ny || NY;
+  const i = Math.floor(gx / K), j = Math.floor(gy / K);
+  if (i < 0 || j < 0 || i >= W || j >= H) return NaN;
+  return f.table[f.q[j * W + i]];
+}
+
+/* Smoothed radar and rain: the VALUES are interpolated (a light blur, then bicubic-like
+   bilinear on a finer grid) and only then coloured, so the stepped palette keeps crisp
+   bands with smooth edges instead of blurring one colour into the next. Only the part of
+   the grid that has data is upsampled. */
+export function smoothCanvas(frame, varKey, cache) {
+  if (cache?.has(frame)) return cache.get(frame);
+  const sc = scaleFor(varKey);
+  const W = frame.nx || NX, H = frame.ny || NY, K = frame.nx ? frame.k || 1 : 1, q = frame.q;
+  const lut = new Uint32Array(256);
+  for (let v = 0; v < 255; v++) {
+    const c = colourAt(sc, frame.table[v]);
+    if (c) lut[v] = (c[3] << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
+  }
+  let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  for (let j = 0; j < H; j++) {
+    const row = j * W;
+    for (let i = 0; i < W; i++) if (lut[q[row + i]]) { if (i < x0) x0 = i; if (i > x1) x1 = i; if (j < y0) y0 = j; if (j > y1) y1 = j; }
+  }
+  const cv = document.createElement('canvas');
+  if (x1 < 0) { cv.width = 1; cv.height = 1; cv.dataK = K; cv.dataX0 = 0; cv.dataY0 = 0; return cv; }
+  x0 = Math.max(0, x0 - 3); y0 = Math.max(0, y0 - 3); x1 = Math.min(W - 1, x1 + 3); y1 = Math.min(H - 1, y1 + 3);
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1, F = K < 1 ? 2 : 3;
+  // values in the encoded domain (monotonic in the value; no-data counts as dry), blurred [1 2 1]
+  const a = new Float32Array(bw * bh), b = new Float32Array(bw * bh);
+  for (let j = 0; j < bh; j++) for (let i = 0; i < bw; i++) { const v = q[(y0 + j) * W + x0 + i]; a[j * bw + i] = v === 255 ? 0 : v; }
+  for (let j = 0; j < bh; j++) for (let i = 0; i < bw; i++) {
+    const l = a[j * bw + Math.max(0, i - 1)], r = a[j * bw + Math.min(bw - 1, i + 1)];
+    b[j * bw + i] = (l + 2 * a[j * bw + i] + r) / 4;
+  }
+  for (let j = 0; j < bh; j++) for (let i = 0; i < bw; i++) {
+    const u0 = b[Math.max(0, j - 1) * bw + i], d0 = b[Math.min(bh - 1, j + 1) * bw + i];
+    a[j * bw + i] = Math.max((u0 + 2 * b[j * bw + i] + d0) / 4, 0.82 * q[(y0 + j) * W + x0 + i] * (q[(y0 + j) * W + x0 + i] !== 255));   // keep cores
+  }
+  const ow = bw * F, oh = bh * F;
+  cv.width = ow; cv.height = oh;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(ow, oh);
+  const d = new Uint32Array(img.data.buffer);
+  for (let y = 0; y < oh; y++) {
+    const fy = (y + 0.5) / F - 0.5, j0 = Math.max(0, Math.min(bh - 1, Math.floor(fy))), j1 = Math.min(bh - 1, j0 + 1), ty = Math.min(1, Math.max(0, fy - j0));
+    for (let x = 0; x < ow; x++) {
+      const fx = (x + 0.5) / F - 0.5, i0 = Math.max(0, Math.min(bw - 1, Math.floor(fx))), i1 = Math.min(bw - 1, i0 + 1), tx = Math.min(1, Math.max(0, fx - i0));
+      const v = (a[j0 * bw + i0] * (1 - tx) + a[j0 * bw + i1] * tx) * (1 - ty) + (a[j1 * bw + i0] * (1 - tx) + a[j1 * bw + i1] * tx) * ty;
+      d[y * ow + x] = lut[Math.min(254, Math.round(v))];
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  cv.dataK = K / F; cv.dataX0 = x0 * K; cv.dataY0 = y0 * K;
+  if (cache) { cache.set(frame, cv); if (cache.size > 6) cache.delete(cache.keys().next().value); }
+  return cv;
+}
+
+/* ── a grid of values: thin lines on a lattice tied to the map (it does not swim as you pan),
+   each box labelled with the layer's value at its centre, formatted for that layer ── */
+const NICE = [0.5, 1, 2, 3, 5, 10, 15, 20, 25, 50, 100, 200];
+export function gridLabel(v, varKey, unit) {
+  if (v == null || Number.isNaN(v)) return null;
+  const sc = scaleFor(varKey);
+  if (varKey === 'wx') return ['Clear', 'Pt cloud', 'Cloudy', 'Dull', 'Fog', 'Drizzle', 'Lt rain', 'Rain', 'Heavy', 'Sleet', 'Lt snow', 'Snow', 'Hvy snow', 'Thunder', 'Hail'][Math.round(v)] ?? null;
+  if (varKey === 'mwd' || varKey === 'wdir10') return ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(v / 22.5) % 16];
+  if (sc.floor != null && v < sc.floor) return null;
+  if (unit === '°C') return `${Math.round(v)}°`;
+  if (unit === '%' || unit === 'mph' || unit === 'hPa' || unit === 'J/kg' || unit === 'm' || unit === 'dam' || unit === 'W/m²') return String(Math.round(v));
+  const a = Math.abs(v);
+  return a >= 10 ? String(Math.round(v)) : a >= 1 ? v.toFixed(1).replace(/\.0$/, '') : v.toFixed(a >= 0.1 ? 1 : 2);
+}
+function drawValueGrid(ctx, G, X, Y, gx0, gy0, gx1, gy1, s, u, st) {
+  const f = G.frame;
+  const minCell = f.nx && f.k < 1 ? 0.5 : 1;
+  const g = NICE.find((n) => n >= minCell && n * s >= 74 * u) || 200;
+  const i0 = Math.floor(gx0 / g), i1 = Math.ceil(gx1 / g), j0 = Math.floor(gy0 / g), j1 = Math.ceil(gy1 / g);
+  ctx.save();
+  ctx.lineWidth = Math.max(1, 0.8 * u);
+  ctx.strokeStyle = st.glass === 'light' ? 'rgba(20,30,44,0.16)' : 'rgba(255,255,255,0.14)';
+  ctx.beginPath();
+  for (let i = i0; i <= i1; i++) { ctx.moveTo(X(i * g), Y(j0 * g)); ctx.lineTo(X(i * g), Y(j1 * g)); }
+  for (let j = j0; j <= j1; j++) { ctx.moveTo(X(i0 * g), Y(j * g)); ctx.lineTo(X(i1 * g), Y(j * g)); }
+  ctx.stroke();
+  ctx.font = `700 ${Math.min(17, Math.max(11, g * s / 5.2 / u)) * u}px ${FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let j = j0; j < j1; j++) {
+    for (let i = i0; i < i1; i++) {
+      const cx = (i + 0.5) * g, cy = (j + 0.5) * g;
+      const t = gridLabel(sampleFrame(f, cx, cy), G.varKey, G.unit);
+      if (t) haloText(ctx, t, X(cx), Y(cy), st, 3.5 * u);
+    }
+  }
+  ctx.restore();
+}
+
+/* ── wind arrows (direction the wind blows towards), turned for the grid's convergence ── */
+function gridLonLat(gx, gy) { return invLaea(-1159000 + gx * 2000, 903000 - gy * 2000); }
+function drawArrows(ctx, A, X, Y, gx0, gy0, gx1, gy1, s, u, st) {
+  const f = A.frame;
+  const g = NICE.find((n) => n >= 1 && n * s >= 58 * u) || 200;
+  const len = Math.min(26, Math.max(15, g * s * 0.42 / u)) * u;
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (let j = Math.floor(gy0 / g); j <= Math.ceil(gy1 / g); j++) {
+    for (let i = Math.floor(gx0 / g); i <= Math.ceil(gx1 / g); i++) {
+      const cx = (i + 0.5) * g, cy = (j + 0.5) * g;
+      const dir = sampleFrame(f, cx, cy);
+      if (!Number.isFinite(dir)) continue;
+      const [lon, lat] = gridLonLat(cx, cy);
+      const conv = (lon + 2.5) * Math.sin(lat * DEG);
+      const b = ((dir + 180 - conv) % 360) * DEG;           // towards, clockwise from map-up
+      const dx = Math.sin(b) * len / 2, dy = -Math.cos(b) * len / 2;
+      const x = X(cx), y = Y(cy);
+      const head = () => {
+        ctx.beginPath();
+        ctx.moveTo(x - dx, y - dy); ctx.lineTo(x + dx, y + dy);
+        const hb = 0.5, hl = len * 0.38;
+        ctx.moveTo(x + dx, y + dy); ctx.lineTo(x + dx - hl * Math.sin(b - hb), y + dy + hl * Math.cos(b - hb));
+        ctx.moveTo(x + dx, y + dy); ctx.lineTo(x + dx - hl * Math.sin(b + hb), y + dy + hl * Math.cos(b + hb));
+      };
+      head(); ctx.lineWidth = 4.2 * u; ctx.strokeStyle = st.halo; ctx.stroke();
+      head(); ctx.lineWidth = 1.9 * u; ctx.strokeStyle = st.text; ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+/* ── weather symbols. Codes are shared with the server (mdata/derived.py WX_NAMES). ── */
+export const WX_NAMES = ['Clear', 'Partly cloudy', 'Cloudy', 'Overcast', 'Fog', 'Drizzle', 'Light rain', 'Rain', 'Heavy rain',
+  'Sleet', 'Light snow', 'Snow', 'Heavy snow', 'Thunderstorm', 'Hail'];
+function sunElev(lon, lat, utcMs) {
+  const { dec, subLon } = sunAt(utcMs);
+  const H = (lon - subLon) * DEG, la = lat * DEG;
+  return Math.asin(Math.sin(la) * Math.sin(dec) + Math.cos(la) * Math.cos(dec) * Math.cos(H)) / DEG;
+}
+function cloudShape(ctx, x, y, r) {
+  ctx.beginPath();
+  ctx.arc(x - r * 0.45, y + r * 0.1, r * 0.42, Math.PI * 0.5, Math.PI * 1.5);
+  ctx.arc(x - r * 0.05, y - r * 0.2, r * 0.52, Math.PI * 1.05, Math.PI * 1.85);
+  ctx.arc(x + r * 0.5, y + r * 0.08, r * 0.44, Math.PI * 1.4, Math.PI * 0.5);
+  ctx.closePath();
+}
+export function drawWxIcon(ctx, code, x, y, r, night, u) {
+  const sunC = '#ffc93c', moonC = '#e8eefc', cloudC = code >= 5 || code === 3 ? '#c9d2de' : '#f4f7fb';
+  const dark = code >= 7 || code === 13;
+  ctx.save();
+  ctx.lineCap = 'round';
+  const orb = (ox, oy, rr) => {
+    if (night) {                                     // a crescent: the disc, less a second disc
+      ctx.save();
+      ctx.beginPath(); ctx.arc(ox, oy, rr, 0, Math.PI * 2); ctx.clip();
+      ctx.beginPath(); ctx.rect(ox - 2 * rr, oy - 2 * rr, 4 * rr, 4 * rr);
+      ctx.arc(ox + rr * 0.45, oy - rr * 0.3, rr * 0.82, 0, Math.PI * 2, true);
+      ctx.fillStyle = moonC; ctx.fill();
+      ctx.restore();
+    } else {
+      ctx.strokeStyle = sunC; ctx.lineWidth = 1.6 * u;
+      for (let k = 0; k < 8; k++) {
+        const t = (k * Math.PI) / 4;
+        ctx.beginPath(); ctx.moveTo(ox + Math.cos(t) * rr * 1.25, oy + Math.sin(t) * rr * 1.25); ctx.lineTo(ox + Math.cos(t) * rr * 1.6, oy + Math.sin(t) * rr * 1.6); ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(ox, oy, rr, 0, Math.PI * 2); ctx.fillStyle = sunC; ctx.fill();
+    }
+  };
+  const cloud = (cx, cy, rr, col) => {
+    cloudShape(ctx, cx, cy, rr);
+    ctx.fillStyle = col; ctx.fill();
+    ctx.lineWidth = 1.1 * u; ctx.strokeStyle = 'rgba(20,30,45,0.35)'; ctx.stroke();
+  };
+  if (code === 0) orb(x, y, r * 0.55);
+  else if (code === 1) { orb(x - r * 0.3, y - r * 0.3, r * 0.42); cloud(x + r * 0.12, y + r * 0.18, r * 0.78, '#f4f7fb'); }
+  else if (code === 4) {
+    ctx.strokeStyle = '#dfe6ee'; ctx.lineWidth = 2.2 * u;
+    for (let k = -1; k <= 1; k++) { ctx.beginPath(); ctx.moveTo(x - r * 0.75 + (k === 0 ? r * 0.15 : 0), y + k * r * 0.38); ctx.lineTo(x + r * 0.75, y + k * r * 0.38); ctx.stroke(); }
+  } else {
+    cloud(x, y - r * 0.18, r * 0.95, dark ? '#9aa6b6' : cloudC);
+    const by = y + r * 0.55;
+    const drops = (n, col, len) => {
+      ctx.strokeStyle = col; ctx.lineWidth = 1.9 * u;
+      for (let k = 0; k < n; k++) { const dx = (k - (n - 1) / 2) * r * 0.42; ctx.beginPath(); ctx.moveTo(x + dx, by); ctx.lineTo(x + dx - r * 0.12, by + len); ctx.stroke(); }
+    };
+    const flakes = (n) => {
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.4 * u;
+      for (let k = 0; k < n; k++) {
+        const fx = x + (k - (n - 1) / 2) * r * 0.48, fy = by + r * 0.22, fr = r * 0.17;
+        for (let a = 0; a < 3; a++) { const t = (a * Math.PI) / 3; ctx.beginPath(); ctx.moveTo(fx - Math.cos(t) * fr, fy - Math.sin(t) * fr); ctx.lineTo(fx + Math.cos(t) * fr, fy + Math.sin(t) * fr); ctx.stroke(); }
+      }
+    };
+    if (code === 5) drops(3, '#9fd3ff', r * 0.18);
+    else if (code === 6) drops(2, '#5fb4ff', r * 0.32);
+    else if (code === 7) drops(3, '#3d9bff', r * 0.38);
+    else if (code === 8) drops(4, '#2f7bff', r * 0.46);
+    else if (code === 9) { drops(1, '#5fb4ff', r * 0.32); ctx.save(); ctx.translate(r * 0.3, 0); flakes(1); ctx.restore(); }
+    else if (code === 10) flakes(2);
+    else if (code === 11) flakes(3);
+    else if (code === 12) flakes(4);
+    else if (code === 13 || code === 14) {
+      ctx.beginPath();
+      ctx.moveTo(x + r * 0.08, by - r * 0.08); ctx.lineTo(x - r * 0.22, by + r * 0.34); ctx.lineTo(x + r * 0.02, by + r * 0.34); ctx.lineTo(x - r * 0.14, by + r * 0.66);
+      ctx.lineTo(x + r * 0.3, by + r * 0.2); ctx.lineTo(x + r * 0.05, by + r * 0.2); ctx.lineTo(x + r * 0.22, by - r * 0.08); ctx.closePath();
+      ctx.fillStyle = '#ffd23f'; ctx.fill(); ctx.lineWidth = 1 * u; ctx.strokeStyle = 'rgba(60,40,0,0.7)'; ctx.stroke();
+      if (code === 14) { ctx.fillStyle = '#ffffff'; for (const dx of [-0.42, 0.5]) { ctx.beginPath(); ctx.arc(x + dx * r, by + r * 0.3, r * 0.1, 0, Math.PI * 2); ctx.fill(); } }
+    }
+  }
+  ctx.restore();
+}
+
 /* where the field peaks inside a grid box: the highest value, and among equal highs the
    cell nearest their middle (so a flat-topped maximum gets its star in the middle of it) */
 const maxCache = new WeakMap();
@@ -673,12 +1075,25 @@ export function frameMax(frame, gx0, gy0, gx1, gy1) {
   const c = maxCache.get(frame);
   if (c && c.k === k) return c.m;
   const q = frame.q;
+  /* radar: a lone hot cell (the composite has some, 100+ mm/h with nothing around them) is not
+     the heaviest rain; a peak needs at least three of its eight neighbours at half its level */
+  const radar = frame.live === 'radar';
+  const real = (x, y, v) => {
+    if (!radar || x < 1 || y < 1 || x >= W - 1 || y >= Hh - 1) return true;
+    let k = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const w = q[(y + dy) * W + x + dx];
+      if ((dx || dy) && w !== 255 && w >= v * 0.7) k++;          // encoded sqrt: 0.7 ~ half the rate
+    }
+    return k >= 3;
+  };
   let best = -1, n = 0, sx = 0, sy = 0;
   for (let y = y0; y <= y1; y++) {
     const row = y * W;
     for (let x = x0; x <= x1; x++) {
       const v = q[row + x];
       if (v === 255 || v < best) continue;
+      if (!real(x, y, v)) continue;
       if (v > best) { best = v; n = 0; sx = 0; sy = 0; }
       n++; sx += x; sy += y;
     }
@@ -762,15 +1177,27 @@ function drawContourLabels(ctx, contours, X, Y, R, u, st) {
   }
 }
 
-function drawCities(ctx, cities, X, Y, R, cellPx, u, st, footer) {
+/* place labels; with `wx` (a weather-type frame and its time) each place gets its symbol
+   above the name, the sun or the moon by the real sun at that place */
+function drawCities(ctx, cities, X, Y, R, cellPx, u, st, footer, wx) {
   const maxRank = cellPx > 3.2 ? 3 : cellPx > 1.5 ? 2 : 1;
-  ctx.font = `600 ${19 * u}px ${FONT}`;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
   for (const c of cities) {
     if (c.rank > maxRank) continue;
     const x = X(c.x), y = Y(c.y);
     if (x < R.x + 10 * u || y < R.y + 170 * u || x > R.x + R.w - 120 * u || y > R.y + R.h - footer) continue;
+    const code = wx?.frame ? sampleFrame(wx.frame, c.x, c.y) : NaN;
+    if (Number.isFinite(code) && code >= 0 && code < WX_NAMES.length) {
+      const [lon, lat] = gridLonLat(c.x, c.y);
+      const r = 17 * u, ix = x + 4 * u, iy = y - 27 * u;
+      ctx.save();
+      ctx.beginPath(); ctx.arc(ix, iy, r * 1.08, 0, Math.PI * 2);
+      ctx.fillStyle = st.glass === 'light' ? 'rgba(30,48,72,0.55)' : 'rgba(6,12,22,0.48)'; ctx.fill();
+      ctx.restore();
+      drawWxIcon(ctx, Math.round(code), ix, iy, r * 0.82, sunElev(lon, lat, wx.utcMs) < -0.833, u);
+    }
+    ctx.font = `600 ${19 * u}px ${FONT}`;
     ctx.beginPath();
     ctx.arc(x, y, 4 * u, 0, Math.PI * 2);
     ctx.fillStyle = st.text;

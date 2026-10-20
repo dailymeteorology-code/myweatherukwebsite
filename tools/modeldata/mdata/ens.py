@@ -197,6 +197,31 @@ class ECMWFEns:
         return d                                         # snow: 1 mm water ~ 1 cm of snow (10:1)
 
 
+# ── ECMWF AIFS ENS (the machine-learned ensemble, 50 members) ────────────────
+class AIFSEns(ECMWFEns):
+    id, label, members = 'aifs_ens', 'ECMWF AIFS ENS (AI)', 50
+    PARAMS = {'wind': ['10u', '10v'], 't2': ['2t'], 'precip_6h': ['tp'], 'precip_24h': ['tp'], 'snow_24h': ['sf'],
+              'mslp': ['msl'], 'tcc': ['tcc']}
+    fields = list(PARAMS)
+
+    def base(self, run, h, host):
+        return f'{host}/{run:%Y%m%d}/{run:%H}z/aifs-ens/0p25/enfo/{run:%Y%m%d%H}0000-{h}h-enfo-pf'
+
+    def schedule(self, run):
+        return list(range(0, 361, 6))
+
+    def field(self, run, h, f, raw_at):
+        if f in ('precip_6h', 'precip_24h', 'snow_24h'):
+            # AIFS writes accumulations in kg m-2, which is already mm (IFS: metres)
+            win = 6 if f == 'precip_6h' else 24
+            if h == 0:
+                raise KeyError('no accumulation at T+0')
+            a = raw_at(h, self.PARAMS[f][0])
+            b = raw_at(max(0, h - win), self.PARAMS[f][0]) if h - win > 0 else 0.0
+            return np.maximum(a - b, 0)
+        return super().field(run, h, f, raw_at)
+
+
 # ── NOAA GEFS ───────────────────────────────────────────────────────────────
 class GEFS:
     id, label, members = 'gefs', 'NOAA GEFS', 31
@@ -304,7 +329,7 @@ def _span(desc):
         return 999
 
 
-ENSEMBLES = {m.id: m for m in (ECMWFEns(), GEFS())}
+ENSEMBLES = {m.id: m for m in (ECMWFEns(), AIFSEns(), GEFS())}
 
 
 def encode_members(a, enc):

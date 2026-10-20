@@ -94,6 +94,20 @@ VARIABLES = {
     'lw_down':      dict(label='Longwave radiation (downward)', unit='W/m²', group='Radiation & surface', lo=150, hi=480),
     'uv_down':      dict(label='UV radiation (downward)', unit='W/m²', group='Radiation & surface', lo=0, hi=80),
     'shf':          dict(label='Sensible heat flux', unit='W/m²', group='Radiation & surface', lo=-200, hi=600),
+    # wind direction (drawn as arrows over any layer), wind chill and the weather type (symbols)
+    'wdir10':       dict(label='Wind direction (10 m)', unit='°', group='Wind & pressure', lo=0, hi=360),
+    'windchill':    dict(label='Wind chill', unit='°C', group='Temperature', lo=-45, hi=35),
+    'wx':           dict(label='Weather type', unit='', group='Cloud & visibility', lo=0, hi=254),
+    # sea state (ECMWF WAM, NOAA GFS-Wave)
+    'swh':          dict(label='Wave height (significant)', unit='m', group='Sea & waves', lo=0, hi=20, scale='sqrt'),
+    'mwp':          dict(label='Wave period (mean)', unit='s', group='Sea & waves', lo=0, hi=25),
+    'pp1d':         dict(label='Wave period (peak)', unit='s', group='Sea & waves', lo=0, hi=30),
+    'mwd':          dict(label='Wave direction', unit='°', group='Sea & waves', lo=0, hi=360),
+    # air quality (NOAA GEFS-Aerosols)
+    'aod':          dict(label='Aerosol optical depth (all, 550 nm)', unit='', group='Air quality', lo=0, hi=4, scale='sqrt'),
+    'dust_aod':     dict(label='Saharan dust (optical depth)', unit='', group='Air quality', lo=0, hi=4, scale='sqrt'),
+    'pm25':         dict(label='PM2.5 (fine particles)', unit='µg/m³', group='Air quality', lo=0, hi=400, scale='sqrt'),
+    'pm10':         dict(label='PM10 (coarse particles)', unit='µg/m³', group='Air quality', lo=0, hi=600, scale='sqrt'),
 }
 
 # accumulated-from-T+0 quantities and how they are built
@@ -111,6 +125,27 @@ def _feels(t, td, w_mph):
     e = 6.105 * np.exp(17.27 * td / (237.7 + td))
     at = t + 0.33 * e - 0.70 * (v / 3.6) - 4.0
     return np.where(t <= 10, np.minimum(wc, t), np.where(t >= 26, np.maximum(at, t), t))
+
+
+def _windchill(t, w_mph):
+    """Wind chill (JAG/TI, as the Met Office and NWS): 10 m wind in km/h, defined for T <= 10 C
+    and wind above 4.8 km/h; elsewhere it is the air temperature."""
+    v = w_mph * 1.609344
+    p = np.power(np.maximum(v, 4.8), 0.16)
+    wc = 13.12 + 0.6215 * t - 11.37 * p + 0.3965 * t * p
+    return np.where((t <= 10) & (v > 4.8), np.minimum(wc, t), t)
+
+
+def _wdir(u, v):
+    """Meteorological direction (degrees the wind blows FROM) of earth-relative u, v."""
+    with np.errstate(invalid='ignore'):
+        return np.mod(np.degrees(np.arctan2(-u, -v)), 360.0)
+
+
+def _dewpoint(t, rh):
+    """Dew point (C) from temperature (C) and relative humidity (%), Magnus."""
+    g = np.log(np.clip(rh, 1, 100) / 100.0) + 17.625 * t / (243.04 + t)
+    return 243.04 * g / (17.625 - g)
 
 
 # ── Met Office (UKV, Global) ────────────────────────────────────────────────
@@ -164,6 +199,11 @@ class MetOffice:
         return f'{MO_BUCKET}/{self.model}/{run:%Y%m%dT%H%MZ}/{vt:%Y%m%dT%H%MZ}-PT{h:04d}H00M-{name}.nc'
 
     def _read(self, run, h, name, level=None):
+        a, units, geo = self._load(run, h, name, level)
+        return self._to_display(a, geo), units
+
+    def _load(self, run, h, name, level=None):
+        """The field on the model's own grid: (array, units, geometry)."""
         blob = get(self.url(run, h, name), tries=3, timeout=120)
         with NC_LOCK:
             ds = open_nc(blob)
@@ -179,7 +219,7 @@ class MetOffice:
                 a = a[k]
             geo = self._geo(ds)
             ds.close()
-        return self._to_display(a, geo), units
+        return a, units, geo
 
     def _geo(self, ds):
         if 'projection_x_coordinate' in ds.variables:
@@ -222,6 +262,17 @@ class MetOffice:
             td, _ = self._read(run, h, F['td2'])
             w, _ = self._read(run, h, F['wind10'])
             return _feels(t - 273.15, td - 273.15, w * MPH)
+        if var == 'windchill':
+            t, _ = self._read(run, h, F['t2'])
+            w, _ = self._read(run, h, F['wind10'])
+            return _windchill(t - 273.15, w * MPH)
+        if var == 'wdir10':
+            # direction cannot be interpolated across north (359 -> 1): go through the wind's
+            # components on the model grid, interpolate those, and take the direction after
+            s, _, geo = self._load(run, h, F['wind10'])
+            d, _, _ = self._load(run, h, 'wind_direction_at_10m')
+            r = np.radians(d)
+            return _wdir(self._to_display(-s * np.sin(r), geo), self._to_display(-s * np.cos(r), geo))
         if var in self.pl_files:
             name, level = self.pl_files[var]
             a, _ = self._read(run, h, name, level)
@@ -266,7 +317,7 @@ class UKV(MetOffice):
         'shf': 'sensible_heat_flux_at_surface',
     }
     pl_files = {'wbpt850': ('wet_bulb_potential_temperature_on_pressure_levels', 85000.0)}
-    variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'feels', 'wbpt850']
+    variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'feels', 'wbpt850', 'windchill', 'wdir10', 'wx']
 
 
 class MOGlobal(MetOffice):
@@ -287,7 +338,7 @@ class MOGlobal(MetOffice):
         'lw_down': 'radiation_flux_in_longwave_downward_at_surface', 'uv_down': 'radiation_flux_in_uv_downward_at_surface',
         'trop_p': 'pressure_at_tropopause',
     }
-    variables = list(files) + ['precip_1h', 'precip_total', 'feels']
+    variables = list(files) + ['precip_1h', 'precip_total', 'feels', 'windchill', 'wdir10', 'wx']
 
 
 # ── ECMWF (IFS, AIFS) ───────────────────────────────────────────────────────
@@ -309,10 +360,14 @@ class ECMWF:
         't850': [('pl', 't', 850)], 't500': [('pl', 't', 500)], 'z500': [('pl', 'gh', 500)], 'rh700': [('pl', 'r', 700)],
         'wind850': [('pl', 'u', 850), ('pl', 'v', 850)], 'wind500': [('pl', 'u', 500), ('pl', 'v', 500)],
         'wind250': [('pl', 'u', 250), ('pl', 'v', 250)], 'sw_down': [('sfc', 'ssrd')], 'lw_down': [('sfc', 'strd')],
+        'wdir10': [('sfc', '10u'), ('sfc', '10v')], 'windchill': [('sfc', '2t'), ('sfc', '10u'), ('sfc', '10v')],
+        # the wave model (ECMWF WAM), a stream of its own beside the atmosphere
+        'swh': [('sfc', 'swh')], 'mwp': [('sfc', 'mwp')], 'pp1d': [('sfc', 'pp1d')], 'mwd': [('sfc', 'mwd')],
     }
-    variables = ['precip_rate', 'precip_total', 'snow_total', 't2', 'td2', 'rh2', 'tskin', 'feels', 'wind10', 'gust10',
-                 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'cape_mu', 'pw', 't850', 't500', 'z500', 'rh700',
-                 'wind850', 'wind500', 'wind250', 'sw_down', 'lw_down']
+    WAVE = {'swh', 'mwp', 'pp1d', 'mwd'}
+    variables = ['precip_rate', 'precip_total', 'snow_total', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10',
+                 'gust10', 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'cape_mu', 'pw', 't850', 't500', 'z500', 'rh700',
+                 'wind850', 'wind500', 'wind250', 'sw_down', 'lw_down', 'wx', 'swh', 'mwp', 'pp1d', 'mwd']
 
     def __init__(self):
         self._idx, self._host, self._ix = {}, {}, None
@@ -321,16 +376,17 @@ class ECMWF:
         long = run.hour in (0, 12)
         return list(range(0, 145, 3)) + list(range(150, 241, 6)) if long else list(range(0, 91, 3))
 
-    def base(self, run, h, host):
-        return f'{host}/{run:%Y%m%d}/{run:%H}z/{self.path}/{run:%Y%m%d%H}0000-{h}h-{self.stem}'
+    def base(self, run, h, host, wave=False):
+        path, stem = ('ifs/0p25/wave', 'wave-fc') if wave else (self.path, self.stem)
+        return f'{host}/{run:%Y%m%d}/{run:%H}z/{path}/{run:%Y%m%d%H}0000-{h}h-{stem}'
 
-    def index(self, run, h):
-        k = (run, h)
+    def index(self, run, h, wave=False):
+        k = (run, h, wave)
         if k not in self._idx:
             last = None
             for host in ECM_HOSTS:
                 try:
-                    txt = get(self.base(run, h, host) + '.index', tries=2, timeout=8).decode()
+                    txt = get(self.base(run, h, host, wave) + '.index', tries=2, timeout=8).decode()
                     if txt.strip():
                         self._idx[k], self._host[k] = ecmwf_index(txt), host
                         break
@@ -367,9 +423,9 @@ class ECMWF:
                 break
         return out
 
-    def _get(self, run, h, wants):
-        idx = self.index(run, h)
-        host = self._host[(run, h)]
+    def _get(self, run, h, wants, wave=False):
+        idx = self.index(run, h, wave)
+        host = self._host[(run, h, wave)]
         ranges, names = [], []
         for w in wants:
             lt, p = w[0], w[1]
@@ -381,10 +437,14 @@ class ECMWF:
                 raise KeyError(f'{w} not in {self.id} T+{h}')
             ranges.append((rec['_offset'], rec['_offset'] + rec['_length'] - 1, len(names)))
             names.append(w)
-        blobs = fetch_ranges(self.base(run, h, host) + '.grib2', ranges, gap=0, workers=12)
+        blobs = fetch_ranges(self.base(run, h, host, wave) + '.grib2', ranges, gap=0, workers=12)
         out = []
         for i in range(len(names)):
             a, meta = decode_grib(blobs[i])
+            if names[i][1] == 'mwd':                       # a direction: interpolate its components
+                r = np.radians(np.asarray(a, np.float32).reshape(meta['Nj'], meta['Ni']))
+                out.append(_wdir(-self._to_display(np.sin(r).ravel(), meta), -self._to_display(np.cos(r).ravel(), meta)))
+                continue
             out.append(self._to_display(a, meta))
         return out
 
@@ -402,9 +462,13 @@ class ECMWF:
 
     def field(self, run, h, var, prev_h, prev_raw=None):
         S = self.SPEC[var]
-        A = self._get(run, h, S)
+        A = self._get(run, h, S, wave=var in self.WAVE)
         if var in ('t2', 'td2', 'tskin', 't850', 't500'):
             return A[0] - 273.15
+        if var == 'wdir10':
+            return _wdir(A[0], A[1])
+        if var == 'windchill':
+            return _windchill(A[0] - 273.15, np.hypot(A[1], A[2]) * MPH)
         if var in ('wind10', 'wind100', 'wind850', 'wind500', 'wind250'):
             return np.hypot(A[0], A[1]) * MPH
         if var == 'gust10':
@@ -434,9 +498,9 @@ class AIFS(ECMWF):
     def schedule(self, run):
         return list(range(0, 241, 6))
 
-    variables = ['precip_rate', 'precip_total', 'snow_total', 't2', 'td2', 'rh2', 'tskin', 'feels', 'wind10', 'wind100',
-                 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'pw', 't850', 't500', 'z500', 'wind850', 'wind500', 'wind250',
-                 'sw_down', 'lw_down']
+    variables = ['precip_rate', 'precip_total', 'snow_total', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10',
+                 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'pw', 't850', 't500', 'z500', 'wind850', 'wind500', 'wind250',
+                 'sw_down', 'lw_down', 'wx']
 
 
 # ── NOAA GFS ────────────────────────────────────────────────────────────────
@@ -461,11 +525,16 @@ class GFS:
         'wind850': [('UGRD', '850 mb'), ('VGRD', '850 mb')], 'wind500': [('UGRD', '500 mb'), ('VGRD', '500 mb')],
         'wind250': [('UGRD', '250 mb'), ('VGRD', '250 mb')], 'sw_down': [('DSWRF', 'surface')],
         'frz': [('HGT', '0C isotherm')], 'trop_p': [('PRES', 'tropopause')],
+        'wdir10': [('UGRD', '10 m above ground'), ('VGRD', '10 m above ground')],
+        'windchill': [('TMP', '2 m above ground'), ('UGRD', '10 m above ground'), ('VGRD', '10 m above ground')],
+        # NOAA GFS-Wave (WAVEWATCH III), its own file beside the atmosphere
+        'swh': [('HTSGW', 'surface')], 'pp1d': [('PERPW', 'surface')], 'mwd': [('DIRPW', 'surface')],
     }
-    variables = ['precip_rate', 'precip_total', 'refc', 't2', 'td2', 'rh2', 'tskin', 'feels', 'wind10', 'gust10',
+    WAVE = {'swh', 'pp1d', 'mwd'}
+    variables = ['precip_rate', 'precip_total', 'refc', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10', 'gust10',
                  'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'cape_sb', 'cin_sb', 'li', 'srh3', 'pw',
                  'snow_depth', 'snow_swe', 'frz', 't850', 't500', 'z500', 'rh700', 'wind850', 'wind500', 'wind250',
-                 'trop_p', 'sw_down']
+                 'trop_p', 'sw_down', 'wx', 'swh', 'pp1d', 'mwd']
 
     def __init__(self):
         self._idx, self._ix = {}, None
@@ -473,7 +542,9 @@ class GFS:
     def schedule(self, run):
         return list(range(0, 121)) + list(range(123, 241, 3))
 
-    def url(self, run, h):
+    def url(self, run, h, wave=False):
+        if wave:
+            return f'{GFS_BUCKET}/gfs.{run:%Y%m%d}/{run:%H}/wave/gridded/gfswave.t{run:%H}z.global.0p25.f{h:03d}.grib2'
         return f'{GFS_BUCKET}/gfs.{run:%Y%m%d}/{run:%H}/atmos/gfs.t{run:%H}z.pgrb2.0p25.f{h:03d}'
 
     def runs(self, n=4):
@@ -499,15 +570,16 @@ class GFS:
                 break
         return out
 
-    def index(self, run, h):
-        k = (run, h)
+    def index(self, run, h, wave=False):
+        k = (run, h, wave)
         if k not in self._idx:
-            lines = [l for l in get(self.url(run, h) + '.idx', tries=3, timeout=60).decode().splitlines() if l.strip()]
+            lines = [l for l in get(self.url(run, h, wave) + '.idx', tries=3, timeout=60).decode().splitlines() if l.strip()]
             recs = []
             for i, l in enumerate(lines):
                 p = l.split(':')
                 end = int(lines[i + 1].split(':')[1]) - 1 if i + 1 < len(lines) else None
-                recs.append({'var': p[3], 'level': p[4], 'desc': p[5] if len(p) > 5 else '', 'start': int(p[1]), 'end': end})
+                recs.append({'var': p[3], 'level': p[4], 'desc': p[5] if len(p) > 5 else '', 'start': int(p[1]), 'end': end,
+                             'extra': ':'.join(p[6:])})
             self._idx[k] = recs
         return self._idx[k]
 
@@ -522,20 +594,29 @@ class GFS:
         return c[0]
 
     def field(self, run, h, var, prev_h, prev_raw=None):
-        recs = self.index(run, h)
+        wave = var in self.WAVE
+        recs = self.index(run, h, wave)
         wants = []
         for v, lev in self.SPEC[var]:
             r = self._pick(recs, v, lev)
             if r is None:
-                raise KeyError(f'{v}:{lev} not in GFS T+{h}')
+                raise KeyError(f'{v}:{lev} not in {self.id} T+{h}')
             wants.append((r['start'], r['end'], len(wants)))
-        blobs = fetch_ranges(self.url(run, h), wants, gap=0, workers=12)
+        blobs = fetch_ranges(self.url(run, h, wave), wants, gap=0, workers=12)
         A = []
         for i in range(len(wants)):
             a, meta = decode_grib(blobs[i])
+            if var == 'mwd':                               # a direction: interpolate its components
+                r = np.radians(np.asarray(a, np.float32))
+                A.append(_wdir(-ECMWF._to_display(self, np.sin(r), meta), -ECMWF._to_display(self, np.cos(r), meta)))
+                continue
             A.append(ECMWF._to_display(self, a, meta))
         if var in ('t2', 'td2', 'tskin', 'feels', 't850', 't500'):
             return A[0] - 273.15
+        if var == 'wdir10':
+            return _wdir(A[0], A[1])
+        if var == 'windchill':
+            return _windchill(A[0] - 273.15, np.hypot(A[1], A[2]) * MPH)
         if var in ('wind10', 'wind100', 'wind850', 'wind500', 'wind250'):
             return np.hypot(A[0], A[1]) * MPH
         if var == 'gust10':
@@ -555,13 +636,96 @@ class GFS:
         return A[0]
 
 
-MODELS = {m.id: m for m in (UKV(), MOGlobal(), ECMWF(), AIFS(), GFS())}
+# ── NOAA GEFS ensemble mean, as a forecast model in its own right (0.5°, 16 days) ──────────
+GEFS_BUCKET = 'https://noaa-gefs-pds.s3.amazonaws.com'
+
+
+class GEFSMean(GFS):
+    id, label, res_km = 'gefs_mean', 'NOAA GEFS (ensemble mean)', 50.0
+    SPEC = {
+        't2': [('TMP', '2 m above ground')], 'rh2': [('RH', '2 m above ground')],
+        'td2': [('TMP', '2 m above ground'), ('RH', '2 m above ground')],
+        'wind10': [('UGRD', '10 m above ground'), ('VGRD', '10 m above ground')],
+        'wdir10': [('UGRD', '10 m above ground'), ('VGRD', '10 m above ground')],
+        'windchill': [('TMP', '2 m above ground'), ('UGRD', '10 m above ground'), ('VGRD', '10 m above ground')],
+        'feels': [('TMP', '2 m above ground'), ('RH', '2 m above ground'), ('UGRD', '10 m above ground'), ('VGRD', '10 m above ground')],
+        'mslp': [('PRMSL', 'mean sea level')], 'precip_rate': [('APCP', 'surface')], 'tcc': [('TCDC', 'entire atmosphere')],
+        'cape_mu': [('CAPE', '180-0 mb above ground')], 'pw': [('PWAT', 'entire atmosphere (considered as a single layer)')],
+        'snow_depth': [('SNOD', 'surface')], 't850': [('TMP', '850 mb')], 't500': [('TMP', '500 mb')], 'z500': [('HGT', '500 mb')],
+        'rh700': [('RH', '700 mb')], 'wind850': [('UGRD', '850 mb'), ('VGRD', '850 mb')],
+        'wind500': [('UGRD', '500 mb'), ('VGRD', '500 mb')], 'wind250': [('UGRD', '250 mb'), ('VGRD', '250 mb')],
+        'sw_down': [('DSWRF', 'surface')],
+    }
+    WAVE = set()
+    variables = ['precip_rate', 't2', 'td2', 'rh2', 'feels', 'windchill', 'wind10', 'wdir10', 'mslp', 'tcc', 'cape_mu', 'pw',
+                 'snow_depth', 't850', 't500', 'z500', 'rh700', 'wind850', 'wind500', 'wind250', 'sw_down', 'wx']
+
+    def schedule(self, run):
+        return list(range(0, 241, 3)) + list(range(246, 385, 6))
+
+    def url(self, run, h, wave=False):
+        return f'{GEFS_BUCKET}/gefs.{run:%Y%m%d}/{run:%H}/atmos/pgrb2ap5/geavg.t{run:%H}z.pgrb2a.0p50.f{h:03d}'
+
+    def field(self, run, h, var, prev_h, prev_raw=None):
+        if var == 'precip_rate':
+            # GEFS buckets rain over 6 h (0-3, 0-6, 6-9, 6-12, ...): the mean rate over the bucket
+            if h == 0:
+                return np.zeros((NY, NX), np.float32)
+            r = self._pick(self.index(run, h), 'APCP', 'surface')
+            a, meta = decode_grib(fetch_ranges(self.url(run, h), [(r['start'], r['end'], 0)], gap=0, workers=2)[0])
+            hrs = re.match(r'(\d+)-(\d+) hour', r['desc'])
+            span = int(hrs.group(2)) - int(hrs.group(1)) if hrs else 6
+            return ECMWF._to_display(self, a, meta) / max(span, 1)
+        if var in ('td2', 'feels'):
+            S = self.SPEC[var]
+            recs = self.index(run, h)
+            rr = [self._pick(recs, v, lev) for v, lev in S]
+            blobs = fetch_ranges(self.url(run, h), [(r['start'], r['end'], i) for i, r in enumerate(rr)], gap=0, workers=4)
+            A = [ECMWF._to_display(self, *decode_grib(blobs[i])) for i in range(len(rr))]
+            t = A[0] - 273.15
+            td = _dewpoint(t, A[1])
+            return td if var == 'td2' else _feels(t, td, np.hypot(A[2], A[3]) * MPH)
+        return super().field(run, h, var, prev_h, prev_raw)
+
+
+# ── NOAA GEFS-Aerosols: dust, smoke and fine particles (0.25°, 5 days) ───────────────────
+class GEFSAerosol(GFS):
+    id, label, res_km = 'gefs_aer', 'NOAA GEFS-Aerosols', 25.0
+    # (GRIB name, level, a phrase the record's extra fields must contain)
+    PICK = {
+        'aod': ('AOTK', 'entire atmosphere', 'aerosol=Total aerosol:aerosol_size <2e-05:aerosol_wavelength >=5.45e-07'),
+        'dust_aod': ('AOTK', 'entire atmosphere', 'aerosol=Dust dry:aerosol_size <2e-05:aerosol_wavelength >=5.45e-07'),
+        'pm25': ('PMTF', 'surface', 'aerosol=Total aerosol'),
+        'pm10': ('PMTC', 'surface', 'aerosol=Total aerosol'),
+    }
+    WAVE = set()
+    variables = ['aod', 'dust_aod', 'pm25', 'pm10']
+
+    def schedule(self, run):
+        return list(range(0, 121, 3))
+
+    def url(self, run, h, wave=False):
+        return f'{GEFS_BUCKET}/gefs.{run:%Y%m%d}/{run:%H}/chem/pgrb2ap25/gefs.chem.t{run:%H}z.a2d_0p25.f{h:03d}.grib2'
+
+    def field(self, run, h, var, prev_h, prev_raw=None):
+        name, lev, phrase = self.PICK[var]
+        r = next((x for x in self.index(run, h) if x['var'] == name and x['level'] == lev and x['extra'].startswith(phrase)), None)
+        if r is None:
+            raise KeyError(f'{var} not in GEFS-Aerosols T+{h}')
+        a, meta = decode_grib(fetch_ranges(self.url(run, h), [(r['start'], r['end'], 0)], gap=0, workers=2)[0])
+        a = ECMWF._to_display(self, a, meta)
+        return a                                     # PMTF/PMTC are published in micrograms/m3
+
+
+MODELS = {m.id: m for m in (UKV(), MOGlobal(), ECMWF(), AIFS(), GFS(), GEFSMean(), GEFSAerosol())}
 SOURCES = {
     'ukv': 'Met Office UKV 2 km — AWS open data (uk-deterministic-2km)',
     'mo_global': 'Met Office Global 10 km — AWS open data (global-deterministic-10km)',
     'ifs': "ECMWF IFS 0.25° — ECMWF open data (ECMWF's Google Cloud copy; the AWS copy as fallback)",
     'aifs': "ECMWF AIFS 0.25° — ECMWF open data (ECMWF's Google Cloud copy; the AWS copy as fallback)",
-    'gfs': 'NOAA GFS 0.25° — AWS open data (noaa-gfs-bdp-pds)',
+    'gfs': 'NOAA GFS 0.25° — AWS open data (noaa-gfs-bdp-pds); waves from GFS-Wave (WAVEWATCH III)',
+    'gefs_mean': 'NOAA GEFS 0.5° ensemble mean of 31 members, to 16 days — AWS open data (noaa-gefs-pds)',
+    'gefs_aer': 'NOAA GEFS-Aerosols 0.25°: dust, smoke, sea salt and fine particles — AWS open data (noaa-gefs-pds, chem)',
 }
 # variables whose frames are differences of an accumulation between consecutive steps
 DIFFERENCED = {('ifs', 'precip_rate'), ('aifs', 'precip_rate'), ('ifs', 'sw_down'), ('aifs', 'sw_down'),

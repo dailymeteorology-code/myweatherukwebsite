@@ -108,6 +108,57 @@ def lines():
     return out
 
 
+MWUK_BASEMAP = REPO.parent / 'mwuk-graphics' / 'assets' / 'basemap'
+ROAD_CLASSES = ('motorway', 'trunk', 'primary')
+
+
+def roads():
+    """The motion graphics' road network (OpenStreetMap, ODbL; mwuk-graphics basemap bundle) on
+    the display grid: motorway, trunk and primary roads, each as a coarse national set and the
+    full-detail set, so the viewer can add detail as it zooms in. roads.bin holds int16 grid
+    pixels x16 per line plus uint32 line starts; roads.json indexes it."""
+    meta = json.loads((MWUK_BASEMAP / 'basemap.json').read_text())
+    blob = (MWUK_BASEMAP / 'basemap.bin').read_bytes()
+    ent = {e['name']: e for e in meta['entries']}
+    p = meta['projection']
+    inv = Transformer.from_crs(f"+proj=tmerc +lat_0={p['lat0']} +lon_0={p['lon0']} +k=1 +x_0=0 +y_0=0 +R={p['radiusKm'] * 1000} +units=km",
+                               'EPSG:4326', always_xy=True)
+
+    def arr(name, dt):
+        e = ent[name]
+        return np.frombuffer(blob, dt, e['length'], e['offset'])
+    index, parts, at = {}, [], 0
+    for cls in ROAD_CLASSES:
+        for lod, tol in (('coarse', 0.45), ('fine', 0.06)):
+            if f'roads.{cls}.{lod}.xy' not in ent:
+                continue
+            xy = arr(f'roads.{cls}.{lod}.xy', np.float32).reshape(-1, 2)
+            off = arr(f'roads.{cls}.{lod}.off', np.uint32)
+            lon, lat = inv.transform(xy[:, 0].astype(float), xy[:, 1].astype(float))
+            px, py = to_px(lon, lat)
+            pts, starts = [], [0]
+            for i in range(len(off) - 1):
+                a, b = int(off[i]), int(off[i + 1])
+                if b - a < 2:
+                    continue
+                x, y = px[a:b], py[a:b]
+                if np.all((x < -5) | (x > NX + 5) | (y < -5) | (y > NY + 5)):
+                    continue
+                x, y = thin(x, y, tol)
+                if len(x) < 2:
+                    continue
+                pts.append(np.c_[x, y])
+                starts.append(starts[-1] + len(x))
+            q = np.round(np.vstack(pts) * 16).astype(np.int16).ravel()
+            s = np.asarray(starts, np.uint32)
+            index[f'{cls}.{lod}'] = {'xy': [at, q.size], 'off': [at + q.nbytes, s.size], 'lines': len(pts)}
+            parts += [q.tobytes(), s.tobytes()]
+            at += q.nbytes + s.nbytes
+    (STATIC / 'roads.bin').write_bytes(b''.join(parts))
+    write_json(STATIC / 'roads.json', {'scale': 16, 'classes': index, 'source': 'OpenStreetMap contributors (ODbL), via the MyWeatherUK graphics basemap'})
+    return index
+
+
 def land_mask():
     t, arcs = topo('land-10m.json')
     img = Image.new('L', (NX * SS, NY * SS), 0)
@@ -226,10 +277,15 @@ def main():
     px, py = to_px([c[2] for c in CITIES], [c[1] for c in CITIES])
     write_json(STATIC / 'cities.json', [{'name': c[0], 'x': round(float(x), 2), 'y': round(float(y), 2), 'rank': c[3]}
                                         for c, x, y in zip(CITIES, px, py) if 0 <= x <= NX and 0 <= y <= NY])
+    roads()
     basemap()
     styled_basemaps()
     print('static layers written to', STATIC)
 
 
 if __name__ == '__main__':
-    main()
+    import sys
+    if sys.argv[1:] == ['roads']:                  # roads only (the basemaps take minutes)
+        print(roads())
+    else:
+        main()

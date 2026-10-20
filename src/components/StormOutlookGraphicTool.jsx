@@ -17,6 +17,7 @@ import { RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConf
 import { buildOutlookLayers, buildHiResOutlookLayers } from '@/lib/tcmOutlookLayers';
 import { loadLatestTCMFromDB } from '@/lib/tcmForecastCache';
 import TimelinePill from '@/components/tcm/StormOutlookTimelinePill';
+import { RADAR_BANDS, UKRadarLayer } from '@/lib/ukRadar';
 
 // --- Conditional Severe -----------------------------------------------------
 // A risk tier that sits BETWEEN High and Severe. Like Severe it flags the
@@ -115,39 +116,10 @@ const isSevereId = (id) => id === 'Severe';
 const isCondSevereId = (id) => id === COND_SEVERE_ID;
 
 // --- Radar mode: rain-rate colour levels + radar hazards ---
-// These are the ACTUAL RainViewer palette colours, not an approximation, so the
-// on-graphic key matches the radar imagery pixel-for-pixel.
-//
-// Scheme: "Universal Blue" — column 3 of RainViewer's official colour table,
-//   https://www.rainviewer.com/files/rainviewer_api_colors_table.csv
-// (the table holds two stacked blocks: rain in rows 1-128, snow in 129-256.
-// These are the RAIN colours.)
-//
-// VERIFIED against live tiles rather than assumed: sampling the actual pixels
-// returned by the tile endpoint over the UK and matching them against every
-// column of that CSV gives 39 exact RGBA hits on Universal Blue and ZERO on all
-// eight other schemes. Note also that the tile endpoint currently IGNORES the
-// colour-scheme segment of the URL — requesting schemes 0 through 7 returns a
-// byte-identical PNG (same SHA-256) — and always serves Universal Blue. The URL
-// below still asks for `/2/` (Universal Blue's id) so that IF RainViewer ever
-// starts honouring the parameter, the tiles stay on the scheme this key
-// documents instead of silently switching palette and breaking the key again.
-//
-// Bands are labelled with their dBZ span and the equivalent rain rate via
-// Marshall-Palmer (Z = 200 R^1.6). Above ~55 dBZ the implied rain rates stop
-// being physically meaningful (that return is hail, not rainfall), so the top
-// band is labelled accordingly.
-const RADAR_LEVELS = [
-  { id: 'TraceRain',   short: 'TRACE',      range: '0.1-0.3 mm/h', dbz: '5-14 dBZ',  color: '#cec087' },
-  { id: 'LightRain',   short: 'V.LIGHT',    range: '0.3-0.6 mm/h', dbz: '15-19 dBZ', color: '#88ddee' },
-  { id: 'ModRain',     short: 'LIGHT',      range: '0.6-1.2 mm/h', dbz: '20-24 dBZ', color: '#00a3e0' },
-  { id: 'HeavyRain',   short: 'MODERATE',   range: '1.3-2.4 mm/h', dbz: '25-29 dBZ', color: '#0077aa' },
-  { id: 'VHeavyRain',  short: 'HEAVY',      range: '2.7-5 mm/h',   dbz: '30-34 dBZ', color: '#004a70' },
-  { id: 'IntenseRain', short: 'V.HEAVY',    range: '5.6-10 mm/h',  dbz: '35-39 dBZ', color: '#ffc500' },
-  { id: 'TorrRain',    short: 'INTENSE',    range: '11-20 mm/h',   dbz: '40-44 dBZ', color: '#ff8100' },
-  { id: 'ExtremeRain', short: 'TORRENTIAL', range: '24-86 mm/h',   dbz: '45-54 dBZ', color: '#cd0d00' },
-  { id: 'HailCore',    short: 'HAIL',       range: 'Hail / extreme', dbz: '55+ dBZ', color: '#ff77ff' },
-].map(l => ({ ...l, fill: `${l.color}66`, border: l.color }));
+// The radar is the Met Office 1 km composite (lib/ukRadar: the same radar and palette as the
+// Model Data page and the motion graphics); these bands are that palette, so the key matches
+// the imagery. Ids are kept from the old key so saved graphics still resolve.
+const RADAR_LEVELS = RADAR_BANDS;
 const RADAR_BY_ID = Object.fromEntries(RADAR_LEVELS.map(l => [l.id, l]));
 const LEVEL_LOOKUP = { ...RADAR_BY_ID, ...RISK_BY_ID };
 
@@ -889,56 +861,6 @@ function CityMarkersLayer({ region = null, k = 1, mask = null }) {
   );
 }
 
-// --- Live rain radar overlay (rain-only tiles, no basemap) ---
-function RadarOverlayLayer({ opacity = 0.85, bbox = MAP_BBOX }) {
-  const bboxKey = `${bbox.lonMin}-${bbox.lonMax}-${bbox.latMin}-${bbox.latMax}`;
-  const [tiles, setTiles] = useState(null);
-  useEffect(() => {
-    (async () => {
-      try {
-        const meta = await fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json());
-        const frames = meta?.radar?.past || [];
-        const frame = frames[frames.length - 1];
-        if (!frame) return;
-        const z = 6, n = 2 ** z;
-        const lon2x = lon => ((lon + 180) / 360) * n;
-        const lat2y = lat => ((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2) * n;
-        const xMin = Math.floor(lon2x(bbox.lonMin)), xMax = Math.floor(lon2x(bbox.lonMax));
-        const yMin = Math.floor(lat2y(bbox.latMax)), yMax = Math.floor(lat2y(bbox.latMin));
-        const out = [];
-        for (let x = xMin; x <= xMax; x++) {
-          for (let y = yMin; y <= yMax; y++) {
-            const lonW = (x / n) * 360 - 180, lonE = ((x + 1) / n) * 360 - 180;
-            const latN = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
-            const latS = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / n))) * 180 / Math.PI;
-            const [px, py] = projectPt(lonW, latN);
-            const [px2, py2] = projectPt(lonE, latS);
-            out.push({
-              // `/2/` = Universal Blue, the scheme RADAR_LEVELS documents. The
-              // endpoint currently ignores this segment and serves Universal
-              // Blue regardless, but asking for it explicitly keeps the tiles
-              // and the on-graphic key in sync if that ever changes.
-              url: `${meta.host}${frame.path}/256/${z}/${x}/${y}/2/1_1.png`,
-              x: px, y: py, w: px2 - px, h: py2 - py,
-            });
-          }
-        }
-        setTiles(out);
-      } catch { /* radar unavailable - just skip the overlay */ }
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bboxKey]);
-  if (!tiles) return null;
-  return (
-    <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} preserveAspectRatio="xMidYMid meet"
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-      {tiles.map((t, i) => (
-        <image key={i} href={t.url} x={t.x} y={t.y} width={t.w} height={t.h}
-          opacity={opacity} preserveAspectRatio="none" crossOrigin="anonymous" />
-      ))}
-    </svg>
-  );
-}
 
 // --- Blitzortung lightning overlay ---
 const LIGHTNING_SWATCHES = ['#facc15', '#ffffff', '#f87171', '#ec4899', '#22d3ee', '#a78bfa'];
@@ -2491,7 +2413,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
           </div>
         )}
 
-        {/* Active risk — OUTLOOK ONLY. The radar view renders real RainViewer
+        {/* Active risk — OUTLOOK ONLY. The radar view renders the real Met Office radar
             imagery, so the hand-drawn rain-rate palette that used to sit here
             was redundant (and could contradict the actual radar) and has been
             removed. */}
@@ -3157,7 +3079,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                           boxSizing: 'border-box',
                         } : {
                           background: r.color,
-                          // The real RainViewer ramp includes very dark greens and
+                          // The radar ramp includes very dark greens and
                           // reds that would otherwise vanish against the dark
                           // glass card — a hairline keeps every band's chip readable.
                           ...(isRadar ? { border: '1px solid rgba(255,255,255,0.28)', boxSizing: 'border-box' } : {}),
@@ -3228,7 +3150,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 position: 'relative', zIndex: 1, display: 'block', marginTop: 8,
                 fontSize: 7.5, fontWeight: 700, letterSpacing: '0.07em',
                 color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase',
-              }}>{isRadar ? 'Source: RainViewer / Blitzortung' : usesSevere ? 'SVRE = Severe Tstorm risk · COND = conditional' : null}</span>
+              }}>{isRadar ? 'Source: Met Office radar / Blitzortung' : usesSevere ? 'SVRE = Severe Tstorm risk · COND = conditional' : null}</span>
             </div>
 
             {/* Hazards card — hidden while the lightning overlay is active, since
@@ -3394,7 +3316,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
             {!isRadar && <NeighbourLayer regionId={outlookRegion} />}
             <UKOutlineMap region={activeRegionBox} mask={regionMask} />
             <CountyLinesLayer opacity={0.5} region={activeRegionBox} mask={regionMask} />
-            {isRadar && <RadarOverlayLayer opacity={0.88} bbox={(UK_REGIONS.find(r => r.id === radarRegion) || UK_REGIONS[0]).bbox} />}
+            {isRadar && <UKRadarLayer opacity={0.88} projectPt={projectPt} viewW={VIEW_W} viewH={VIEW_H} bbox={(UK_REGIONS.find(r => r.id === radarRegion) || UK_REGIONS[0]).bbox} />}
             {isRadar && <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 2, backgroundImage: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.07) 0px, rgba(0,0,0,0.07) 1px, transparent 1px, transparent 3px)' }} />}
             {showShapes && (
               <svg viewBox="0 0 1000 1000" preserveAspectRatio="none"
@@ -3652,7 +3574,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                   <span style={{
                     fontSize: 7.5, fontWeight: 700, color: 'rgba(255,255,255,0.40)',
                     letterSpacing: '0.10em', textTransform: 'uppercase', textAlign: 'right', lineHeight: 1.5,
-                  }}>Radar: RainViewer · Lightning: Blitzortung</span>
+                  }}>Radar: Met Office · Lightning: Blitzortung</span>
                 </div>
               );
             })()}

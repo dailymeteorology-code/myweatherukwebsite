@@ -41,6 +41,42 @@ def steps_for(model, run):
     return M.steps(run) if hasattr(M, 'steps') else M.schedule(run)
 
 
+def derived(model, run_s, var, steps, d, status):
+    """A field made from other variables' frames (mdata/derived.py): make those first (any
+    already complete are reused), then combine them step by step."""
+    import json
+    from .common import read_frame
+    from .derived import weather_type, wx_inputs
+    M = MODELS[model]
+    run = _utc(run_s)
+    deps = wx_inputs(M.variables)
+    for v in deps:
+        try:
+            done = json.loads((run_dir(model, run, v) / 'status.json').read_text()).get('state') == 'complete'
+        except Exception:
+            done = False
+        if not done:
+            main(model, run_s, v)
+    for h in steps:
+        if (d / f'{h}.bin').exists():
+            status['done'].append(h)
+            continue
+        f = {}
+        for v in deps:
+            p = run_dir(model, run, v) / f'{h}.bin'
+            if p.exists():
+                f[v] = read_frame(p)[0]
+        if 'precip_rate' not in f and 'tcc' not in f:
+            status['missing'].append(h)
+            continue
+        f.setdefault('precip_rate', np.zeros_like(next(iter(f.values()))))
+        vt = run + timedelta(hours=h)
+        write_frame(d / f'{h}.bin', weather_type(f), VARIABLES[var],
+                    {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat()})
+        status['done'].append(h)
+        write_json(d / 'status.json', status)
+
+
 def main(model, run_s, var, first=None):
     logging.disable(logging.WARNING)
     warnings.filterwarnings('ignore')
@@ -53,6 +89,12 @@ def main(model, run_s, var, first=None):
     status = {'model': model, 'run': run.isoformat(), 'var': var, 'steps': steps, 'done': [], 'missing': [],
               'state': 'running', 'started': time.time()}
     write_json(d / 'status.json', status)
+    if var == 'wx':
+        derived(model, run_s, var, steps, d, status)
+        status['state'] = 'complete'
+        status['seconds'] = round(time.time() - status['started'], 1)
+        write_json(d / 'status.json', status)
+        return
     accum = var in ACCUM and model in ('ukv', 'mo_global')
     diff = (model, var) in DIFFERENCED
     need_all = accum or diff                       # these need every raw step, even if frames exist

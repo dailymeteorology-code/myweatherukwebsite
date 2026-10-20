@@ -171,17 +171,44 @@ def encode(a, enc):
     return out
 
 
+def _replace(tmp, path):
+    """os.replace, retried: Windows refuses while another process (the server) has the target open."""
+    import time
+    for i in range(8):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.15 * (i + 1))
+    os.replace(tmp, path)
+
+
+def read_frame(path: Path):
+    """-> (float32 array, header): the inverse of write_frame (to within the encoding step)."""
+    raw = gzip.decompress(Path(path).read_bytes())
+    n = struct.unpack('<I', raw[:4])[0]
+    h = json.loads(raw[4:4 + n])
+    q = np.frombuffer(raw, np.uint8, h['nx'] * h['ny'], 4 + n).reshape(h['ny'], h['nx'])
+    if h.get('scale') == 'sqrt':
+        flo, fhi = np.sqrt(max(h['lo'], 0)), np.sqrt(h['hi'])
+        v = (flo + q / 254.0 * (fhi - flo)) ** 2
+    else:
+        v = h['lo'] + q / 254.0 * (h['hi'] - h['lo'])
+    return np.where(q == 255, np.nan, v).astype(np.float32), h
+
+
 def write_frame(path: Path, a, enc, meta):
     path.parent.mkdir(parents=True, exist_ok=True)
-    head = json.dumps(dict(meta, nx=NX, ny=NY, lo=enc['lo'], hi=enc['hi'], scale=enc.get('scale', 'lin'))).encode()
+    ny, nx = np.shape(a)
+    head = json.dumps(dict(meta, nx=nx, ny=ny, lo=enc['lo'], hi=enc['hi'], scale=enc.get('scale', 'lin'))).encode()
     raw = struct.pack('<I', len(head)) + head + encode(a, enc).tobytes()
     tmp = path.with_suffix('.tmp')
     tmp.write_bytes(gzip.compress(raw, 6))
-    os.replace(tmp, path)
+    _replace(tmp, path)
 
 
 def write_json(path: Path, obj):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + '.tmp')
     tmp.write_text(json.dumps(obj, separators=(',', ':')))
-    os.replace(tmp, path)
+    _replace(tmp, path)
