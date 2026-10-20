@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import math
+import threading
 from datetime import timedelta
 
 import numpy as np
@@ -98,34 +99,91 @@ def consensus(items, shape):
     return wmean(out, shape)
 
 
+def _spawn(fn, *args):
+    """fn(*args) on a daemon thread, as a Future: a fetch still stuck when the job ends
+    must not hold the process open (an executor's threads are joined at exit)."""
+    fut = cf.Future()
+
+    def run():
+        try:
+            fut.set_result(fn(*args))
+        except BaseException as e:            # noqa: BLE001 -- handed to the caller
+            fut.set_exception(e)
+    threading.Thread(target=run, daemon=True).start()
+    return fut
+
+
 class Blender:
+    #: A source still fetching this long after its frame was asked for is left out of that
+    #: frame, and the frame's manifest entry says so (fetch_errors). A safety net, not a
+    #: trim: on 20 Oct 2026 the slowest normal first-frame fetch was ~90 s, while single
+    #: frames stalled for 136-269 s.
+    FETCH_BUDGET_S = 120
+
     def __init__(self, init, horizon_h, only=None):
         self.g = grid()
         self.terr = terrain.load(GRID_NAME)
         readers = {k: READERS[k]() for k in READERS if only is None or k in only}
         self.cycles = {}
+        until = init + timedelta(hours=horizon_h)
         for k, r in readers.items():
-            rr = r.find_run(init, need_lead_h=min(horizon_h, 54)) if k in ('ukv', 'icon_eu') else None
-            rr = rr or r.find_run(init)
+            if k in ('ifs', 'aifs', 'ifs_ens', 'aifs_ens'):
+                rr = r.find_run(init, until=until)       # complete to the run's end on the Google copy
+            else:
+                rr = r.find_run(init, need_lead_h=min(horizon_h, 54)) if k in ('ukv', 'icon_eu') else None
+                rr = rr or r.find_run(init)
             if rr:
                 self.cycles[k] = rr
         log('v5 blend cycles:', {k: f'{v:%d %HZ}' for k, v in self.cycles.items()})
         self.caches = {k: SourceCache(k, readers[k], self.cycles[k], self.g, self.terr) for k in self.cycles}
+        self.busy = {}                   # source -> its fetch for an earlier frame, still running
+        self.fetch_log = {}
 
-    def at(self, vt):
+    def at(self, vt, budget_s=None, on_source=None):
         """Every source at vt. Each source's fetch time and any failures are kept in
-        self.fetch_log[vt], so a slow or missing model shows in the frame's manifest entry."""
+        self.fetch_log[vt], so a slow or missing model shows in the frame's manifest entry.
+        A source over the fetch budget is left out of this frame; it keeps fetching in the
+        background (a SourceCache is never used by two threads at once) and rejoins the
+        first frame asked for after it finishes. on_source(key, value) is called as each
+        source arrives, so its processing can start while slower sources still download."""
         import time
+        budget = self.FETCH_BUDGET_S if budget_s is None else budget_s
 
         def one(c):
             t0, n = time.time(), len(c.errors)
             v = c.at(vt)
             return v, round(time.time() - t0, 1), c.errors[n:]
-        with cf.ThreadPoolExecutor(len(self.caches) or 1) as ex:
-            res = dict(zip(self.caches, ex.map(one, self.caches.values())))
-        self.fetch_log = getattr(self, 'fetch_log', {})
-        self.fetch_log[vt] = {'seconds': {k: r[1] for k, r in res.items()},
-                              'errors': {k: r[2][-3:] for k, r in res.items() if r[2]}}
+        futs, res, errors = {}, {}, {}
+        for k, c in self.caches.items():
+            if k in self.busy and not self.busy[k].done():
+                errors[k] = ['still fetching an earlier frame (over the fetch budget): left out']
+                continue
+            self.busy.pop(k, None)
+            futs[k] = _spawn(one, c)
+        key_of = {f: k for k, f in futs.items()}
+        try:
+            for f in cf.as_completed(list(futs.values()), timeout=budget):
+                k = key_of[f]
+                try:
+                    res[k] = f.result()
+                except Exception as e:                # SourceCache records reader errors itself
+                    res[k] = (None, 0.0, [f'{type(e).__name__}: {str(e)[:120]}'])
+                if res[k][2]:
+                    errors[k] = res[k][2][-3:]
+                if on_source and res[k][0]:
+                    try:
+                        on_source(k, res[k][0])
+                    except Exception as e:
+                        log(f'{k} {vt:%d %HZ}: early processing not started: {e}')
+        except cf.TimeoutError:
+            pass
+        for k, f in futs.items():
+            if k not in res:
+                self.busy[k] = f
+                res[k] = (None, float(budget), [])
+                errors[k] = [f'over the {budget:.0f} s fetch budget: left out of this frame']
+                log(f'{k} {vt:%d %HZ}: over the {budget:.0f} s fetch budget, left out of this frame')
+        self.fetch_log[vt] = {'seconds': {k: r[1] for k, r in res.items()}, 'errors': errors}
         return {k: r[0] for k, r in res.items() if r[0]}
 
 

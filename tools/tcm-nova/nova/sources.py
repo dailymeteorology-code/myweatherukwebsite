@@ -13,7 +13,9 @@ Units are standardised here so nothing downstream guesses.
 from __future__ import annotations
 
 import concurrent.futures as cf
+import math
 import time
+import urllib.error
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -49,12 +51,16 @@ class Source:
         for k in range(0, 48 // self.cycle_h + 1):
             yield t - timedelta(hours=k * self.cycle_h)
 
-    def find_run(self, init, need_lead_h=6):
+    def find_run(self, init, need_lead_h=6, until=None):
+        """Newest cycle at or before `init` that reaches `need_lead_h` hours past its own
+        start, or -- with `until` -- the valid time `until` (so an older cycle must reach
+        further)."""
         for run in self.candidates(init):
             if run > init:
                 continue
+            need = need_lead_h if until is None else max(need_lead_h, math.ceil((until - run).total_seconds() / 3600))
             try:
-                if self.available(run, need_lead_h):
+                if self.available(run, need):
                     return run
             except Exception:
                 pass
@@ -380,24 +386,60 @@ def _ecm_base(src, run, step, stem=None, host=None):
     return f'{host}/{run:%Y%m%d}/{run:%H}z/{src.path}/{run:%Y%m%d%H}0000-{step}h-{stem or src.stem}'
 
 
-def _ecm_available(src, run):
-    return any(exists(_ecm_base(src, run, 0, host=h) + '.index') for h in (BUCKETS['ecm_gcs'], BUCKETS['ecm']))
+def _ecm_step_at(src, need):
+    """The published step that covers lead `need` h: 3-hourly to T+144 (AIFS 6-hourly),
+    6-hourly beyond."""
+    every = 6 if src.key in ('aifs', 'aifs_ens') or need > 144 else 3
+    return int(math.ceil(need / every) * every)
+
+
+def _ecm_available(src, run, need=0):
+    """The cycle's T+0 index is on either copy and, for a cycle that must reach T+`need`,
+    the step covering it is COMPLETE (index and GRIB) on ECMWF's Google Cloud copy.
+
+    That copy fills 20-35 min behind the AWS copy (IFS ENS: the 00Z and 12Z cycles complete
+    there only ~8 h 15 min after the cycle time, 06Z and 18Z ~7 h 40 min), and the AWS copy
+    answers most range requests with 503 SlowDown (20 Oct 2026: 3 of 4 refused from one
+    client asking one range at a time). A Main Run starting at 08:02Z used to take the 00Z
+    ENS, find T+84..T+105 only on AWS and wait 136-194 s for frames that then dropped the
+    ENS anyway. Steps arrive in order, so the last step needed stands for all of them."""
+    if not any(exists(_ecm_base(src, run, 0, host=h) + '.index') for h in (BUCKETS['ecm_gcs'], BUCKETS['ecm'])):
+        return False
+    if need <= 0:
+        return True
+    base = _ecm_base(src, run, _ecm_step_at(src, need), host=BUCKETS['ecm_gcs'])
+    return exists(base + '.grib2') and exists(base + '.index')
+
+
+def _ecm_find_run(src, init, need_lead_h=6, until=None):
+    """The newest cycle complete on the Google Cloud copy; if that copy has none (it is
+    down, or everything is late), the newest cycle on either copy, as before."""
+    return Source.find_run(src, init, need_lead_h, until) or Source.find_run(src, init, 0)
 
 
 def _ecm_index(src, run, step):
     """The step's index from ECMWF's Google Cloud copy, else the AWS copy; remembers which
-    host answered so the GRIB ranges come from the same file."""
+    host answered so the GRIB ranges come from the same file. The Google copy is asked
+    three times first: once a step's index comes from AWS, its ~100 ranges do too, and
+    the AWS copy refuses most of them (503 SlowDown) -- minutes of retries."""
     hosts = src.__dict__.setdefault('_host', {})
-    for i in range(3):
-        for h in (BUCKETS['ecm_gcs'], BUCKETS['ecm']):
-            try:
-                txt = get(_ecm_base(src, run, step, host=h) + '.index', tries=2, timeout=60).decode()
-                if txt.strip():
-                    hosts[(run, step)] = h
-                    return ecmwf_index(txt)
-            except Exception:
-                pass
-        time.sleep(2 + 2 * i)
+    plan = [BUCKETS['ecm_gcs']] * 3 + [BUCKETS['ecm']] * 2
+    i = 0
+    while i < len(plan):
+        h = plan[i]
+        try:
+            txt = get(_ecm_base(src, run, step, host=h) + '.index', tries=2, timeout=60).decode()
+            if txt.strip():
+                hosts[(run, step)] = h
+                return ecmwf_index(txt)
+        except urllib.error.HTTPError as e:
+            if e.code == 404 and h == BUCKETS['ecm_gcs']:
+                i = plan.index(BUCKETS['ecm'])            # not on the Google copy (yet): no point retrying it
+                continue
+        except Exception:
+            pass
+        time.sleep(1 + i)
+        i += 1
     return None
 
 
@@ -415,7 +457,10 @@ class ECMWF(GribLatLon):
         return _ecm_base(self, run, step)
 
     def available(self, run, need):
-        return _ecm_available(self, run)
+        return _ecm_available(self, run, need)
+
+    def find_run(self, init, need_lead_h=6, until=None):
+        return _ecm_find_run(self, init, need_lead_h, until)
 
     def steps_ok(self, step):
         return step <= 144 and step % 3 == 0 or step % 6 == 0
@@ -505,7 +550,10 @@ class ECMWFEns(GribLatLon):
         return _ecm_base(self, run, step, stem)
 
     def available(self, run, need):
-        return _ecm_available(self, run)
+        return _ecm_available(self, run, need)
+
+    def find_run(self, init, need_lead_h=6, until=None):
+        return _ecm_find_run(self, init, need_lead_h, until)
 
     def members(self, run, step, grid):
         key = (run, step, grid.name)

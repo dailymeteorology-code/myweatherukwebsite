@@ -86,6 +86,30 @@ def fetch_static():
             upload('nova-static', f, required=False)
 
 
+MAIN_TERRAIN = ('gb2km', 'gb_v5laea2km')
+
+
+def ensure_main_inputs(wait_s=90):
+    """A Main Run chunk's terrain and learning weights. The workflow downloads them in the
+    background while the Python environment restores, and touches $NOVA_PREFETCH when done;
+    this waits for that, then fetches anything still missing the usual way. (The separate
+    fetch-static / fetch-state steps cost each chunk ~7 s, most of it the 150 MB of learning
+    pairs and the 1.5 km terrain, neither of which the Main Run reads.)"""
+    import time
+    marker = os.environ.get('NOVA_PREFETCH')
+    if marker:
+        t0 = time.time()
+        while not Path(marker).exists() and time.time() - t0 < wait_s:
+            time.sleep(0.2)
+    from . import terrain
+    if any(not (DATA / 'terrain' / f'{g}-{terrain.TERRAIN_VERSION}.npz').exists() for g in MAIN_TERRAIN):
+        log('cloud: terrain not prefetched, fetching')
+        fetch_static()
+    if not all((DATA / f).exists() for f in ('skill.json', 'calibration.json')):
+        log('cloud: learning weights not prefetched, fetching')
+        fetch_state(light=True)
+
+
 def publish(product):
     tag = f'nova-{product}'
     ensure_release(tag, f'TCM NOVA {product} runs')
@@ -96,7 +120,10 @@ def publish(product):
         if name in have and rd != runs[-1]:
             continue                                     # the newest run is always (re)uploaded
         tgz = DATA / name
-        with tarfile.open(tgz, 'w:gz', compresslevel=1) as t:
+        # gzip level 0 (stored): every field is already zlib-compressed, so level 1 only
+        # spent ~10 s of the publish re-compressing 500 MB to the same size; the file stays
+        # a real .tar.gz for the site mirror (tar -xzf) and the learning job.
+        with tarfile.open(tgz, 'w:gz', compresslevel=0) as t:
             t.add(rd, arcname=rd.name, filter=lambda ti: None if '/sources' in ti.name.replace('\\', '/') else ti)
         upload(tag, tgz)
         tgz.unlink()
@@ -120,9 +147,89 @@ def prune(tag):
             gh('release', 'delete-asset', tag, victim, '--yes', check=False)
 
 
-def fetch_state():
+def collect_chunks(chunks, own, dest, deadline_s=1500, poll_s=2, grace_s=30):
+    """The Main Run's publishing chunk: download every other chunk's artifact from THIS
+    workflow run into `dest` as soon as it is uploaded, until all are in or every other
+    chunk job has finished (a failed chunk uploads nothing). A separate publish job used to
+    wait for the slowest chunk and then spend ~35 s starting and setting up before it could
+    assemble; this way only the last chunk's download is left on the critical path.
+
+    chunks: the route's main_chunks list (artifact main-chunk-<i> holds chunks[i]);
+    own: this job's leads (its frames are here already)."""
+    import concurrent.futures as cf
+    import io
+    import time
+    import zipfile
+    repo, run = os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_RUN_ID']
+    want = {f'main-chunk-{i}': c for i, c in enumerate(chunks) if c != own}
+    got, pending, failed = set(), {}, set()
+
+    def api(path):
+        try:
+            return json.loads(gh('api', path, check=False, capture=True) or '{}')
+        except Exception:
+            return {}
+
+    def fetch(aid):
+        r = subprocess.run(['gh', 'api', f'repos/{repo}/actions/artifacts/{aid}/zip'], capture_output=True, timeout=300)
+        if r.returncode != 0:
+            return False
+        zipfile.ZipFile(io.BytesIO(r.stdout)).extractall(dest)
+        return True
+    t0, t_jobs, all_done_at = time.time(), 0.0, None
+    with cf.ThreadPoolExecutor(4) as ex:
+        while True:
+            for a in api(f'repos/{repo}/actions/runs/{run}/artifacts?per_page=100').get('artifacts', []):
+                n = a.get('name')
+                if n in want and n not in got and n not in pending and not a.get('expired'):
+                    pending[n] = ex.submit(fetch, a['id'])
+            for n, f in list(pending.items()):
+                if f.done():
+                    pending.pop(n)
+                    try:
+                        ok = f.result()
+                    except Exception as e:
+                        log(f'cloud: {n} download failed: {e}')
+                        ok = False
+                    if ok:
+                        got.add(n)
+                        log(f'cloud: {n} (T+{want[n]}) in after {time.time() - t0:.0f} s')
+            missing = set(want) - got - failed
+            if not missing:
+                break
+            if time.time() - t_jobs > 10:
+                t_jobs = time.time()
+                jobs = {j['name']: j for j in api(f'repos/{repo}/actions/runs/{run}/jobs?per_page=100').get('jobs', [])
+                        if j['name'].startswith('main-chunk')}
+                for n in missing:
+                    j = jobs.get(f'main-chunk ({want[n]})')
+                    if j and j['status'] == 'completed' and j['conclusion'] != 'success':
+                        failed.add(n)
+                        log(f'cloud: chunk T+{want[n]} ended {j["conclusion"]}: published without it')
+                if jobs and all(j['status'] == 'completed' for nm, j in jobs.items() if nm != f'main-chunk ({own})'):
+                    all_done_at = all_done_at or time.time()
+            if all_done_at and not pending and time.time() - all_done_at > grace_s:
+                log(f'cloud: every chunk job has finished; still missing {sorted(missing)}')
+                break
+            if time.time() - t0 > deadline_s:
+                log(f'cloud: gave up waiting after {deadline_s} s; missing {sorted(missing)}')
+                break
+            time.sleep(poll_s)
+    missing = set(want) - got - failed
+    if missing:
+        # never publish a run short of chunks that DID finish: fail, and main-publish (the
+        # fallback job) publishes it the old way from the same artifacts
+        raise RuntimeError(f'could not gather {sorted(missing)}')
+    return got
+
+
+def fetch_state(light=False):
+    """light: only the weights/calibration JSON a Main Run chunk reads (not the 150 MB of
+    learning pairs only the learning and training jobs use)."""
     ensure_release('nova-state', 'TCM NOVA learning state')
     download('nova-state', '*.json', DATA)
+    if light:
+        return
     for arch in ('pairs.tar.gz', 'reports.tar.gz'):
         if download('nova-state', arch, DATA / '_dl'):
             with tarfile.open(DATA / '_dl' / arch) as t:

@@ -8,9 +8,10 @@ V5 output is remapped to the NOVA grid and written with NOVA's RunWriter: same r
 manifest, storage and publishing, so the page, cloud sync and archive are unchanged.
 
     python -m nova.v5_run --product main [--init ISO] [--leads 0-24] [--chunk]
-    python -m nova.v5_run --product main --init ISO --assemble     (merge chunks, publish)
-The chunked form is how GitHub runs it: four jobs compute lead ranges in parallel and a
-final job assembles and publishes the run.
+    python -m nova.v5_run --product main --init ISO --assemble [--collect CHUNKS --own LEADS]
+The chunked form is how GitHub runs it: 17 jobs compute lead times in parallel, and the
+one-lead job then gathers the others' frames as they finish (--collect), merges and
+publishes the run.
 """
 from __future__ import annotations
 
@@ -121,7 +122,32 @@ def _peak_mem_mb():
         return None
 
 
-def compute(product, init, leads, stride, workers, writer_dir: Path, cycles_out: dict):
+class _Started:
+    """Stands in for run_frame's process pool: a model whose V5 chain already started (as
+    its data arrived) hands back that result; any other model is run now."""
+    def __init__(self, started, pool):
+        self.started, self.pool = started, pool
+
+    def map(self, fn, tasks):
+        futs = [self.started.get(t[0]) or self.pool.submit(fn, t) for t in tasks]
+        return [f.result() for f in futs]
+
+
+def _run_frame(PL, pool, W, started, got, lead, blender, init, vt):
+    """pipeline.run_frame, collecting the V5 chains already started for this frame.
+    (pipeline.py itself is left untouched: its hash keys the compiled-kernel cache.)"""
+    if not pool:
+        return PL.run_frame(got, lead, blender.cycles, blender.terr, blender.g, run=init, valid_time=vt, log=log)
+    real = PL.pool
+    PL.pool = lambda workers: _Started(started, pool)
+    try:
+        return PL.run_frame(got, lead, blender.cycles, blender.terr, blender.g, run=init, valid_time=vt, log=log,
+                            workers=W)
+    finally:
+        PL.pool = real
+
+
+def compute(product, init, leads, stride, workers, writer_dir: Path, cycles_out: dict, horizon_h=None):
     """The V5 engine for `leads`, writing NOVA frames into writer_dir. Returns frame metas."""
     from . import v5_blend as VB
     from .v5x import pipeline as PL
@@ -130,13 +156,35 @@ def compute(product, init, leads, stride, workers, writer_dir: Path, cycles_out:
     tmp.dir, tmp.manifest = writer_dir, {'frames': [], 'fields': {}}
     (writer_dir / 'frames').mkdir(parents=True, exist_ok=True)
     only = ('ukv',) if product == 'hyper' else None
-    blender = VB.Blender(init, max(leads), only=only)
+    # cycles are chosen for the WHOLE run's horizon, not this chunk's last lead, so every
+    # chunk of a run picks the same cycle of every model
+    blender = VB.Blender(init, horizon_h or max(leads), only=only)
     cycles_out.update(blender.cycles)
+    # Each model's V5 chain starts in the process pool the moment ITS data has arrived,
+    # while slower models are still downloading (a frame used to wait for the slowest
+    # download before any physics began). The pool's processes are forked here, before
+    # any download thread exists.
+    import os
+    W = max(1, (os.cpu_count() or 2) // 2)          # run_frame's own default
+    pool = PL.pool(W) if W > 1 else None
+    if pool:
+        pool.submit(int).result()
+    lon = blender.g.lonlat[0]
+    started = {}                                     # valid time -> {model: Future of its V5 chain}
+
+    def fetch(vt):
+        started[vt] = {}
+
+        def on_source(k, f):
+            if pool and k in PL.PROFILE_SOURCES and 'pl' in f:
+                fh = int(round((vt - blender.cycles[k]).total_seconds() / 3600))
+                started[vt][k] = pool.submit(PL._task, (k, f, blender.terr['h_mean'], blender.cycles[k], fh, vt, lon, True))
+        return blender.at(vt, on_source=on_source)
     # the next frame's data downloads while this frame computes (fetching is network-bound,
     # the physics CPU-bound, so the two overlap almost completely)
     import concurrent.futures as cf
     ex = cf.ThreadPoolExecutor(1)
-    nxt = ex.submit(blender.at, init + timedelta(hours=leads[0])) if leads else None
+    nxt = ex.submit(fetch, init + timedelta(hours=leads[0])) if leads else None
     for i, lead in enumerate(leads):
         vt = init + timedelta(hours=lead)
         t0 = time.time()
@@ -144,9 +192,9 @@ def compute(product, init, leads, stride, workers, writer_dir: Path, cycles_out:
             try:
                 got = nxt.result()
             finally:            # one fetch at a time (SourceCache is not shared across threads)
-                nxt = ex.submit(blender.at, init + timedelta(hours=leads[i + 1])) if i + 1 < len(leads) else None
+                nxt = ex.submit(fetch, init + timedelta(hours=leads[i + 1])) if i + 1 < len(leads) else None
             t_fetch = time.time() - t0
-            fields, meta = PL.run_frame(got, lead, blender.cycles, blender.terr, blender.g, run=init, valid_time=vt, log=log)
+            fields, meta = _run_frame(PL, pool, W, started.pop(vt, {}), got, lead, blender, init, vt)
             if fields is None:
                 log(f'T+{lead}: {meta}')
                 continue
@@ -281,7 +329,7 @@ def run(product='main', init=None, horizon_h=None, stride=None, workers=None, le
     store.set_status(product, state='running', run_id=rid, init_utc=init.isoformat())
     t0 = time.time()
     cycles = {}
-    frames = compute(product, init, leads, stride, workers, d, cycles)
+    frames = compute(product, init, leads, stride, workers, d, cycles, horizon_h=horizon_h)
     if chunk:
         (d / f'chunk-{leads[0]}-{leads[-1]}.json').write_text(json.dumps(
             {'frames': frames, 'cycles': {k: v.isoformat() for k, v in cycles.items()}, 'seconds': round(time.time() - t0)},
@@ -290,9 +338,14 @@ def run(product='main', init=None, horizon_h=None, stride=None, workers=None, le
     return finish(product, init, horizon_h, stride, d, frames, cycles, t0)
 
 
-def assemble(product, init, horizon_h=None, stride=3):
+def assemble(product, init, horizon_h=None, stride=3, collect=None):
+    """Merge the chunks and publish. collect=(chunks, own_leads): first gather the other
+    chunks' artifacts from this workflow run as they finish (see cloud.collect_chunks)."""
     rid = store.run_id(product, init)
     d = store.DATA / product / (rid + '.partial')
+    if collect:
+        from .cloud import collect_chunks
+        collect_chunks(collect[0], collect[1], store.DATA / product)
     frames, cycles = [], {}
     for c in d.glob('chunk-*.json'):
         j = json.loads(c.read_text())
@@ -322,6 +375,9 @@ if __name__ == '__main__':
     ap.add_argument('--leads')
     ap.add_argument('--chunk', action='store_true')
     ap.add_argument('--assemble', action='store_true')
+    ap.add_argument('--collect', help="with --assemble: the route's main_chunks JSON; gather the other chunks' "
+                                      "artifacts from this workflow run first")
+    ap.add_argument('--own', help='with --collect: this job\'s own leads (its frames are here already)')
     ap.add_argument('--print-init', action='store_true')
     a = ap.parse_args()
     init = datetime.fromisoformat(a.init).astimezone(timezone.utc) if a.init else None
@@ -329,6 +385,10 @@ if __name__ == '__main__':
         from .main_run import cycle_init
         print((init or cycle_init()).isoformat())
     elif a.assemble:
-        print(assemble(a.product, init, a.horizon, a.stride or 3))
+        print(assemble(a.product, init, a.horizon, a.stride or 3,
+                       collect=(json.loads(a.collect), a.own or '') if a.collect else None))
     else:
+        if a.chunk and a.product == 'main':
+            from .cloud import ensure_main_inputs
+            ensure_main_inputs()
         print(run(a.product, init, a.horizon, a.stride, a.workers, _leads(a.leads) if a.leads else None, a.chunk))

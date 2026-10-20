@@ -7,8 +7,8 @@
 # dropped trigger is simply caught by the next one.
 #
 #   main       03/09/15/21 UK time   TCM Main Run on the TCM V5 engine, 3-hourly to 4 days.
-#                                    17 jobs side by side, two lead times each; one job
-#                                    assembles and publishes.
+#                                    17 jobs side by side, two lead times each; the one-lead
+#                                    job then gathers the others as they finish and publishes.
 #   ukv-env    each new UKV cycle    Hyper-Short's UKV half (TCM V5 on UKV), computed as soon
 #                                    as the cycle reaches AWS, 6 jobs side by side.
 #   hyper      every hour            TCM Hyper-Short (radar + lightning nowcast + UKV/V5),
@@ -68,6 +68,7 @@ jobs:
       main: ${{ steps.r.outputs.main }}
       main_init: ${{ steps.r.outputs.main_init }}
       main_chunks: ${{ steps.r.outputs.main_chunks }}
+      main_publisher: ${{ steps.r.outputs.main_publisher }}
       hyper: ${{ steps.r.outputs.hyper }}
       ukv_env: ${{ steps.r.outputs.ukv_env }}
       ukv_env_cycle: ${{ steps.r.outputs.ukv_env_cycle }}
@@ -104,6 +105,10 @@ jobs:
           else echo 'days=[]' >> "$GITHUB_OUTPUT"; fi
 
   # ── Main Run (TCM V5 on every model at 2 km) ────────────────────────────────
+  # Every job computes its lead times; the one-lead job (route's main_publisher) is done
+  # first, then downloads each other job's artifact the moment it is uploaded, assembles
+  # and publishes -- no publish job to start and set up after the slowest chunk.
+  # main-publish is only the fallback: it publishes the old way if that did not happen.
   main-chunk:
     needs: route
     if: needs.route.outputs.main == 'true'
@@ -113,11 +118,25 @@ jobs:
       fail-fast: false
       matrix:
         leads: ${{ fromJSON(needs.route.outputs.main_chunks) }}
+    env:
+      NOVA_PREFETCH: /tmp/nova/prefetch.done
     steps:
       - uses: actions/checkout@v4
+      # terrain + learning weights, downloaded while the environment restores (only what
+      # the Main Run reads; the chunk waits for $NOVA_PREFETCH and fills any gap itself)
+      - run: |
+          mkdir -p "$NOVA_DATA/terrain" "$NOVA_CACHE"
+          ( gh release download nova-static -R "$GITHUB_REPOSITORY" -D "$NOVA_DATA/terrain" -p 'gb2km-terrain-*' -p 'gb_v5laea2km-terrain-*'
+            gh release download nova-static -R "$GITHUB_REPOSITORY" -D "$NOVA_CACHE" -p 'pseudoadiabat_*.npy'
+            gh release download nova-state -R "$GITHUB_REPOSITORY" -D "$NOVA_DATA" -p '*.json'
+            touch "$NOVA_PREFETCH" ) > /tmp/nova/prefetch.log 2>&1 &
       - uses: ./.github/actions/nova-setup
-      - run: python -m nova.cloud fetch-static
-      - run: python -m nova.cloud fetch-state
+      # ICON-EU-EPS icosahedral cells -> the 2 km grid (otherwise rebuilt from DWD's grid
+      # files inside every chunk's first download)
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/nova/cache/icon_eu_eps_map_gb_v5laea2km.npz
+          key: nova-iconeps-map-gb_v5laea2km-v1
       - name: TCM V5 frames T+${{ matrix.leads }}
         run: python -m nova.v5_run --product main --init "${{ needs.route.outputs.main_init }}" --leads "${{ matrix.leads }}" --chunk
       - uses: actions/upload-artifact@v4
@@ -125,6 +144,13 @@ jobs:
           name: main-chunk-${{ strategy.job-index }}
           path: /tmp/nova/data/main/
           retention-days: 2
+          compression-level: 0          # the fields are zlib-compressed already
+      - name: Gather the other chunks as they finish, assemble, publish
+        if: ${{ !cancelled() && matrix.leads == needs.route.outputs.main_publisher }}
+        run: |
+          python -m nova.v5_run --product main --init "${{ needs.route.outputs.main_init }}" --assemble \
+            --collect '${{ needs.route.outputs.main_chunks }}' --own "${{ matrix.leads }}"
+          python -m nova.cloud publish main
 
   main-publish:
     needs: [route, main-chunk]
@@ -133,11 +159,20 @@ jobs:
     timeout-minutes: 15
     concurrency: { group: nova-main-publish, cancel-in-progress: false }
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/nova-setup
-      - uses: actions/download-artifact@v4
+      - id: done                         # normally the gathering chunk has published already
+        run: |
+          RID="main-$(date -u -d '${{ needs.route.outputs.main_init }}' +%Y%m%dT%H%MZ)"
+          gh release view nova-main -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > /tmp/assets.txt || true
+          if grep -qx "$RID.tar.gz" /tmp/assets.txt; then echo "published=true" >> "$GITHUB_OUTPUT"; echo "$RID is published"; fi
+      - if: steps.done.outputs.published != 'true'
+        uses: actions/checkout@v4
+      - if: steps.done.outputs.published != 'true'
+        uses: ./.github/actions/nova-setup
+      - if: steps.done.outputs.published != 'true'
+        uses: actions/download-artifact@v4
         with: { pattern: main-chunk-*, merge-multiple: true, path: /tmp/nova/data/main/ }
-      - run: python -m nova.v5_run --product main --init "${{ needs.route.outputs.main_init }}" --assemble && python -m nova.cloud publish main
+      - if: steps.done.outputs.published != 'true'
+        run: python -m nova.v5_run --product main --init "${{ needs.route.outputs.main_init }}" --assemble && python -m nova.cloud publish main
 
   # ── Hyper-Short's UKV environment (TCM V5 on UKV), per new UKV cycle ────────
   ukv-env:

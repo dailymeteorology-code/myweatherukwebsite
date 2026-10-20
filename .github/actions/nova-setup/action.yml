@@ -3,17 +3,23 @@ description: Python, ecCodes, the NOVA requirements, and the compiled-kernel (Nu
 runs:
   using: composite
   steps:
+    # ecCodes from apt, in the background while the cached environment restores (job
+    # start-up is on the Main Run's critical path); the last step waits for it
+    - shell: bash
+      run: |
+        mkdir -p /tmp/nova
+        ( sudo apt-get install -y -qq --no-install-recommends libeccodes0 libeccodes-data >/dev/null 2>&1 \
+          || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libeccodes0 libeccodes-data >/dev/null)
+          touch /tmp/nova/eccodes.done ) > /tmp/nova/eccodes.log 2>&1 &
     - uses: actions/setup-python@v5
       with: { python-version: '3.11' }
     # the whole installed environment is cached (restores in seconds; pip only runs when
-    # requirements.txt changes) -- job start-up is on the Main Run's critical path
+    # requirements.txt changes)
     - uses: actions/cache@v4
       id: pyenv
       with:
         path: ${{ env.pythonLocation }}
         key: nova-pyenv-${{ runner.os }}-${{ env.pythonLocation }}-${{ hashFiles('tools/tcm-nova/requirements.txt') }}
-    - shell: bash
-      run: sudo apt-get install -y -qq --no-install-recommends libeccodes0 libeccodes-data >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libeccodes0 libeccodes-data >/dev/null)
     - if: steps.pyenv.outputs.cache-hit != 'true'
       shell: bash
       run: pip install -q -r tools/tcm-nova/requirements.txt
@@ -32,3 +38,11 @@ runs:
       with:
         path: /tmp/nova/cache/v5_pseudoadiabat_rk4_v1.npy
         key: nova-pseudoadiabat-v1
+    - shell: bash
+      run: |
+        for i in $(seq 1 900); do [ -f /tmp/nova/eccodes.done ] && break; sleep 0.2; done
+        ldconfig -p > /tmp/nova/ldcache.txt
+        if ! grep -q 'libeccodes\.so' /tmp/nova/ldcache.txt; then
+          cat /tmp/nova/eccodes.log 2>/dev/null || true
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libeccodes0 libeccodes-data >/dev/null
+        fi

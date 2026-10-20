@@ -214,6 +214,136 @@ def test_met_office_steps_go_3_hourly_after_t54(monkeypatch):
         assert asked == want, (key, h, asked)
 
 
+def test_ecmwf_cycle_must_be_complete_on_the_google_copy(monkeypatch):
+    """At 08:02Z the 00Z ENS is complete on AWS (throttled) but only to ~T+84 on ECMWF's
+    Google Cloud copy: the run must take the 18Z cycle, which reaches its T+96 there."""
+    from nova import sources as S
+    from nova.io_aws import BUCKETS
+    gcs, aws = BUCKETS['ecm_gcs'], BUCKETS['ecm']
+    have = set()
+    for run, last in ((datetime(2026, 10, 20, 0), 84), (datetime(2026, 10, 19, 18), 144)):
+        for step in range(0, last + 1, 3):
+            base = f'/{run:%Y%m%d}/{run:%H}z/ifs/0p25/enfo/{run:%Y%m%d%H}0000-{step}h-enfo-ef'
+            have |= {gcs + base + '.index', gcs + base + '.grib2'}
+        base = f'/{run:%Y%m%d}/{run:%H}z/ifs/0p25/enfo/{run:%Y%m%d%H}0000-0h-enfo-ef'
+        have.add(aws + base + '.index')
+    monkeypatch.setattr(S, 'exists', lambda url: url in have)
+    init = datetime(2026, 10, 20, 8, tzinfo=timezone.utc)
+    r = S.ECMWFEns()
+    utc = lambda *a: datetime(*a, tzinfo=timezone.utc)      # noqa: E731
+    assert r.find_run(init, until=init + timedelta(hours=96)) == utc(2026, 10, 19, 18)
+    assert r.find_run(init, until=init + timedelta(hours=72)) == utc(2026, 10, 20, 0)   # 00Z reaches T+80 there
+    assert S._ecm_step_at(r, 104) == 105 and S._ecm_step_at(S.AIFS(), 104) == 108
+    # the Google copy unreachable: the newest cycle on either copy, as before
+    have = {u for u in have if u.startswith(aws)}
+    assert r.find_run(init, until=init + timedelta(hours=96)) == utc(2026, 10, 20, 0)
+
+
+def test_blender_leaves_a_slow_source_out_and_says_so():
+    import threading
+    import time
+    from nova import v5_blend as VB
+    release = threading.Event()
+
+    class Cache:
+        def __init__(self, slow):
+            self.slow, self.errors, self.calls, self.inside = slow, [], 0, 0
+
+        def at(self, vt):
+            self.calls += 1
+            self.inside += 1
+            assert self.inside == 1                     # never two fetches on one SourceCache
+            if self.slow:
+                release.wait(5)
+            self.inside -= 1
+            return {'sfc': {}, 'valid': True}
+    b = VB.Blender.__new__(VB.Blender)
+    b.caches, b.busy, b.fetch_log = {'fast': Cache(False), 'slow': Cache(True)}, {}, {}
+    vt1, vt2, vt3 = (datetime(2026, 10, 20, h, tzinfo=timezone.utc) for h in (9, 12, 15))
+    t0 = time.time()
+    got = b.at(vt1, budget_s=0.3)
+    assert time.time() - t0 < 2 and sorted(got) == ['fast']
+    assert 'fetch budget' in b.fetch_log[vt1]['errors']['slow'][0]
+    got = b.at(vt2, budget_s=0.3)                         # still busy: not asked again
+    assert sorted(got) == ['fast'] and b.caches['slow'].calls == 1
+    assert 'earlier frame' in b.fetch_log[vt2]['errors']['slow'][0]
+    release.set()
+    time.sleep(0.2)
+    got = b.at(vt3, budget_s=2)                           # finished: rejoins
+    assert sorted(got) == ['fast', 'slow'] and b.fetch_log[vt3]['errors'] == {}
+
+
+def test_models_start_processing_as_their_data_arrives():
+    """Blender.at hands each model over as it arrives; run_frame then collects the chains
+    already started and runs only the rest."""
+    import concurrent.futures as cf
+    from nova import v5_blend as VB
+    from nova.v5_run import _Started
+
+    class Cache:
+        errors = []
+
+        def __init__(self, v):
+            self.v = v
+
+        def at(self, vt):
+            return self.v
+    b = VB.Blender.__new__(VB.Blender)
+    b.caches, b.busy, b.fetch_log = {'ukv': Cache({'pl': 1}), 'gfs': Cache({'pl': 2}), 'none': Cache(None)}, {}, {}
+    seen = []
+    got = b.at(datetime(2026, 10, 20, 9, tzinfo=timezone.utc), budget_s=5, on_source=lambda k, v: seen.append(k))
+    assert sorted(seen) == ['gfs', 'ukv'] and sorted(got) == ['gfs', 'ukv']
+    done = cf.Future()
+    done.set_result(('ukv', 'early', ''))
+    with cf.ThreadPoolExecutor(1) as pool:
+        out = _Started({'ukv': done}, pool).map(lambda t: (t[0], 'now', ''), [('ukv',), ('gfs',)])
+    assert out == [('ukv', 'early', ''), ('gfs', 'now', '')]
+
+
+def test_route_main_publisher_is_the_one_lead_chunk():
+    import route_ci
+    mc = route_ci.chunks(route_ci.MAIN_LEADS, route_ci.MAIN_JOBS)
+    assert len(mc) == 17 and sorted(int(x) for c in mc for x in c.split(',')) == route_ci.MAIN_LEADS
+    assert min(reversed(mc), key=lambda c: len(c.split(','))) == '48'
+
+
+def test_publishing_chunk_gathers_the_others_and_skips_a_failed_one(tmp_path, monkeypatch):
+    import io
+    import subprocess
+    import zipfile
+    from nova import cloud
+    monkeypatch.setenv('GITHUB_REPOSITORY', 'o/r')
+    monkeypatch.setenv('GITHUB_RUN_ID', '7')
+    chunks = ['0,51', '3,54', '6,57', '48']
+    uploaded = {1: 'main-chunk-0', 2: 'main-chunk-1'}          # artifact id -> name; chunk 6,57 failed
+    jobs = [{'name': f'main-chunk ({c})', 'status': 'completed', 'conclusion': 'failure' if c == '6,57' else 'success'}
+            for c in chunks]
+
+    def gh(*args, check=True, capture=False):
+        path = args[1]
+        if path.endswith('/artifacts?per_page=100'):
+            return json.dumps({'artifacts': [{'id': i, 'name': n} for i, n in uploaded.items()]})
+        if path.endswith('/jobs?per_page=100'):
+            return json.dumps({'jobs': jobs})
+        raise AssertionError(path)
+
+    def run(cmd, capture_output=True, timeout=None):
+        aid = int(cmd[2].split('/')[-2])
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr(f'main-x.partial/chunk-{aid}.json', '{}')
+        return subprocess.CompletedProcess(cmd, 0, buf.getvalue(), b'')
+    monkeypatch.setattr(cloud, 'gh', gh)
+    monkeypatch.setattr(cloud.subprocess, 'run', run)
+    got = cloud.collect_chunks(chunks, '48', tmp_path, deadline_s=20, poll_s=0.05)
+    assert got == {'main-chunk-0', 'main-chunk-1'}
+    assert sorted(p.name for p in (tmp_path / 'main-x.partial').iterdir()) == ['chunk-1.json', 'chunk-2.json']
+    # a chunk that finished but whose frames never arrive: refuse to publish a short run
+    jobs[2]['conclusion'] = 'success'
+    with pytest.raises(RuntimeError, match='main-chunk-2'):
+        cloud.collect_chunks(chunks, '48', tmp_path, deadline_s=20, poll_s=0.05, grace_s=0.3)
+
+
 def test_stored_fields_are_rounded_and_compress(tmp_data):
     """Noise below each field's step is dropped before storage: values stay within half a step
     and a noisy field compresses far better than raw float16."""

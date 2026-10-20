@@ -5,8 +5,8 @@ GitHub drops or delays a large share of scheduled triggers (on 19 Oct 2026 only 
 state instead -- the latest run in each release and any run already in progress -- and
 starts whatever is missing. A dropped trigger is then simply caught by the next one.
 
-Writes GitHub step outputs: main, main_init, main_chunks, hyper, hyper_init, ukv_env,
-ukv_env_cycle, ukv_env_chunks, learning, learning_day.
+Writes GitHub step outputs: main, main_init, main_chunks, main_publisher, hyper, hyper_init,
+ukv_env, ukv_env_cycle, ukv_env_chunks, learning, learning_day.
 """
 from __future__ import annotations
 
@@ -59,16 +59,23 @@ def main_cycle(now):
     return best.astimezone(timezone.utc)
 
 
-def in_progress(job_prefix):
-    """True if another run of this workflow has a job starting with `job_prefix` that is
-    queued or running (so a second trigger never starts the same work twice)."""
+_ACTIVE_JOBS = None
+
+
+def active_jobs():
+    """Names of the jobs not yet completed in OTHER runs of this workflow that are queued or
+    running. Listed once per route (the route is on the Main Run's critical path)."""
+    global _ACTIVE_JOBS
+    if _ACTIVE_JOBS is not None:
+        return _ACTIVE_JOBS
     me = os.environ.get('GITHUB_RUN_ID')
     try:
         runs = json.loads(subprocess.run(
             ['gh', 'api', f'repos/{REPO}/actions/workflows/nova.yml/runs?per_page=30'],
             capture_output=True, text=True, timeout=60).stdout or '{}').get('workflow_runs', [])
     except Exception:
-        return False
+        runs = []
+    names = []
     for r in runs:
         if str(r['id']) == me or r['status'] not in ('queued', 'in_progress', 'waiting', 'pending'):
             continue
@@ -77,9 +84,15 @@ def in_progress(job_prefix):
                                              capture_output=True, text=True, timeout=60).stdout or '{}').get('jobs', [])
         except Exception:
             continue
-        if any(j['name'].startswith(job_prefix) and j['status'] != 'completed' for j in jobs):
-            return True
-    return False
+        names += [j['name'] for j in jobs if j['status'] != 'completed']
+    _ACTIVE_JOBS = names
+    return names
+
+
+def in_progress(job_prefix):
+    """True if another run of this workflow has a job starting with `job_prefix` that is
+    queued or running (so a second trigger never starts the same work twice)."""
+    return any(n.startswith(job_prefix) for n in active_jobs())
 
 
 def latest_ukv_cycle(now, reach_h=27):
@@ -117,7 +130,10 @@ def decide(now, force=''):
     if have is not None and have >= cyc and lm.get('engine') != MAIN_ENGINE:
         have = None                                  # made by an older engine: redo this cycle
     out['main_init'] = cyc.isoformat()
-    out['main_chunks'] = json.dumps(chunks(MAIN_LEADS, MAIN_JOBS))
+    mc = chunks(MAIN_LEADS, MAIN_JOBS)
+    out['main_chunks'] = json.dumps(mc)
+    # the chunk with the fewest leads finishes first, so it gathers the others and publishes
+    out['main_publisher'] = min(reversed(mc), key=lambda c: len(c.split(',')))
     if force == 'main' or ((have is None or have < cyc) and not in_progress('main')):
         out['main'] = 'true'
     # UKV V5 environment for Hyper-Short: as soon as a newer UKV cycle is on AWS
