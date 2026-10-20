@@ -27,6 +27,7 @@ const novaFetch = (url) => fetch(url, { headers: authHeaders() });
 import {
   CloudLightning, Zap, CloudRain, Wind, Tornado, Snowflake, AlertTriangle, Play, Pause,
   ChevronLeft, ChevronRight, Layers, Clock, Database, Activity, Map as MapIcon, Info, RefreshCw, TrendingUp,
+  CalendarRange, Download, X,
 } from 'lucide-react';
 
 /* ── look (V3 light card style) ───────────────────────────────────────────── */
@@ -200,7 +201,9 @@ function colourAt(stops, v) {
   return null;
 }
 
-function renderField(data, grid, layer) {
+/* The field as an image over BOUNDS. A layer with `step` is drawn as flat risk levels with a
+   darker edge where a level meets a lower one, the way a forecaster's outlook looks. */
+function renderCanvas(data, grid, layer) {
   const { xs, ys } = PIXEL_BNG();
   const cv = document.createElement('canvas');
   cv.width = OUT_W; cv.height = OUT_H;
@@ -208,6 +211,7 @@ function renderField(data, grid, layer) {
   const img = ctx.createImageData(OUT_W, OUT_H);
   const mul = layer.mul || 1;
   const cat = layer.categorical;
+  const lv = layer.step ? new Int8Array(xs.length).fill(-1) : null;     // risk level per pixel
   for (let k = 0; k < xs.length; k += 1) {
     const fx = (xs[k] - grid.x0) / grid.dx_m - 0.5, fy = (ys[k] - grid.y0) / grid.dx_m - 0.5;
     const ix = Math.floor(fx), iy = Math.floor(fy);
@@ -220,13 +224,30 @@ function renderField(data, grid, layer) {
       if (!Number.isFinite(a + b + c2 + d)) v = data[Math.round(fy) * grid.nx + Math.round(fx)];
       else v = (a * (1 - tx) + b * tx) * (1 - ty) + (c2 * (1 - tx) + d * tx) * ty;
     }
-    const c = colourAt(layer.stops, v * (layer.pct ? 1 : mul));
+    const sv = v * (layer.pct ? 1 : mul);
+    if (lv) {
+      for (let q = 0; q < layer.stops.length && sv >= layer.stops[q][0]; q += 1) lv[k] = q;
+      continue;
+    }
+    const c = colourAt(layer.stops, sv);
     if (!c) continue;
     img.data[k * 4] = c[0]; img.data[k * 4 + 1] = c[1]; img.data[k * 4 + 2] = c[2]; img.data[k * 4 + 3] = c[3];
   }
+  if (lv) {
+    const px = img.data;
+    for (let k = 0; k < lv.length; k += 1) {
+      const q = lv[k];
+      if (q < 0) continue;
+      const i = k % OUT_W;
+      const edge = (i > 0 && lv[k - 1] < q) || (i < OUT_W - 1 && lv[k + 1] < q) || (k >= OUT_W && lv[k - OUT_W] < q) || (k + OUT_W < lv.length && lv[k + OUT_W] < q);
+      const c = layer.stops[q][1], f = edge ? 0.62 : 1;
+      px[k * 4] = c[0] * f; px[k * 4 + 1] = c[1] * f; px[k * 4 + 2] = c[2] * f; px[k * 4 + 3] = edge ? 235 : c[3];
+    }
+  }
   ctx.putImageData(img, 0, 0);
-  return cv.toDataURL();
+  return cv;
 }
+const renderField = (data, grid, layer) => renderCanvas(data, grid, layer).toDataURL();
 
 function riskWord(p) {
   if (p >= 0.6) return ['HIGH', '#a855f7'];
@@ -236,6 +257,214 @@ function riskWord(p) {
   if (p >= 0.05) return ['MRGL', '#22c55e'];
   if (p >= 0.02) return ['TSTM', '#38bdf8'];
   return ['No Risk', '#94a3b8'];
+}
+
+/* ── combining hours ─────────────────────────────────────────────────────── */
+/* outlook risk levels: the riskWord bands as flat colours [from, rgba, name] */
+const RISK_LEVELS = [[0.02, [56, 189, 248, 120], 'TSTM'], [0.05, [34, 197, 94, 140], 'MRGL'], [0.15, [234, 179, 8, 150], 'SLGT'],
+  [0.3, [249, 115, 22, 160], 'ENH'], [0.45, [239, 68, 68, 165], 'MDT'], [0.6, [168, 85, 247, 170], 'HIGH']];
+/* fields whose worst value is the lowest (the whole-day summaries use the same rule) */
+const LOW_WORST = new Set(['ml_cin']);
+
+const valueText = (v, layer) => (layer.pct ? `${Math.round(v * 100)}%` : `${(v * (layer.mul || 1)).toFixed(1)} ${layer.unit}`.trim());
+const weekday = (iso) => london(iso, { weekday: 'short' });
+const stamp = (iso) => london(iso, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).replace(/[^0-9A-Za-z]/g, '');
+const fmtArea = (km2) => (km2 >= 1e4 ? `${Math.round(km2 / 1000).toLocaleString()}k km²` : `${Math.round(km2).toLocaleString()} km²`);
+const howText = (field, how, pctField) => (field === 'precip_accum' ? 'Total that falls in the window'
+  : how === 'mean' ? 'Average over the window'
+    : LOW_WORST.has(field) ? 'Lowest at any time in the window' : `Highest ${pctField ? 'chance' : 'value'} at any time in the window`);
+
+/* from slot i, every frame up to `hours` later */
+function spanFrom(slots, i, hours) {
+  const a = slots[Math.max(0, i)];
+  if (!a) return { from: 0, to: 0 };
+  const inside = slots.filter((x) => x.t >= a.t && x.t <= a.t + hours * 36e5);
+  return { from: a.t, to: inside[inside.length - 1].t };
+}
+
+/* fields already fetched, most recently used last; about 60 MB of decoded fields at most */
+const FIELD_CACHE = new Map();
+function cachedField(product, manifest, lead, field) {
+  const k = `${manifest.run_id}|${lead}|${field}`;
+  let p = FIELD_CACHE.get(k);
+  if (p) { FIELD_CACHE.delete(k); FIELD_CACHE.set(k, p); return p; }
+  p = fetchField(product, manifest.run_id, lead, field);
+  FIELD_CACHE.set(k, p);
+  p.catch(() => FIELD_CACHE.delete(k));
+  const cap = Math.max(12, Math.floor(60e6 / (4 * manifest.grid.nx * manifest.grid.ny)));
+  while (FIELD_CACHE.size > cap) FIELD_CACHE.delete(FIELD_CACHE.keys().next().value);
+  return p;
+}
+
+/* One field over a window of frames, cell by cell: the peak (and which frame it came in) or the
+   average. Accumulated rain is the total that falls inside the window instead. */
+async function combineFrames({ product, manifest, win, field, how, alive, onProgress }) {
+  const n = manifest.grid.nx * manifest.grid.ny;
+  if (field === 'precip_accum') {
+    /* the running total at the end less the total before the window: Main Run holds each frame's
+       rate over its 3 h (the whole-day totals add the same way), Hyper-Short integrates between frames */
+    const all = (manifest.frames || []).filter((f) => f.valid).sort((x, y) => x.lead_min - y.lead_min);
+    const i0 = all.findIndex((f) => f.lead_min === win[0].lead_min);
+    const base = product === 'hyper' && win.length > 1 ? win[0] : all[i0 - 1] || null;
+    const [end, start] = await Promise.all([cachedField(product, manifest, win[win.length - 1].lead_min, field),
+      base ? cachedField(product, manifest, base.lead_min, field) : null]);
+    onProgress(win.length, win.length);
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i += 1) out[i] = Math.max(0, end[i] - (start ? start[i] : 0));
+    return { data: out, at: null };
+  }
+  const low = LOW_WORST.has(field);
+  const out = new Float32Array(n).fill(NaN);
+  const cnt = how === 'mean' ? new Uint16Array(n) : null;
+  const at = cnt ? null : new Uint8Array(n).fill(255);
+  const fold = (a, j) => {
+    for (let i = 0; i < n; i += 1) {
+      const v = a[i];
+      if (!Number.isFinite(v)) continue;
+      if (cnt) { out[i] = cnt[i] ? out[i] + v : v; cnt[i] += 1; } else if (at[i] === 255 || (low ? v < out[i] : v > out[i]) || (v === out[i] && j < at[i])) { out[i] = v; at[i] = j; }
+    }
+  };
+  let next = 0, done = 0;
+  const worker = async () => {
+    while (next < win.length && alive()) {
+      const j = next; next += 1;
+      const a = await cachedField(product, manifest, win[j].lead_min, field);
+      if (!alive()) return;
+      fold(a, j); done += 1; onProgress(done, win.length);
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  if (cnt) for (let i = 0; i < n; i += 1) if (cnt[i]) out[i] /= cnt[i];
+  return { data: out, at };
+}
+
+/* Risk levels are smoothed over about 6 km before they are drawn, the way a drawn outlook is, so
+   the 2 km speckle does not break the edges into fragments. A NaN-aware box blur, twice (close to
+   a Gaussian); cells with no data stay empty. Only the picture: the numbers stay unsmoothed. */
+function smoothGrid(data, grid) {
+  const { nx, ny } = grid, r = Math.max(1, Math.round(6000 / grid.dx_m));
+  let a = data;
+  for (let pass = 0; pass < 2; pass += 1) {
+    const h = new Float32Array(a.length), out = new Float32Array(a.length);
+    for (let y = 0; y < ny; y += 1) {
+      const o = y * nx;
+      for (let x = 0; x < nx; x += 1) {
+        let s = 0, c = 0;
+        for (let k = Math.max(0, x - r), e = Math.min(nx - 1, x + r); k <= e; k += 1) { const v = a[o + k]; if (v === v) { s += v; c += 1; } }
+        h[o + x] = c ? s / c : NaN;
+      }
+    }
+    for (let x = 0; x < nx; x += 1) {
+      for (let y = 0; y < ny; y += 1) {
+        let s = 0, c = 0;
+        for (let k = Math.max(0, y - r), e = Math.min(ny - 1, y + r); k <= e; k += 1) { const v = h[k * nx + x]; if (v === v) { s += v; c += 1; } }
+        const i = y * nx + x;
+        out[i] = c && data[i] === data[i] ? s / c : NaN;
+      }
+    }
+    a = out;
+  }
+  return a;
+}
+
+/* the UK-wide extreme of a combined field, when it came, and the area at each risk level or above */
+function windowStats(combo, layer) {
+  const { data, at, times, grid } = combo;
+  const low = LOW_WORST.has(combo.field);
+  let best = NaN, bi = -1;
+  const count = RISK_LEVELS.map(() => 0);
+  for (let i = 0; i < data.length; i += 1) {
+    const v = data[i];
+    if (!Number.isFinite(v)) continue;
+    if (bi < 0 || (low ? v < best : v > best)) { best = v; bi = i; }
+    if (layer.pct) for (let q = RISK_LEVELS.length - 1; q >= 0; q -= 1) if (v >= RISK_LEVELS[q][0]) { count[q] += 1; break; }
+  }
+  for (let q = count.length - 2; q >= 0; q -= 1) count[q] += count[q + 1];          // this level or higher
+  const cell = grid.cell_area_km2 || (grid.dx_m / 1000) ** 2;
+  return { best: bi < 0 ? null : best, when: at && bi >= 0 && at[bi] !== 255 ? times[at[bi]] : null, areas: count.map((c) => c * cell) };
+}
+
+/* ── the combined window as a 1080×1920 image ────────────────────────────── */
+const mercX = (lon) => (lon + 180) / 360;
+const mercY = (lat) => (1 - Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) / Math.PI) / 2;      // 0 = top of the world
+const loadImg = (src, cors) => new Promise((ok) => {
+  const im = new Image();
+  if (cors) im.crossOrigin = 'anonymous';
+  im.onload = () => ok(im); im.onerror = () => ok(null);
+  im.src = src;
+});
+const greyTile = (part, z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_${part}/MapServer/tile/${z}/${y}/${x}`;
+const FONT = "Inter, 'Segoe UI', system-ui, sans-serif";
+
+async function saveWindowPng({ overlay, title, lines, layer, footer, file }) {
+  const W = 1080, H = 1920, MY = 250, MH = 1450;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+  /* the map, full width: Great Britain and Ireland centred, grey base, the field, then place names */
+  const bx0 = mercX(-10.7), bx1 = mercX(2.1), by0 = mercY(59.2), by1 = mercY(49.8);
+  const sc = Math.min(W / (bx1 - bx0), MH / (by1 - by0));                    // px per world unit
+  const vx0 = (bx0 + bx1) / 2 - W / 2 / sc, vy0 = (by0 + by1) / 2 - MH / 2 / sc;
+  const z = Math.min(9, Math.ceil(Math.log2(sc / 256))), n = 2 ** z, tp = sc / n;
+  const X = (u) => (u - vx0) * sc, Y = (u) => MY + (u - vy0) * sc;
+  const tiles = (part) => {
+    const jobs = [];
+    for (let ty = Math.floor(vy0 * n); ty < (vy0 + MH / sc) * n; ty += 1) {
+      for (let tx = Math.floor(vx0 * n); tx < (vx0 + W / sc) * n; tx += 1) jobs.push(loadImg(greyTile(part, z, tx, ty), true).then((im) => ({ im, tx, ty })));
+    }
+    return Promise.all(jobs);
+  };
+  const [base, names, logo] = await Promise.all([tiles('Base'), tiles('Reference'), loadImg('/logo.png', false)]);
+  const draw = (list) => list.forEach(({ im, tx, ty }) => { if (im) ctx.drawImage(im, X(tx / n), Y(ty / n), tp + 0.6, tp + 0.6); });
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, MY, W, MH); ctx.clip();
+  ctx.fillStyle = '#e5e7eb'; ctx.fillRect(0, MY, W, MH);
+  draw(base);
+  ctx.globalAlpha = 0.85;
+  ctx.drawImage(overlay, X(mercX(BOUNDS[0][1])), Y(mercY(BOUNDS[1][0])),
+    (mercX(BOUNDS[1][1]) - mercX(BOUNDS[0][1])) * sc, (mercY(BOUNDS[0][0]) - mercY(BOUNDS[1][0])) * sc);
+  ctx.globalAlpha = 1;
+  draw(names);
+  ctx.restore();
+  /* the title, the window and how it was combined; the logo top right */
+  let right = W - 56;
+  if (logo) {
+    const h = 112, w = Math.min(320, (h * logo.width) / logo.height);
+    ctx.drawImage(logo, W - 56 - w, 58, w, (w * logo.height) / logo.width);
+    right = W - 56 - w - 32;
+  }
+  const fit = (text, weight, size) => {
+    let px = size;
+    do { ctx.font = `${weight} ${px}px ${FONT}`; px -= 2; } while (ctx.measureText(text).width > right - 56 && px > 18);
+  };
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#0f172a'; fit(title, 900, 60); ctx.fillText(title, 56, 118);
+  ctx.fillStyle = '#334155'; fit(lines[0], 700, 34); ctx.fillText(lines[0], 56, 168);
+  ctx.fillStyle = '#64748b'; fit(lines[1], 500, 27); ctx.fillText(lines[1], 56, 210);
+  /* the key */
+  const items = layer.stops.filter((q) => q[1][3] > 0).map(([v, c, name]) => [c,
+    name ? `${name} ${Math.round(v * 100)}%` : layer.pct ? `${Math.round(v * 100)}%` : `${v}`]);
+  ctx.fillStyle = '#0f172a'; ctx.font = `800 26px ${FONT}`;
+  ctx.fillText(layer.step ? 'Risk level (chance at or above)' : `${layer.label}${!layer.pct && layer.unit ? ` (${layer.unit})` : ''}`, 56, MY + MH + 52);
+  let kx = 56, ky = MY + MH + 76;
+  ctx.font = `700 24px ${FONT}`;
+  for (const [c, label] of items) {
+    const w = 40 + 10 + ctx.measureText(label).width + 28;
+    if (kx + w > W - 56) { kx = 56; ky += 42; }
+    ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, c[3] / 170)})`;
+    ctx.fillRect(kx, ky, 40, 26);
+    ctx.fillStyle = '#334155'; ctx.fillText(label, kx + 50, ky + 22);
+    kx += w;
+  }
+  ctx.fillStyle = '#94a3b8'; ctx.font = `600 22px ${FONT}`;
+  ctx.fillText(footer, 56, H - 34);
+  const blob = await new Promise((ok) => cv.toBlob(ok, 'image/png'));
+  if (!blob) throw new Error('the image could not be made');
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = file;
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 /* ── data hooks ──────────────────────────────────────────────────────────── */
@@ -307,8 +536,16 @@ function useLightningToday(on) {
   return d;
 }
 
+/* the overlay image: replaced in place, created on first use */
+const putOverlay = (ov, m, url) => {
+  if (ov.current) ov.current.setUrl(url);
+  else ov.current = L.imageOverlay(url, BOUNDS, { opacity: 0.85, interactive: false }).addTo(m);
+};
+
 /* ── map ─────────────────────────────────────────────────────────────────── */
-function NovaMap({ product, manifest, lead, day = null, layerKey, onHover, strikes }) {
+/* One frame (or one whole day) of one field. While hours are being combined (`combining`) it
+   fetches nothing and shows `combined`, the field the page made, once it is ready. */
+function NovaMap({ product, manifest, lead, day = null, layerKey, onHover, strikes, combining = false, combined = null, busyText = null }) {
   const el = useRef(null), map = useRef(null), overlay = useRef(null), dataRef = useRef(null), strikeLayer = useRef(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -323,7 +560,9 @@ function NovaMap({ product, manifest, lead, day = null, layerKey, onHover, strik
       const d = dataRef.current; if (!d) return;
       const [x, y] = toBNG(e.latlng.lat, e.latlng.lng);
       const g = d.grid; const ix = Math.floor((x - g.x0) / g.dx_m), iy = Math.floor((y - g.y0) / g.dx_m);
-      onHover(ix >= 0 && iy >= 0 && ix < g.nx && iy < g.ny ? { v: d.data[iy * g.nx + ix], lat: e.latlng.lat, lon: e.latlng.lng } : null);
+      if (ix < 0 || iy < 0 || ix >= g.nx || iy >= g.ny) { onHover(null); return; }
+      const i = iy * g.nx + ix;
+      onHover({ v: d.data[i], lat: e.latlng.lat, lon: e.latlng.lng, when: d.at && d.at[i] !== 255 ? d.times[d.at[i]] : null });
     });
     map.current = m;
   }, [onHover]);
@@ -335,39 +574,43 @@ function NovaMap({ product, manifest, lead, day = null, layerKey, onHover, strik
     } else if (strikeLayer.current) { map.current.removeLayer(strikeLayer.current); strikeLayer.current = null; }
   }, [strikes]);
   useEffect(() => {
-    if (!manifest || lead == null) return undefined;
+    if (!combining || !combined || !map.current) return;
+    dataRef.current = combined;
+    putOverlay(overlay, map.current, renderField(combined.shown, combined.grid, combined.layer));
+  }, [combining, combined]);
+  useEffect(() => {
+    if (combining) { setBusy(false); setErr(null); return undefined; }
+    if (!manifest || lead == null || manifest.product !== product) return undefined;   // a product switch, before its run arrives
     let alive = true;
     setBusy(true); setErr(null);
     fetchField(product, manifest.run_id, lead, layerKey, day).then((data) => {
       if (!alive) return;
       dataRef.current = { data, grid: manifest.grid };
-      const url = renderField(data, manifest.grid, LAYERS[layerKey]);
-      if (overlay.current) overlay.current.setUrl(url);
-      else overlay.current = L.imageOverlay(url, BOUNDS, { opacity: 0.85, interactive: false }).addTo(map.current);
+      putOverlay(overlay, map.current, renderField(data, manifest.grid, LAYERS[layerKey]));
     }).catch((e) => { if (alive) { setErr(String(e.message || e)); if (overlay.current) { overlay.current.remove(); overlay.current = null; } dataRef.current = null; } })
       .finally(() => alive && setBusy(false));
     return () => { alive = false; };
-  }, [product, manifest, lead, layerKey, day]);
+  }, [product, manifest, lead, layerKey, day, combining]);
   return (
     <div style={{ position: 'relative' }}>
       {/* isolation: Leaflet's panes use z-index up to 1000; keep them inside the map so they never cover the sticky bars */}
       <div ref={el} style={{ height: 'min(72vh, 760px)', minHeight: 460, borderRadius: 14, overflow: 'hidden', background: '#e5e7eb', isolation: 'isolate', zIndex: 0, position: 'relative' }} />
-      {busy && <div style={{ position: 'absolute', top: 10, left: 54, zIndex: 700, ...pill('#fff', T.mid) }}>Loading field…</div>}
+      {(busyText || busy) && <div style={{ position: 'absolute', top: 10, left: 54, zIndex: 700, ...pill('#fff', T.mid) }}>{busyText || 'Loading field…'}</div>}
       {err && <div style={{ position: 'absolute', top: 10, left: 54, zIndex: 700, ...pill('#fef2f2', '#b91c1c') }}>Not in this run: {LAYERS[layerKey].label}</div>}
     </div>
   );
 }
 const pill = (bg, color) => ({ background: bg, color, border: `1px solid ${T.border}`, borderRadius: 99, padding: '4px 10px', fontSize: '0.7rem', fontWeight: 700 });
 
-function Legend({ layerKey }) {
-  const l = LAYERS[layerKey];
+function Legend({ layerKey, layer = LAYERS[layerKey] }) {
+  const l = layer;
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
       <span style={{ fontSize: '0.72rem', fontWeight: 800, color: T.text, marginRight: 4 }}>{l.label}</span>
-      {l.stops.filter((s) => s[1][3] > 0).map(([v, c]) => (
+      {l.stops.filter((s) => s[1][3] > 0).map(([v, c, name]) => (
         <span key={v} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.66rem', color: T.mid, fontFamily: MONO }}>
           <span style={{ width: 14, height: 10, borderRadius: 3, background: `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, c[3] / 200)})` }} />
-          {l.pct ? `${Math.round(v * 100)}%` : `${v}${l.unit ? ' ' + l.unit : ''}`}
+          {name ? `${name} ≥${Math.round(v * 100)}%` : l.pct ? `${Math.round(v * 100)}%` : `${v}${l.unit ? ' ' + l.unit : ''}`}
         </span>
       ))}
     </div>
@@ -433,8 +676,16 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   const [threeHourly, setThreeHourly] = useState(() => { try { return localStorage.getItem('nova_3h') === '1'; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem('nova_3h', threeHourly ? '1' : '0'); } catch { /* blocked */ } }, [threeHourly]);
   useEffect(() => { try { localStorage.setItem('nova_lightning', showLightning ? '1' : '0'); } catch { /* blocked */ } }, [showLightning]);
+  /* combining hours: one map from a start time to an end time, which may be on another day */
+  const [combine, setCombine] = useState(null);             // { from, to, how }: valid times (ms), or null when off
+  const [combineStyle, setCombineStyle] = useState(() => { try { return localStorage.getItem('nova_combine_style') === 'shades' ? 'shades' : 'levels'; } catch { return 'levels'; } });
+  useEffect(() => { try { localStorage.setItem('nova_combine_style', combineStyle); } catch { /* blocked */ } }, [combineStyle]);
+  const [combo, setCombo] = useState(null);                  // the combined field
+  const [comboProg, setComboProg] = useState(null);          // [frames done, of] while combining
+  const [comboErr, setComboErr] = useState(null);
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => { setPinned(null); setIdx(0); setEnded(false); setLayerKey('p_thunder'); }, [product]);
+  useEffect(() => { setPinned(null); setIdx(0); setEnded(false); setLayerKey('p_thunder'); setCombine(null); }, [product]);
   /* follow the newest run unless the user is examining an older one */
   useEffect(() => {
     if (pinned) {
@@ -456,6 +707,15 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   const next = () => { if (idx + 1 < frames.length) { setIdx(idx + 1); setEnded(false); } else if (product === 'hyper') setEnded(true); };
   const prev = () => { setEnded(false); setIdx(Math.max(0, idx - 1)); };
 
+  /* every frame's valid time, UK day and minute of the day (the combine pickers work in these) */
+  const slots = useMemo(() => frames.map((f) => {
+    const [h, mi] = london(f.valid, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).split(':').map(Number);
+    return { f, t: Date.parse(f.valid), day: london(f.valid, { year: 'numeric', month: '2-digit', day: '2-digit' }), mins: h * 60 + mi };
+  }), [frames]);
+  const win = useMemo(() => (combine ? slots.filter((x) => x.t >= combine.from && x.t <= combine.to) : []), [slots, combine]);
+  const winKey = win.map((x) => x.f.lead_min).join(',');
+  const how = combine?.how || null;
+
   const groups = product === 'main' ? MAIN_LAYER_GROUPS : HYPER_LAYER_GROUPS;
 
   /* day cards (Main): highest thunder probability per UK calendar day */
@@ -473,9 +733,57 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   const dayMax = days.find((d) => d.key === curDay)?.max || 0;
   const dayMeta = frame ? (manifest?.days || []).find((d) => d.lead_min?.includes(frame.lead_min)) : null;
   const dayView = product === 'main' && !threeHourly && !!dayMeta && dayMeta.fields.includes(layerKey);
-  const fieldMax = (f, fr = frame) => (dayView && dayMeta?.stats?.[f] ? dayMeta.stats[f].max : fr?.stats?.[f]?.max) ?? null;
+  const fieldMax = (f, fr = frame) => {
+    if (win.length) return win.reduce((m, x) => { const v = x.f.stats?.[f]?.max; return v == null ? m : Math.max(m ?? v, v); }, null);
+    return (dayView && dayMeta?.stats?.[f] ? dayMeta.stats[f].max : fr?.stats?.[f]?.max) ?? null;
+  };
   const [word, colour] = riskWord(dayMeta?.stats?.p_thunder?.max ?? dayMax);
   const P = PRODUCTS[product];
+
+  /* a newer run that no longer covers the window: start again from its first frame */
+  useEffect(() => { if (combine && slots.length && !win.length) setCombine((c) => c && { ...c, ...spanFrom(slots, 0, 12) }); }, [combine, slots, win.length]);
+  useEffect(() => {
+    if (!how || !manifest || !winKey || manifest.product !== product) { setCombo(null); setComboProg(null); return undefined; }
+    const list = winKey.split(',').map(Number).map((l) => manifest.frames.find((f) => f.lead_min === l)).filter(Boolean);
+    let alive = true;
+    setComboErr(null); setComboProg([0, list.length]);
+    combineFrames({ product, manifest, win: list, field: layerKey, how, alive: () => alive, onProgress: (d, n) => { if (alive) setComboProg([d, n]); } })
+      .then(({ data, at }) => { if (alive) setCombo({ data, at, grid: manifest.grid, times: list.map((f) => f.valid), field: layerKey, how }); })
+      .catch((e) => { if (alive) { setCombo(null); setComboErr(`${LAYERS[layerKey].label} is missing from part of this window (${e.message || e}).`); } })
+      .finally(() => { if (alive) setComboProg(null); });
+    return () => { alive = false; };
+  }, [product, manifest, layerKey, how, winKey]);
+  const comboLayer = useMemo(() => (combineStyle === 'levels' && LAYERS[layerKey].pct ? { ...LAYERS[layerKey], stops: RISK_LEVELS, step: true } : LAYERS[layerKey]), [layerKey, combineStyle]);
+  const combined = useMemo(() => (combo && combo.field === layerKey && combo.how === how
+    ? { ...combo, layer: comboLayer, shown: comboLayer.step ? smoothGrid(combo.data, combo.grid) : combo.data } : null), [combo, comboLayer, layerKey, how]);
+  const comboStats = useMemo(() => (combined ? windowStats(combined, LAYERS[combined.field]) : null), [combined]);
+  /* open on the frame (or the whole day) being looked at, 12 hours long */
+  const openCombine = () => {
+    const d = dayView ? days.find((x) => x.key === curDay) : null;
+    setCombine({ how: 'peak', ...spanFrom(slots, d ? d.first : Math.min(idx, slots.length - 1), 12) });
+    setPlaying(false); setEnded(false);
+  };
+  const dayWindow = (key) => {
+    const xs = slots.filter((x) => x.day === key);
+    if (xs.length) setCombine((c) => ({ ...c, from: xs[0].t, to: xs[xs.length - 1].t }));
+  };
+  const saveImage = async () => {
+    if (!combined || !win.length) return;
+    const a = win[0].f.valid, b = win[win.length - 1].f.valid;
+    setSaving(true);
+    try {
+      await saveWindowPng({
+        overlay: renderCanvas(combined.shown, combined.grid, combined.layer),
+        title: layerKey === 'p_thunder' ? 'THUNDERSTORM RISK' : LAYERS[layerKey].label.toUpperCase(),
+        lines: [`${dayName(a)} ${hhmm(a)}  →  ${dayName(b)} ${hhmm(b)}`, howText(layerKey, how, LAYERS[layerKey].pct)],
+        layer: combined.layer,
+        footer: `TCM NOVA · ${P.label} · run initialised ${manifest.init_local}`,
+        file: `nova-${layerKey}-${stamp(a)}-${stamp(b)}.png`,
+      });
+    } catch (e) {
+      setComboErr(`The image could not be saved (${e.message || e}).`);
+    } finally { setSaving(false); }
+  };
 
   return (
     <div style={{ minHeight: '100vh', background: T.bg, color: T.text, fontFamily: 'inherit' }}>
@@ -525,9 +833,9 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
           <div role="tablist" aria-label="Forecast day" style={{ maxWidth: 1360, margin: '0 auto', padding: '8px 16px', display: 'flex', gap: 6, overflowX: 'auto' }}>
             {days.slice(0, 4).map((d, i) => {
               const [w, c] = riskWord(d.max);
-              const on = d.key === curDay;
+              const on = combine ? win.some((x) => x.day === d.key) : d.key === curDay;
               return (
-                <button key={d.key} type="button" role="tab" aria-selected={on} onClick={() => { setIdx(d.first); setEnded(false); }}
+                <button key={d.key} type="button" role="tab" aria-selected={on} onClick={() => { if (combine) dayWindow(d.key); else { setIdx(d.first); setEnded(false); } }}
                   style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
                     border: `1px solid ${on ? '#0f172a' : T.border}`, background: on ? '#0f172a' : T.soft, color: on ? '#fff' : T.text }}>
                   <span style={{ fontFamily: MONO, fontSize: '0.62rem', opacity: 0.75 }}>DAY {i + 1}</span>
@@ -569,9 +877,9 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
               <SectionTitle icon={Clock} text={product === 'main' ? 'Forecast days' : 'Forecast window'} />
               {product === 'main' ? days.map((d, i) => {
                 const [w, c] = riskWord(d.max);
-                const on = d.key === curDay;
+                const on = combine ? win.some((x) => x.day === d.key) : d.key === curDay;
                 return (
-                  <button key={d.key} type="button" onClick={() => { setIdx(d.first); setEnded(false); }}
+                  <button key={d.key} type="button" onClick={() => { if (combine) dayWindow(d.key); else { setIdx(d.first); setEnded(false); } }}
                     style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 10, padding: '9px 10px', marginTop: 6, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
                       background: on ? '#f1f5f9' : '#fff', border: `1px solid ${on ? '#334155' : T.border}`, textAlign: 'left' }}>
                     <span style={{ ...pill(T.soft, T.mid), fontFamily: MONO, fontSize: '0.6rem' }}>DAY {i + 1}</span>
@@ -587,7 +895,7 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
               )}
             </div>
             <div style={{ ...card, padding: 12 }}>
-              <SectionTitle icon={AlertTriangle} text={dayView ? "Hazards · whole day" : "Hazards · this frame"} />
+              <SectionTitle icon={AlertTriangle} text={combine ? 'Hazards · peak in window' : dayView ? 'Hazards · whole day' : 'Hazards · this frame'} />
               {HAZARDS.map(({ f, label, icon: Icon }) => {
                 const v = fieldMax(f);
                 const avail = v != null;
@@ -649,14 +957,20 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
                       <Zap style={{ width: 13, height: 13 }} /> Lightning today
                       {showLightning && lightning && <span style={{ fontFamily: MONO }}>· {lightning.count.toLocaleString()} strikes</span>}
                     </button>
+                    <button type="button" onClick={() => (combine ? setCombine(null) : openCombine())} aria-pressed={!!combine}
+                      title="Combine the forecast from one time to another, across days if you like, into one map"
+                      style={{ ...pill(combine ? '#e0f2fe' : '#fff', combine ? '#0369a1' : T.mid), cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5,
+                        borderColor: combine ? '#7dd3fc' : T.border }}>
+                      <CalendarRange style={{ width: 13, height: 13 }} /> Combine hours
+                    </button>
                     {hover && Number.isFinite(hover.v) && (
                       <span style={{ ...pill(T.soft, T.text), fontFamily: MONO }}>
-                        {LAYERS[layerKey].pct ? `${Math.round(hover.v * 100)}%` : `${(hover.v * (LAYERS[layerKey].mul || 1)).toFixed(1)} ${LAYERS[layerKey].unit}`} · {hover.lat.toFixed(2)}, {hover.lon.toFixed(2)}
+                        {combine && how === 'mean' && layerKey !== 'precip_accum' ? 'avg ' : ''}{valueText(hover.v, LAYERS[layerKey])}{hover.when ? ` at ${weekday(hover.when)} ${hhmm(hover.when)}` : ''} · {hover.lat.toFixed(2)}, {hover.lon.toFixed(2)}
                       </span>
                     )}
                   </div>
-                  <Legend layerKey={layerKey} />
-                  {frame?.stats?.[layerKey] && frame.stats[layerKey].max != null && frame.stats[layerKey].max * (LAYERS[layerKey].pct ? 1 : (LAYERS[layerKey].mul || 1)) < LAYERS[layerKey].stops[0][0] && (
+                  <Legend layerKey={layerKey} layer={combine ? comboLayer : undefined} />
+                  {!combine && frame?.stats?.[layerKey] && frame.stats[layerKey].max != null && frame.stats[layerKey].max * (LAYERS[layerKey].pct ? 1 : (LAYERS[layerKey].mul || 1)) < LAYERS[layerKey].stops[0][0] && (
                     <div style={{ fontSize: '0.72rem', color: T.mid }}>
                       Nothing to show for this frame: {LAYERS[layerKey].pct ? `the highest value anywhere is ${Math.round((frame.stats[layerKey].max || 0) * 100)}%` : 'the field stays below the lowest colour band everywhere'}. The layer is working; there is simply no {LAYERS[layerKey].label.toLowerCase()} signal at this time.
                     </div>
@@ -673,7 +987,8 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
                 </div>
                 <div style={{ ...card, padding: 8, position: 'relative' }}>
                   <NovaMap product={product} manifest={manifest} lead={frame?.lead_min} day={dayView ? dayMeta.date : null} layerKey={layerKey} onHover={setHover}
-                    strikes={showLightning ? lightning?.strikes : null} />
+                    strikes={showLightning ? lightning?.strikes : null} combining={!!combine} combined={combined}
+                    busyText={comboProg ? `Combining ${comboProg[0]} of ${comboProg[1]} frames…` : null} />
                   {ended && (
                     <div style={{ position: 'absolute', inset: 8, zIndex: 800, borderRadius: 14, background: 'rgba(15,23,42,0.72)', display: 'grid', placeItems: 'center', color: '#fff', textAlign: 'center', padding: 20 }}>
                       <div>
@@ -686,7 +1001,7 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
                   )}
                 </div>
                 {/* timeline */}
-                {product === 'main' && manifest?.days?.length > 0 && (
+                {!combine && product === 'main' && manifest?.days?.length > 0 && (
                   <div style={{ ...card, padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <div style={{ fontWeight: 900, fontSize: '0.95rem' }}>{dayView ? `${dayMeta.label} · whole day` : frame ? `${dayName(frame.valid)} ${hhmm(frame.valid)}` : '—'}</div>
                     {dayView && <span style={{ ...pill(T.soft, T.mid) }}>highest value at any time of the day{dayMeta.complete ? '' : ' (part day in this run)'}</span>}
@@ -697,7 +1012,7 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
                     </label>
                   </div>
                 )}
-                {(product !== 'main' || threeHourly || !manifest?.days?.length) && (
+                {!combine && (product !== 'main' || threeHourly || !manifest?.days?.length) && (
                 <div style={{ ...card, padding: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <button type="button" onClick={prev} aria-label="Previous frame" style={btn}><ChevronLeft style={{ width: 16, height: 16 }} /></button>
@@ -724,6 +1039,11 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
                   )}
                 </div>
                 )}
+                {combine && (
+                  <CombinePanel slots={slots} days={days} combine={combine} setCombine={setCombine} win={win} stats={comboStats} prog={comboProg} err={comboErr}
+                    layerKey={layerKey} combineStyle={combineStyle} setCombineStyle={setCombineStyle} saving={saving} canSave={!!combined && !comboProg}
+                    onSave={saveImage} onClose={() => setCombine(null)} dayTabs={product === 'main'} />
+                )}
                 <div style={{ ...card, padding: 12, fontSize: '0.72rem', color: T.mid, lineHeight: 1.6, display: 'flex', gap: 8 }}>
                   <Info style={{ width: 15, height: 15, flexShrink: 0, color: T.sky }} />
                   <span>
@@ -741,6 +1061,118 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
             {tab === 'learning' && <LearningPanel />}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+/* Combine hours: the start and the end (day and time), quick windows, how to combine, and what
+   came out of it: the highest value, when it came and the area at each risk level. */
+function CombinePanel({ slots, days, combine, setCombine, win, stats, prog, err, layerKey, combineStyle, setCombineStyle, saving, canSave, onSave, onClose, dayTabs }) {
+  if (!win.length) return null;
+  const layer = LAYERS[layerKey];
+  const accum = layerKey === 'precip_accum';
+  const a = win[0], b = win[win.length - 1];
+  const setFrom = (t) => setCombine((c) => ({ ...c, from: t, to: Math.max(t, c.to) }));
+  const setTo = (t) => setCombine((c) => ({ ...c, to: t, from: Math.min(t, c.from) }));
+  /* a day's frame nearest a time of day, so changing the day keeps the hour */
+  const near = (key, mins, minT = -Infinity) => slots.filter((x) => x.day === key && x.t >= minT)
+    .reduce((best, x) => (!best || Math.abs(x.mins - mins) < Math.abs(best.mins - mins) ? x : best), null)?.t;
+  const di = days.findIndex((d) => d.key === a.day);
+  const d0 = days[di]?.key, d1 = days[di + 1]?.key;
+  const span = (pred) => { const xs = slots.filter(pred); return xs.length ? { from: xs[0].t, to: xs[xs.length - 1].t } : null; };
+  const presets = [
+    ['Afternoon & evening', '12:00–00:00', span((x) => (x.day === d0 && x.mins >= 720) || (x.day === d1 && x.mins === 0))],
+    ['Overnight', '18:00–06:00', span((x) => (x.day === d0 && x.mins >= 1080) || (x.day === d1 && x.mins <= 360))],
+    ['Whole day', days[di]?.label || '', span((x) => x.day === d0)],
+    ['Next 24 h', `from ${hhmm(a.f.valid)}`, span((x) => x.t >= a.t && x.t <= a.t + 864e5)],
+  ];
+  const sel = { ...pill('#fff', T.text), padding: '7px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.76rem' };
+  const picker = (label, s, dayList, times, onPick, minT) => (
+    <div role="group" aria-label={label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.12em', color: T.faint, fontFamily: MONO, width: 34 }}>{label.toUpperCase()}</span>
+      <select value={s.day} aria-label={`${label} day`} onChange={(e) => onPick(near(e.target.value, s.mins, minT))} style={sel}>
+        {dayList.map((d) => <option key={d.key} value={d.key}>{d.label}</option>)}
+      </select>
+      <select value={s.t} aria-label={`${label} time`} onChange={(e) => onPick(Number(e.target.value))} style={{ ...sel, fontFamily: MONO }}>
+        {times.map((x) => <option key={x.t} value={x.t}>{hhmm(x.f.valid)}</option>)}
+      </select>
+    </div>
+  );
+  const seg = (on) => ({ border: 'none', cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontWeight: 800, fontSize: '0.72rem', fontFamily: 'inherit',
+    background: on ? '#0f172a' : 'transparent', color: on ? '#fff' : T.mid });
+  const group = (aria, items, value, onPick) => (
+    <div role="radiogroup" aria-label={aria} style={{ display: 'inline-flex', background: T.soft, border: `1px solid ${T.border}`, borderRadius: 10, padding: 2 }}>
+      {items.map(([k, l]) => <button key={k} type="button" role="radio" aria-checked={value === k} onClick={() => onPick(k)} style={seg(value === k)}>{l}</button>)}
+    </div>
+  );
+  const hours = Math.round(((b.t - a.t) / 36e5) * 10) / 10;
+  const best = stats?.best;
+  const [word, colour] = layer.pct && best != null ? riskWord(best) : [null, T.text];
+  const what = layerKey === 'p_thunder' ? 'thunderstorm risk' : layer.label.toLowerCase();
+  return (
+    <div style={{ ...card, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ flex: 1 }}><SectionTitle icon={CalendarRange} text="Combine hours" /></div>
+        <button type="button" onClick={onSave} disabled={!canSave || saving} title="Save this window as a 1080×1920 image"
+          style={{ ...pill('#fff', T.text), cursor: canSave && !saving ? 'pointer' : 'not-allowed', opacity: canSave ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Download style={{ width: 13, height: 13 }} /> {saving ? 'Saving…' : 'Save image'}
+        </button>
+        <button type="button" onClick={onClose} aria-label="Stop combining hours" title="Back to single times" style={{ ...btn, width: 30, height: 30 }}><X style={{ width: 15, height: 15 }} /></button>
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {picker('From', a, days, slots.filter((x) => x.day === a.day), setFrom, -Infinity)}
+        <span style={{ color: T.faint, fontWeight: 900 }}>→</span>
+        {picker('To', b, days.filter((d) => slots.some((x) => x.day === d.key && x.t >= a.t)), slots.filter((x) => x.day === b.day && x.t >= a.t), setTo, a.t)}
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {presets.map(([l, sub, w]) => {
+          const on = !!w && w.from === a.t && w.to === b.t;
+          return (
+            <button key={l} type="button" disabled={!w} onClick={() => setCombine((c) => ({ ...c, ...w }))} aria-pressed={on}
+              style={{ ...pill(on ? '#0f172a' : '#fff', on ? '#fff' : T.text), cursor: w ? 'pointer' : 'not-allowed', opacity: w ? 1 : 0.45 }}>
+              {l} <span style={{ fontWeight: 600, opacity: 0.7 }}>{sub}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {accum ? <span style={{ ...pill(T.soft, T.mid) }}>Rain total in the window</span>
+          : group('How to combine', [['peak', LOW_WORST.has(layerKey) ? 'Lowest' : 'Peak'], ['mean', 'Average']], combine.how, (k) => setCombine((c) => ({ ...c, how: k })))}
+        {layer.pct && group('Map style', [['levels', 'Risk levels'], ['shades', 'Shades']], combineStyle, setCombineStyle)}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 900, fontSize: '0.95rem' }}>{dayName(a.f.valid)} {hhmm(a.f.valid)} → {dayName(b.f.valid)} {hhmm(b.f.valid)}</div>
+        <span style={{ ...pill(T.soft, T.mid), fontFamily: MONO }}>{hours} h · {win.length} frame{win.length === 1 ? '' : 's'}</span>
+        {prog && <span style={{ ...pill('#e0f2fe', '#0369a1'), fontFamily: MONO }}>combining {prog[0]}/{prog[1]}</span>}
+      </div>
+      {err && <div style={{ fontSize: '0.74rem', color: '#b91c1c' }}>{err}</div>}
+      {!prog && best != null && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 12px', borderRadius: 12, background: layer.pct ? `${colour}14` : T.soft, border: `1px solid ${T.border}` }}>
+          {word && <span style={{ ...pill('#fff', colour), fontWeight: 900 }}>{word}</span>}
+          <span style={{ fontFamily: MONO, fontWeight: 900, fontSize: '1.35rem' }}>{valueText(best, layer)}</span>
+          <span style={{ fontSize: '0.78rem', color: T.mid }}>
+            {accum ? 'the most rain anywhere in the window' : `${combine.how === 'mean' ? 'highest average' : LOW_WORST.has(layerKey) ? 'lowest' : 'highest'} ${what} in the window`}
+            {stats.when ? <>, at <b style={{ color: T.text }}>{dayName(stats.when)} {hhmm(stats.when)}</b></> : null}
+          </span>
+        </div>
+      )}
+      {!prog && layer.pct && stats && stats.areas.some((x) => x > 0) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: '0.7rem', color: T.mid }}>
+          <b style={{ color: T.text }}>Area at each level or above</b>
+          {RISK_LEVELS.map(([, c, name], q) => stats.areas[q] > 0 && (
+            <span key={name} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: MONO }}>
+              <span style={{ width: 10, height: 10, borderRadius: 3, background: `rgb(${c[0]},${c[1]},${c[2]})` }} />{name} {fmtArea(stats.areas[q])}
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{ fontSize: '0.7rem', color: T.mid, lineHeight: 1.55 }}>
+        {accum ? 'The rain that falls between the first and the last time, from the run’s rain rate (Main Run frames hold for 3 h each).'
+          : combine.how === 'mean'
+            ? `Average: the mean of the ${win.length} frames at every point. It shows how long a risk lasts and always sits at or below the peak.`
+            : `Peak: the ${LOW_WORST.has(layerKey) ? 'lowest' : 'highest'} value at every point at any one time in the window, the rule the whole-day maps use.${layer.pct ? ' The chance of a storm at some point in a long window is higher than any one time’s chance, so read a long window as a floor.' : ''} Hover the map for the value at a point and when it came.`}
+        {combineStyle === 'levels' && layer.pct ? ' Risk levels are smoothed over about 6 km like a drawn outlook; the numbers are not.' : ''}
+        {dayTabs ? ' The days the window touches are highlighted above; click a day to combine all of it.' : ''}
       </div>
     </div>
   );
