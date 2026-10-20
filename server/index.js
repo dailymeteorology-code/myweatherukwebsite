@@ -40,6 +40,7 @@ import { startLiveScenarios } from './scenarios/live/index.js';
 import { mountPastFuture } from './pastFuture/index.js';
 import { mountModelData } from './modelData.js';
 import { mountLocationWeather } from './locationWeather.js';
+import { mountImageSizes, warmImageSizes } from './imageSizes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(here, '..');
@@ -459,6 +460,7 @@ const upload = multer({
 
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
+  warmImageSizes(UPLOAD_DIR, req.file.filename);           // web-sized copies, ready before anyone looks
   res.json({ file_url: `/uploads/${req.file.filename}` });
 });
 
@@ -469,6 +471,7 @@ mountScenarios(app);
 mountPastFuture(app);
 mountModelData(app);
 mountLocationWeather(app);
+mountImageSizes(app, UPLOAD_DIR);
 startLiveScenarios(app);
 
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y' }));

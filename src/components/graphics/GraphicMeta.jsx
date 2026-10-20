@@ -186,6 +186,22 @@ export function ConditionChips({ graphic, max = 0, className = '' }) {
   );
 }
 
+/* white or near-black text, whichever reads on a colour (#rgb, #rrggbb or rgb()/rgba()) */
+function inkOn(colour) {
+  let r = 0, g = 0, b = 0;
+  const s = String(colour || '').trim();
+  const hex = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(s);
+  if (hex) {
+    const h = hex[1].length === 3 ? hex[1].replace(/./g, (x) => x + x) : hex[1];
+    [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  } else {
+    const m = s.match(/\d+(\.\d+)?/g);
+    if (m) [r, g, b] = m.map(Number);
+  }
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.62 ? '#111827' : '#ffffff';
+}
+
 /** Thunderstorm risk detail — bands first, then any measured values. */
 export function ThunderstormRisks({ data, className = '' }) {
   if (!data || typeof data !== 'object') return null;
@@ -201,28 +217,39 @@ export function ThunderstormRisks({ data, className = '' }) {
 
   if (!bands.length && !measured.length) return null;
 
+  /* Each risk is the hazard's name on glass and its level in a solid pill of the level's colour.
+     It used to be the level's colour on a fill of the same colour, which left "Moderate" (red on
+     red) unreadable; the pill's text is white or near-black, whichever the colour can carry. */
   return (
     <div className={`flex flex-wrap items-center gap-1.5 ${className}`}>
-      {bands.map(({ label, level }) => (
-        <span
-          key={label}
-          title={`${label}: ${level}`}
-          className="inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[10px] font-semibold whitespace-nowrap"
-          style={{
-            color: RISK_COLOR(level, 'thunderstorm'),
-            background: RISK_FILL(level, 'thunderstorm'),
-            border: `1px solid ${RISK_BORDER(level, 'thunderstorm')}`,
-          }}
-        >
-          {label}
-          <span className="font-bold">{level}</span>
-        </span>
-      ))}
+      {bands.map(({ label, level }) => {
+        const c = RISK_COLOR(level, 'thunderstorm');
+        return (
+          <span
+            key={label}
+            title={`${label}: ${level}`}
+            className="inline-flex items-center gap-1.5 rounded-full py-[2px] pl-2 pr-[3px] text-[10px] font-semibold whitespace-nowrap"
+            style={{
+              color: 'var(--ink-1, rgba(255,255,255,0.9))',
+              background: 'var(--glass-fill-strong, rgba(255,255,255,0.10))',
+              border: `1px solid ${RISK_BORDER(level, 'thunderstorm')}`,
+            }}
+          >
+            {label}
+            <span className="rounded-full px-1.5 font-bold" style={{ background: c, color: inkOn(c) }}>{level}</span>
+          </span>
+        );
+      })}
       {measured.map(({ label, value }) => (
         <span
           key={label}
-          className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/10
-                     px-2 py-[2px] text-[10px] font-medium text-white/85 whitespace-nowrap"
+          className="inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[10px] font-medium whitespace-nowrap"
+          /* the page's glass tokens where it has them (the home page, light or dark), white on dark elsewhere */
+          style={{
+            color: 'var(--ink-1, rgba(255,255,255,0.85))',
+            background: 'var(--glass-fill-strong, rgba(255,255,255,0.10))',
+            border: '1px solid var(--glass-hairline, rgba(255,255,255,0.15))',
+          }}
         >
           {label}
           <span className="font-bold">{value}</span>

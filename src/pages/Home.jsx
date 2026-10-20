@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import WarningCard from '@/components/WarningCard';
 import SocialLinks from '@/components/SocialLinks';
 import ForecastSection from '@/components/ForecastSection';
+import { sized, sizedSet } from '@/lib/sizedImage';
 import CombinedBannerStack from '@/components/CombinedBannerStack';
 import SeverityFilter from '@/components/SeverityFilter';
 // SectionNavigation (the old hamburger) removed — SiteNav in the layout now
@@ -1533,6 +1534,10 @@ export default function Home() {
     initialData: [], retry: 2, retryDelay: 1000
   });
 
+  /* A MyWeatherUK graphic in force is the most important thing we publish, so while one is
+     (not archived, not expired) the graphics section moves up to sit right under the title. */
+  const graphicsOnTop = forecasts.some((f) => !f.is_archived && (!f.expires_at || new Date(f.expires_at) > now));
+
   const { data: appUpdates = [] } = useQuery({
     queryKey: ['appUpdates'],
     // Show every PUBLISHED app update in the banner stack alongside active
@@ -1946,6 +1951,9 @@ export default function Home() {
           </motion.div>
         </header>
 
+        {/* ══ MYWEATHERUK GRAPHICS, when one is in force: straight under the title ══ */}
+        {graphicsOnTop && <div id="forecasts"><ForecastSection forecasts={forecasts} isOwner={isOwner} /></div>}
+
         {/* A red wildfire warning is the one thing allowed to interrupt. */}
         {redWildfire && (
           <Section>
@@ -2006,7 +2014,7 @@ export default function Home() {
             Rendered once. It used to appear in two places in the tree, the same
             component with the same props, picked between by whether the list was
             empty — which only moved where its empty state landed. */}
-        <div id="forecasts"><ForecastSection forecasts={forecasts} isOwner={isOwner} /></div>
+        {!graphicsOnTop && <div id="forecasts"><ForecastSection forecasts={forecasts} isOwner={isOwner} /></div>}
 
         {/* ══ WHAT'S NEW ════════════════════════════════════════════════════════ */}
         {settings?.news_title?.trim() && (() => {
@@ -2089,7 +2097,8 @@ export default function Home() {
                   viewport={{ once: true }}
                   transition={{ delay: Math.min(index * 0.06, 0.3), duration: 0.45 }}>
                   <img
-                    src={graphic.image_url} alt={graphic.title} loading="lazy"
+                    src={sized(graphic.image_url, 800)} srcSet={sizedSet(graphic.image_url, [480, 800, 1200])}
+                    sizes="(min-width: 640px) 360px, 100vw" alt={graphic.title} loading="lazy" decoding="async"
                     style={{ display: 'block', width: '100%', aspectRatio: '16 / 9', objectFit: 'cover' }} />
                   <div style={{ padding: 'clamp(13px, 2.4vw, 17px)' }}>
                     <h3 style={{

@@ -3,23 +3,19 @@ import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  CloudSun, Pencil, Save, X, Upload, Loader2, Trash2,
-  Clock, ChevronRight, MapPin, Check, Plus, Archive,
+  CloudSun, X, Upload, Loader2,
+  ChevronRight, MapPin, Check, Plus, Archive,
   AlertTriangle, Zap, Wind, Droplets, Snowflake, Flame,
-  Bold, Italic, Palette, Edit2, Flag, RefreshCw, ChevronDown
+  Bold, Italic, Palette, Edit2, Flag, RefreshCw, ChevronDown, Maximize2, ExternalLink
 } from 'lucide-react';
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { base44 } from '@/api/base44Client';
-import { useTheme } from '@/components/ThemeContext';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { format, isValid, formatDistanceToNow, isPast } from 'date-fns';
+import { format, isValid, isPast } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import ForecastFurtherInfo from './ForecastFurtherInfo';
 import ThunderstormPanel from './ThunderstormPanel';
 import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GRAPHIC_LEVEL_STYLE, GRAPHIC_LEVEL_LABEL } from '@/components/graphics/GraphicMeta';
+import { sized, sizedSet } from '@/lib/sizedImage';
 
 
 /* ─────────────────────────────────────────────
@@ -322,356 +318,217 @@ function RichText({ html, style = {} }) {
 }
 
 /* ─────────────────────────────────────────────
-   TINY HELPERS
+   GRAPHICS ON THE HOME PAGE — liquid glass
+   The newest graphic in force gets the big pane: the graphic on one side (kept in view while
+   the details scroll), everything about it on the other, stacked on a phone. Any others sit
+   in a rail underneath and swap into the big pane when tapped. Every colour comes from the
+   home page's glass tokens (--glass-*, --ink-*), so it follows the light and dark themes like
+   the rest of the page. Images are web-sized copies (lib/sizedImage); the full-size upload
+   only loads in the viewer.
 ───────────────────────────────────────────── */
-function TimeChip({ icon: Icon, label, value, highlight }) {
+const FG_CSS = `
+.fg-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.fg-head-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fg-btn { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 14px; border-radius: 12px; cursor: pointer; font: inherit; font-size: 0.82rem; font-weight: 600; letter-spacing: -0.01em; text-decoration: none; white-space: nowrap; background: var(--glass-fill); border: 1px solid var(--glass-hairline); color: var(--ink-2); -webkit-backdrop-filter: blur(16px) saturate(160%); backdrop-filter: blur(16px) saturate(160%); transition: background .15s, color .15s; }
+.fg-btn:hover { background: var(--glass-fill-strong); color: var(--ink-1); }
+.fg-btn.is-primary { background: var(--ink-1); color: var(--page-bg); border-color: transparent; }
+.fg-btn.is-primary:hover { opacity: .9; color: var(--page-bg); }
+.fg-count { font-size: .76rem; font-weight: 700; color: var(--ink-2); padding: 6px 11px; border-radius: 99px; background: var(--glass-fill); border: 1px solid var(--glass-hairline); }
+.fg-count-sm { font-size: .7rem; padding: 1px 7px; border-radius: 99px; background: var(--glass-fill-strong); }
+.fg-feature { display: grid; grid-template-columns: minmax(0, 1fr); }
+.fg-media { position: relative; padding: clamp(10px, 1.8vw, 16px); }
+@media (min-width: 900px) {
+  .fg-feature { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .fg-media { position: sticky; top: 72px; align-self: start; }
+  .fg-body { padding-left: 6px !important; }
+}
+.fg-media-btn { position: relative; display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.fg-img { display: block; width: 100%; height: auto; max-height: min(80vh, 820px); object-fit: contain; border-radius: 18px; background: rgba(0,0,0,.16); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 18px 40px -16px rgba(0,0,0,.55); }
+.fg-zoom { position: absolute; right: 12px; bottom: 12px; display: inline-flex; gap: 6px; align-items: center; padding: 7px 12px; border-radius: 99px; font-size: .76rem; font-weight: 600; color: #fff; background: rgba(10,16,28,.5); border: 1px solid rgba(255,255,255,.22); -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%); pointer-events: none; }
+.fg-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; cursor: pointer; color: #fff; background: rgba(10,16,28,.5); border: 1px solid rgba(255,255,255,.22); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.fg-icon:hover { background: rgba(10,16,28,.72); }
+.fg-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: clamp(16px, 2.6vw, 28px); }
+.fg-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fg-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 99px; font-size: .78rem; font-weight: 600; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); white-space: nowrap; }
+.fg-chip i { width: 8px; height: 8px; border-radius: 99px; flex-shrink: 0; }
+.fg-risks { gap: 6px !important; }
+.fg-risks > span { font-size: .76rem !important; padding: 4px 4px 4px 11px !important; }
+.fg-risks > span:not([title]) { padding-right: 11px !important; }
+.fg-risks > span > span { padding: 1px 8px !important; }
+.fg-title { margin: 0; font-size: clamp(1.3rem, 2.8vw, 1.85rem); font-weight: 700; letter-spacing: -0.025em; line-height: 1.15; color: var(--ink-1); text-wrap: balance; }
+.fg-times { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.fg-time { padding: 10px 12px; border-radius: 14px; background: var(--glass-fill); border: 1px solid var(--glass-hairline); }
+.fg-time span { display: block; font-size: .66rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.fg-time b { display: block; margin-top: 2px; font-size: .92rem; font-weight: 650; color: var(--ink-1); }
+.fg-desc { font-size: .96rem; line-height: 1.68; color: var(--ink-2); max-height: 11.5em; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 68%, transparent); mask-image: linear-gradient(180deg, #000 68%, transparent); }
+.fg-desc.is-open { max-height: none; -webkit-mask-image: none; mask-image: none; }
+.fg-more { align-self: flex-start; margin-top: -6px; padding: 0; border: 0; background: none; color: var(--accent-uk); font: inherit; font-size: .88rem; font-weight: 650; cursor: pointer; }
+.fg-locs { display: flex; gap: 8px; align-items: flex-start; font-size: .88rem; line-height: 1.5; color: var(--ink-2); }
+.fg-locs svg { flex-shrink: 0; margin-top: 3px; color: var(--ink-3); }
+.fg-note { padding: 10px 12px; border-radius: 14px; background: var(--tint-sky); border: 1px solid var(--glass-hairline); font-size: .88rem; line-height: 1.5; color: var(--ink-1); }
+.fg-note b { display: block; margin-bottom: 2px; font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.fg-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.fg-dot { width: 7px; height: 7px; border-radius: 99px; background: #38bdf8; }
+.fg-rail { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x proximity; padding: 14px 2px 8px; scrollbar-width: none; }
+.fg-rail::-webkit-scrollbar { display: none; }
+.fg-mini { flex: 0 0 auto; width: 240px; display: flex; flex-direction: column; padding: 8px; text-align: left; font: inherit; cursor: pointer; scroll-snap-align: start; }
+.fg-mini.is-on { box-shadow: var(--glass-shadow), inset 0 0 0 2px var(--accent-uk); }
+.fg-mini-img img, .fg-mini-img .fg-noimg { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; object-position: top; border-radius: 16px; }
+.fg-mini-body { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 6px 4px; }
+.fg-mini-title { font-size: .9rem; font-weight: 650; line-height: 1.3; color: var(--ink-1); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.fg-mini-time { font-size: .76rem; color: var(--ink-3); }
+.fg-noimg { aspect-ratio: 4 / 3; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--ink-3); border-radius: 18px; background: var(--glass-fill); }
+.fg-empty { display: flex; align-items: center; gap: 14px; padding: 20px 22px; color: var(--ink-3); }
+.fg-empty b { display: block; font-size: 1rem; color: var(--ink-1); }
+.fg-empty span { display: block; margin-top: 2px; font-size: .88rem; color: var(--ink-2); }
+.fg-viewer { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; background: rgba(3,6,12,.94); -webkit-backdrop-filter: blur(24px) saturate(140%); backdrop-filter: blur(24px) saturate(140%); animation: fg-fade .2s ease both; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, Roboto, sans-serif; }
+@keyframes fg-fade { from { opacity: 0; } to { opacity: 1; } }
+.fg-viewer-bar { display: flex; align-items: center; gap: 10px; padding: 12px 14px; color: #fff; }
+.fg-viewer-bar span { flex: 1; min-width: 0; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fg-viewer .fg-btn { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.22); }
+/* flex, not grid: a grid cell's height is not definite, so the image's max-height could not fit it to the screen */
+.fg-viewer-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 12px; overflow: hidden; }
+.fg-viewer-stage img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 12px; cursor: zoom-in; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+.fg-viewer-stage.is-zoom { display: block; overflow: auto; -webkit-overflow-scrolling: touch; }
+.fg-viewer-stage.is-zoom img { max-width: none; max-height: none; width: min(5120px, 300%); cursor: zoom-out; border-radius: 0; }
+.fg-viewer-hint { margin: 0; padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px)); text-align: center; font-size: .78rem; color: rgba(255,255,255,.6); }
+@media (prefers-reduced-motion: reduce) { .fg-viewer { animation: none; } }
+`;
+
+const condsOf = (f) => (f.weather_conditions?.length ? f.weather_conditions : f.weather_condition ? [f.weather_condition] : []);
+const levelsOf = (f) => (f.impact_levels?.length ? f.impact_levels : f.impact_level ? [f.impact_level] : []);
+
+function Chip({ dot, children }) {
+  return <span className="fg-chip">{dot && <i style={{ background: dot }} />}{children}</span>;
+}
+function TimeTile({ label, value, tone }) {
+  return <div className="fg-time"><span>{label}</span><b style={tone ? { color: tone } : undefined}>{value}</b></div>;
+}
+function GraphicImage({ forecast, widths, sizes, className, eager }) {
+  const url = forecast.image_url;
+  if (!url) return <div className="fg-noimg"><CloudSun size={32} /><span>No graphic</span></div>;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-      <Icon size={11} style={{ color: 'rgba(148,163,184,0.6)', flexShrink: 0 }} />
-      <span style={{ fontFamily: 'monospace', fontSize: 10, color: 'rgba(148,163,184,0.6)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-        {label}
-      </span>
-      <span style={{ fontFamily: 'monospace', fontSize: 10, color: highlight || '#cbd5e1' }}>
-        {value}
-      </span>
-    </div>
+    <img src={sized(url, widths[widths.length - 1])} srcSet={sizedSet(url, widths)} sizes={sizes} alt={forecast.title || 'Forecast graphic'}
+      className={className} loading={eager ? 'eager' : 'lazy'} decoding="async" />
   );
 }
 
-function Badge({ cfg, label, size = 'sm' }) {
-  const pad = size === 'sm' ? '3px 10px' : '4px 13px';
-  const isSevere = label === 'Severe';
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5,
-      padding: pad, borderRadius: 999,
-      background: cfg.dim ?? cfg.bg,
-      border: `1px solid ${cfg.border}`,
-      fontFamily: 'monospace', fontSize: 10, letterSpacing: '0.08em',
-      textTransform: 'uppercase', color: cfg.text, whiteSpace: 'nowrap',
-      boxShadow: isSevere ? '0 0 0 1px rgba(0,0,0,0.9)' : 'none',
-    }}>
-      <span style={{ width: 5, height: 5, borderRadius: '50%', background: cfg.accent ?? cfg.dot, flexShrink: 0 }} />
-      {label}
-    </span>
-  );
-}
-
-function SubtypeChip({ label }) {
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center',
-      padding: '2px 9px', borderRadius: 999,
-      background: 'rgba(255,255,255,0.04)',
-      border: '1px solid rgba(255,255,255,0.09)',
-      fontFamily: 'monospace', fontSize: 10, letterSpacing: '0.04em',
-      color: '#cbd5e1', whiteSpace: 'nowrap',
-    }}>
-      {label}
-    </span>
-  );
-}
-
-/* ─────────────────────────────────────────────
-   FORECAST CARD  (photo always at top)
-───────────────────────────────────────────── */
-function ForecastCard({ forecast, index, isOwner, onEdit, onArchive, onFurtherInfo, onUpdateImage, horizontal }) {
-  const condCfg = CONDITION_CONFIG[forecast.weather_condition] || DEFAULT_CFG;
-
-  const issuedAt      = formatBST(forecast.created_date);
-  const expiresAt     = formatExpiryBST(forecast.expires_at);
-  const inForceAt     = formatBST(forecast.in_force_from);
-  const wasEdited     = forecast.updated_date && forecast.created_date &&
-    new Date(forecast.updated_date).getTime() - new Date(forecast.created_date).getTime() > 5000;
+function FeaturedGraphic({ forecast, isOwner, onEdit, onArchive, onFurtherInfo, onUpdateImage, onOpen }) {
+  const [more, setMore] = useState(false);
+  const issuedAt = formatBST(forecast.created_date);
+  const expiresAt = formatExpiryBST(forecast.expires_at);
+  const inForceAt = formatBST(forecast.in_force_from);
+  const wasEdited = forecast.updated_date && forecast.created_date
+    && new Date(forecast.updated_date).getTime() - new Date(forecast.created_date).getTime() > 5000;
   const lastUpdatedAt = wasEdited ? formatBST(forecast.updated_date) : null;
-  const hasDetails    = forecast.impact_level || forecast.locations_impacted?.length > 0 || forecast.in_force_from;
-  const expiringSoon  = forecast.expires_at && !isPast(new Date(forecast.expires_at)) &&
-    new Date(forecast.expires_at) - Date.now() < 3 * 60 * 60 * 1000;
-
-  const conditions = forecast.weather_conditions?.length > 0
-    ? forecast.weather_conditions
-    : forecast.weather_condition ? [forecast.weather_condition] : [];
-  const impacts = forecast.impact_levels?.length > 0
-    ? forecast.impact_levels
-    : forecast.impact_level ? [forecast.impact_level] : [];
-  const subtypes = forecast.condition_subtypes?.length > 0 ? forecast.condition_subtypes : [];
-
-  /* Shared image block — sits at the TOP of every card */
-  const ImageBlock = ({ tall }) => (
-    <div style={{ position: 'relative', background: '#050a14', overflow: 'hidden' }}>
-      {forecast.image_url ? (
-        <>
-          <img
-            src={forecast.image_url}
-            alt="Forecast graphic"
-            style={{
-              width: '100%',
-              height: 'auto',
-              display: 'block',
-              objectFit: 'contain',
-            }}
-            loading="lazy"
-          />
-          {/* colour accent glow at top */}
-          <div style={{
-            position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-            background: `linear-gradient(90deg, ${condCfg.accent}, ${condCfg.accent}44, transparent)`,
-          }} />
-        </>
-      ) : (
-        <div style={{
-          width: '100%', aspectRatio: '16/9',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10,
-          background: condCfg.dim,
-        }}>
-          <condCfg.Icon size={40} style={{ color: condCfg.accent, opacity: 0.3 }} />
-          <span style={{ fontFamily: 'monospace', fontSize: 10, color: 'rgba(148,163,184,0.3)', textTransform: 'uppercase', letterSpacing: '0.12em' }}>No graphic</span>
-        </div>
-      )}
-
-      {/* Admin controls overlaid bottom-left of image */}
-      {isOwner && (
-        <div style={{ position: 'absolute', bottom: 10, left: 10, display: 'flex', gap: 5 }}>
-          <label style={{
-            width: 28, height: 28, borderRadius: 8, cursor: 'pointer',
-            background: 'rgba(0,0,0,0.6)', border: '1px solid rgba(255,255,255,0.12)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            transition: 'background 0.2s',
-          }}
-            onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,0,0,0.8)'}
-            onMouseLeave={e => e.currentTarget.style.background = 'rgba(0,0,0,0.6)'}
-            title="Replace image"
-          >
-            <Upload size={11} style={{ color: '#94a3b8' }} />
-            <input type="file" style={{ display: 'none' }} accept="image/*" onChange={e => onUpdateImage(e, forecast)} />
-          </label>
-          <motion.button
-            whileTap={{ scale: 0.92 }}
-            onClick={() => onArchive(forecast.id)}
-            title="Archive"
-            style={{
-              width: 28, height: 28, borderRadius: 8, cursor: 'pointer',
-              background: 'rgba(0,0,0,0.6)', border: '1px solid rgba(255,255,255,0.12)',
-              backdropFilter: 'blur(8px)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'all 0.2s', color: '#94a3b8',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(251,191,36,0.3)'; e.currentTarget.style.color = '#fbbf24'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(0,0,0,0.6)'; e.currentTarget.style.color = '#94a3b8'; }}
-          >
-            <Archive size={11} />
-          </motion.button>
-        </div>
-      )}
-    </div>
-  );
-
-  /* Shared content block — sits BELOW the image */
-  const ContentBlock = () => (
-    <div style={{
-      display: 'flex', flexDirection: 'column',
-      padding: horizontal ? '20px 22px 16px' : '16px 18px 14px',
-      minWidth: 0, flex: 1,
-    }}>
-      {/* Title row */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <div style={{
-            width: horizontal ? 34 : 32, height: horizontal ? 34 : 32, borderRadius: 10, flexShrink: 0,
-            background: condCfg.dim, border: `1px solid ${condCfg.border}`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <condCfg.Icon size={horizontal ? 16 : 15} style={{ color: condCfg.accent }} />
-          </div>
-          <h3 style={{
-            fontFamily: "'DM Sans', 'Outfit', system-ui, sans-serif",
-            fontSize: horizontal ? 16 : 15, fontWeight: 700, color: '#f1f5f9',
-            letterSpacing: '-0.02em', lineHeight: 1.2, margin: 0,
-          }}>
-            {forecast.title || 'Forecast'}
-          </h3>
-          {/* Update label badge */}
-          {forecast.forecast_update_label && (
-            <span style={{
-              display: 'inline-flex', alignItems: 'center',
-              padding: '2px 8px', borderRadius: 6, fontSize: 10,
-              fontFamily: 'monospace', letterSpacing: '0.06em', textTransform: 'uppercase',
-              background: forecast.is_initial_forecast ? 'rgba(56,189,248,0.12)' : 'rgba(245,158,11,0.12)',
-              border: `1px solid ${forecast.is_initial_forecast ? 'rgba(56,189,248,0.3)' : 'rgba(245,158,11,0.3)'}`,
-              color: forecast.is_initial_forecast ? '#38bdf8' : '#f59e0b',
-              flexShrink: 0,
-            }}>
-              {forecast.forecast_update_label}
-            </span>
-          )}
-        </div>
-        {isOwner && !horizontal && (
-          <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-            <motion.button whileTap={{ scale: 0.92 }} onClick={() => onEdit(forecast)} title="Edit"
-              style={{ width: 28, height: 28, borderRadius: 8, cursor: 'pointer', background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s', color: '#a78bfa' }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(167,139,250,0.16)'; e.currentTarget.style.color = '#c084fc'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(167,139,250,0.08)'; e.currentTarget.style.color = '#a78bfa'; }}
-            >
-              <Edit2 size={12} />
-            </motion.button>
-          </div>
-        )}
-      </div>
-
-      {/* Badges */}
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: subtypes.length ? 8 : 14 }}>
-        {conditions.map(c => <Badge key={c} cfg={CONDITION_CONFIG[c] || DEFAULT_CFG} label={c} />)}
-        {impacts.map(l => IMPACT_CONFIG[l] && <Badge key={l} cfg={IMPACT_CONFIG[l]} label={l} />)}
-        {expiringSoon && (
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            padding: '3px 9px', borderRadius: 999,
-            background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)',
-            fontFamily: 'monospace', fontSize: 10, color: '#fca5a5', letterSpacing: '0.06em',
-          }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#ef4444', animation: 'pulse 1s infinite' }} />
-            EXPIRING SOON
-          </span>
-        )}
-      </div>
-
-      {/* Sub-types */}
-      {subtypes.length > 0 && (
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 14 }}>
-          {subtypes.slice(0, horizontal ? 8 : 5).map(s => <SubtypeChip key={s} label={s} />)}
-          {subtypes.length > (horizontal ? 8 : 5) && (
-            <span style={{ fontFamily: 'monospace', fontSize: 10, color: 'rgba(148,163,184,0.4)' }}>
-              +{subtypes.length - (horizontal ? 8 : 5)} more
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Thunderstorm risk detail. Collected by the editor and saved on the
-          graphic, but never drawn anywhere until now — so the hail, tornado,
-          wind and flash-flood risks behind a thunderstorm graphic were
-          invisible to everyone including the person who set them. */}
-      <ThunderstormRisks data={forecast.thunderstorm_data} className="mb-3.5" />
-
-      {/* Description */}
-      {forecast.description ? (
-        <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.75, marginBottom: 14, flex: 1 }}>
-          <RichText html={forecast.description} />
-        </div>
-      ) : (
-        <div style={{ flex: 1 }} />
-      )}
-
-      {/* Locations */}
-      {forecast.locations_impacted?.length > 0 && (
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
-          <MapPin size={10} style={{ color: 'rgba(148,163,184,0.4)', flexShrink: 0 }} />
-          {forecast.locations_impacted.slice(0, 4).map(loc => (
-            <span key={loc} style={{
-              fontFamily: 'monospace', fontSize: 10, color: '#94a3b8',
-              background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-              padding: '2px 9px', borderRadius: 999, letterSpacing: '0.04em',
-            }}>{loc}</span>
-          ))}
-          {forecast.locations_impacted.length > 4 && (
-            <span style={{ fontFamily: 'monospace', fontSize: 10, color: 'rgba(148,163,184,0.4)' }}>+{forecast.locations_impacted.length - 4} more</span>
-          )}
-        </div>
-      )}
-
-      {/* Update note */}
-      {forecast.update_reason && lastUpdatedAt && (
-        <div style={{
-          padding: '8px 12px', borderRadius: 10, marginBottom: 14,
-          background: 'rgba(96,165,250,0.07)', border: '1px solid rgba(96,165,250,0.18)',
-        }}>
-          <p style={{ fontFamily: 'monospace', fontSize: 9, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 2 }}>Update note</p>
-          <p style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.6, margin: 0 }}>{forecast.update_reason}</p>
-        </div>
-      )}
-
-      {/* Footer: times + action buttons */}
-      <div style={{
-        borderTop: '1px solid rgba(255,255,255,0.06)',
-        paddingTop: 12, marginTop: 'auto',
-        display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap',
-      }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {inForceAt     && <TimeChip icon={Clock} label="In force" value={inForceAt} />}
-          {issuedAt      && <TimeChip icon={Clock} label="Issued"   value={issuedAt} />}
-          {expiresAt     && <TimeChip icon={Clock} label="Expires"  value={expiresAt} highlight={isPast(new Date(forecast.expires_at)) ? '#f87171' : '#fbbf24'} />}
-          {lastUpdatedAt && <TimeChip icon={Clock} label="Updated"  value={lastUpdatedAt} highlight="#60a5fa" />}
-        </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-          {isOwner && horizontal && (
-            <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={() => onEdit(forecast)}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 13px', borderRadius: 100, background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', fontFamily: 'monospace', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#a78bfa', cursor: 'pointer', transition: 'all 0.2s', whiteSpace: 'nowrap' }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(167,139,250,0.16)'; e.currentTarget.style.color = '#c084fc'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(167,139,250,0.08)'; e.currentTarget.style.color = '#a78bfa'; }}
-            >
-              <Edit2 size={11} /> Edit
-            </motion.button>
-          )}
-          <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={() => onFurtherInfo(forecast)}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 13px', borderRadius: 100, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', fontFamily: 'monospace', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#94a3b8', cursor: 'pointer', transition: 'all 0.2s', whiteSpace: 'nowrap' }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.09)'; e.currentTarget.style.color = '#f1f5f9'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.color = '#94a3b8'; }}
-          >
-            Further Info
-            {hasDetails && <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#60a5fa' }} />}
-            <ChevronRight size={11} style={{ opacity: 0.5 }} />
-          </motion.button>
-        </div>
-      </div>
-    </div>
-  );
-
-  /* ── HORIZONTAL (≤3 cards) — wider card, image on top ── */
-  if (horizontal) {
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: index * 0.08, duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-        style={{
-          background: 'rgba(8,13,26,0.97)',
-          border: `1px solid ${condCfg.border}`,
-          borderRadius: 20,
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-          boxShadow: `0 8px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`,
-          minWidth: 0,
-        }}
-      >
-        <ImageBlock tall />
-        <ContentBlock />
-      </motion.div>
-    );
-  }
-
-  /* ── VERTICAL (grid, 4+ cards) — image on top ── */
+  const hasDetails = forecast.impact_level || forecast.locations_impacted?.length > 0 || forecast.in_force_from;
+  const expiringSoon = forecast.expires_at && !isPast(new Date(forecast.expires_at))
+    && new Date(forecast.expires_at) - Date.now() < 3 * 60 * 60 * 1000;
+  const subtypes = forecast.condition_subtypes || [];
+  const longText = (forecast.description || '').replace(/<[^>]+>/g, '').length > 380;
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 28 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.07, duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-      style={{
-        background: 'rgba(8,13,26,0.96)',
-        border: `1px solid ${condCfg.border}`,
-        borderRadius: 20,
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
-        boxShadow: `0 4px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)`,
-        transition: 'border-color 0.3s, box-shadow 0.3s',
-        minWidth: 0,
-      }}
-    >
-      <ImageBlock />
-      <ContentBlock />
-    </motion.div>
+    <motion.article className="lg-pane fg-feature" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}>
+      <div className="fg-media">
+        <button type="button" className="fg-media-btn" onClick={() => forecast.image_url && onOpen(forecast)} aria-label="View the graphic full size">
+          <GraphicImage forecast={forecast} widths={[480, 800, 1200, 1600]} sizes="(min-width: 900px) 540px, 100vw" className="fg-img" eager />
+          {forecast.image_url && <span className="fg-zoom"><Maximize2 size={13} />Full size</span>}
+        </button>
+      </div>
+
+      <div className="fg-body">
+        <div className="fg-chips">
+          {condsOf(forecast).map((c) => <Chip key={c} dot={(CONDITION_CONFIG[c] || DEFAULT_CFG).accent}>{c}</Chip>)}
+          {levelsOf(forecast).map((l) => IMPACT_CONFIG[l] && <Chip key={l} dot={IMPACT_CONFIG[l].dot}>{l}</Chip>)}
+          {forecast.forecast_update_label && <Chip dot={forecast.is_initial_forecast ? '#38bdf8' : '#f59e0b'}>{forecast.forecast_update_label}</Chip>}
+          {expiringSoon && <Chip dot="#ef4444">Expiring soon</Chip>}
+        </div>
+
+        <h3 className="fg-title">{forecast.title || 'Forecast'}</h3>
+
+        <div className="fg-times">
+          {inForceAt && <TimeTile label="In force" value={inForceAt} />}
+          {issuedAt && <TimeTile label="Issued" value={issuedAt} />}
+          {expiresAt && <TimeTile label="Expires" value={expiresAt} tone={isPast(new Date(forecast.expires_at)) ? '#f87171' : undefined} />}
+          {lastUpdatedAt && <TimeTile label="Updated" value={lastUpdatedAt} />}
+        </div>
+
+        <ThunderstormRisks data={forecast.thunderstorm_data} className="fg-risks" />
+
+        {subtypes.length > 0 && <div className="fg-chips">{subtypes.map((s) => <Chip key={s}>{s}</Chip>)}</div>}
+
+        {forecast.description && (
+          <>
+            <div className={`fg-desc${more || !longText ? ' is-open' : ''}`}><RichText html={forecast.description} /></div>
+            {longText && <button type="button" className="fg-more" onClick={() => setMore((m) => !m)}>{more ? 'Show less' : 'Read more'}</button>}
+          </>
+        )}
+
+        {forecast.locations_impacted?.length > 0 && (
+          <div className="fg-locs"><MapPin size={14} /><span>{forecast.locations_impacted.join(', ')}</span></div>
+        )}
+
+        {forecast.update_reason && lastUpdatedAt && (
+          <div className="fg-note"><b>What changed</b>{forecast.update_reason}</div>
+        )}
+
+        <div className="fg-actions">
+          <button type="button" className="fg-btn is-primary" onClick={() => onFurtherInfo(forecast)}>
+            Further info{hasDetails && <i className="fg-dot" />}<ChevronRight size={14} />
+          </button>
+          {forecast.image_url && <button type="button" className="fg-btn" onClick={() => onOpen(forecast)}><Maximize2 size={14} />View full size</button>}
+          {/* the owner's tools sit with the other buttons, not over the graphic */}
+          {isOwner && <button type="button" className="fg-btn" onClick={() => onEdit(forecast)}><Edit2 size={14} />Edit</button>}
+          {isOwner && (
+            <label className="fg-btn" title="Replace the graphic's image">
+              <Upload size={14} />Replace image
+              <input type="file" style={{ display: 'none' }} accept="image/*" onChange={(e) => onUpdateImage(e, forecast)} />
+            </label>
+          )}
+          {isOwner && <button type="button" className="fg-btn" onClick={() => onArchive(forecast.id)}><Archive size={14} />Archive</button>}
+        </div>
+      </div>
+    </motion.article>
+  );
+}
+
+function MiniGraphic({ forecast, active, onSelect }) {
+  const cond = condsOf(forecast)[0];
+  return (
+    <button type="button" className={`lg-pane lg-lift fg-mini${active ? ' is-on' : ''}`} onClick={() => onSelect(forecast.id)} aria-pressed={active} role="listitem">
+      <span className="fg-mini-img"><GraphicImage forecast={forecast} widths={[480]} sizes="240px" /></span>
+      <span className="fg-mini-body">
+        {cond && <Chip dot={(CONDITION_CONFIG[cond] || DEFAULT_CFG).accent}>{cond}</Chip>}
+        <span className="fg-mini-title">{forecast.title || 'Forecast'}</span>
+        {forecast.created_date && <span className="fg-mini-time">Issued {formatBST(forecast.created_date)}</span>}
+      </span>
+    </button>
+  );
+}
+
+/* the graphic full screen: fitted at first, the full-resolution upload once you tap to zoom */
+function GraphicViewer({ forecast, onClose }) {
+  const [zoom, setZoom] = useState(false);
+  useEffect(() => {
+    const key = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', key);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', key); document.body.style.overflow = overflow; };
+  }, [onClose]);
+  return createPortal(
+    <div className="fg-viewer" role="dialog" aria-modal="true" aria-label={forecast.title || 'Forecast graphic'} onClick={onClose}>
+      <div className="fg-viewer-bar" onClick={(e) => e.stopPropagation()}>
+        <span>{forecast.title || 'Forecast graphic'}</span>
+        <a className="fg-btn" href={forecast.image_url} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} />Original</a>
+        <button type="button" className="fg-icon" onClick={onClose} aria-label="Close"><X size={16} /></button>
+      </div>
+      <div className={`fg-viewer-stage${zoom ? ' is-zoom' : ''}`}>
+        <img src={zoom ? forecast.image_url : sized(forecast.image_url, 2400)} alt={forecast.title || 'Forecast graphic'}
+          onClick={(e) => { e.stopPropagation(); setZoom((z) => !z); }} />
+      </div>
+      <p className="fg-viewer-hint">{zoom ? 'Tap the graphic to fit it to the screen' : 'Tap the graphic to see it at full resolution'}</p>
+    </div>,
+    document.body,
   );
 }
 
@@ -1393,20 +1250,16 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
   const [editingForecast, setEditingForecast] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [furtherInfoForecast, setFurtherInfoForecast] = useState(null);
+  const [selected, setSelected] = useState(null);           // the graphic in the big pane (default: the newest)
+  const [viewing, setViewing] = useState(null);             // the graphic open full screen
   const queryClient = useQueryClient();
-  const { isDark } = useTheme();
-  const T = {
-    ink:       isDark ? '#f1f5f9' : '#0f172a',
-    subtleBg:  isDark ? 'rgba(255,255,255,0.02)' : 'rgba(15,23,42,0.03)',
-    subtleBg2: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(15,23,42,0.04)',
-    dashed:    isDark ? 'rgba(255,255,255,0.07)' : 'rgba(15,23,42,0.14)',
-    line:      isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.12)',
-  };
 
   const activeForecasts   = forecasts.filter(f => !f.is_archived && (!f.expires_at || !isPast(new Date(f.expires_at))));
   const archivedForecasts = forecasts.filter(f => f.is_archived || (f.expires_at && isPast(new Date(f.expires_at))));
 
-  const horizontal = activeForecasts.length > 0 && activeForecasts.length < 4;
+  const featured = activeForecasts.find((f) => f.id === selected) || activeForecasts[0] || null;
+  /* issued in the last day: the heading says so */
+  const fresh = activeForecasts.some((f) => f.created_date && Date.now() - new Date(f.created_date).getTime() < 24 * 3600e3);
 
   /* mutations */
   const updateMutation = useMutation({
@@ -1545,124 +1398,55 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
   };
 
   return (
-    <section style={{ maxWidth: 1000, margin: '0 auto', padding: '40px 20px 80px', fontFamily: "'DM Sans', 'Outfit', system-ui, sans-serif" }}>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }`}</style>
+    <section className="mx-auto w-full px-4 sm:px-6" style={{ maxWidth: 1120, paddingTop: 'clamp(28px, 5vw, 56px)' }}>
+      <style>{FG_CSS}</style>
 
-      {/* SECTION HEADER */}
-      <motion.div
-        initial={{ opacity: 0, y: -12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 36 }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{
-            width: 42, height: 42, borderRadius: 13,
-            background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <CloudSun size={20} style={{ color: '#c084fc' }} />
-          </div>
-          <div>
-            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: T.ink, letterSpacing: '-0.02em' }}>
-              MyWeatherUK Graphics
-            </h2>
-            <p style={{ margin: '1px 0 0', fontFamily: 'monospace', fontSize: 10, color: 'rgba(148,163,184,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-              {activeForecasts.length} active {activeForecasts.length === 1 ? 'graphic' : 'graphics'}
-            </p>
-          </div>
+      <div className="fg-head">
+        <div style={{ minWidth: 0 }}>
+          <p className="lg-eyebrow" style={{ margin: '0 0 7px' }}>{fresh ? 'Just issued' : activeForecasts.length ? 'In force' : 'Issued by us'}</p>
+          <h2 className="lg-title" style={{ margin: 0 }}>MyWeatherUK Graphics</h2>
         </div>
-
-        {isOwner && (
-          <motion.button
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setShowAddNew(true)}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 7,
-              padding: '8px 16px', borderRadius: 12,
-              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-              color: '#94a3b8', fontFamily: 'monospace', fontSize: 11,
-              textTransform: 'uppercase', letterSpacing: '0.08em', cursor: 'pointer',
-              transition: 'all 0.2s',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(167,139,250,0.1)'; e.currentTarget.style.borderColor = 'rgba(167,139,250,0.3)'; e.currentTarget.style.color = '#c084fc'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; e.currentTarget.style.color = '#94a3b8'; }}
-          >
-            <Plus size={13} />
-            Add graphic
-          </motion.button>
-        )}
-      </motion.div>
-
-      {/* GRID / STACK */}
-      {activeForecasts.length > 0 ? (
-        <div style={horizontal
-          ? { display: 'grid', gridTemplateColumns: `repeat(${activeForecasts.length}, 1fr)`, gap: 20, alignItems: 'start' }
-          : { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }
-        }>
-          {activeForecasts.map((forecast, index) => (
-            <ForecastCard
-              key={forecast.id}
-              forecast={forecast}
-              index={index}
-              isOwner={isOwner}
-              horizontal={horizontal}
-              onEdit={(f) => setEditingForecast(f)}
-              onArchive={(id) => archiveMutation.mutate(id)}
-              onFurtherInfo={setFurtherInfoForecast}
-              onUpdateImage={handleUpdateImage}
-            />
-          ))}
+        <div className="fg-head-actions">
+          {activeForecasts.length > 0 && <span className="fg-count">{activeForecasts.length} active</span>}
+          {isOwner && (
+            <button type="button" className="fg-btn" onClick={() => setShowAddNew(true)}><Plus size={14} />Add graphic</button>
+          )}
+          <Link to="/MyWeatherArchive" className="fg-btn">
+            <Archive size={14} />Archive
+            {archivedForecasts.length > 0 && <span className="fg-count-sm">{archivedForecasts.length}</span>}
+          </Link>
         </div>
-      ) : (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          style={{
-            padding: '64px 24px', borderRadius: 20,
-            background: T.subtleBg, border: `1px dashed ${T.dashed}`,
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-          }}
-        >
-          <CloudSun size={36} style={{ color: 'rgba(167,139,250,0.3)' }} />
-          <p style={{ fontFamily: 'monospace', fontSize: 11, color: 'rgba(148,163,184,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', margin: 0 }}>
-            No active graphics
-          </p>
-        </motion.div>
-      )}
-
-      {/* ARCHIVE BUTTON */}
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 28 }}>
-        <Link to="/MyWeatherArchive" style={{ textDecoration: 'none' }}>
-          <motion.span
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 8,
-              padding: '9px 20px', borderRadius: 100,
-              background: T.subtleBg2, border: `1px solid ${T.line}`,
-              color: 'rgba(148,163,184,0.5)', fontFamily: 'monospace', fontSize: 10,
-              textTransform: 'uppercase', letterSpacing: '0.1em', cursor: 'pointer',
-              transition: 'all 0.2s',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.14)'; }}
-            onMouseLeave={e => { e.currentTarget.style.color = 'rgba(148,163,184,0.5)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
-          >
-            <Archive size={12} />
-            Archived graphics
-            {archivedForecasts.length > 0 && (
-              <span style={{
-                padding: '1px 8px', borderRadius: 999,
-                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)',
-                fontSize: 9, color: '#64748b',
-              }}>
-                {archivedForecasts.length}
-              </span>
-            )}
-          </motion.span>
-        </Link>
       </div>
+
+      {featured ? (
+        <>
+          <FeaturedGraphic
+            key={featured.id}
+            forecast={featured}
+            isOwner={isOwner}
+            onEdit={(f) => setEditingForecast(f)}
+            onArchive={(id) => archiveMutation.mutate(id)}
+            onFurtherInfo={setFurtherInfoForecast}
+            onUpdateImage={handleUpdateImage}
+            onOpen={setViewing}
+          />
+          {activeForecasts.length > 1 && (
+            <div className="fg-rail" role="list" aria-label="Other graphics in force">
+              {activeForecasts.map((f) => (
+                <MiniGraphic key={f.id} forecast={f} active={f.id === featured.id} onSelect={setSelected} />
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="lg-pane fg-empty">
+          <CloudSun size={28} />
+          <div>
+            <b>No graphics in force right now</b>
+            <span>New MyWeatherUK forecasts appear here, and move to the top of the page, as soon as they are issued.</span>
+          </div>
+        </div>
+      )}
 
       {/* MODALS */}
       <AnimatePresence>
@@ -1701,6 +1485,8 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
           onUpdate={handleFurtherInfoUpdate}
         />
       )}
+
+      {viewing && <GraphicViewer forecast={viewing} onClose={() => setViewing(null)} />}
     </section>
   );
 }
