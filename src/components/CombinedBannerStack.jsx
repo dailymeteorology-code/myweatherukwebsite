@@ -244,7 +244,6 @@ function AccentBar({ items }) {
 export default function CombinedBannerStack({
   announcements = [],
   updates = [],
-  isRestricted = false,
   currentPage = '',
   onAllDismissed,
 }) {
@@ -270,13 +269,14 @@ export default function CombinedBannerStack({
     .filter((item, idx, arr) => arr.findIndex(i => i.id === item.id) === idx)
     .sort((a, b) => (a.sort_order ?? 9999) - (b.sort_order ?? 9999));
 
+  /* The parent is told outside the state update: calling it from inside the updater set the
+     home page's state while this component was rendering, which React warns about (and runs
+     twice in strict mode). */
   const handleDismiss = useCallback(id => {
-    setDismissed(prev => {
-      const next = [...prev, id];
-      if (allItems.filter(item => !next.includes(item.id)).length === 0) onAllDismissed?.();
-      return next;
-    });
-  }, [allItems, onAllDismissed]);
+    const next = [...dismissed, id];
+    setDismissed(next);
+    if (allItems.every(item => next.includes(item.id))) onAllDismissed?.();
+  }, [allItems, dismissed, onAllDismissed]);
 
   const dismissAll = useCallback(() => {
     setDismissed(prev => [...new Set([...prev, ...allItems.map(i => i.id)])]);
@@ -284,10 +284,11 @@ export default function CombinedBannerStack({
   }, [allItems, onAllDismissed]);
 
   useEffect(() => {
-    const onKey = e => { if (e.key === 'Escape') dismissAll(); };
+    // only while the stack is showing: Esc closing some other sheet must not count as a dismissal
+    const onKey = e => { if (e.key === 'Escape' && allItems.length) dismissAll(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [dismissAll]);
+  }, [dismissAll, allItems.length]);
 
   // Lock body scroll while modal is open
   useEffect(() => {

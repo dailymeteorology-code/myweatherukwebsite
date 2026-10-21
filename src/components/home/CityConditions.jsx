@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import useBlitzortung from '@/components/tcm/useBlitzortung';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { classify, condLabel, sunElevation, windyOf } from '@/lib/ukvLocation';
 import { LightningBanner, BandHeading, CityCard } from '@/components/home/CityConditionsUI';
 
 /**
- * "Around the World": the weather right now in fifteen cities, in three bands, with live global
- * lightning above them.
+ * "Around the World": the weather right now in fifteen cities, in three bands, with live
+ * lightning above them (the UK and Ireland, Europe and the world).
  *
  * Every number is the Met Office's:
  *   UK cities      the 15-minute UKV analysis (corrected by station reports) and the radar at each
@@ -96,109 +95,54 @@ const CLOCKS = Object.fromEntries(ALL_CITIES.map((c) => [c.id, clock(c.tz)]));
 
 /* Inclusive bands: Europe contains the UK and Ireland, and World contains
    everything — which is how people read "UK / Europe / World" without being
-   told. The world box is the whole planet, so the feed is unfiltered. */
+   told. `region` is the server's name for the same box (server/lightning). */
 const BANDS = [
-  { id: 'uk', label: 'UK & Ireland', latMin: 49.5, latMax: 61, lonMin: -11, lonMax: 2 },
-  { id: 'eu', label: 'Europe', latMin: 34, latMax: 72, lonMin: -25, lonMax: 45 },
-  { id: 'world', label: 'World', latMin: -90, latMax: 90, lonMin: -180, lonMax: 180 },
+  { id: 'uk', label: 'UK & Ireland', region: 'uk' },
+  { id: 'eu', label: 'Europe', region: 'europe' },
+  { id: 'world', label: 'World', region: 'world' },
 ];
-const WORLD_BBOX = { lonMin: -180, lonMax: 180, latMin: -90, latMax: 90 };
-
-const inBand = (s, b) =>
-  s.lat >= b.latMin && s.lat <= b.latMax && s.lon >= b.lonMin && s.lon <= b.lonMax;
-
-const TOTALS_KEY = 'mwuk_lightning_totals';
-
-function loadTotals() {
-  const today = new Date().toISOString().slice(0, 10);
-  try {
-    const saved = JSON.parse(localStorage.getItem(TOTALS_KEY) || 'null');
-    if (saved && saved.date === today) return saved.totals;
-  } catch {
-    /* unreadable or blocked — start from zero */
-  }
-  return { uk: 0, eu: 0, world: 0 };
-}
-
-function saveTotals(totals) {
-  try {
-    localStorage.setItem(
-      TOTALS_KEY,
-      JSON.stringify({ date: new Date().toISOString().slice(0, 10), totals })
-    );
-  } catch {
-    /* storage full or blocked — the live windows still work */
-  }
-}
+const LIGHTNING_MS = 20 * 1000;
 
 /**
- * Live lightning worldwide, from Blitzortung.
+ * Live lightning, from this site's own round-the-clock archive (/api/lightning/summary): the
+ * Met Office's network over the UK and Ireland, Blitzortung everywhere else, captured by the
+ * server and, while it is off, by the cloud capture.
  *
- * Global strike rates run to thousands per minute, so nothing here calls
- * setState per strike — that would re-render the page continuously. Strikes
- * land in refs, and the display is flushed on a timer. For the same reason the
- * rolling buffer holds only the last hour and only timestamps + band flags;
- * today's running totals are plain counters, persisted so a reload does not
- * reset them to zero.
- *
- * This intentionally does not write to the shared `tcm_today_strikes` store the
- * TCM pages use — that one is UK-scoped, and filling it with worldwide strikes
- * would corrupt their view.
+ * It used to open its own Blitzortung connection in every visitor's browser and count what that
+ * one socket heard while the tab was open: a fraction of the strikes (about a quarter of the
+ * world's, the evening it was replaced), and a "today" that really meant "since you opened the
+ * page", different on every device. The server's counts are the whole day and the same for
+ * everyone, and the page no longer handles thousands of strikes a minute to show nine numbers.
  */
 function useLightning() {
-  const recentRef = useRef([]); // { t, bands: [ids] } for the last hour
-  const totalsRef = useRef(loadTotals());
-  const dirtyRef = useRef(false);
-  const [stats, setStats] = useState(() => ({
-    uk: { fifteen: 0, hour: 0, today: totalsRef.current.uk },
-    eu: { fifteen: 0, hour: 0, today: totalsRef.current.eu },
-    world: { fifteen: 0, hour: 0, today: totalsRef.current.world },
-  }));
-  const [status, setStatus] = useState('connecting');
-  const [lastStrikeAt, setLastStrikeAt] = useState(null);
-
-  const onStrike = useCallback((s) => {
-    if (!Number.isFinite(s?.lat) || !Number.isFinite(s?.lon)) return;
-    const bands = BANDS.filter((b) => inBand(s, b)).map((b) => b.id);
-    if (!bands.length) return;
-    recentRef.current.push({ t: s.time || Date.now(), bands });
-    for (const id of bands) totalsRef.current[id] += 1;
-    dirtyRef.current = true;
-  }, []);
-
-  useBlitzortung({ enabled: true, bbox: WORLD_BBOX, onStrike, onStatus: setStatus });
-
-  // One flush a second: the windows stay honest as time passes, and a burst of
-  // strikes costs one render rather than hundreds.
+  const [state, setState] = useState({ stats: null, live: false, lastStrikeAt: null });
   useEffect(() => {
-    const id = setInterval(() => {
-      const now = Date.now();
-      const hourAgo = now - 3600_000;
-      const fifteenAgo = now - 900_000;
-      recentRef.current = recentRef.current.filter((r) => r.t >= hourAgo);
-
-      const next = {};
-      for (const b of BANDS) {
-        const mine = recentRef.current.filter((r) => r.bands.includes(b.id));
-        next[b.id] = {
-          fifteen: mine.filter((r) => r.t >= fifteenAgo).length,
-          hour: mine.length,
-          today: totalsRef.current[b.id],
-        };
+    let stop = false;
+    const load = async () => {
+      if (document.visibilityState === 'hidden') return;      // nobody looking: skip the poll
+      try {
+        const r = await fetch('/api/lightning/summary', { signal: AbortSignal.timeout(15000) });
+        if (!r.ok) throw new Error(String(r.status));
+        const j = await r.json();
+        if (stop) return;
+        const stats = {};
+        for (const b of BANDS) {
+          const g = j.regions?.[b.region] || {};
+          stats[b.id] = { fifteen: g.last15 ?? 0, hour: g.lastHour ?? 0, today: g.today ?? 0 };
+        }
+        const newest = j.regions?.world?.newest;
+        const live = j.feeds?.blitzortung?.status === 'live' || j.feeds?.metoffice?.status === 'live';
+        setState({ stats, live, lastStrikeAt: newest ? new Date(newest) : null });
+      } catch {
+        if (!stop) setState((s) => ({ ...s, live: false }));
       }
-      setStats(next);
-
-      if (dirtyRef.current) {
-        dirtyRef.current = false;
-        saveTotals(totalsRef.current);
-        setLastStrikeAt(new Date());
-      }
-    }, 1000);
-    return () => clearInterval(id);
+    };
+    load();
+    const id = setInterval(load, LIGHTNING_MS);
+    document.addEventListener('visibilitychange', load);
+    return () => { stop = true; clearInterval(id); document.removeEventListener('visibilitychange', load); };
   }, []);
-
-  const live = status === 'live' || status === 'connected' || status === 'open';
-  return { stats, live, lastStrikeAt };
+  return state;
 }
 
 /* ── the cities ─────────────────────────────────────────────────────────── */
@@ -307,7 +251,7 @@ export default function CityConditions() {
           Right now · UK: Met Office UKV analysis · elsewhere: Met Office global model · updated{' '}
           {updatedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
           <span className="mx-1.5 opacity-40">·</span>
-          lightning © Blitzortung, live
+          lightning: Met Office (UK & Ireland), Blitzortung elsewhere
         </p>
       )}
     </div>

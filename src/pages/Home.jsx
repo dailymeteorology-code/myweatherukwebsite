@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  AlertTriangle, CloudSun, RefreshCw, Loader2,
+  AlertTriangle, CloudSun, RefreshCw, Loader2, ChevronDown,
   ExternalLink, Sparkles, Megaphone, Zap, History } from
 'lucide-react';
 import WarningCard from '@/components/WarningCard';
@@ -27,88 +27,24 @@ import { useTheme } from '@/components/ThemeContext';
 
 // ─── Theme CSS injection ──────────────────────────────────────────────────────
 const THEME_STYLES = `
+  /* The old palette, cut to the six colours still read elsewhere: the Settings sheet and the
+     corner version label are on every page and take theirs from here. Nothing on this page
+     uses them any more. */
   :root {
-    /* Shared */
-    --sky: #0ea5e9;
-    --sky-dim: rgba(14,165,233,0.15);
-    --sky-border: rgba(14,165,233,0.25);
-    --amber: #f59e0b;
-    --amber-dim: rgba(245,158,11,0.15);
-    --blue: #3b82f6;
-    --blue-dim: rgba(59,130,246,0.12);
-
-    /* Dark (default) */
-    --bg-base:      #0b1220;
-    --bg-mid:       #0f1a2e;
-    --bg-surface:   rgba(255,255,255,0.04);
-    --bg-card:      rgba(255,255,255,0.05);
-    --bg-card-hover:rgba(255,255,255,0.08);
-    --bg-pill:      rgba(255,255,255,0.08);
-
-    --border:       rgba(255,255,255,0.07);
-    --border-hover: rgba(14,165,233,0.4);
-
+    --bg-card:        rgba(255,255,255,0.05);
+    --bg-surface:     rgba(255,255,255,0.04);
+    --border:         rgba(255,255,255,0.07);
     --text-primary:   #f1f5f9;
     --text-secondary: #94a3b8;
     --text-muted:     rgba(148,163,184,0.45);
-    --text-tertiary:  #64748b;
-    --text-link:      #38bdf8;
-
-    --section-icon-bg:  rgba(14,165,233,0.1);
-    --divider:          rgba(255,255,255,0.06);
-    --hero-glow-a:      rgba(14,165,233,0.12);
-    --hero-glow-b:      rgba(99,102,241,0.08);
-    --particle-color:   rgba(255,255,255,0.04);
-    --refresh-bg:       rgba(15,26,46,0.95);
-    --empty-bg:         rgba(255,255,255,0.03);
-    --empty-border:     rgba(255,255,255,0.07);
-    --hidden-bg:        rgba(255,255,255,0.02);
-    --hidden-border:    rgba(148,163,184,0.15);
-    --footer-border:    rgba(255,255,255,0.06);
-
-    --gradient-hero:    linear-gradient(135deg, #0b1220 0%, #0f1a2e 50%, #0c1a30 100%);
-    --gradient-hero-overlay: linear-gradient(to bottom, transparent 0%, #0b1220 100%);
-    --gradient-title:   linear-gradient(135deg, #f1f5f9 0%, #bae6fd 50%, #cbd5e1 100%);
-
-    --toggle-bg:        rgba(255,255,255,0.07);
-    --toggle-border:    rgba(255,255,255,0.12);
   }
-
   .light-mode {
-    --bg-base:      #f0f6ff;
-    --bg-mid:       #e8f2ff;
-    --bg-surface:   rgba(255,255,255,0.7);
-    --bg-card:      rgba(255,255,255,0.85);
-    --bg-card-hover:rgba(255,255,255,1);
-    --bg-pill:      rgba(14,165,233,0.08);
-
-    --border:       rgba(14,165,233,0.15);
-    --border-hover: rgba(14,165,233,0.5);
-
+    --bg-card:        rgba(255,255,255,0.85);
+    --bg-surface:     rgba(255,255,255,0.7);
+    --border:         rgba(14,165,233,0.15);
     --text-primary:   #0f172a;
     --text-secondary: #334155;
     --text-muted:     rgba(51,65,85,0.5);
-    --text-tertiary:  #64748b;
-    --text-link:      #0284c7;
-
-    --section-icon-bg:  rgba(14,165,233,0.12);
-    --divider:          rgba(14,165,233,0.1);
-    --hero-glow-a:      rgba(14,165,233,0.2);
-    --hero-glow-b:      rgba(99,102,241,0.1);
-    --particle-color:   rgba(14,165,233,0.06);
-    --refresh-bg:       rgba(240,246,255,0.97);
-    --empty-bg:         rgba(255,255,255,0.6);
-    --empty-border:     rgba(14,165,233,0.15);
-    --hidden-bg:        rgba(255,255,255,0.5);
-    --hidden-border:    rgba(14,165,233,0.2);
-    --footer-border:    rgba(14,165,233,0.12);
-
-    --gradient-hero:    linear-gradient(135deg, #dbeafe 0%, #eff6ff 50%, #e0f2fe 100%);
-    --gradient-hero-overlay: linear-gradient(to bottom, transparent 0%, #f0f6ff 100%);
-    --gradient-title:   linear-gradient(135deg, #0f172a 0%, #0369a1 50%, #1e3a5f 100%);
-
-    --toggle-bg:        rgba(14,165,233,0.08);
-    --toggle-border:    rgba(14,165,233,0.2);
   }
 
   /* ═══════════════════════════════════════════════════════════════════════
@@ -150,6 +86,7 @@ const THEME_STYLES = `
     --ink-1: #f2f6fc;
     --ink-2: #9fb0c6;
     --ink-3: rgba(159,176,198,0.62);
+    --sky:   #0ea5e9;
 
     --tint-sky:   rgba(56,189,248,0.16);
     --tint-amber: rgba(251,191,36,0.16);
@@ -176,7 +113,7 @@ const THEME_STYLES = `
 
     --ink-1: #0b1220;
     --ink-2: #4a5b70;
-    --ink-3: rgba(74,91,112,0.66);
+    --ink-3: rgba(74,91,112,0.74);
 
     --tint-sky:   rgba(2,132,199,0.10);
     --tint-amber: rgba(180,83,9,0.10);
@@ -187,6 +124,23 @@ const THEME_STYLES = `
     --ambient-a: rgba(14,165,233,0.26);
     --ambient-b: rgba(129,140,248,0.20);
     --ambient-c: rgba(45,212,191,0.14);
+  }
+
+  /* The summer theme (Admin Settings → Site Control). It used to repaint a beach scene —
+     a sky-gradient hero, waves, seagulls, a golden footer — that went with the old hero;
+     on the glass page only its footer and a few colour swaps were left, and they turned
+     the warnings countdown dark-on-dark. Now it warms the light behind the glass instead:
+     sun-gold where the sky blue was, sea-green below, and a warm "UK". Text and panes keep
+     their contrast in both themes. */
+  .summer-theme {
+    --ambient-a: rgba(251,191,36,0.30);
+    --ambient-b: rgba(14,165,233,0.24);
+    --ambient-c: rgba(45,212,191,0.22);
+    --accent-uk: #fbbf24;
+  }
+  .summer-theme.light-mode {
+    --ambient-a: rgba(251,191,36,0.34);
+    --accent-uk: #c2410c;
   }
 
   /* The page's ground colour.
@@ -209,6 +163,9 @@ const THEME_STYLES = `
     box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
   }
   .lg-pane-strong { background: var(--glass-fill-strong); }
+  /* the status line scrolls to #activeWarnings, the admin overview to #forecasts:
+     land them below the fixed site bar rather than under it */
+  .lg-page [id] { scroll-margin-top: 64px; }
 
   /* Interactive panes lift very slightly. Any more and glass reads as plastic. */
   .lg-lift { transition: transform 260ms cubic-bezier(0.22,0.61,0.36,1), box-shadow 260ms ease; }
@@ -227,30 +184,41 @@ const THEME_STYLES = `
      pane in front of them had to re-blur its backdrop on EVERY frame — the
      main source of lag across the site. They are now plain radial gradients
      that do not move: same glow, no per-frame work. */
-  .lg-ambient i { position: absolute; display: block; border-radius: 50%; }
+  .lg-ambient i { position: absolute; display: block; border-radius: 50%; transition: background 600ms ease; }
   .lg-orb-a { width: 70vw; height: 70vw; top: -24vw; left: -20vw;  background: radial-gradient(circle, var(--ambient-a) 0%, transparent 62%); }
   .lg-orb-b { width: 62vw; height: 62vw; top: 12vh;  right: -22vw; background: radial-gradient(circle, var(--ambient-b) 0%, transparent 62%); }
   .lg-orb-c { width: 60vw; height: 60vw; bottom: -22vw; left: 12vw; background: radial-gradient(circle, var(--ambient-c) 0%, transparent 62%); }
-}
 
   /* ── type ──────────────────────────────────────────────────────────────── */
   /* Fluid rather than stepped: the page has to hold at 360px and at 2560px,
-     and a handful of breakpoints leaves the in-between sizes looking wrong. */
-  .lg-display { font-size: clamp(2rem, 6.2vw, 3.6rem); font-weight: 700;
-                letter-spacing: -0.035em; line-height: 1.05; color: var(--ink-1); }
+     and a handful of breakpoints leaves the in-between sizes looking wrong.
+     The wordmark never actually got its size: a stray closing brace just above
+     this rule made the browser throw the rule away, so "MyWeatherUK" rendered
+     as 16px body text. */
+  .lg-display { font-size: clamp(2.75rem, 9.5vw, 5.4rem); font-weight: 800;
+                letter-spacing: -0.045em; line-height: 1; color: var(--ink-1);
+                text-wrap: balance; }
   .lg-title   { font-size: clamp(1.15rem, 2.6vw, 1.5rem); font-weight: 650;
                 letter-spacing: -0.02em; color: var(--ink-1); }
   .lg-eyebrow { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.16em;
                 text-transform: uppercase; color: var(--ink-3); }
   .lg-body    { font-size: clamp(0.92rem, 1.6vw, 1rem); line-height: 1.62; color: var(--ink-2); }
 
+  /* The live dot on the status line. Its own keyframes: it used Tailwind's "ping", which
+     only exists in the stylesheet while some class on the site happens to use it. */
+  @keyframes lg-ping { 75%, 100% { transform: scale(2.4); opacity: 0; } }
+  .lg-ping { animation: lg-ping 1.8s cubic-bezier(0,0,0.2,1) infinite; }
+  .lg-status { cursor: pointer; font: inherit; color: inherit; transition: transform 200ms ease, box-shadow 200ms ease; }
+  .lg-status:focus-visible { outline: 2px solid var(--accent-uk); outline-offset: 3px; }
+  @media (hover: hover) { .lg-status:hover { transform: translateY(-1px); } }
+
   /* ── motion ────────────────────────────────────────────────────────────── */
   /* Vestibular safety, and it also makes the page far cheaper on a laptop
      that is already working hard to composite this many blurs. */
   @media (prefers-reduced-motion: reduce) {
-    .lg-ambient i { animation: none !important; }
-    .lg-lift { transition: none !important; }
-    .lg-lift:hover { transform: none !important; }
+    .lg-ping { animation: none !important; }
+    .lg-lift, .lg-status { transition: none !important; }
+    .lg-lift:hover, .lg-status:hover { transform: none !important; }
   }
 
   /* backdrop-filter is nearly universal now, but where it is missing the panes
@@ -259,273 +227,25 @@ const THEME_STYLES = `
     :root      { --glass-fill: rgba(22,30,46,0.90); --glass-fill-strong: rgba(26,35,54,0.95); }
     .light-mode { --glass-fill: rgba(255,255,255,0.94); --glass-fill-strong: #fff; }
   }
-
-
-  /* ═══════════════════════════════════════════════════════════════════════
-     SUMMER THEME — ultimate tropical paradise
-     Applied by toggling class="summer-theme" on <html>.
-  ═══════════════════════════════════════════════════════════════════════ */
-  .summer-theme {
-    --bg-base:        #fffbf0;
-    --bg-mid:         #fef3e2;
-    --bg-surface:     rgba(255,252,240,0.88);
-    --bg-card:        rgba(255,255,255,0.94);
-    --bg-card-hover:  rgba(255,255,255,1);
-    --bg-pill:        rgba(14,165,233,0.12);
-
-    --border:         rgba(14,165,233,0.22);
-    --border-hover:   rgba(14,165,233,0.60);
-
-    --text-primary:   #0c1a2e;
-    --text-secondary: #1e4976;
-    --text-muted:     rgba(30,73,118,0.55);
-    --text-tertiary:  #0369a1;
-    --text-link:      #0284c7;
-
-    --section-icon-bg: rgba(14,165,233,0.14);
-    --divider:         rgba(14,165,233,0.18);
-    --hero-glow-a:     rgba(253,224,71,0.85);
-    --hero-glow-b:     rgba(14,165,233,0.50);
-    --particle-color:  rgba(255,255,255,0.80);
-    --refresh-bg:      rgba(255,251,240,0.98);
-    --empty-bg:        rgba(255,255,255,0.80);
-    --empty-border:    rgba(14,165,233,0.22);
-    --hidden-bg:       rgba(255,255,255,0.60);
-    --hidden-border:   rgba(14,165,233,0.28);
-    --footer-border:   rgba(251,191,36,0.50);
-
-    /* Perfect midday sky — brilliant cerulean fading to golden horizon */
-    --gradient-hero:
-      linear-gradient(180deg,
-        #0284c7  0%,
-        #0ea5e9 12%,
-        #38bdf8 24%,
-        #7dd3fc 38%,
-        #bae6fd 52%,
-        #fde68a 68%,
-        #fbbf24 80%,
-        #f59e0b 90%,
-        #fef9c3 100%);
-    --gradient-hero-overlay:
-      linear-gradient(to bottom,
-        rgba(2,132,199,0.05) 0%,
-        transparent          28%,
-        rgba(255,251,235,0.45) 68%,
-        #fffbf0              100%);
-    --gradient-title:
-      linear-gradient(135deg, #0c4a6e 0%, #0284c7 40%, #0ea5e9 70%, #fbbf24 100%);
-
-    --toggle-bg:     rgba(14,165,233,0.12);
-    --toggle-border: rgba(14,165,233,0.38);
-  }
-
-  /* Tall hero so the full sky gradient shows */
-  .summer-theme header.summer-hero {
-    min-height: 580px !important;
-  }
-
-  /* ── Animated sun with corona rings ── */
-  @keyframes s-sun-beat {
-    0%,100% { transform: translateX(-50%) scale(1.00); opacity: 0.95; }
-    50%     { transform: translateX(-50%) scale(1.08); opacity: 1.00; }
-  }
-  @keyframes s-corona-spin {
-    to { transform: translateX(-50%) rotate(360deg); }
-  }
-  @keyframes s-corona-spin-rev {
-    to { transform: translateX(-50%) rotate(-360deg); }
-  }
-  @keyframes s-rays-rotate {
-    to { transform: translateX(-50%) rotate(360deg); }
-  }
-
-  /* ── Ocean wave at hero base ── */
-  .s-wave {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 120px;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 3;
-  }
-  .s-wave-inner {
-    position: absolute; bottom: 0;
-    width: 200%; height: 100%;
-    animation: s-wave-scroll 9s linear infinite;
-  }
-  .s-wave-inner2 {
-    position: absolute; bottom: 0;
-    width: 200%; height: 100%;
-    opacity: 0.55;
-    animation: s-wave-scroll 13s linear infinite reverse;
-  }
-  .s-wave-inner3 {
-    position: absolute; bottom: 0;
-    width: 200%; height: 100%;
-    opacity: 0.35;
-    animation: s-wave-scroll 17s linear infinite;
-    animation-delay: -4s;
-  }
-  @keyframes s-wave-scroll {
-    from { transform: translateX(0); }
-    to   { transform: translateX(-50%); }
-  }
-
-  /* ── Seagulls ── */
-  .s-birds {
-    position: absolute;
-    top: 16%;
-    left: 0; right: 0;
-    pointer-events: none;
-    z-index: 4;
-    overflow: hidden;
-    height: 80px;
-  }
-  .s-bird {
-    position: absolute;
-    animation: s-bird-fly 20s linear infinite;
-  }
-  .s-bird:nth-child(2) { top: 8px;  animation-duration: 27s; animation-delay: -7s; }
-  .s-bird:nth-child(3) { top: 28px; animation-duration: 22s; animation-delay: -14s; }
-  .s-bird:nth-child(4) { top: 50px; animation-duration: 35s; animation-delay: -3s; }
-  @keyframes s-bird-fly {
-    from { transform: translateX(-80px); }
-    to   { transform: translateX(calc(100vw + 80px)); }
-  }
-  /* ── Floating sand particles in page body ── */
-  @keyframes s-float-up {
-    0%   { transform: translateY(0) translateX(0) rotate(0deg);    opacity: 0; }
-    10%  { opacity: 0.7; }
-    90%  { opacity: 0.4; }
-    100% { transform: translateY(-80px) translateX(20px) rotate(180deg); opacity: 0; }
-  }
-  .s-sand-particle {
-    position: absolute;
-    border-radius: 50%;
-    pointer-events: none;
-    animation: s-float-up linear infinite;
-  }
-
-  /* ── Page body — layered beach scene ── */
-  .summer-theme .summer-page-body {
-    background:
-      linear-gradient(180deg,
-        #fffbf0  0%,
-        #fefce8  8%,
-        #f0f9ff 30%,
-        #e0f2fe 55%,
-        #f0fdf4 75%,
-        #f0f9ff 100%) !important;
-    position: relative;
-  }
-
-  /* ── Subtle sand-texture overlay on page body ── */
-  .summer-theme .summer-page-body::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background-image:
-      radial-gradient(circle at 20% 15%, rgba(251,191,36,0.06) 0%, transparent 40%),
-      radial-gradient(circle at 80% 40%, rgba(14,165,233,0.05) 0%, transparent 35%),
-      radial-gradient(circle at 50% 80%, rgba(16,185,129,0.04) 0%, transparent 40%);
-    pointer-events: none;
-    z-index: 0;
-  }
-
-  /* ── Cards get a warm coastal glow ── */
-  .summer-theme .summer-section-accent {
-    border-left: 4px solid #0ea5e9 !important;
-    background: linear-gradient(135deg,
-      rgba(14,165,233,0.07) 0%,
-      rgba(251,191,36,0.05) 50%,
-      rgba(255,255,255,0.80) 100%) !important;
-    box-shadow: 0 2px 20px rgba(14,165,233,0.08), 0 1px 4px rgba(251,191,36,0.06) !important;
-  }
-
-  /* ── Dividers become golden waterline ── */
-  .summer-theme .summer-page-body .h-px {
-    background: linear-gradient(to right,
-      transparent,
-      rgba(251,191,36,0.35) 25%,
-      rgba(14,165,233,0.40) 50%,
-      rgba(251,191,36,0.35) 75%,
-      transparent) !important;
-  }
-
-  /* ── Welcome banner — tropical gradient ── */
-  .s-welcome-banner {
-    background: linear-gradient(135deg,
-      rgba(14,165,233,0.18) 0%,
-      rgba(251,191,36,0.14) 50%,
-      rgba(16,185,129,0.12) 100%);
-    border-bottom: 2px solid rgba(14,165,233,0.25);
-    padding: 16px 24px;
-    text-align: center;
-    position: relative;
-    overflow: hidden;
-  }
-  .s-welcome-banner::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(90deg,
-      transparent 0%,
-      rgba(255,255,255,0.30) 50%,
-      transparent 100%);
-    animation: s-banner-shimmer 4s ease-in-out infinite;
-  }
-  @keyframes s-banner-shimmer {
-    0%,100% { transform: translateX(-100%); opacity: 0; }
-    50%     { transform: translateX(100%);  opacity: 1; }
-  }
-
-  /* ── Footer — deep golden beach sunset ── */
-  .summer-theme footer {
-    background: linear-gradient(180deg,
-      #fffbf0  0%,
-      #fef9c3 30%,
-      #fde68a 65%,
-      #fbbf24 100%) !important;
-    border-top: 3px solid rgba(251,191,36,0.55) !important;
-    position: relative;
-    overflow: hidden;
-  }
-  .summer-theme footer::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    background: linear-gradient(90deg,
-      #0ea5e9 0%, #fbbf24 25%, #f59e0b 50%, #fbbf24 75%, #0ea5e9 100%);
-  }
-
-  /* ── Section icon backgrounds glow warm in summer ── */
-  .summer-theme [style*="--section-icon-bg"] {
-    box-shadow: 0 0 12px rgba(14,165,233,0.15) !important;
-  }
-
-  /* ── Warning cards get a warm coastal shadow in summer ── */
-  .summer-theme .warning-card-wrapper {
-    filter: drop-shadow(0 2px 12px rgba(14,165,233,0.10));
-  }
-
-  /* ── Scrollbar — golden beach sand ── */
-  .summer-theme ::-webkit-scrollbar { width: 8px; }
-  .summer-theme ::-webkit-scrollbar-track { background: #fef9c3; }
-  .summer-theme ::-webkit-scrollbar-thumb {
-    background: linear-gradient(to bottom, #fbbf24, #0ea5e9);
-    border-radius: 4px;
-  }
 `;
-export function injectThemeStyles() {
-  if (document.getElementById('home-theme-vars')) return;
-  const el = document.createElement('style');
-  el.id = 'home-theme-vars';
-  el.textContent = THEME_STYLES;
-  document.head.appendChild(el);
+function injectThemeStyles() {
+  let el = document.getElementById('home-theme-vars');
+  if (!el) {
+    el = document.createElement('style');
+    el.id = 'home-theme-vars';
+    document.head.appendChild(el);
+  }
+  if (el.textContent !== THEME_STYLES) el.textContent = THEME_STYLES;
 }
 
+const cookieConsentPending = () => {
+  try { return !localStorage.getItem('cookie_consent'); } catch { return false; }
+};
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const SEV_RANK = { Yellow: 1, Amber: 2, Red: 3 };
+const SEV_DOT = { Yellow: '#facc15', Amber: '#f59e0b', Red: '#ef4444' };
 
 function classifyWarnings(allWarnings) {
   const now = new Date();
@@ -541,13 +261,17 @@ function classifyWarnings(allWarnings) {
 }
 
 /**
- * The next scheduled warnings refresh: :00 or :30, whichever comes first.
+ * The next scheduled warnings refresh: the next ten-minute slot (SLOT_MINUTES in
+ * server/functions/getMetOfficeWarnings.js). This said ":00 or :30", a cadence
+ * the server stopped using, so a record without `next_at` counted down to the
+ * wrong time.
  *
  * The server fetches on those boundaries and nowhere else — opening the page
  * never triggers a fetch — so this countdown is the same for every visitor.
  * When the cached record carries the server's own `next_at`, that wins; this is
  * only the fallback for a record written before that field existed.
  */
+const SLOT_MINUTES = 10;
 function getNextRefreshTime(record) {
   const fromServer = record?.next_at ? new Date(record.next_at) : null;
   if (fromServer && !Number.isNaN(fromServer.getTime()) && fromServer > new Date()) {
@@ -555,8 +279,7 @@ function getNextRefreshTime(record) {
   }
   const next = new Date();
   next.setSeconds(0, 0);
-  if (next.getMinutes() < 30) next.setMinutes(30);
-  else next.setHours(next.getHours() + 1, 0);
+  next.setMinutes(Math.floor(next.getMinutes() / SLOT_MINUTES) * SLOT_MINUTES + SLOT_MINUTES);
   return next;
 }
 
@@ -585,12 +308,6 @@ function classifyManualWarnings(warnings, now) {
   }
   return { active, upcoming, past };
 }
-
-
-// ─── Summer decorations ───────────────────────────────────────────────────────
-
-
-
 
 
 // ─── Section header ──────────────────────────────────────────────────────────
@@ -631,8 +348,6 @@ function Section({ id, children, className = '' }) {
   );
 }
 
-/* A glass pane. `pad` is off for panes whose child brings its own padding —
-   the radar and the city rail both bleed to their own edges. */
 /* The page's one button style: a glass chip. Quiet enough to sit three-in-a-row
    without any of them shouting, and big enough to hit on a phone. */
 const quietBtn = {
@@ -644,6 +359,8 @@ const quietBtn = {
   color: 'var(--ink-2)',
 };
 
+/* A glass pane. `pad` is off for panes whose child brings its own padding —
+   the radar and the city rail both bleed to their own edges. */
 function Pane({ children, pad = true, strong = false, className = '', style }) {
   return (
     <div
@@ -654,28 +371,22 @@ function Pane({ children, pad = true, strong = false, className = '', style }) {
   );
 }
 
-// ─── Divider ──────────────────────────────────────────────────────────────────
-
-
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
 function EmptyState({ icon: Icon, iconColor, title, body }) {
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.5 }}
-      className="text-center py-20 rounded-3xl backdrop-blur-sm"
-      style={{ background: 'var(--empty-bg)', border: '1px solid var(--empty-border)' }}>
-      
-      <motion.div animate={{ y: [0, -8, 0] }} transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}>
-        <Icon className={`w-16 h-16 ${iconColor} mx-auto mb-4`} />
-      </motion.div>
-      <h3 className="text-xl font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>{title}</h3>
-      <p style={{ color: 'var(--text-secondary)' }}>{body}</p>
-    </motion.div>);
-
+      initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+      transition={{ duration: 0.35 }}
+      style={{ textAlign: 'center', padding: 'clamp(26px, 6vw, 46px) 12px' }}>
+      <Icon style={{ width: 44, height: 44, margin: '0 auto 12px', color: iconColor }} />
+      <h3 style={{
+        margin: '0 0 6px', fontSize: '1.05rem', fontWeight: 700,
+        letterSpacing: '-0.015em', color: 'var(--ink-1)',
+      }}>{title}</h3>
+      <p style={{ margin: 0, fontSize: '0.88rem', lineHeight: 1.55, color: 'var(--ink-2)' }}>{body}</p>
+    </motion.div>
+  );
 }
 
 // ─── Loading spinner ──────────────────────────────────────────────────────────
@@ -683,21 +394,13 @@ function EmptyState({ icon: Icon, iconColor, title, body }) {
 function LoadingSpinner({ label }) {
   return (
     <motion.div
-      key="loading"
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="flex flex-col items-center justify-center py-20 gap-4"
-      style={{ color: 'var(--text-secondary)' }}>
-      
-      <motion.div animate={{ rotate: 360 }} transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}>
-        <Loader2 className="w-10 h-10" />
-      </motion.div>
-      {label &&
-      <motion.p animate={{ opacity: [0.5, 1, 0.5] }} transition={{ duration: 2, repeat: Infinity }}>
-          {label}
-        </motion.p>
-      }
-    </motion.div>);
-
+      className="flex flex-col items-center justify-center gap-3"
+      style={{ padding: 'clamp(26px, 6vw, 46px) 12px', color: 'var(--ink-2)' }}>
+      <Loader2 className="w-8 h-8 animate-spin" />
+      {label && <p style={{ margin: 0, fontSize: '0.88rem' }}>{label}</p>}
+    </motion.div>
+  );
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
@@ -712,38 +415,26 @@ export default function Home() {
   // shared context keeps the whole page in sync the moment the theme flips.
   const { isDark } = useTheme();
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     injectThemeStyles();
   }, []);
 
-  useEffect(() => {
-    const root = document.documentElement;
-    if (isDark) root.classList.remove('light-mode');
-    else        root.classList.add('light-mode');
+  useLayoutEffect(() => {
+    document.documentElement.classList.toggle('light-mode', !isDark);
   }, [isDark]);
 
-  // ── Summer theme — read from localStorage, updated live via storage event.
-  //    The admin sets it in AdminSettings which writes localStorage instantly.
-  //    The storage event fires in every other open tab so the home page updates
-  //    immediately without a page reload — no DB round-trip needed.
+  // ── Summer theme. A site setting (Admin Settings → Site Control), so every visitor gets it
+  //    once the settings arrive; the last value seen is kept in this browser so a returning
+  //    visitor's first paint is already right instead of changing a moment later.
   const SUMMER_KEY = 'mwuk_summer_theme';
   const [summerThemeOn, setSummerThemeOn] = useState(() => {
     try { return localStorage.getItem(SUMMER_KEY) === 'true'; } catch { return false; }
   });
-  useEffect(() => {
-    if (summerThemeOn) document.documentElement.classList.add('summer-theme');
-    else               document.documentElement.classList.remove('summer-theme');
-    // Strip the Home-only summer class when leaving the page so its styling
-    // doesn't leak onto other routes that mount without it.
+  useLayoutEffect(() => {
+    document.documentElement.classList.toggle('summer-theme', summerThemeOn);
+    // Home only: strip it on the way out so it does not leak onto other routes.
     return () => document.documentElement.classList.remove('summer-theme');
   }, [summerThemeOn]);
-  useEffect(() => {
-    const onStorage = (e) => {
-      if (e.key === SUMMER_KEY) setSummerThemeOn(e.newValue === 'true');
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
 
   // ── Met Office warnings ──
   const [warnings, setWarnings] = useState([]);
@@ -773,14 +464,19 @@ export default function Home() {
     return () => clearInterval(id);
   }, []);
 
-
-
-
-  // ── Announcements — must be declared before the useEffect that reads announcementsLoaded ──
+  // ── Announcements and app updates ──
+  /* No initialData: with it the queries reported "loaded" at once, empty, before anything had
+     been fetched. */
   const { data: announcements = [], isSuccess: announcementsLoaded } = useQuery({
     queryKey: ['announcements'],
     queryFn: async () => {try {return (await base44.entities.Announcement.filter({ is_active: true }, '-created_date')) || [];} catch {return [];}},
-    initialData: [], retry: 2, retryDelay: 1000
+    retry: 2, retryDelay: 1000
+  });
+  const { data: appUpdates = [], isSuccess: updatesLoaded } = useQuery({
+    queryKey: ['appUpdates'],
+    // Every PUBLISHED app update shows in the banner stack alongside active announcements.
+    queryFn: async () => { try { return (await base44.entities.AppUpdate.filter({ is_published: true }, '-created_date')) || []; } catch { return []; } },
+    retry: 1, retryDelay: 2000
   });
 
   // ── Auth bootstrap ──
@@ -788,30 +484,28 @@ export default function Home() {
     base44.auth.me().
     then((user) => setIsOwner(user?.role === 'admin')).
     catch(() => setIsOwner(false));
-    localStorage.removeItem('warnings_cache');
-    localStorage.removeItem('upcoming_warnings_cache');
-    localStorage.removeItem('warnings_last_fetch_hour');
   }, []);
 
-  // ── Show banners once announcements have loaded (so we don't flash empty and close) ──
+  /* The banner stack opens once a session, when both lists have loaded, and the cookie notice
+     waits until it is dismissed. With nothing to show, the notice comes straight away: it used
+     to wait for a dismissal that could never happen, so on a day without announcements a
+     first-time visitor was never asked. */
+  const bannersDecided = useRef(false);
   useEffect(() => {
-    if (!announcementsLoaded) return;
-    const shownThisSession = sessionStorage.getItem('bannersShown');
-    if (!shownThisSession) {
+    if (bannersDecided.current || !announcementsLoaded || !updatesLoaded) return;
+    bannersDecided.current = true;
+    const anything =
+      announcements.some((a) => a.is_active === true && (!a.target_page || a.target_page === 'Home')) ||
+      appUpdates.some((u) => u.is_published === true);
+    let shown = false;
+    try { shown = sessionStorage.getItem('bannersShown') === 'true'; } catch { /* storage blocked */ }
+    if (anything && !shown) {
       setShowBanners(true);
-      sessionStorage.setItem('bannersShown', 'true');
-    } else {
-      if (!localStorage.getItem('cookie_consent')) setCookieConsentReady(true);
+      try { sessionStorage.setItem('bannersShown', 'true'); } catch { /* storage blocked */ }
+    } else if (cookieConsentPending()) {
+      setCookieConsentReady(true);
     }
-  }, [announcementsLoaded]);
-
-  useEffect(() => {
-    if (document.querySelector('script[src="https://elfsightcdn.com/platform.js"]')) return;
-    const s = document.createElement('script');
-    s.src = 'https://elfsightcdn.com/platform.js';
-    s.async = true;
-    document.head.appendChild(s);
-  }, []);
+  }, [announcementsLoaded, updatesLoaded, announcements, appUpdates]);
 
   const loadWarningsFromDB = useCallback(async (retries = 2) => {
     setLoadingWarnings(true);
@@ -828,6 +522,7 @@ export default function Home() {
         setWarnings([]);setUpcomingWarnings([]);setAllWarnings([]);
       }
       setNextUpdate(getNextRefreshTime(record));
+      return !!record;
     } catch (error) {
       if (retries > 0) setTimeout(() => loadWarningsFromDB(retries - 1), 1500);else
       {console.error('Error loading warnings:', error);setWarnings([]);setUpcomingWarnings([]);}
@@ -852,20 +547,19 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      await loadWarningsFromDB();
+      const found = await loadWarningsFromDB();
       // ─── Cold-start bootstrap ─────────────────────────────────────────
       // If the CachedWarnings collection is empty (e.g. first ever page-load
       // on a fresh deployment, or after the cache was cleared), the public
       // Home page would otherwise stay empty until an admin manually pressed
       // Refresh. Trigger a one-off background fetch so data loads automatically.
-      try {
-        const list = await base44.entities.CachedWarnings.list();
-        if (!cancelled && (!list || list.length === 0)) {
-          base44.functions.invoke('getMetOfficeWarnings', {})
-            .then(() => loadWarningsFromDB())
-            .catch((e) => console.warn('[Home] cold-start warnings fetch failed:', e?.message));
-        }
-      } catch { /* ignore */ }
+      // (`false` only when the read worked and found nothing — a failed read
+      // retries on its own.)
+      if (!cancelled && found === false) {
+        base44.functions.invoke('getMetOfficeWarnings', {})
+          .then(() => loadWarningsFromDB())
+          .catch((e) => console.warn('[Home] cold-start warnings fetch failed:', e?.message));
+      }
     })();
 
     const unsub = base44.entities.CachedWarnings.subscribe((event) => {
@@ -890,12 +584,14 @@ export default function Home() {
   const { data: settings } = useQuery({
     queryKey: ['settings'],
     queryFn: async () => {try {const l = await base44.entities.SiteSettings.list();return l?.[0] || null;} catch {return null;}},
-    refetchInterval: 5000, retry: 2, retryDelay: 1000
+    // every 30 s rather than every 5: an admin's change still shows within the half-minute,
+    // and visitors are not each asking twelve times a minute for something that rarely changes
+    refetchInterval: 30000, retry: 2, retryDelay: 1000
   });
-  /* The summer theme is a site setting (Admin Settings → Site Control), so every visitor gets it.
-     It used to be read only from the admin's own browser storage, where the switch wrote it. */
   useEffect(() => {
-    if (typeof settings?.summer_theme === 'boolean') setSummerThemeOn(settings.summer_theme);
+    if (typeof settings?.summer_theme !== 'boolean') return;
+    setSummerThemeOn(settings.summer_theme);
+    try { localStorage.setItem(SUMMER_KEY, String(settings.summer_theme)); } catch { /* private mode */ }
   }, [settings?.summer_theme]);
   /* /#forecasts (the admin overview's "Add a forecast graphic") lands on the graphics */
   useEffect(() => {
@@ -919,14 +615,6 @@ export default function Home() {
   /* A MyWeatherUK graphic in force is the most important thing we publish, so while one is
      (not archived, not expired) the graphics section moves up to sit right under the title. */
   const graphicsOnTop = forecasts.some((f) => !f.is_archived && (!f.expires_at || new Date(f.expires_at) > now));
-
-  const { data: appUpdates = [] } = useQuery({
-    queryKey: ['appUpdates'],
-    // Show every PUBLISHED app update in the banner stack alongside active
-    // announcements, so both surface on Home whenever there's one or more.
-    queryFn: async () => { try { return (await base44.entities.AppUpdate.filter({ is_published: true }, '-created_date')) || []; } catch { return []; } },
-    initialData: [], retry: 1, retryDelay: 2000
-  });
 
   const { data: rawManualWarnings = [] } = useQuery({
     queryKey: ['manualWarnings'],
@@ -966,7 +654,25 @@ export default function Home() {
 
   const filteredWarnings = severityFilter ? mergedActive.filter((w) => w.severity === severityFilter) : mergedActive;
   const filteredUpcoming = severityFilter ? mergedUpcoming.filter((w) => w.severity === severityFilter) : mergedUpcoming;
-  const totalWarnings = mergedActive.length + mergedUpcoming.length;
+
+  /* The status line under the title. It used to count upcoming warnings as "in force" whenever
+     nothing was in force yet — on the eve of a storm it said "3 warnings in force" above an
+     empty In force tab. Its dot takes the worst warning in force. */
+  const worstActive = mergedActive.reduce(
+    (worst, w) => ((SEV_RANK[w.severity] || 0) > (SEV_RANK[worst] || 0) ? w.severity : worst), null);
+  const statusDot = SEV_DOT[worstActive] || (mergedUpcoming.length ? '#38bdf8' : '#34d399');
+  const statusText = mergedActive.length
+    ? `${mergedActive.length} warning${mergedActive.length === 1 ? '' : 's'} in force`
+      + (mergedUpcoming.length ? ` · ${mergedUpcoming.length} upcoming` : '')
+    : mergedUpcoming.length
+      ? `No warnings in force · ${mergedUpcoming.length} upcoming`
+      : 'No weather warnings in force';
+  /* …and it takes you to them, on the tab it is talking about. */
+  const goToWarnings = () => {
+    setSeverityFilter(null);
+    setWarnTab(mergedActive.length || !mergedUpcoming.length ? 'active' : 'upcoming');
+    document.getElementById('activeWarnings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   // ── Red Wild Fire nationwide banner ──
   // The Met Office does not issue wildfire warnings; a Red "Wild Fire" manual
@@ -976,8 +682,10 @@ export default function Home() {
     (w) => (w.type || '').toLowerCase() === 'wild fire' && (w.severity || '').toLowerCase() === 'red'
   );
 
-  // Countdown is published if the admin has enabled it in settings
-  const isCountdownPublished = !!(settings?.countdown_enabled && settings?.countdown_target);
+  /* The admin's countdown (Admin Settings → Site Control): switched on, with a target, and set
+     to show on the home page. */
+  const showCountdown = !!(settings?.countdown_enabled && settings?.countdown_target
+    && settings?.countdown_display === 'homepage');
 
   /* An amber or red warning in force moves the whole warnings block — active,
      upcoming, and the map and past-warnings buttons that belong to them — above
@@ -1000,9 +708,7 @@ export default function Home() {
      between them, an orphaned row of buttons underneath and a link below that.
      Active and upcoming warnings are the same thing at different times; putting
      them side by side is both shorter and easier to read, and it means the
-     panel says "nothing in force" once instead of twice.
-
-     exactly what it used to. */
+     panel says "nothing in force" once instead of twice. */
   const tabs = [
     { id: 'active', label: 'In force', rows: filteredWarnings, upcoming: false },
     { id: 'upcoming', label: 'Upcoming', rows: filteredUpcoming, upcoming: true },
@@ -1026,7 +732,7 @@ export default function Home() {
               {isOwner && (
                 <>
                   <button
-                    type="button" onClick={fetchWarnings} disabled={loadingWarnings}
+                    type="button" onClick={() => fetchWarnings()} disabled={loadingWarnings}
                     aria-label="Refresh warnings"
                     style={{
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -1113,7 +819,7 @@ export default function Home() {
             ) : (
               <EmptyState
                 key={`empty-${currentTab.id}-${severityFilter}`}
-                icon={CloudSun} iconColor="text-sky-400"
+                icon={CloudSun} iconColor="var(--accent-uk)"
                 title={severityFilter
                   ? `No ${severityFilter} warnings ${currentTab.upcoming ? 'upcoming' : 'in force'}`
                   : currentTab.upcoming ? 'Nothing upcoming' : 'Nothing in force'}
@@ -1208,11 +914,10 @@ export default function Home() {
         <CombinedBannerStack
           announcements={announcements}
           updates={appUpdates}
-          isRestricted={localStorage.getItem('site_access_granted') !== 'true'}
           currentPage="Home"
           onAllDismissed={() => {
             setShowBanners(false);
-            if (!localStorage.getItem('cookie_consent')) setCookieConsentReady(true);
+            if (cookieConsentPending()) setCookieConsentReady(true);
           }} />
       )}
 
@@ -1281,32 +986,28 @@ export default function Home() {
                 the old pill and its amber count badge carried between them. */}
             <AnimatePresence>
               {!loadingWarnings && (
-                <motion.div
+                <motion.button
+                  type="button" onClick={goToWarnings}
+                  aria-label={`${statusText}. Go to the weather warnings.`}
                   initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
                   transition={{ delay: 0.18, duration: 0.5 }}
-                  className="lg-pane"
+                  className="lg-pane lg-status"
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 10,
-                    padding: '9px 17px', borderRadius: 99,
+                    padding: '10px 18px', borderRadius: 99,
                     marginTop: 'clamp(18px, 3.5vw, 28px)',
                   }}>
-                  <span style={{ position: 'relative', display: 'flex', width: 8, height: 8 }}>
-                    <span style={{
-                      position: 'absolute', inset: 0, borderRadius: 99,
-                      background: mergedActive.length ? '#fbbf24' : '#34d399',
-                      opacity: 0.75, animation: 'ping 1.8s cubic-bezier(0,0,0.2,1) infinite',
+                  <span style={{ position: 'relative', display: 'flex', width: 9, height: 9 }}>
+                    <span className="lg-ping" style={{
+                      position: 'absolute', inset: 0, borderRadius: 99, background: statusDot, opacity: 0.75,
                     }} />
-                    <span style={{
-                      position: 'relative', width: 8, height: 8, borderRadius: 99,
-                      background: mergedActive.length ? '#fbbf24' : '#34d399',
-                    }} />
+                    <span style={{ position: 'relative', width: 9, height: 9, borderRadius: 99, background: statusDot }} />
                   </span>
-                  <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--ink-1)' }}>
-                    {totalWarnings === 0
-                      ? 'No weather warnings in force'
-                      : `${mergedActive.length || totalWarnings} warning${(mergedActive.length || totalWarnings) > 1 ? 's' : ''} in force`}
+                  <span style={{ fontSize: '0.9rem', fontWeight: 650, color: 'var(--ink-1)' }}>
+                    {statusText}
                   </span>
-                </motion.div>
+                  <ChevronDown aria-hidden="true" style={{ width: 15, height: 15, color: 'var(--ink-3)', marginRight: -4 }} />
+                </motion.button>
               )}
             </AnimatePresence>
           </motion.div>
@@ -1338,8 +1039,7 @@ export default function Home() {
           </Section>
         )}
 
-        {settings?.countdown_enabled && isCountdownPublished
-          && settings?.countdown_target && settings?.countdown_display === 'homepage' && (
+        {showCountdown && (
           <Section>
             <CountdownDisplay
               target={settings.countdown_target}
@@ -1393,7 +1093,7 @@ export default function Home() {
             <Section id="news">
               <SectionHeader eyebrow="From us" title="What's new" />
               <Pane>
-                <div className="flex items-center gap-9" style={{ marginBottom: 13, flexWrap: 'wrap', gap: 10 }}>
+                <div className="flex items-center flex-wrap" style={{ marginBottom: 13, gap: 10 }}>
                   <span style={{
                     display: 'inline-flex', alignItems: 'center', gap: 6,
                     padding: '4px 11px', borderRadius: 99,

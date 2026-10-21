@@ -29,33 +29,30 @@ const extractImpacts = (w) => {
 };
 
 /* ─── Severity config ──────────────────────────────────────────── */
+/* `hex` is the severity's own colour, and the text colour on the dark card. On the light card a
+   yellow (or orange) label on near-white is barely there, so text takes `ink` there instead: the
+   same hue, dark enough to read. */
 const SEV = {
   Yellow: {
-    hex: '#facc15', rgb: '250,204,21',
-    bg: 'rgba(250,204,21,0.07)',
+    hex: '#facc15', rgb: '250,204,21', ink: '#a16207',
     border: 'rgba(250,204,21,0.35)',
     glow: 'rgba(250,204,21,0.18)',
     bar: 'linear-gradient(90deg,#fef08a,#facc15)',
     badge: { bg: '#facc15', text: '#0a0f1e' },
-    heroGrad: 'linear-gradient(135deg, rgba(250,204,21,0.12) 0%, rgba(250,204,21,0.04) 60%, rgba(10,15,30,0.95) 100%)',
   },
   Amber: {
-    hex: '#f97316', rgb: '249,115,22',
-    bg: 'rgba(249,115,22,0.08)',
+    hex: '#f97316', rgb: '249,115,22', ink: '#c2410c',
     border: 'rgba(249,115,22,0.40)',
     glow: 'rgba(249,115,22,0.22)',
     bar: 'linear-gradient(90deg,#fdba74,#f97316)',
     badge: { bg: '#f97316', text: '#fff' },
-    heroGrad: 'linear-gradient(135deg, rgba(249,115,22,0.14) 0%, rgba(249,115,22,0.04) 60%, rgba(10,15,30,0.95) 100%)',
   },
   Red: {
-    hex: '#ef4444', rgb: '239,68,68',
-    bg: 'rgba(239,68,68,0.09)',
+    hex: '#ef4444', rgb: '239,68,68', ink: '#b91c1c',
     border: 'rgba(239,68,68,0.45)',
     glow: 'rgba(239,68,68,0.28)',
     bar: 'linear-gradient(90deg,#fca5a5,#ef4444)',
     badge: { bg: '#ef4444', text: '#fff' },
-    heroGrad: 'linear-gradient(135deg, rgba(239,68,68,0.16) 0%, rgba(239,68,68,0.04) 60%, rgba(10,15,30,0.95) 100%)',
   },
 };
 const getSev = (s) => SEV[s] || SEV.Yellow;
@@ -116,7 +113,7 @@ function SevPill({ value }) {
    phone, so a rewritten description stays readable instead of being squeezed
    into a half-width column. Long values are clamped — an amended description
    can run to several paragraphs and would otherwise bury the rest of the card. */
-function DiffField({ field, before, after, ink, hair }) {
+function DiffField({ field, before, after, ink, hair, sky }) {
   const clamp = { overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 6, WebkitBoxOrient: 'vertical' };
   const isSev = field === 'severity';
 
@@ -128,7 +125,7 @@ function DiffField({ field, before, after, ink, hair }) {
     }}>
       <div style={{
         fontSize: '0.53rem', fontWeight: 800, letterSpacing: '0.11em', textTransform: 'uppercase',
-        color: current ? '#7dd3fc' : ink, opacity: current ? 1 : 0.45, marginBottom: 4,
+        color: current ? sky : ink, opacity: current ? 1 : 0.45, marginBottom: 4,
       }}>
         {label}
       </div>
@@ -149,7 +146,7 @@ function DiffField({ field, before, after, ink, hair }) {
     <div style={{ padding: '9px 11px', borderTop: `1px solid ${hair}` }}>
       <div style={{
         fontSize: '0.57rem', fontWeight: 800, letterSpacing: '0.09em',
-        textTransform: 'uppercase', color: '#7dd3fc', marginBottom: 6,
+        textTransform: 'uppercase', color: sky, marginBottom: 6,
       }}>
         {fieldLabel(field)}
       </div>
@@ -199,7 +196,11 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
     faintBorder: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.12)',
     hair:        isDark ? 'rgba(255,255,255,0.07)' : 'rgba(15,23,42,0.10)',
     track:       isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.08)',
+    sub:         isDark ? '#a3b1c4' : '#475569',     // the description
+    muted:       isDark ? '#8392a8' : '#64748b',     // labels and the date
+    sky:         isDark ? '#7dd3fc' : '#0369a1',     // "Upcoming", "Updated"
   };
+  const sevInk = isDark ? sev.hex : sev.ink;
   const cardBg = `linear-gradient(135deg, rgba(${sev.rgb},0.14) 0%, rgba(${sev.rgb},0.05) 55%, ${T.deep} 100%)`;
 
   const remaining = useCountdown(isUpcoming ? warning.validFrom : warning.validTo);
@@ -280,7 +281,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 boxShadow: `0 0 20px rgba(${sev.rgb},0.22), inset 0 1px 0 rgba(255,255,255,0.12)`,
               }}>
-                <Icon style={{ width: 24, height: 24, color: sev.hex }} />
+                <Icon style={{ width: 24, height: 24, color: sevInk }} />
               </div>
             </div>
 
@@ -307,7 +308,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                   {warning.severity}
                 </span>
                 {isUpcoming && (
-                  <span style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.30)', color: '#38bdf8', fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+                  <span style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.30)', color: T.sky, fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase' }}>
                     UPCOMING
                   </span>
                 )}
@@ -323,8 +324,8 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                     padding: '3px 9px', borderRadius: 99,
                     fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase',
                     ...(warning.status === 'cancelled'
-                      ? { background: 'rgba(245,158,11,0.14)', border: '1px solid rgba(245,158,11,0.42)', color: '#fbbf24' }
-                      : { background: 'rgba(148,163,184,0.12)', border: '1px solid rgba(148,163,184,0.32)', color: '#94a3b8' }),
+                      ? { background: 'rgba(245,158,11,0.14)', border: '1px solid rgba(245,158,11,0.42)', color: isDark ? '#fbbf24' : '#b45309' }
+                      : { background: 'rgba(148,163,184,0.12)', border: '1px solid rgba(148,163,184,0.32)', color: T.muted }),
                   }}>
                     {warning.status === 'cancelled' ? 'Cancelled' : 'Expired'}
                   </span>
@@ -333,7 +334,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                   <motion.span
                     animate={{ opacity: [1, 0.4, 1] }}
                     transition={{ duration: 1.1, repeat: Infinity }}
-                    style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.40)', color: '#fca5a5', fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.07em' }}
+                    style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.40)', color: isDark ? '#fca5a5' : '#b91c1c', fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.07em' }}
                   >
                     SEVERE
                   </motion.span>
@@ -365,7 +366,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                 background: `rgba(${sev.rgb},0.10)`, border: `1px solid rgba(${sev.rgb},0.22)`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <Eye style={{ width: 13, height: 13, color: sev.hex }} />
+                <Eye style={{ width: 13, height: 13, color: sevInk }} />
               </div>
             </div>
           </div>
@@ -385,7 +386,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                   padding: '2px 9px', borderRadius: 99,
                   background: 'rgba(56,189,248,0.18)', border: '1px solid rgba(56,189,248,0.42)',
-                  fontSize: '0.58rem', fontWeight: 900, letterSpacing: '0.09em', color: '#7dd3fc',
+                  fontSize: '0.58rem', fontWeight: 900, letterSpacing: '0.09em', color: T.sky,
                 }}>
                   <RefreshCw style={{ width: 10, height: 10 }} />
                   UPDATED
@@ -401,7 +402,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                       display: 'inline-flex', alignItems: 'center', gap: 5,
                       padding: '3px 10px', borderRadius: 99, fontSize: '0.62rem', fontWeight: 800,
                       background: showDiff ? 'rgba(56,189,248,0.28)' : 'rgba(56,189,248,0.14)',
-                      border: '1px solid rgba(56,189,248,0.4)', color: '#7dd3fc',
+                      border: '1px solid rgba(56,189,248,0.4)', color: T.sky,
                     }}>
                     {showDiff ? 'Hide changes' : 'Before / now'}
                     <ChevronDown style={{
@@ -435,7 +436,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                   }}>
                     <div style={{
                       fontSize: '0.53rem', fontWeight: 800, letterSpacing: '0.11em',
-                      textTransform: 'uppercase', color: '#7dd3fc', marginBottom: 3,
+                      textTransform: 'uppercase', color: T.sky, marginBottom: 3,
                     }}>
                       Why it changed
                     </div>
@@ -454,7 +455,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                     <div style={{ padding: '9px 11px', borderTop: `1px solid ${T.hair}` }}>
                       <div style={{
                         fontSize: '0.57rem', fontWeight: 800, letterSpacing: '0.09em',
-                        textTransform: 'uppercase', color: '#7dd3fc', marginBottom: 6,
+                        textTransform: 'uppercase', color: T.sky, marginBottom: 6,
                       }}>
                         Warning area
                       </div>
@@ -472,7 +473,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                     .map(f => (
                       <DiffField key={f} field={f}
                                  before={warning.previousVersions[0][f]}
-                                 after={warning[f]} ink={T.ink} hair={T.hair} />
+                                 after={warning[f]} ink={T.ink} hair={T.hair} sky={T.sky} />
                     ))}
 
                   {warning.previousVersions.length > 1 && (
@@ -493,14 +494,14 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                   display: 'inline-flex', alignItems: 'center', gap: 3,
                   padding: '2px 8px', borderRadius: 99,
                   background: `rgba(${sev.rgb},0.09)`, border: `1px solid rgba(${sev.rgb},0.22)`,
-                  fontSize: '0.62rem', fontWeight: 600, color: sev.hex,
+                  fontSize: '0.62rem', fontWeight: 600, color: sevInk,
                 }}>
                   <MapPin style={{ width: 9, height: 9 }} />
                   {r}
                 </span>
               ))}
               {regionList.length > 5 && (
-                <span style={{ padding: '2px 8px', borderRadius: 99, background: T.faintBg, border: `1px solid ${T.faintBorder}`, fontSize: '0.62rem', color: '#64748b' }}>
+                <span style={{ padding: '2px 8px', borderRadius: 99, background: T.faintBg, border: `1px solid ${T.faintBorder}`, fontSize: '0.62rem', color: T.muted }}>
                   +{regionList.length - 5} more
                 </span>
               )}
@@ -510,7 +511,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
           {/* Description */}
           {warning.description && (
             <p style={{
-              margin: '0 0 12px', fontSize: '0.78rem', lineHeight: 1.6, color: '#94a3b8',
+              margin: '0 0 12px', fontSize: '0.78rem', lineHeight: 1.6, color: T.sub,
               display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
             }}>
               {warning.description}
@@ -525,7 +526,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                   display: 'inline-flex', alignItems: 'center', gap: 4,
                   padding: '3px 9px', borderRadius: 99,
                   background: `rgba(${sev.rgb},0.10)`, border: `1px solid rgba(${sev.rgb},0.22)`,
-                  fontSize: '0.63rem', fontWeight: 700, color: sev.hex,
+                  fontSize: '0.63rem', fontWeight: 700, color: sevInk,
                 }}>
                   {imp.label}
                 </span>
@@ -554,16 +555,16 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                   background: `rgba(${sev.rgb},0.14)`, border: `1px solid rgba(${sev.rgb},0.28)`,
                   display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                 }}>
-                  <Clock style={{ width: 11, height: 11, color: sev.hex }} />
+                  <Clock style={{ width: 11, height: 11, color: sevInk }} />
                 </div>
-                <span style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600 }}>
+                <span style={{ fontSize: '0.7rem', color: T.muted, fontWeight: 600 }}>
                   {isUpcoming ? 'Starts' : 'Expires'}:
                 </span>
-                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: remaining === 'Expired' ? '#ef4444' : sev.hex, fontFamily: 'monospace' }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: remaining === 'Expired' ? '#ef4444' : sevInk, fontFamily: 'monospace' }}>
                   {remaining}
                 </span>
               </div>
-              <span style={{ fontSize: '0.63rem', color: '#475569', fontFamily: 'monospace' }}>
+              <span style={{ fontSize: '0.63rem', color: T.muted, fontFamily: 'monospace' }}>
                 {fmtDT(isUpcoming ? warning.validFrom : warning.validTo)}
               </span>
             </div>

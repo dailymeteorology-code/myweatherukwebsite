@@ -9,27 +9,21 @@ import React, { useState, useEffect } from 'react';
  * warnings panel is ambiguous between "nothing is in force" and "this page has
  * gone stale".
  *
- * The section header already prints "Updated HH:MM" as its subtitle, and prints
- * the countdown itself on mobile via `mobileSubtitle` — but that subtitle lives
- * in an `sm:hidden` block, so on desktop there was no countdown at all. This
- * fills that gap and stays out of the way below the `sm` breakpoint.
+ * It used to hide on phones because the section header printed the countdown
+ * there instead; the header lost that line in the glass redesign, so on a phone
+ * there was no countdown at all. It shows at every width now, in the page's
+ * glass rather than the old palette.
  */
-export default function WarningsRefreshBadge({
-  lastUpdated, nextUpdate, source,
-  /* The radar reuses this badge so both feeds count down the same way instead
-     of each inventing its own "Next update in 3:07" text. Its slot is five
-     minutes rather than thirty, and it is a different feed with a different
-     cadence, so the ring length and the tooltip are parameters now. */
-  /* Matches SLOT_MINUTES in server/functions/getMetOfficeWarnings.js. If that
-     changes, this ring fills at the wrong rate — it is only the ring geometry,
-     the countdown itself comes from `nextUpdate`, so a mismatch shows as a
-     ring that fills early and then sits full rather than as a wrong time. */
-  slotMs = 10 * 60 * 1000,
-  title: titleOverride,
-  /* The warnings badge hides below `sm` because the section header prints the
-     countdown there instead. The radar has no such fallback, so it opts in. */
-  alwaysVisible = false,
-}) {
+
+/* Matches SLOT_MINUTES in server/functions/getMetOfficeWarnings.js. If that
+   changes, this ring fills at the wrong rate — it is only the ring geometry,
+   the countdown itself comes from `nextUpdate`, so a mismatch shows as a ring
+   that fills early and then sits full rather than as a wrong time. */
+const SLOT_MS = 10 * 60 * 1000;
+const R = 9;
+const CIRC = 2 * Math.PI * R;
+
+export default function WarningsRefreshBadge({ lastUpdated, nextUpdate, source }) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -46,34 +40,27 @@ export default function WarningsRefreshBadge({
   const due = remainingMs <= 0;
 
   // The ring fills as the feed's slot elapses.
-  const elapsed = Math.min(slotMs, Math.max(0, slotMs - remainingMs));
-  const progress = elapsed / slotMs;
+  const progress = Math.min(SLOT_MS, Math.max(0, SLOT_MS - remainingMs)) / SLOT_MS;
 
   const totalSec = Math.max(0, Math.floor(remainingMs / 1000));
   const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
   const ss = String(totalSec % 60).padStart(2, '0');
 
-  const R = 9;
-  const CIRC = 2 * Math.PI * R;
-
-  const title = titleOverride ??
-    ((source === 'nswws-api'
-      ? 'Official Met Office warnings feed (NSWWS). '
-      : '') +
-    /* Deliberately not naming the minutes. This said ":00 and :30" and went
-       stale the moment the cadence changed; the point it is making is that the
-       schedule is the feed's, not yours. */
+  const title =
+    (source === 'nswws-api' ? 'Official Met Office warnings feed (NSWWS). ' : '') +
+    /* Deliberately not naming the minutes: the point is that the schedule is
+       the feed's, not yours, and a named cadence goes stale when it changes. */
     'Refreshes on the clock — opening the page does not trigger a fetch.' +
-    (lastUpdated ? ` Last updated ${new Date(lastUpdated).toLocaleTimeString('en-GB')}.` : ''));
+    (lastUpdated ? ` Last updated ${new Date(lastUpdated).toLocaleTimeString('en-GB')}.` : '');
 
   return (
     <div
       title={title}
-      className={`${alwaysVisible ? 'flex' : 'hidden sm:flex'} items-center gap-2 rounded-2xl px-2.5 py-1.5 backdrop-blur-sm`}
-      style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}
+      className="flex items-center gap-2 rounded-2xl px-2.5 py-1.5"
+      style={{ background: 'var(--glass-fill)', border: '1px solid var(--glass-hairline)' }}
     >
-      <svg width="24" height="24" viewBox="0 0 24 24" className="flex-shrink-0 -rotate-90">
-        <circle cx="12" cy="12" r={R} fill="none" strokeWidth="2.5" stroke="var(--border)" />
+      <svg width="24" height="24" viewBox="0 0 24 24" className="flex-shrink-0 -rotate-90" aria-hidden="true">
+        <circle cx="12" cy="12" r={R} fill="none" strokeWidth="2.5" stroke="var(--glass-hairline)" />
         <circle
           cx="12"
           cy="12"
@@ -81,26 +68,23 @@ export default function WarningsRefreshBadge({
           fill="none"
           strokeWidth="2.5"
           strokeLinecap="round"
-          stroke={due ? '#34d399' : '#38bdf8'}
+          stroke={due ? '#34d399' : 'var(--accent-uk)'}
           strokeDasharray={CIRC}
           strokeDashoffset={CIRC * (1 - progress)}
-          style={{
-            transition: 'stroke-dashoffset 0.9s linear, stroke 0.3s',
-            filter: due ? 'drop-shadow(0 0 4px rgba(52,211,153,0.7))' : 'none',
-          }}
+          style={{ transition: 'stroke-dashoffset 0.9s linear, stroke 0.3s' }}
         />
       </svg>
 
       <span className="leading-tight">
         <span
           className="block text-[9px] font-bold uppercase tracking-[0.13em]"
-          style={{ color: 'var(--text-muted)' }}
+          style={{ color: 'var(--ink-3)' }}
         >
           {due ? 'Refreshing' : 'Next update'}
         </span>
         <span
           className="block text-[12.5px] font-extrabold tabular-nums"
-          style={{ color: 'var(--text-primary)' }}
+          style={{ color: 'var(--ink-1)' }}
         >
           {due ? 'now' : `${mm}:${ss}`}
         </span>

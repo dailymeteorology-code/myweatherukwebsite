@@ -21,7 +21,7 @@
  * start-up and every 20 minutes it downloads only the days that cover time it was off and merges them
  * in, a strike heard by both counted once — so the archive has no holes either way.
  *
- *   GET /api/lightning/summary            counts (5 min, hour, today, 24 h in 15-minute bars) for
+ *   GET /api/lightning/summary            counts (5 and 15 min, hour, today, 24 h in 15-minute bars) for
  *                                         the UK, Europe and the world, and how each feed is doing
  *   GET /api/lightning/strikes            ?from=&to= (ms) or ?day=YYYY-MM-DD (UK day), &region=
  *                                         uk|europe|world, &uk=mo|bz → [t, lat, lon, src, …]
@@ -362,7 +362,7 @@ export function createLightning({ ingest } = {}) {
     const BIN = 15 * 60e3, nb = 96;
     const binStart = Math.floor(now / BIN) * BIN - (nb - 1) * BIN;     // 96 bars ending with the current quarter-hour
     const regions = {};
-    for (const r of Object.keys(REGIONS)) regions[r] = { last5: 0, lastHour: 0, today: 0, last24: 0, bins: new Array(nb).fill(0), newest: null };
+    for (const r of Object.keys(REGIONS)) regions[r] = { last5: 0, last15: 0, lastHour: 0, today: 0, last24: 0, bins: new Array(nb).fill(0), newest: null };
     const hoursSeen = new Set();
     for (const src of [0, 1]) {
       const c = cols[src];
@@ -374,6 +374,7 @@ export function createLightning({ ingest } = {}) {
           if (!inBox(REGIONS[r], la, lo)) continue;
           const g = regions[r];
           if (t >= now - 5 * 60e3) g.last5 += 1;
+          if (t >= now - 15 * 60e3) g.last15 += 1;
           if (t >= now - 3600e3) g.lastHour += 1;
           if (t >= dayStart) g.today += 1;
           if (t >= binStart) {

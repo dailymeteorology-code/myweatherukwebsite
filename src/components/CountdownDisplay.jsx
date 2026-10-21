@@ -23,8 +23,8 @@ import { motion } from 'framer-motion';
  * and never used this one, so the takeover styling was serving nobody; what was
  * needed here was a card that sits in the hero.
  *
- * Colours come from the page's own theme tokens, so it follows light and dark
- * with the rest of the page instead of assuming a dark background.
+ * It is one of the home page's glass panes, in the page's own ink, so it follows
+ * light and dark with the rest of the page instead of assuming a dark background.
  */
 
 function getTimeLeft(target) {
@@ -43,14 +43,14 @@ function TimeBlock({ value, label }) {
   return (
     <div
       className="flex flex-col items-center rounded-xl px-3 py-2 sm:px-4 sm:py-2.5 min-w-[62px] sm:min-w-[72px]"
-      style={{ background: 'var(--bg-pill)', border: '1px solid var(--border)' }}
+      style={{ background: 'var(--glass-fill-strong)', border: '1px solid var(--glass-hairline)' }}
     >
       <span className="text-2xl sm:text-3xl font-bold tabular-nums leading-none"
-            style={{ color: 'var(--text-primary)' }}>
+            style={{ color: 'var(--ink-1)' }}>
         {String(value).padStart(2, '0')}
       </span>
       <span className="text-[9.5px] sm:text-[10px] mt-1.5 uppercase tracking-[0.14em]"
-            style={{ color: 'var(--text-secondary)' }}>
+            style={{ color: 'var(--ink-3)' }}>
         {label}
       </span>
     </div>
@@ -80,16 +80,15 @@ export default function CountdownDisplay({ target, title, description, settings 
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}
-      className="mx-auto w-full max-w-xl rounded-2xl px-5 py-4 text-center backdrop-blur-sm"
-      style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}
+      className="lg-pane mx-auto w-full max-w-xl px-5 py-4 text-center"
     >
       {(heading || !timeLeft) && (
-        <h3 className="text-sm sm:text-base font-bold" style={{ color: 'var(--text-primary)' }}>
+        <h3 className="text-sm sm:text-base font-bold" style={{ color: 'var(--ink-1)' }}>
           {heading || 'Coming soon'}
         </h3>
       )}
       {blurb && (
-        <p className="mt-1 text-xs sm:text-[13px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+        <p className="mt-1 text-xs sm:text-[13px] leading-relaxed" style={{ color: 'var(--ink-2)' }}>
           {blurb}
         </p>
       )}
@@ -102,7 +101,7 @@ export default function CountdownDisplay({ target, title, description, settings 
           <TimeBlock value={timeLeft.seconds} label="Secs" />
         </div>
       ) : (
-        <p className="mt-2 text-sm font-semibold" style={{ color: 'var(--text-link)' }}>
+        <p className="mt-2 text-sm font-semibold" style={{ color: 'var(--accent-uk)' }}>
           It’s live.
         </p>
       )}

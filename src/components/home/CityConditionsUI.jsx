@@ -41,9 +41,11 @@ export const BAND_ACCENT = {
 
 export function LightningBanner({ stats, live, lastStrikeAt, bands }) {
   // Bars are scaled against the busiest band so the comparison is honest even
-  // when the whole planet is quiet.
-  const peak = Math.max(1, ...bands.map((b) => stats[b.id].fifteen));
-  const hot = stats.world.fifteen > 0;
+  // when the whole planet is quiet. `stats` is null until the first count arrives.
+  const peak = Math.max(1, ...bands.map((b) => stats?.[b.id]?.fifteen ?? 0));
+  const hot = (stats?.world?.fifteen ?? 0) > 0;
+  const num = (v) => (stats ? v.toLocaleString('en-GB') : '–');
+  const short = (v) => (v >= 100000 ? `${Math.round(v / 1000)}k` : v.toLocaleString('en-GB'));
 
   return (
     <Link
@@ -82,7 +84,7 @@ export function LightningBanner({ stats, live, lastStrikeAt, bands }) {
             }}
           >
             <Zap
-              className={`w-[18px] h-[18px] ${hot ? 'text-yellow-300' : 'text-[color:var(--ink-2)]'}`}
+              className={`w-[18px] h-[18px] ${hot ? 'text-amber-500 dark:text-yellow-300' : 'text-[color:var(--ink-2)]'}`}
               style={hot ? { filter: 'drop-shadow(0 0 6px rgba(250,204,21,0.7))' } : undefined}
             />
           </span>
@@ -94,12 +96,12 @@ export function LightningBanner({ stats, live, lastStrikeAt, bands }) {
             <span className="flex items-center gap-2 mt-0.5">
               <span
                 className={`inline-flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-[0.14em]
-                            ${live ? 'text-emerald-400' : 'text-amber-400'}`}
+                            ${live ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}
               >
                 <span
-                  className={`w-1.5 h-1.5 rounded-full ${live ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}
+                  className={`w-1.5 h-1.5 rounded-full ${live ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}
                 />
-                {live ? 'Live' : 'Connecting'}
+                {live ? 'Live' : stats ? 'Delayed' : 'Connecting'}
               </span>
               {lastStrikeAt && (
                 <span className="text-[10px] text-[color:var(--ink-2)] tabular-nums">
@@ -116,7 +118,7 @@ export function LightningBanner({ stats, live, lastStrikeAt, bands }) {
 
           <span
             className="ml-auto flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wider
-                       text-[color:var(--ink-2)] group-hover:text-sky-300 transition-colors"
+                       text-[color:var(--ink-2)] group-hover:text-[color:var(--accent-uk)] transition-colors"
           >
             Lightning map
             <ArrowUpRight className="w-3.5 h-3.5" />
@@ -125,12 +127,15 @@ export function LightningBanner({ stats, live, lastStrikeAt, bands }) {
 
         <div className="grid grid-cols-3 gap-2.5 md:gap-3">
           {bands.map((b) => {
-            const s = stats[b.id];
+            const s = stats?.[b.id] || { fifteen: 0, hour: 0, today: 0 };
             const accent = BAND_ACCENT[b.id];
             return (
+              /* The page's glass, a step up from the pane it sits in. These were black at 25%,
+                 which in the light theme made three grey slabs. */
               <div
                 key={b.id}
-                className="rounded-2xl border border-white/10 bg-black/25 px-3 py-2.5 backdrop-blur-sm"
+                className="min-w-0 rounded-2xl px-2.5 sm:px-3 py-2.5"
+                style={{ background: 'var(--glass-fill-strong)', border: '1px solid var(--glass-hairline)' }}
               >
                 <div className="flex items-center gap-1.5 mb-1.5">
                   <span
@@ -142,15 +147,17 @@ export function LightningBanner({ stats, live, lastStrikeAt, bands }) {
                   </span>
                 </div>
 
-                <div className="flex items-baseline gap-1.5">
-                  <span className="text-[22px] md:text-[26px] font-extrabold tabular-nums leading-none text-[color:var(--ink-1)]">
-                    {s.fifteen.toLocaleString('en-GB')}
+                {/* On a phone a tile is about 80px wide: "/15 min" wraps under the number, and
+                    the hour and today counts stack, with today's six figures shortened. */}
+                <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                  <span className="text-[19px] sm:text-[22px] md:text-[26px] font-extrabold tabular-nums leading-none text-[color:var(--ink-1)]">
+                    {num(s.fifteen)}
                   </span>
-                  <span className="text-[9.5px] font-semibold text-slate-500">/15 min</span>
+                  <span className="text-[9.5px] font-semibold text-[color:var(--ink-3)]">/15 min</span>
                 </div>
 
                 {/* Relative activity — instantly shows where the storms are. */}
-                <div className="mt-2 h-1 rounded-full bg-white/[0.07] overflow-hidden">
+                <div className="mt-2 h-1 rounded-full overflow-hidden" style={{ background: 'var(--glass-hairline)' }}>
                   <div
                     className="h-full rounded-full transition-[width] duration-700 ease-out"
                     style={{
@@ -161,9 +168,12 @@ export function LightningBanner({ stats, live, lastStrikeAt, bands }) {
                   />
                 </div>
 
-                <div className="mt-2 flex gap-2.5 text-[9.5px] text-slate-500 tabular-nums">
-                  <span>{s.hour.toLocaleString('en-GB')} hr</span>
-                  <span>{s.today.toLocaleString('en-GB')} today</span>
+                <div className="mt-2 flex flex-col sm:flex-row sm:flex-wrap sm:gap-x-2.5 text-[9.5px] text-[color:var(--ink-3)] tabular-nums">
+                  <span>{num(s.hour)} hr</span>
+                  <span>
+                    <span className="sm:hidden">{stats ? short(s.today) : '–'}</span>
+                    <span className="hidden sm:inline">{num(s.today)}</span> today
+                  </span>
                 </div>
               </div>
             );
