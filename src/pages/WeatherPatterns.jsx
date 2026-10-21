@@ -35,12 +35,19 @@ const REGION = {
 function usePatterns(issueId) {
   const [state, setState] = useState({ data: null, error: null, loading: true });
   const [tick, setTick] = useState(0);
+  const last = useRef('');
   const running = !!state.data?.meta?.status?.running;
   useEffect(() => {
     const ac = new AbortController();
     fetch(`/api/patterns${issueId ? `?issue=${issueId}` : ''}`, { signal: ac.signal })
-      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then((data) => setState({ data, error: null, loading: false }))
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); })
+      .then((text) => {
+        // the page polls; an unchanged answer must not re-render the cards (the day picked on a
+        // map, a playing week and the charts would all start again)
+        if (text === last.current) return;
+        last.current = text;
+        setState({ data: JSON.parse(text), error: null, loading: false });
+      })
       .catch((e) => { if (e.name !== 'AbortError') setState((s) => ({ ...s, error: e.message, loading: false })); });
     return () => ac.abort();
   }, [issueId, tick]);
@@ -84,6 +91,7 @@ function weekRange(w) {
   return `${ukFmt({ weekday: 'short', day: 'numeric', ...(sameMonth ? {} : { month: 'short' }) }).format(a)} – ${ukFmt({ weekday: 'short', day: 'numeric', month: 'short' }).format(b)}`;
 }
 const windWord = (g) => (g >= 30 ? 'Gales' : g >= 22 ? 'Windy' : g >= 14 ? 'Breezy' : 'Light winds');
+const dayWind = (d) => (d.gale >= 0.4 || d.G >= 30 ? 'gales' : d.G >= 22 ? 'windy' : '');
 /** How sure the week is: how far the likeliest scenario stands out. */
 function confidence(w) {
   const top = w.scenarios[0]?.chance ?? 0;
@@ -117,7 +125,9 @@ function ModelMix({ mix, info }) {
       </div>
       <div className="wp-mix-key">
         {MODEL_ORDER.filter((m) => mix[m]).map((m) => (
-          <span key={m}><i style={{ background: MODEL_COLOUR[m] }} />{info?.[m]?.short || m} <b>{mix[m].n}/{mix[m].of}</b></span>
+          <span key={m} className={mix[m].n ? undefined : 'wp-mix-none'}>
+            <i style={{ background: MODEL_COLOUR[m] }} />{info?.[m]?.short || m}<b>{mix[m].n}/{mix[m].of}</b>
+          </span>
         ))}
       </div>
     </div>
@@ -135,7 +145,7 @@ function DayStrip({ days, sel, onPick, accent }) {
           <PatternIcon kind={d.icon} size={28} />
           <span className="wp-day-t"><b>{Math.round(d.tmax)}°</b><em>{Math.round(d.tmin)}°</em></span>
           <span className="wp-day-r">{d.rain < 0.5 ? 'dry' : `${d.rain < 10 ? d.rain.toFixed(1) : Math.round(d.rain)} mm`}</span>
-          {(d.gale >= 0.4 || d.G >= 25) && <span className="wp-day-w"><GustIcon size={13} title={windWord(d.G)} /></span>}
+          <span className="wp-day-w">{dayWind(d) ? <><GustIcon size={11} title={dayWind(d)} />{dayWind(d)}</> : ' '}</span>
         </button>
       ))}
     </div>
@@ -146,7 +156,6 @@ function ScenarioCard({ s, index, landPath, grid, info, uid }) {
   const accent = ACCENTS[index] || ACCENTS[2];
   const [day, setDay] = useState(s.keyDay ?? 3);
   const [playing, setPlaying] = useState(false);
-  useEffect(() => { setDay(s.keyDay ?? 3); setPlaying(false); }, [s]);
   useEffect(() => {
     if (!playing) return undefined;
     const t = setInterval(() => setDay((d) => (d + 1) % s.days.length), 1500);
@@ -182,23 +191,25 @@ function ScenarioCard({ s, index, landPath, grid, info, uid }) {
 
       <p className="wp-desc">{s.description}</p>
 
-      <div className="wp-facts">
+      <div className="wp-factbox"><div className="wp-facts">
         <div className="wp-fact">
-          <span>Rain this week</span>
-          <b>{Math.round(wk.rain)} mm{rainPct != null && <small> · {rainPct}% of normal</small>}</b>
-          {regions.length > 1 && <em>Most in {REGION[regions[0][0]] || regions[0][0]} ({Math.round(regions[0][1])} mm)</em>}
+          <span>Rain</span>
+          <b>{Math.round(wk.rain)} mm</b>
+          {rainPct != null && <em className={rainPct >= 130 ? 'wp-up' : rainPct < 70 ? 'wp-down' : undefined}>{rainPct}% of normal</em>}
+          {regions.length > 1 && <em>Most in {REGION[regions[0][0]] || regions[0][0]}</em>}
         </div>
         <div className="wp-fact">
           <span>Temperature</span>
-          <b>{signed(wk.tmaxAnom)}°C <small>by day</small></b>
-          <em>{signed(wk.tminAnom)}°C at night{wk.frostNights ? ` · ${wk.frostNights} frosty night${wk.frostNights > 1 ? 's' : ''}` : ''}</em>
+          <b>{signed(wk.tmaxAnom)}°C</b>
+          <em>by day vs normal</em>
+          <em>{signed(wk.tminAnom)}°C at night{wk.frostNights ? ` · ${wk.frostNights} frosty` : ''}</em>
         </div>
         <div className="wp-fact">
           <span>Wind</span>
           <b>{wk.galeDays ? `${wk.galeDays} gale day${wk.galeDays > 1 ? 's' : ''}` : windWord(gMax)}</b>
-          <em>Strongest {fmtDay(s.days.reduce((a, x) => (x.G > a.G ? x : a)).date, { weekday: 'long' })}</em>
+          <em>Strongest on {fmtDay(s.days.reduce((a, x) => (x.G > a.G ? x : a)).date, { weekday: 'long' })}</em>
         </div>
-      </div>
+      </div></div>
 
       <div className="wp-support">
         <ModelMix mix={s.mix} info={info} />
@@ -408,7 +419,7 @@ const CSS = `
   --ink-1: #0b1220; --ink-2: #475a71; --ink-3: rgba(71,90,113,.7); --page-bg: #eef3fb;
   --amb-a: rgba(236,95,134,.14); --amb-b: rgba(155,111,227,.14); --amb-c: rgba(61,142,240,.16);
   --wp-sea: #d9e6f4; --wp-land: #ffffff; --wp-coast: #a9bbd0; --wp-iso: rgba(64,82,108,.55); --wp-iso-major: rgba(40,56,80,.85);
-  --wp-label-halo: #d9e6f4; --wp-high: #e08a12; --wp-low: #2f7de6; --wp-cloud: #c3cfdd; --wp-cloud-dark: #8193a9; --wp-gust: #6b7d94; }
+  --wp-label-halo: #d9e6f4; --wp-high: #e08a12; --wp-low: #2f7de6; --wp-cloud: #a9b8ca; --wp-cloud-dark: #73869d; --wp-gust: #6b7d94; }
 .wp-ambient { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
 .wp-ambient i { position: absolute; display: block; border-radius: 50%; }
 .wp-ambient i:nth-child(1) { width: 70vw; height: 70vw; top: -26vw; left: -22vw; background: radial-gradient(circle, var(--amb-a), transparent 62%); }
@@ -452,13 +463,19 @@ button.wp-tag:disabled { opacity: .6; cursor: default; }
 .wp-weekline { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; margin: 18px 4px 12px; font-size: .84rem; color: var(--ink-3); }
 .wp-weekline span:first-child { color: var(--ink-2); font-weight: 600; }
 .wp-conf b { color: var(--ink-1); font-weight: 650; }
-.wp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+/* The cards share the grid's rows (subgrid), so a card's header, chips, map, day strip,
+   description, facts and model support line up with its neighbours' however long each part is. */
+.wp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 @media (max-width: 1080px) { .wp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 720px) { .wp-grid { grid-template-columns: minmax(0, 1fr); } }
-.wp-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; min-width: 0; }
-.wp-card::before { content: ''; position: absolute; inset: 0 0 auto; height: 3px; border-radius: 24px 24px 0 0; background: var(--accent); opacity: .9; }
-.wp-reveal .wp-card { animation: wp-in .7s cubic-bezier(.22,1,.36,1) both; animation-delay: calc(var(--i) * 260ms); }
-@keyframes wp-in { from { opacity: 0; transform: translateY(18px) scale(.985); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
+.wp-card { display: grid; grid-row: span 7; grid-template-rows: subgrid; row-gap: 12px; align-content: start; padding: 16px; min-width: 0; overflow: hidden; isolation: isolate; }
+@supports not (grid-template-rows: subgrid) { .wp-card { display: flex; flex-direction: column; gap: 12px; } .wp-support { margin-top: auto; } }
+/* the scenario's colour: a rim along the top, clipped to the card's curve, and a faint wash under it */
+.wp-card::before { content: ''; position: absolute; inset: 0 0 auto; height: 3px; background: var(--accent); }
+.wp-card::after { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(120% 34% at 50% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 72%); }
+.wp-reveal .wp-card { animation: wp-in .6s cubic-bezier(.22,1,.36,1) both; animation-delay: calc(var(--i) * 240ms); }
+@keyframes wp-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .wp-reveal .wp-card { animation: none; } }
 .wp-card-head { display: flex; align-items: center; gap: 12px; }
 .wp-card-heading { min-width: 0; }
@@ -499,23 +516,35 @@ button.wp-tag:disabled { opacity: .6; cursor: default; }
 .wp-day-t b { font-weight: 700; }
 .wp-day-t em { font-style: normal; font-size: .7rem; color: var(--ink-3); }
 .wp-day-r { font-size: .64rem; font-weight: 600; color: var(--ink-3); white-space: nowrap; }
-.wp-day-w { position: absolute; top: 4px; right: 4px; color: var(--wp-gust); line-height: 0; }
+.wp-day-w { display: inline-flex; align-items: center; gap: 2px; min-height: 12px; font-size: .58rem; font-weight: 700; letter-spacing: .02em; color: var(--wp-gust); white-space: nowrap; }
 .wp-desc { margin: 2px 2px 0; font-size: .92rem; line-height: 1.6; color: var(--ink-2); }
-.wp-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-@media (max-width: 420px) { .wp-facts { grid-template-columns: minmax(0, 1fr); } }
+/* the facts measure their own width (a container on a wrapper: containment on the card itself would
+   stop it being a subgrid) */
+.wp-factbox { container: wpfacts / inline-size; min-width: 0; }
+.wp-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; align-content: start; }
 .wp-fact { display: flex; flex-direction: column; gap: 2px; padding: 9px 10px; border-radius: 14px; background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); min-width: 0; }
 .wp-fact span { font-size: .6rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
-.wp-fact b { font-size: .9rem; font-weight: 700; }
-.wp-fact b small { font-size: .72rem; font-weight: 600; color: var(--ink-2); }
+.wp-fact b { font-size: 1rem; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
 .wp-fact em { font-style: normal; font-size: .72rem; line-height: 1.35; color: var(--ink-3); }
+.wp-fact em.wp-up { color: #4f9bff; font-weight: 650; }
+.wp-fact em.wp-down { color: #e0a44a; font-weight: 650; }
+/* a narrow card (two columns on a tablet, or a phone): each fact becomes a row, its label at the side */
+@container wpfacts (max-width: 360px) {
+  .wp-facts { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .wp-facts .wp-fact { display: grid; grid-template-columns: 92px minmax(0, 1fr); column-gap: 10px; row-gap: 1px; align-items: baseline; padding: 8px 12px; }
+  .wp-facts .wp-fact span { grid-row: span 3; align-self: center; }
+  .wp-facts .wp-fact b, .wp-facts .wp-fact em { grid-column: 2; }
+}
 .wp-support p { margin: 6px 2px 0; font-size: .76rem; line-height: 1.45; color: var(--ink-3); }
 .wp-mix-bar { display: flex; height: 6px; border-radius: 99px; overflow: hidden; background: var(--glass-fill-strong); }
 .wp-mix-bar i { display: block; height: 100%; }
-.wp-mix-key { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 7px; font-size: .72rem; color: var(--ink-2); }
-.wp-mix-key span { display: inline-flex; align-items: center; gap: 5px; }
-.wp-mix-key i { width: 8px; height: 8px; border-radius: 3px; }
-.wp-mix-key b { font-weight: 650; color: var(--ink-1); }
-.wp-pending { min-height: 420px; }
+.wp-mix-key { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 14px; margin-top: 8px; font-size: .72rem; color: var(--ink-2); }
+.wp-mix-key span { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.wp-mix-key i { flex: 0 0 8px; height: 8px; border-radius: 3px; }
+.wp-mix-key b { margin-left: auto; font-weight: 650; color: var(--ink-1); font-variant-numeric: tabular-nums; }
+.wp-mix-key .wp-mix-none { opacity: .5; }
+.wp-pending { display: flex; flex-direction: column; gap: 12px; }
+.wp-pending .wp-map { flex: 0 0 auto; }
 .wp-shimmer, .wp-lines i { background: linear-gradient(100deg, var(--glass-fill) 30%, var(--glass-fill-strong) 50%, var(--glass-fill) 70%); background-size: 300% 100%; animation: wp-shine 1.6s ease-in-out infinite; }
 @keyframes wp-shine { from { background-position: 100% 0; } to { background-position: 0 0; } }
 .wp-lines { display: flex; flex-direction: column; gap: 8px; }

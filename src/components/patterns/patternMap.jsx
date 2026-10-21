@@ -134,7 +134,8 @@ export function buildLand(land) {
 
 /* ── isobars ────────────────────────────────────────────────────────────── */
 
-export function buildIsobars(msl, grid) {
+/** Isobars every 4 hPa, each labelled once, the labels kept clear of the highs' and lows' letters (`avoid`). */
+export function buildIsobars(msl, grid, avoid = []) {
   const K = 4;
   const { out, NX, NY } = upsample(msl, grid.nx, grid.ny, K);
   const step = grid.d / K;
@@ -148,7 +149,8 @@ export function buildIsobars(msl, grid) {
       const P = line.pts.map(toPx);
       lines.push({ p, d: smooth(P, line.closed), major: p % 20 === 0 });
       // one label per line: its on-map point nearest a column a little left of centre
-      const on = P.filter(([x, y]) => x > 26 && x < MAP_W - 26 && y > 20 && y < MAP_H - 20);
+      const on = P.filter(([x, y]) => x > 26 && x < MAP_W - 26 && y > 20 && y < MAP_H - 20
+        && !avoid.some((c) => Math.abs(c.x - x) < 30 && y > c.y - 34 && y < c.y + 32));
       if (on.length > 10) {
         const target = MAP_W * 0.36;
         const pick = on.reduce((b, q) => (Math.abs(q[0] - target) < Math.abs(b[0] - target) ? q : b), on[0]);
@@ -162,11 +164,11 @@ export function buildIsobars(msl, grid) {
 /* ── the map ────────────────────────────────────────────────────────────── */
 
 export default function PatternMap({ landPath, msl, grid, centres, uid, children }) {
-  const iso = useMemo(() => (msl && grid ? buildIsobars(msl, grid) : null), [msl, grid]);
   const marks = useMemo(() => (centres || []).map((c) => {
     const [x, y] = project(c.lon, c.lat);
     return { ...c, x, y };
   }).filter((c) => c.x > 18 && c.x < MAP_W - 18 && c.y > 22 && c.y < MAP_H - 22), [centres]);
+  const iso = useMemo(() => (msl && grid ? buildIsobars(msl, grid, marks) : null), [msl, grid, marks]);
   const clip = `wp-clip-${uid}`;
   return (
     <svg className="wp-map-svg" viewBox={`0 0 ${MAP_W} ${MAP_H}`} preserveAspectRatio="xMidYMid slice" role="img"
