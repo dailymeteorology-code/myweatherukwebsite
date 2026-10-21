@@ -5,7 +5,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CloudLightning, Tornado, AlertTriangle, CloudRain, CloudDrizzle, CloudRainWind } from 'lucide-react';
 import { RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConfig';
-import { base44 } from '@/api/base44Client';
 
 // --- Conditional Severe -----------------------------------------------------
 const COND_SEVERE_ID = 'Conditional Severe';
@@ -760,11 +759,19 @@ const GEO_SOURCES = [
    'https://raw.githubusercontent.com/johan/world.geo.json/master/countries/IRL.geo.json'],
 ];
 
-// --- Lightning overlay hook (today's strikes + live Blitzortung feed) --------
-// Extracted from StormOutlookGraphicTool so the graphic-tool component stays
-// under the editor line cap. Owns the strike store, the live socket and the
-// rolling 24h window; the colour/outline/window settings stay component-owned
-// (persisted via captureState) and are passed in.
+// --- Lightning overlay hook: Met Office lightning -------------------------------
+// The strikes are the Met Office's (LEELA, through /api/nova/lightning/day): every UK &
+// Ireland strike for a UK calendar day, the same feed as the TCM pages and the site's live
+// lightning layer, read on the server and cached there for three minutes. It used to be pieced
+// together in the browser from Base44 functions and a Base44 table that the self-hosted site
+// does not have, a Blitzortung relay on Render and a live Blitzortung socket, so it loaded
+// nothing or only part of the day. Today (from UK midnight) and yesterday are read, so a
+// rolling window can reach back past midnight, and both are read again every minute while the
+// overlay is on. Used by StormOutlookGraphicTool and SnowOutlookGraphicTool; the colour, outline
+// and window settings stay theirs (saved with the graphic) and are passed in.
+const LIGHTNING_POLL_MS = 60_000;
+const ukDayKey = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+
 export function useStormLightning({
   lightningWindow, setLightningWindow, windowMinutes, setWindowMinutes,
 }) {
@@ -775,10 +782,10 @@ export function useStormLightning({
   const [liveStatus, setLiveStatus] = useState(null);
 
   const strikeStoreRef = useRef(new Map());
-  const flushTimerRef = useRef(null);
   const showLightningRef = useRef(false);
-  const liveStopRef = useRef(null);
+  const pollRef = useRef(null);
   const liveDirtyRef = useRef(false);
+  const todayStartRef = useRef(null);
 
   const inUKIreland = (lat, lon) =>
     lon >= MAP_BBOX.lonMin && lon <= MAP_BBOX.lonMax &&
@@ -788,152 +795,97 @@ export function useStormLightning({
     lat = Number(lat); lon = Number(lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
     if (!inUKIreland(lat, lon)) return false;
-    const tMs = strikeTimeMs(rawT) || Date.now();
-    const key = `${Math.round(tMs / 1000)}_${lat.toFixed(3)}_${lon.toFixed(3)}`;
+    const tMs = strikeTimeMs(rawT);
+    if (!Number.isFinite(tMs)) return false;
+    const key = `${tMs}_${lat.toFixed(4)}_${lon.toFixed(4)}`;
     if (strikeStoreRef.current.has(key)) return false;
     strikeStoreRef.current.set(key, { lat, lon, t: tMs });
     return true;
   };
 
+  /* today = since UK midnight (the server's day bounds); a window = the last N minutes */
   const flushStrikes = () => {
     const all = Array.from(strikeStoreRef.current.values());
     const nowMs = Date.now();
     if (!lightningWindow) {
-      const todayStartMs = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z').getTime();
-      setStrikes(all.filter(s => s.t >= todayStartMs));
+      const start = todayStartRef.current ?? new Date(`${ukDayKey(nowMs)}T00:00:00`).getTime();
+      setStrikes(all.filter(s => s.t >= start));
       return;
     }
     const startMs = nowMs - windowMinutes * 60_000;
     setStrikes(all.filter(s => s.t >= startMs && s.t <= nowMs));
   };
 
-  const seedTodayBackfill = async () => {
+  /* today's and yesterday's strikes from the Met Office; how many were new */
+  const loadMetOffice = async () => {
+    const now = Date.now();
+    const days = [ukDayKey(now), ukDayKey(now - 86_400_000)];
+    const bodies = await Promise.all(days.map(async (d) => {
+      const r = await fetch(`/api/nova/lightning/day?date=${d}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`the Met Office lightning feed answered ${r.status}`);
+      return r.json();
+    }));
     let added = 0;
-    const RENDER_WORKER_RECENT = 'https://blitzortungworker-3.onrender.com/strikes';   // { count, serverTime, strikes }
-    const todayDateStr = new Date().toISOString().slice(0, 10);
-    const ydayDateStr  = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const safe = async (fn) => { try { return await fn(); } catch { return []; } };
-    const [ukRes, euRes, renderRes, archiveRes, ukYRes, euYRes, archiveYRes] = await Promise.allSettled([
-      safe(() => base44.functions.invoke('historicalLightning', { region: 'uk', daysBack: 0 })),
-      safe(() => base44.functions.invoke('historicalLightning', { region: 'europe', daysBack: 0 })),
-      safe(() => fetch(RENDER_WORKER_RECENT).then(r => (r.ok ? r.json() : [])).then(b => (Array.isArray(b) ? b : b?.strikes || []))),
-      safe(() => base44.entities.LightningArchive.filter({ date: todayDateStr })),
-      safe(() => base44.functions.invoke('historicalLightning', { region: 'uk', daysBack: 1 })),
-      safe(() => base44.functions.invoke('historicalLightning', { region: 'europe', daysBack: 1 })),
-      safe(() => base44.entities.LightningArchive.filter({ date: ydayDateStr })),
-    ]);
-    try {
-      const ukStrikes = ukRes.status === 'fulfilled' ? (ukRes.value?.data?.strikes || ukRes.value?.strikes || []) : [];
-      const euStrikes = euRes.status === 'fulfilled' ? (euRes.value?.data?.strikes || euRes.value?.strikes || []) : [];
-      const rdStrikes = renderRes.status === 'fulfilled' && Array.isArray(renderRes.value) ? renderRes.value : [];
-      const ukYStrikes = ukYRes.status === 'fulfilled' ? (ukYRes.value?.data?.strikes || ukYRes.value?.strikes || []) : [];
-      const euYStrikes = euYRes.status === 'fulfilled' ? (euYRes.value?.data?.strikes || euYRes.value?.strikes || []) : [];
-      const archiveStrikes = archiveRes.status === 'fulfilled' && Array.isArray(archiveRes.value)
-        ? archiveRes.value.flatMap(r => (r?.strikes || [])) : [];
-      const archiveYStrikes = archiveYRes.status === 'fulfilled' && Array.isArray(archiveYRes.value)
-        ? archiveYRes.value.flatMap(r => (r?.strikes || [])) : [];
-      const cutoff24 = Date.now() - 24 * 60 * 60 * 1000;
-      const ydayRecent = [...ukYStrikes, ...euYStrikes, ...archiveYStrikes]
-        .filter(s => s && strikeTimeMs(s.time ?? s.t) >= cutoff24);
-      const dbStrikes = [...ukStrikes, ...euStrikes, ...rdStrikes, ...archiveStrikes, ...ydayRecent];
-      let dbAdded = 0;
-      for (const s of dbStrikes) {
-        const e = extractStrike(s);
-        if (e && addStrike(e.lat, e.lon, e.t)) dbAdded++;
-      }
-      added += dbAdded;
-      console.log('[Lightning] backfill: uk', ukStrikes.length, '+ eu', euStrikes.length, '+ render', rdStrikes.length, '+ archive', archiveStrikes.length, '| yesterday last24h', ydayRecent.length, '=', dbStrikes.length, 'loaded,', dbAdded, 'added');
-    } catch (dbErr) {
-      console.warn('[Lightning] DB backfill failed:', dbErr?.message);
+    for (const b of bodies) {
+      if (b.day === days[0] && b.from) todayStartRef.current = Date.parse(b.from);
+      for (const [t, lat, lon] of b.strikes || []) if (addStrike(lat, lon, t)) added++;
     }
-    try {
-      const { loadTodayStrikes } = await import('@/components/tcm/strikeStorage');
-      const todayStrikes = loadTodayStrikes();
-      for (const s of todayStrikes) { if (addStrike(s.lat, s.lon, s.time ?? s.t)) added++; }
-      console.log('[Lightning] backfill from TCM cache:', todayStrikes.length, 'loaded,', added, 'added');
-    } catch (err) {
-      console.warn('[Lightning] strikeStorage import failed, trying raw localStorage', err);
-      const lsKeys = [];
-      try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && /lightn|strike|blitz/i.test(k)) lsKeys.push(k);
-        }
-      } catch { /* noop */ }
-      for (const k of ['tcm_lightning_strikes_today', 'tcm_today_strikes', 'tcm_lightning_strikes']) {
-        if (!lsKeys.includes(k)) lsKeys.push(k);
-      }
-      for (const k of lsKeys) {
-        try {
-          const raw = localStorage.getItem(k);
-          if (!raw) continue;
-          const arr = unwrapStrikeArray(JSON.parse(raw));
-          for (const item of arr) {
-            const e = extractStrike(item);
-            if (e && addStrike(e.lat, e.lon, e.t)) added++;
-          }
-        } catch { /* noop */ }
-      }
-    }
-    console.log('[Lightning] backfill complete, total UK strikes added:', added, '| store size:', strikeStoreRef.current.size);
+    if (/unavailable/i.test(bodies[0]?.source || '')) throw new Error('The Met Office lightning feed is not answering right now.');
+    return added;
   };
 
   const stopLightning = () => {
     showLightningRef.current = false;
-    if (flushTimerRef.current) { clearInterval(flushTimerRef.current); flushTimerRef.current = null; }
-    if (liveStopRef.current) { try { liveStopRef.current(); } catch {} liveStopRef.current = null; }
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     setLiveStatus(null);
   };
 
-  const startLiveFeed = async () => {
-    if (liveStopRef.current) return;
-    try {
-      const { connectBlitzortung } = await import('@/components/tcm/connectBlitzortung');
+  /* while the overlay is on, new strikes arrive every minute */
+  const startPolling = () => {
+    if (pollRef.current) return;
+    pollRef.current = setInterval(async () => {
       if (!showLightningRef.current) return;
-      setLiveStatus('connecting');
-      liveStopRef.current = connectBlitzortung(
-        (s) => { if (!showLightningRef.current) return; if (addStrike(s.lat, s.lon, s.time)) liveDirtyRef.current = true; },
-        (status) => setLiveStatus(status),
-      );
+      try {
+        if (await loadMetOffice()) liveDirtyRef.current = true;
+        setLiveStatus('connected');
+        setLightningError(null);
+      } catch (err) {
+        setLiveStatus('unavailable');
+        setLightningError(err?.message || 'The Met Office lightning feed is not answering right now.');
+      }
+    }, LIGHTNING_POLL_MS);
+  };
+
+  const load = async () => {
+    setLoadingStrikes(true);
+    setLightningError(null);
+    try {
+      await loadMetOffice();
+      flushStrikes();
+      setLiveStatus('connected');
+      if (strikeStoreRef.current.size === 0) setLightningError('No lightning over the UK or Ireland yet today (Met Office). New strikes appear within a few minutes.');
     } catch (err) {
-      console.warn('[Lightning] live feed unavailable:', err?.message);
       setLiveStatus('unavailable');
+      setLightningError(err?.message || 'Could not load the Met Office lightning.');
+    } finally {
+      setLoadingStrikes(false);
     }
+    startPolling();
   };
 
   const toggleLightning = async () => {
     if (showLightning) { setShowLightning(false); stopLightning(); return; }
     setShowLightning(true);
     showLightningRef.current = true;
-    setLoadingStrikes(true);
-    setLightningError(null);
     strikeStoreRef.current = new Map();
     setStrikes([]);
-    try {
-      await seedTodayBackfill();
-      flushStrikes();
-      if (strikeStoreRef.current.size === 0) setLightningError('No stored strikes for today yet — waiting on the live feed.');
-    } catch (err) {
-      setLightningError(err?.message || 'Strike load failed — live feed only.');
-    } finally {
-      setLoadingStrikes(false);
-    }
-    startLiveFeed();
+    setLiveStatus('connecting');
+    await load();
   };
 
   const refreshLightning = async () => {
     if (!showLightning || loadingStrikes) return;
-    setLoadingStrikes(true);
-    setLightningError(null);
-    try {
-      await seedTodayBackfill();
-      flushStrikes();
-    } catch (err) {
-      setLightningError(err?.message || 'Refresh failed.');
-    } finally {
-      setLoadingStrikes(false);
-    }
-    startLiveFeed();
+    await load();
   };
 
   useEffect(() => () => stopLightning(), []);
@@ -947,20 +899,6 @@ export function useStormLightning({
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showLightning, lightningWindow, windowMinutes]);
-
-  useEffect(() => {
-    if (!showLightning || !lightningWindow) return;
-    let cancelled = false;
-    (async () => {
-      setLoadingStrikes(true);
-      await seedTodayBackfill();
-      if (cancelled) return;
-      setLoadingStrikes(false);
-      flushStrikes();
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showLightning, lightningWindow]);
 
   const lightningStats = useMemo(() => {
     const list = Array.isArray(strikes) ? strikes : [];

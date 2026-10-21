@@ -803,7 +803,7 @@ function CityMarkersLayer({ region = null, k = 1, mask = null }) {
 }
 
 
-// --- Blitzortung lightning overlay ---
+// --- Lightning overlay (Met Office strikes, via useStormLightning) ---
 const LIGHTNING_SWATCHES = ['#facc15', '#ffffff', '#f87171', '#ec4899', '#22d3ee', '#a78bfa'];
 
 function HailIcon({ size = 12, color = '#22d3ee' }) {
@@ -1297,7 +1297,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
       // Lightning verification is an outlook-mode view — leaving it on would
       // strand the overlay and stats card on the radar graphic. Clear it.
       setShowLightning(false);
-      // Full teardown (timer AND the live Blitzortung socket) — clearing the
+      // Full teardown (the redraw timer and the Met Office poll) — clearing the
       // flag alone used to leave the stream open in the background.
       stopLightning();
       setActiveRisk('ModRain');
@@ -2455,7 +2455,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 8,
                   background: 'rgba(148,163,184,0.08)', border: `1px solid ${dotColor}55`,
-                }} title="Live Blitzortung stream">
+                }} title="Met Office lightning, checked every minute">
                   <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, boxShadow: `0 0 7px ${dotColor}` }} />
                   <span style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1' }}>
                     {live ? 'Live feed' : liveStatus === 'unavailable' ? 'Live feed off' : 'Connecting…'}
@@ -3050,7 +3050,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 position: 'relative', zIndex: 1, display: 'block', marginTop: 8,
                 fontSize: 7.5, fontWeight: 700, letterSpacing: '0.07em',
                 color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase',
-              }}>{isRadar ? 'Source: Met Office radar / Blitzortung' : usesSevere ? 'SVRE = Severe Tstorm risk · COND = conditional' : null}</span>
+              }}>{isRadar ? 'Source: Met Office radar & lightning' : usesSevere ? 'SVRE = Severe Tstorm risk · COND = conditional' : null}</span>
             </div>
 
             {/* Hazards card — hidden while the lightning overlay is active, since
@@ -3474,7 +3474,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                   <span style={{
                     fontSize: 7.5, fontWeight: 700, color: 'rgba(255,255,255,0.40)',
                     letterSpacing: '0.10em', textTransform: 'uppercase', textAlign: 'right', lineHeight: 1.5,
-                  }}>Radar: Met Office · Lightning: Blitzortung</span>
+                  }}>Radar & lightning: Met Office</span>
                 </div>
               );
             })()}
