@@ -12,7 +12,7 @@ import { useTheme } from '@/components/ThemeContext';
 import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GraphicLevelPill, GraphicLevelChoice, graphicLevel, normLevel } from '@/components/graphics/GraphicMeta';
 import GraphicViewer from '@/components/graphics/GraphicViewer';
 import { sized, sizedSet } from '@/lib/sizedImage';
-import { cleanHtml, plainText } from '@/lib/cleanHtml';
+import { cleanHtml, plainText, TEXT_COLOURS, richTextCss } from '@/lib/cleanHtml';
 import { format, isValid } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 
@@ -99,12 +99,6 @@ const CONDITION_RANGES = {
   'Daily Risks': [{ key: 'visibility_m',         label: 'Visibility',   unit: 'm',  placeholder: 'e.g. <100' }],
 };
 
-const TEXT_COLOURS = [
-  '#f8fafc', '#cbd5e1', '#94a3b8', '#64748b', '#0f172a', '#38bdf8', '#22d3ee',
-  '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899',
-  '#f43f5e', '#ef4444', '#dc2626', '#f97316', '#f59e0b', '#fbbf24', '#facc15',
-  '#84cc16', '#22c55e', '#10b981', '#15803d', '#14b8a6', '#5eead4', '#92400e', '#d6c39a',
-];
 
 function normalizeRangesObj(v) {
   let obj = v;
@@ -159,8 +153,8 @@ function RichTextEditor({ value, onChange, placeholder, rows = 4 }) {
               gridTemplateColumns: 'repeat(7, 1fr)', gap: 6, width: 196,
               boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
             }}>
-              {TEXT_COLOURS.map(c => (
-                <button key={c} onMouseDown={e => { e.preventDefault(); exec('foreColor', c); setShowColours(false); }}
+              {TEXT_COLOURS.map(({ value: c, label }) => (
+                <button key={c} title={label} onMouseDown={e => { e.preventDefault(); exec('foreColor', c); setShowColours(false); }}
                   style={{ width: 18, height: 18, borderRadius: '50%', background: c, border: '2px solid rgba(255,255,255,0.15)', cursor: 'pointer' }} />
               ))}
             </div>
@@ -675,6 +669,7 @@ const GA_CSS = `
   .ga-stat { padding: 12px 14px; }
 }
 @media (prefers-reduced-motion: reduce) { .ga-modal, .ga-detail { animation: none; } .ga-card, .ga-thumb img { transition: none; } }
+${richTextCss('.ga-desc', '.ga-page.ga-light', '.ga-page:not(.ga-light)')}
 `;
 
 const MEASURE = {

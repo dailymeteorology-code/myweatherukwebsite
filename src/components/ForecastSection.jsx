@@ -18,7 +18,7 @@ import ThunderstormPanel from './ThunderstormPanel';
 import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GraphicLevelChoice, GraphicLevelPill, normLevel } from '@/components/graphics/GraphicMeta';
 import { useTheme } from '@/components/ThemeContext';
 import { sized, sizedSet } from '@/lib/sizedImage';
-import { cleanHtml, plainText } from '@/lib/cleanHtml';
+import { cleanHtml, plainText, TEXT_COLOURS, richTextCss } from '@/lib/cleanHtml';
 import GraphicViewer from '@/components/graphics/GraphicViewer';
 
 
@@ -116,38 +116,8 @@ const CONDITION_RANGES = {
   'Daily Risks': [{ key: 'visibility_m',         label: 'Visibility',   unit: 'm',  placeholder: 'e.g. <100' }],
 };
 
-/* Greatly expanded text-colour palette for the editor */
-const TEXT_COLOURS = [
-  { label: 'White',       value: '#f8fafc' },
-  { label: 'Silver',      value: '#cbd5e1' },
-  { label: 'Slate',       value: '#94a3b8' },
-  { label: 'Graphite',    value: '#64748b' },
-  { label: 'Black',       value: '#0f172a' },
-  { label: 'Sky',         value: '#38bdf8' },
-  { label: 'Cyan',        value: '#22d3ee' },
-  { label: 'Azure',       value: '#0ea5e9' },
-  { label: 'Blue',        value: '#3b82f6' },
-  { label: 'Indigo',      value: '#6366f1' },
-  { label: 'Violet',      value: '#8b5cf6' },
-  { label: 'Purple',      value: '#a855f7' },
-  { label: 'Fuchsia',     value: '#d946ef' },
-  { label: 'Pink',        value: '#ec4899' },
-  { label: 'Rose',        value: '#f43f5e' },
-  { label: 'Red',         value: '#ef4444' },
-  { label: 'Crimson',     value: '#dc2626' },
-  { label: 'Orange',      value: '#f97316' },
-  { label: 'Amber',       value: '#f59e0b' },
-  { label: 'Gold',        value: '#fbbf24' },
-  { label: 'Yellow',      value: '#facc15' },
-  { label: 'Lime',        value: '#84cc16' },
-  { label: 'Green',       value: '#22c55e' },
-  { label: 'Emerald',     value: '#10b981' },
-  { label: 'Dark Green',  value: '#15803d' },
-  { label: 'Teal',        value: '#14b8a6' },
-  { label: 'Mint',        value: '#5eead4' },
-  { label: 'Brown',       value: '#92400e' },
-  { label: 'Sand',        value: '#d6c39a' },
-];
+/* the editor's text colours are TEXT_COLOURS in lib/cleanHtml, which keeps exactly those when the
+   description is shown */
 
 /* ─────────────────────────────────────────────
    RICH TEXT EDITOR (the description, in the add / edit sheet)
@@ -316,6 +286,7 @@ const FG_CSS = `
 .fg-empty { display: flex; align-items: center; gap: 14px; padding: 20px 22px; color: var(--ink-3); }
 .fg-empty b { display: block; font-size: 1rem; color: var(--ink-1); }
 .fg-empty span { display: block; margin-top: 2px; font-size: .88rem; color: var(--ink-2); }
+${richTextCss('.fg-desc', 'html.light-mode', 'html:not(.light-mode)')}
 `;
 
 const condsOf = (f) => (f.weather_conditions?.length ? f.weather_conditions : f.weather_condition ? [f.weather_condition] : []);
