@@ -318,7 +318,7 @@ function pointInUKIreland(lat, lon) {
 export function buildCoords(bbox, step) {
   // Process ALL points inside the ACTIVE REGION's bbox (fills the box, incl. the
   // surrounding seas) rather than clipping to a ragged coastline. Each region's
-  // bbox IS its tight data/display box — see REGIONS in pages/WeatherPatterns.jsx
+  // bbox IS its tight data/display box — see REGIONS in pages/TCMOutlooksV3.jsx
   // (uk = UK & Ireland, fr = France). The engine itself stays region-agnostic:
   // every point is scored purely from its own model ingredients.
   const out = [];

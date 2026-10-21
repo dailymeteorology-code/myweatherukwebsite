@@ -40,6 +40,7 @@ import { mountPastFuture } from './pastFuture/index.js';
 import { mountModelData } from './modelData.js';
 import { mountLocationWeather } from './locationWeather.js';
 import { mountWorldConditions } from './worldConditions.js';
+import { mountPatterns } from './patterns/index.js';
 import { mountImageSizes, warmImageSizes } from './imageSizes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -467,6 +468,7 @@ mountPastFuture(app);
 mountModelData(app);
 mountLocationWeather(app);
 mountWorldConditions(app);
+mountPatterns(app);
 mountImageSizes(app, UPLOAD_DIR);
 startLiveScenarios(app);
 

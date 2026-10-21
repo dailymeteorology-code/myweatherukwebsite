@@ -1,5 +1,5 @@
 /* Per-hazard, per-level human-readable descriptions used by the RiskKey
-   hover tooltip. Extracted from WeatherPatterns.jsx. */
+   hover tooltip. Extracted from TCMOutlooksV3.jsx. */
 export const RISK_DESCRIPTIONS = {
   thunderstorm: {
     'No Risk':  'Atmosphere stable and capped — no energy for thunderstorms. Any cloud will be flat and stratiform. Outdoor plans unaffected.',

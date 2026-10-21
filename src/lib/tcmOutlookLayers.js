@@ -2,7 +2,7 @@
 // TCM OUTLOOK LAYERS — the canonical builders that turn a scored grid into the
 // map's polygon layers (Outlook, High-Resolution, Animated step, Severe overlay).
 //
-// This is the ONE place the outlook geometry is assembled. WeatherPatterns.jsx
+// This is the ONE place the outlook geometry is assembled. TCMOutlooksV3.jsx
 // previously carried its own ~300-line copies of these builders (buildOutlookLayers
 // / buildOutlookLayersConservative / buildOutlookLayersForStep / buildSevereOverlay)
 // while this module sat unused; the page now imports from here so there is a single
@@ -20,7 +20,7 @@ import {
 } from '@/components/tcm/geometryEngine';
 import { RISK_META, CONTOUR_LEVELS } from '@/components/tcm/riskConfig';
 
-// Re-exported so callers (WeatherPatterns / AnimatedMap) can pull the geometry
+// Re-exported so callers (TCMOutlooksV3 / AnimatedMap) can pull the geometry
 // primitives from one module alongside the layer builders.
 export { ringToSvgPath, buildFineGrid, buildSmoothedField };
 export { CONTOUR_LEVELS };

@@ -5,7 +5,7 @@ export const DATE_KEY        = 'tcm_today_date';
 export const ARCHIVE_KEY     = 'tcm_lightning_archive';
 export const STORM_STORE_KEY = 'tcm_storm_warnings';
 export const SNAPSHOT_KEY    = 'tcm_forced_snapshots';
-// Shared key read by WeatherPatterns LightningOverlay
+// Shared key read by the TCMOutlooksV3 LightningOverlay
 const WP_CACHE_KEY           = 'tcm_lightning_strikes_today';
 
 export function todayDateStr() { return new Date().toISOString().slice(0, 10); }
@@ -113,7 +113,7 @@ export function saveTodayStrikes(strikes) {
       }
     }
 
-    // ── Keep WeatherPatterns LightningOverlay in sync ────────────────────────
+    // ── Keep TCMOutlooksV3 LightningOverlay in sync ────────────────────────
     // WP reads { date, strikes } from this key. Write it every time so both
     // pages always see the same complete set without needing TCM to run first.
     try {

@@ -10,7 +10,7 @@ import {
   Layers, ChevronDown,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import WeatherPatterns from './WeatherPatterns';
+import TCMOutlooksV3 from './TCMOutlooksV3';
 import TCMNova from './TCMNova';
 import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
 
@@ -160,7 +160,7 @@ export default function TCMOutlooks({ forceEngine }) {
         <div style={{ position: 'absolute', top: 14, right: 16, zIndex: 70 }}>
           <EngineSwitcher engine={engine} setEngine={setEngine} />
         </div>
-        <WeatherPatterns embedded />
+        <TCMOutlooksV3 embedded />
       </div>
     );
   }

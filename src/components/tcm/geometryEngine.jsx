@@ -26,7 +26,7 @@
  *     clusterToPath, convexHull) had no importers; the live outlook layers are
  *     built by lib/tcmOutlookLayers.js via buildContourRiskLayers.
  *
- * Live exports (imported by WeatherPatterns / tcmOutlookLayers / AnimatedMap):
+ * Live exports (imported by TCMOutlooksV3 / tcmOutlookLayers / AnimatedMap):
  *   buildContourRiskLayers, buildPrecipContourLayers,
  *   buildFineGrid, buildSmoothedField, ringToSvgPath.
  */

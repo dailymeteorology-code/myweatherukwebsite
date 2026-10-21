@@ -16,7 +16,7 @@ import { useLogo } from '@/components/MobileHeaderLogo';
  * and a full-screen grouped sheet on mobile.
  *
  * This exists because navigation used to be per-page — SectionNavigation drew
- * its own menu on Home, TCMHamburger drew another on TCM and WeatherPatterns,
+ * its own menu on Home, TCMHamburger drew another on the TCM pages,
  * and Layout's own HamburgerMenu was dead code that never rendered. Worse, the
  * Home menu mixed *section jumps* (Active Warnings, Live Radar — anchors on the
  * current page) with *page links* (Model Data, Thunderstorm Studio), so every
@@ -47,7 +47,7 @@ const GROUPS = [
       { label: 'Model Data', path: '/ModelData', icon: Database, blurb: 'UKMO, UKV and ECMWF charts' },
       { label: 'Lightning', path: '/Lightning', icon: CloudLightning, blurb: 'Live strikes across the UK and Europe' },
       { label: 'TCM Outlooks', path: '/TCMOutlooks', icon: Zap, blurb: 'Thunderstorm risk areas by day' },
-      { label: 'Weather Patterns', path: '/WeatherPatterns', icon: Layers, blurb: 'Longer-range pattern outlook' },
+      { label: 'Weather Patterns', path: '/WeatherPatterns', icon: Layers, blurb: 'Three scenarios for each of the next two weeks' },
       { label: 'Weather Scenarios', path: '/WeatherScenarios', icon: Radar, blurb: 'Every season of UK weather' },
     ],
   },
@@ -100,49 +100,6 @@ function visible(items, { isAdmin, isBeta, isAuthenticated }) {
 
 const isActivePath = (pathname, path) =>
   path === '/' ? pathname === '/' : pathname === path || pathname.startsWith(`${path}/`);
-
-/* ── theme ──────────────────────────────────────────────────────────────────
- * Most of the site follows ThemeContext, but the TCM pages run their own
- * light/dark under TCMThemeContext, stored separately. The nav is rendered by
- * Layout — outside that provider — so on those routes it has to read the TCM
- * setting directly, or it sits dark on a light page.
- */
-const TCM_THEMED_PATHS = ['/WeatherPatterns'];
-const TCM_THEME_KEY = 'tcm_light_mode_v2';
-
-function readTcmLight() {
-  try {
-    return localStorage.getItem(TCM_THEME_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-function useEffectiveDark() {
-  const { isDark } = useTheme();
-  const location = useLocation();
-  const tcmThemed = TCM_THEMED_PATHS.some(
-    (p) => location.pathname === p || location.pathname.startsWith(`${p}/`)
-  );
-  const [tcmLight, setTcmLight] = useState(readTcmLight);
-
-  useEffect(() => {
-    if (!tcmThemed) return undefined;
-    const read = () => setTcmLight(readTcmLight());
-    read();
-    // That toggle lives in another provider and writes straight to
-    // localStorage. A same-tab write raises no `storage` event, so sample the
-    // key as well — it is one string read, and only while on a TCM route.
-    const id = setInterval(read, 400);
-    window.addEventListener('storage', read);
-    return () => {
-      clearInterval(id);
-      window.removeEventListener('storage', read);
-    };
-  }, [tcmThemed]);
-
-  return tcmThemed ? !tcmLight : isDark;
-}
 
 /* ── one link, shared by the desktop panel and the mobile sheet ──────────── */
 
@@ -233,11 +190,7 @@ function NavLink({ item, isDark, active, onNavigate, compact }) {
 /* ── desktop ────────────────────────────────────────────────────────────── */
 
 function DesktopBar({ roles, siteName, logoUrl }) {
-  const isDark = useEffectiveDark();
-  /* The toggle flips the SITE theme, so it comes from the context directly —
-     `useEffectiveDark` above also folds in the TCM pages' own forced theme,
-     which is about how this bar paints itself, not about what the switch does. */
-  const { toggleTheme } = useTheme();
+  const { isDark, toggleTheme } = useTheme();
   const location = useLocation();
   const [openId, setOpenId] = useState(null);
   const barRef = useRef(null);
@@ -469,7 +422,7 @@ function DesktopBar({ roles, siteName, logoUrl }) {
  * wrapper applies a transform, which would otherwise trap `position: fixed`.
  */
 function MobileSheet({ roles }) {
-  const isDark = useEffectiveDark();
+  const { isDark } = useTheme();
   const location = useLocation();
   const [open, setOpen] = useState(false);
 

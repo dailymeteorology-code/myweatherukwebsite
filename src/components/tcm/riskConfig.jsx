@@ -10,7 +10,7 @@
 //
 // This is the ONE scale used across the entire TCM:
 //   • the risk engine's score calibration     (lib/tcmEngineScores.js)
-//   • the live outlook map                    (pages/WeatherPatterns.jsx)
+//   • the live outlook map                    (pages/TCMOutlooksV3.jsx)
 //   • the contour thresholds                  (lib/tcmOutlookLayers.js)
 //   • the archive renderers                   (ArchiveMapPanel, TCMArchive)
 //   • the backend verification job            (verifyDailyForecast/entry.ts)

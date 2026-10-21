@@ -625,7 +625,7 @@ export default function TCMArchive() {
             maxWidth: 1280, margin: '0 auto', padding: '0 24px',
             display: 'flex', alignItems: 'center', gap: 12, height: 56
           }}>
-            <Link to="/WeatherPatterns" style={{
+            <Link to="/TCMOutlooks" style={{
               display: 'inline-flex', alignItems: 'center', gap: 5,
               color: '#475569', textDecoration: 'none',
               fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.05em',
