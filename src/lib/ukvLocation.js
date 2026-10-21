@@ -190,9 +190,11 @@ export function shape(resp) {
   const nowMs = Date.now();
   const nowIdx = Math.max(0, hours.findIndex((h) => h.t >= nowMs - 30 * 60e3));
   const cur = hours[nowIdx] || hours[0];
+  const minutely = nextHour(resp.nowcast, cur, nowMs);
   /* NOW: the 15-minute analysis where it has the field (it is UKV corrected by the latest
-     station reports), the forecast hour otherwise; the radar decides whether it is raining */
-  const radarRate = an?.radar;
+     station reports), the forecast hour otherwise; the radar, carried forward to this minute,
+     decides whether it is raining and how hard */
+  const radarRate = minutely?.mins[0]?.rate ?? an?.radar;
   const nowHour = {
     ...cur,
     t2: an?.t2 ?? cur.t2, td: an?.td2 ?? cur.td, rh: an?.rh2 ?? cur.rh, wind: an?.wind10 ?? cur.wind,
@@ -249,9 +251,64 @@ export function shape(resp) {
   });
 
   return {
-    location: loc, hours, full, days, now: nowHour, nowIdx, observed, analysis: an,
+    location: loc, hours, full, days, now: nowHour, nowIdx, observed, analysis: an, minutely,
     runs: fc.runs, cell: fc.cell, lat, lon,
   };
+}
+
+/* ── the next hour, minute by minute (the radar nowcast) ────────────────────
+   The server sends 90 minutes from when it was asked; the page re-derives every minute, so
+   the hour shown always starts at this minute. Rain or snow from the hour's model snow share. */
+export const RAIN_BANDS = [['Light', 0.1], ['Moderate', 1], ['Heavy', 4]];      // mm/h, as classify() words them
+export const bandOf = (r) => (r == null || r < 0.1 ? 0 : r < 1 ? 1 : r < 4 ? 2 : 3);
+function nextHour(nc, cur, nowMs) {
+  if (!nc?.rate?.length) return null;
+  const from = Math.max(0, Math.floor((nowMs - Date.parse(nc.start)) / 60e3));
+  const mins = [];
+  for (let k = 0; k <= 60; k++) {
+    const i = from + k;
+    if (i >= nc.rate.length || nc.rate[i] == null) break;
+    mins.push({ t: Date.parse(nc.start) + i * 60e3, rate: nc.rate[i], chance: nc.chance[i] ?? 0 });
+  }
+  if (mins.length < 31) return null;                                // too stale to say anything about the hour
+  const snowShare = (cur.precip ?? 0) > 0 && cur.snow != null ? cur.snow / cur.precip : cur.precipRate ? (cur.snowRate ?? 0) / cur.precipRate : 0;
+  return { mins, snow: snowShare >= 0.6, scan: Date.parse(nc.scan), motion: nc.motion };
+}
+export const wetMinute = (m) => m.rate >= 0.1 && m.chance >= 25;
+/** One sentence for the next hour, e.g. "Heavy rain now, easing to rain in about 20 min and stopping in
+    about 35 min." `nowLabel`: the hero's word for now when it is wet, so the two never disagree. */
+export function minutelyText(mm, nowLabel) {
+  if (!mm) return '';
+  const { mins } = mm;
+  const word = (b) => (mm.snow ? ['', 'Light snow', 'Snow', 'Heavy snow'] : ['', 'Light rain', 'Rain', 'Heavy rain'])[b];
+  const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+  const inMin = (i) => `in about ${Math.max(1, Math.round(i))} min`;
+  /* a change only counts once it lasts three minutes */
+  const lasting = (i, test) => i + 3 <= mins.length && mins.slice(i, i + 3).every(test);
+  const n = mins.length;
+  const scan = (from) => {                                          // when it stops, and its heaviest minute before that
+    let stop = -1, peak = from;
+    for (let i = from + 1; i < n && stop < 0; i++) {
+      if (lasting(i, (m) => !wetMinute(m))) stop = i;
+      else if (mins[i].rate > mins[peak].rate) peak = i;
+    }
+    return { stop, peak };
+  };
+  if (nowLabel || wetMinute(mins[0])) {
+    const b0 = bandOf(mins[0].rate);
+    const { stop, peak } = scan(0);
+    let ease = -1;
+    for (let i = 1; i < (stop < 0 ? n : stop) && ease < 0 && b0 > 1; i++) if (lasting(i, (m) => bandOf(m.rate) < b0)) ease = i;
+    const mid = ease > 0 && (stop < 0 || stop - ease >= 5) ? `easing to ${lower(word(Math.max(1, bandOf(mins[ease].rate))))} ${inMin(ease)}`
+      : bandOf(mins[peak].rate) > b0 ? `turning ${lower(word(bandOf(mins[peak].rate)))} ${inMin(peak)}` : '';
+    const end = stop > 0 ? `stopping ${inMin(stop)}` : n > 55 ? 'carrying on for at least the next hour' : `carrying on for the next ${n - 1} min`;
+    return `${nowLabel || word(b0)} now, ${mid ? `${mid} and ${end}` : end}.`;
+  }
+  let start = -1;
+  for (let i = 1; i < n && start < 0; i++) if (lasting(i, wetMinute)) start = i;
+  if (start < 0) return `No ${mm.snow ? 'snow' : 'rain'} expected in the next hour.`;
+  const { stop, peak } = scan(start);
+  return `${word(Math.max(1, bandOf(mins[peak].rate)))} starting ${inMin(start)}${stop > 0 ? `, stopping ${inMin(stop)}` : ''}.`;
 }
 
 /* ── words ───────────────────────────────────────────────────────────────── */

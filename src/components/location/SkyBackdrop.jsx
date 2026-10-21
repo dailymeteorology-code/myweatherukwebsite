@@ -12,7 +12,9 @@
 
    `contained` puts the sky inside its parent instead of behind the whole window (the home page's
    city cards): sized to the card, with clouds, drops and flakes scaled to it, drawn at about 30
-   frames a second, and paused while the card is off screen. */
+   frames a second, and paused while the card is off screen.
+
+   CardRain (below) is the rain landing on the page's top row of glass cards. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 const SKIES = {
@@ -156,7 +158,8 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
     const fog = fogOnce();
     let stars = [], clouds = [], drops = [], flakes = [], stones = [], fogs = [];
     let flash = { a: 0, next: 4, bolt: null };
-    let built = '';
+    let built = '', haze = null;
+    const keyOf = (p) => `${p.cond}|${p.group}|${p.phase}|${Math.round(p.cloud / 10)}|${(p.rate ?? 0) < 0.1 ? 0 : Math.min(8, Math.round(Math.sqrt(p.rate) * 2))}|${W}x${H}`;
 
     const resize = () => {
       if (contained) {
@@ -197,25 +200,40 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
           a: (heavy ? 0.8 : far ? 0.55 : 0.85) * (p.group === 'clear' ? 0.6 : 1), v: (far ? 0.45 : 1) * (0.7 + r() * 0.6),
         };
       }).sort((a, b) => (a.far === b.far ? 0 : a.far ? -1 : 1));
-      /* hail comes down with rain; sleet is rain and snow together */
+      /* hail comes down with rain; sleet is rain and snow together. Rain in two depths: a far
+         curtain of fine, faint, slower streaks (dense in a downpour, so heavy rain reads as a
+         wall of water rather than scattered lines) and nearer, longer, brighter drops */
       const wet = ['rain', 'storm'].includes(p.group) || ['sleet', 'hail'].includes(p.cond);
-      const nRain = wet ? Math.round((p.cond === 'drizzle' ? 90 : p.cond === 'hail' ? 160 : 120 + Math.min(1, p.rate / 6) * 380) * area) : 0;
-      drops = Array.from({ length: nRain }, () => ({ x: r() * W, y: r() * H, l: (10 + r() * 16) * k, v: 0.75 + r() * 0.5 }));
+      const rate = Math.max(0, p.rate ?? 0);
+      const pour = wet && (['heavyRain', 'heavyShowers', 'thunder'].includes(p.cond) || rate >= 4);
+      const inten = Math.min(1, Math.sqrt(rate / 8));                                  // 0 dry … 1 at 8 mm/h
+      const nNear = wet ? Math.round((p.cond === 'drizzle' ? 90 : p.cond === 'hail' ? 160 : 120 + Math.min(1, rate / 6) * 380 + (pour ? 160 : 0)) * area) : 0;
+      const nFar = wet && p.cond !== 'drizzle' ? Math.round((pour ? 1000 + inten * 700 : 90 + inten * 420) * area) : 0;
+      drops = [
+        ...Array.from({ length: nFar }, () => ({ x: r() * W, y: r() * H, l: (6 + r() * 9) * k, v: 0.5 + r() * 0.25, far: true })),
+        ...Array.from({ length: nNear }, () => ({ x: r() * W, y: r() * H, l: (pour ? 16 + r() * 22 : 10 + r() * 16) * k, v: 0.8 + r() * 0.5, far: false })),
+      ];
+      /* a downpour also hangs spray low in the sky */
+      haze = null;
+      if (pour) {
+        haze = ctx.createLinearGradient(0, H * 0.35, 0, H);
+        haze.addColorStop(0, 'rgba(200,212,228,0)');
+        haze.addColorStop(1, `rgba(200,212,228,${(0.1 + 0.08 * inten).toFixed(3)})`);
+      }
       const snowy = ['snow', 'heavySnow', 'snowShowers', 'sleet'].includes(p.cond);
       const nSnow = snowy ? Math.round((p.cond === 'heavySnow' ? 280 : p.cond === 'sleet' ? 90 : 160) * area) : 0;
       /* flakes in three depths: small, faint and slow far away; big, bright and quicker close by */
       flakes = Array.from({ length: nSnow }, () => ({ x: r() * W, y: r() * H, s: (0.8 + r() * 2.9) * (contained ? 0.75 : 1), v: 0.7 + r() * 0.5, ph: r() * 6.3 }));
       stones = p.cond === 'hail' ? Array.from({ length: Math.round(150 * area) }, () => ({ x: r() * W, y: r() * H, l: (5 + r() * 6) * k, v: 0.8 + r() * 0.5, w: 1.6 + r() * 1.6 })) : [];
       fogs = p.group === 'fog' ? Array.from({ length: 5 }, (_, i) => ({ x: r() * W, y: H * (0.35 + i * 0.13), sc: (1 + r() * 0.8) * (contained ? 0.35 : 1), v: (6 + r() * 8) * (contained ? 0.4 : 1) })) : [];
-      built = `${p.cond}|${p.group}|${p.phase}|${Math.round(p.cloud / 10)}|${Math.round(p.rate)}|${W}x${H}`;
+      built = keyOf(p);
     };
 
     const frame = (now) => {
       if (!onScreen) { raf = 0; return; }
       if (contained && !reduce && now - last < 32) { raf = requestAnimationFrame(frame); return; }   // ~30 fps on a card
       const p = paramsRef.current;
-      const key = `${p.cond}|${p.group}|${p.phase}|${Math.round(p.cloud / 10)}|${Math.round(p.rate)}|${W}x${H}`;
-      if (key !== built) build(p);
+      if (keyOf(p) !== built) build(p);
       const dt = reduce ? 0 : Math.min(0.05, (now - last) / 1000);
       last = now;
       clock += dt;
@@ -275,24 +293,31 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
         ctx.drawImage(fog, f.x - w / 2, f.y - h / 2, w, h);
       }
 
-      /* rain: every streak in one path, slanted downwind */
+      /* rain: each depth's streaks in one path, slanted downwind, the far curtain first */
       if (drops.length) {
         const slant = Math.min(0.5, (p.wind ?? 0) / 60) * towards;
         const speed = (900 + Math.min(1, (p.rate ?? 0) / 6) * 500) * (contained ? 0.45 : 1);
-        ctx.strokeStyle = p.group === 'storm' ? 'rgba(200,214,235,0.42)' : 'rgba(210,225,245,0.36)';
-        ctx.lineWidth = p.cond === 'drizzle' ? 0.8 : 1.15;
+        const pour = ['heavyRain', 'heavyShowers', 'thunder'].includes(p.cond) || (p.rate ?? 0) >= 4;
+        const storm = p.group === 'storm';
         ctx.lineCap = 'round';
-        ctx.beginPath();
-        for (const d of drops) {
-          d.y += speed * d.v * dt;
-          d.x += speed * d.v * dt * slant;
-          if (d.y > H + 20) { d.y = -20 - Math.random() * 60; d.x = Math.random() * (W + 200) - 100; }
-          if (d.x > W + 50) d.x -= W + 100;
-          if (d.x < -50) d.x += W + 100;
-          ctx.moveTo(d.x, d.y);
-          ctx.lineTo(d.x - d.l * slant, d.y - d.l);
+        for (const far of [true, false]) {
+          ctx.strokeStyle = far ? (storm ? 'rgba(196,210,232,0.22)' : 'rgba(206,220,240,0.2)')
+            : storm ? 'rgba(200,214,235,0.46)' : pour ? 'rgba(214,228,246,0.44)' : 'rgba(210,225,245,0.36)';
+          ctx.lineWidth = far ? 0.8 : p.cond === 'drizzle' ? 0.8 : pour ? 1.35 : 1.15;
+          ctx.beginPath();
+          for (const d of drops) {
+            if (d.far !== far) continue;
+            d.y += speed * d.v * dt;
+            d.x += speed * d.v * dt * slant;
+            if (d.y > H + 20) { d.y = -20 - Math.random() * 60; d.x = Math.random() * (W + 200) - 100; }
+            if (d.x > W + 50) d.x -= W + 100;
+            if (d.x < -50) d.x += W + 100;
+            ctx.moveTo(d.x, d.y);
+            ctx.lineTo(d.x - d.l * slant, d.y - d.l);
+          }
+          ctx.stroke();
         }
-        ctx.stroke();
+        if (haze) { ctx.fillStyle = haze; ctx.fillRect(0, H * 0.35, W, H * 0.65); }
       }
       /* snow (and the snow in sleet): drifting and swaying, nearer flakes bigger, brighter, faster */
       if (flakes.length) {
@@ -412,4 +437,150 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
       <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, rgba(0,0,0,0.18) 0%, rgba(0,0,0,0) 22%, rgba(0,0,0,0) 70%, rgba(0,0,0,0.22) 100%)' }} />
     </div>
   );
+}
+
+/* ── rain on the cards ──────────────────────────────────────────────────────────
+   While it rains, drops land on the top edge of the page's first row of glass cards and bounce
+   off it in a few fine beads, the way they do on the iPhone's weather cards: the three cards
+   side by side on a wide screen, the one card on a phone (whichever cards share the highest top).
+   One fixed canvas over the page draws them at the cards' edges as the page scrolls, with the
+   row found again every second, so a change of layout is followed. Nothing is drawn for snow,
+   or for readers who ask their system for reduced motion. */
+const SPLASH_CONDS = new Set(['rain', 'heavyRain', 'showers', 'heavyShowers', 'lightRain', 'drizzle', 'thunder', 'hail', 'sleet']);
+export function CardRain({ cond, rate = 0, wind = 0, wdir = 240, selector = '.lw-grid .lw-col > .lw-glass, .lw-grid .lw-tiles > .lw-glass' }) {
+  const on = SPLASH_CONDS.has(cond);
+  const cvRef = useRef(null);
+  const pRef = useRef({ cond, rate, wind, wdir });
+  useEffect(() => { pRef.current = { cond, rate, wind, wdir }; }, [cond, rate, wind, wdir]);
+  useEffect(() => {
+    const cv = cvRef.current;
+    if (!on || !cv || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return undefined;
+    const ctx = cv.getContext('2d');
+    let W = 0, H = 0, dpr = 1, raf = 0, last = performance.now();
+    let cards = [], radius = 22;
+    /* everything is kept relative to its card (x from its left, y from its top edge, up negative) */
+    let drops = [], beads = [], marks = [];
+    const resize = () => {
+      dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      W = window.innerWidth; H = window.innerHeight;
+      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+      cv.style.width = `${W}px`; cv.style.height = `${H}px`;
+    };
+    const find = () => {
+      const all = [...document.querySelectorAll(selector)];
+      const tops = all.map((el) => el.getBoundingClientRect().top);
+      const min = Math.min(...tops);
+      cards = all.filter((_, i) => tops[i] - min < 6);
+      if (cards[0]) radius = parseFloat(getComputedStyle(cards[0]).borderTopLeftRadius) || 22;
+    };
+    const splash = (e, x, inten, slant) => {
+      marks.push({ e, x, age: 0, w: 3 + Math.random() * (4 + 6 * inten) });
+      const n = 2 + Math.floor(Math.random() * (2 + 3 * inten));
+      for (let i = 0; i < n && beads.length < 700; i++) {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        beads.push({
+          e, x, y: -0.5, bounced: false,
+          vx: side * (35 + Math.random() * (60 + 80 * inten)) + slant * 90,
+          vy: -(60 + Math.random() * (100 + 130 * inten)),
+          r: 0.55 + Math.random() * (0.6 + 0.6 * inten),
+        });
+      }
+    };
+    const frame = (now) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const p = pRef.current;
+      const inten = p.cond === 'drizzle' ? 0.12 : Math.min(1, Math.sqrt(Math.max(0.3, p.rate ?? 0) / 8));
+      const towards = Math.sin(((p.wdir ?? 240) + 180) * (Math.PI / 180)) >= 0 ? 1 : -1;
+      const slant = Math.min(0.5, (p.wind ?? 0) / 60) * towards;
+      const rects = cards.map((el) => el.getBoundingClientRect());
+      /* new drops over each edge in view, more the harder it rains */
+      rects.forEach((r, e) => {
+        const len = r.width - 2 * radius;
+        if (len <= 0 || r.top < -10 || r.top > H + 10) return;
+        for (let n = len * (0.01 + 0.085 * inten) * dt; n > 0 && drops.length < 320; n -= 1) {
+          if (n < 1 && Math.random() > n) break;
+          const y = -(16 + Math.random() * 80);                 // starts upwind, so it lands where it was aimed
+          drops.push({ e, x: radius + Math.random() * len + slant * y, y, v: 1000 + Math.random() * 400, l: 9 + Math.random() * 9 });
+        }
+      });
+      for (const d of drops) {
+        d.y += d.v * dt;
+        d.x += d.v * slant * dt;
+        if (d.y >= 0) {
+          const w = rects[d.e]?.width ?? 0;
+          if (d.x >= radius && d.x <= w - radius) splash(d.e, d.x, inten, slant);
+          d.dead = true;
+        }
+      }
+      drops = drops.filter((d) => !d.dead);
+      for (const b of beads) {
+        b.vy += 900 * dt;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        if (b.y >= 0 && b.vy > 0) {
+          const w = rects[b.e]?.width ?? 0;
+          const onGlass = b.x >= 2 && b.x <= w - 2;
+          if (onGlass && !b.bounced && b.r > 1) { b.y = -0.2; b.vy *= -0.28; b.vx *= 0.6; b.bounced = true; }
+          else if (onGlass || b.y > 40) b.dead = true;
+        }
+      }
+      beads = beads.filter((b) => !b.dead);
+      for (const m of marks) m.age += dt;
+      marks = marks.filter((m) => m.age < 0.16);
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(226,236,250,0.5)';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      for (const d of drops) {
+        const r = rects[d.e];
+        if (!r) continue;
+        const X = r.left + d.x, Y = r.top + d.y;
+        ctx.moveTo(X, Y);
+        ctx.lineTo(X - d.l * slant, Y - d.l);
+      }
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(236,244,255,0.9)';
+      ctx.beginPath();
+      for (const b of beads) {
+        const r = rects[b.e];
+        if (!r) continue;
+        const X = r.left + b.x, Y = r.top + b.y;
+        ctx.moveTo(X + b.r, Y);
+        ctx.arc(X, Y, b.r, 0, Math.PI * 2);
+      }
+      ctx.fill();
+      ctx.fillStyle = 'rgba(244,249,255,0.75)';
+      for (const m of marks) {
+        const r = rects[m.e];
+        if (!r) continue;
+        ctx.globalAlpha = 1 - m.age / 0.16;
+        ctx.beginPath();
+        ctx.ellipse(r.left + m.x, r.top + 0.5, (m.w / 2) * (1 + m.age * 4), 1.1, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      raf = requestAnimationFrame(frame);
+    };
+    resize();
+    find();
+    const refind = setInterval(find, 1000);
+    const start = () => { if (!raf && !document.hidden) { last = performance.now(); raf = requestAnimationFrame(frame); } };
+    const onVis = () => { if (document.hidden) { cancelAnimationFrame(raf); raf = 0; } else start(); };
+    const onResize = () => { resize(); find(); };
+    window.addEventListener('resize', onResize);
+    document.addEventListener('visibilitychange', onVis);
+    start();
+    return () => {
+      cancelAnimationFrame(raf);
+      clearInterval(refind);
+      window.removeEventListener('resize', onResize);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [on, selector]);
+  if (!on) return null;
+  return <canvas ref={cvRef} aria-hidden="true" style={{ position: 'fixed', inset: 0, zIndex: 2, pointerEvents: 'none' }} />;
 }

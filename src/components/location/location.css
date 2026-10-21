@@ -144,12 +144,29 @@
 .lw-range em { position: absolute; top: 50%; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 99px; background: #fff; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35); }
 .lw-day-sub { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink3); margin-top: -4px; padding-left: 2px; }
 
-/* ── rain next hours ── */
-.lw-rainbars { display: flex; align-items: flex-end; gap: 3px; height: 92px; padding-top: 6px; }
-.lw-rainbars i { flex: 1; border-radius: 4px 4px 1px 1px; background: linear-gradient(180deg, #6cc4ff, #2e8cff); min-height: 2px; opacity: 0.95; }
-.lw-rainbars i.is-snow { background: linear-gradient(180deg, #ffffff, #c9dbef); }
-.lw-rainbars i.is-dry { background: rgba(255, 255, 255, 0.16); }
-.lw-rainaxis { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--ink3); margin-top: 4px; }
+/* ── precipitation: the next hour minute by minute, or the next 12 hours ── */
+.lw-seg.lw-seg-sm { padding: 2px; border-radius: 10px; text-transform: none; letter-spacing: 0; }
+.lw-seg.lw-seg-sm button { font-size: 12px; padding: 3px 9px; border-radius: 8px; }
+.lw-psum { border-bottom: 0; padding-bottom: 0; margin-bottom: 2px; }
+.lw-pchart { position: relative; height: 116px; margin-top: 10px; touch-action: pan-y; cursor: crosshair; }
+.lw-pguide { position: absolute; left: 0; right: 62px; height: 0; border-top: 1px dashed rgba(255, 255, 255, 0.2); pointer-events: none; }
+.lw-pband { position: absolute; right: 0; width: 56px; transform: translateY(50%); font-size: 10.5px; font-weight: 600; color: var(--ink3); pointer-events: none; }
+.lw-pbars { position: absolute; left: 0; right: 62px; top: 0; bottom: 0; display: flex; align-items: flex-end; gap: 1px; border-bottom: 1px solid rgba(255, 255, 255, 0.24); }
+.lw-pbars.is-hours { gap: 4px; }
+.lw-pbars i { flex: 1; min-width: 0; border-radius: 2px 2px 0 0; background: linear-gradient(180deg, #74c8ff, #2e8cff); transition: height 0.4s ease; }
+.lw-pbars.is-hours i { border-radius: 5px 5px 1px 1px; }
+.lw-pbars i.is-snow { background: linear-gradient(180deg, #ffffff, #c9dbef); }
+.lw-pbars i.is-dry { background: rgba(255, 255, 255, 0.16); }
+.lw-pbars i.is-on { box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.85); }
+.lw-pcursor { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; border-radius: 2px; background: rgba(255, 255, 255, 0.9); pointer-events: none; }
+.lw-paxis { display: flex; justify-content: space-between; margin: 5px 62px 0 0; font-size: 11.5px; color: var(--ink3); }
+.lw-phours { display: flex; gap: 4px; margin: 5px 62px 0 0; }
+.lw-phours span { flex: 1; min-width: 0; text-align: center; font-size: 11px; line-height: 1.35; color: var(--ink3); }
+.lw-phours b { display: block; font-weight: 600; color: var(--ink2); }
+.lw-phours em { font-style: normal; font-weight: 700; color: #8fd0ff; }
+.lw-pnote { margin: 8px 0 0; min-height: 2.7em; font-size: 12.5px; line-height: 1.35; color: var(--ink3); }
+.lw-pnote b { color: var(--ink); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .lw-pbars i { transition: none; } }
 
 /* ── radar ── */
 /* the radar is one unit, map and controls together: dark here, light with .is-light (below) */

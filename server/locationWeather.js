@@ -6,7 +6,8 @@
    conditions are the 15-minute UKV + METAR analysis (mdata/now.py), "today so far" is the
    observed day it keeps, and the radar is the Met Office composite from the AWS bucket.
 
-     GET /api/location/forecast?lat=&lon=[&name=]  or  ?q=     everything the page shows
+     GET /api/location/forecast?lat=&lon=[&name=]  or  ?q=     everything the page shows, with the
+                                                                radar nowcast minute by minute for 90 minutes
      GET /api/location/search?q=                                place suggestions as you type (server/placeSearch.js)
      GET /api/location/now?p=lat,lon|lat,lon…                   now at up to 12 places (the landing cards)
      GET /api/location/radar?lat=&lon=                          past radar times, next hours' UKV rain
@@ -74,7 +75,9 @@ function frameAt(file) {
     const raw = zlib.gunzipSync(fs.readFileSync(file));
     const n = raw.readUInt32LE(0);
     const head = JSON.parse(raw.subarray(4, 4 + n).toString('utf8'));
-    f = { head, q: raw.subarray(4 + n, 4 + n + head.nx * head.ny), nx: head.nx, ny: head.ny, dx: 2000 * (head.k ?? 1), dec: decoder(head) };
+    const dec = decoder(head);
+    const lut = Float32Array.from({ length: 256 }, (_, q) => (q === 255 ? NaN : dec(q)));
+    f = { head, q: raw.subarray(4 + n, 4 + n + head.nx * head.ny), nx: head.nx, ny: head.ny, dx: 2000 * (head.k ?? 1), dec, lut };
   } catch { return null; }
   frameCache.set(key, f);
   while (frameCache.size > 24) frameCache.delete(frameCache.keys().next().value);
@@ -172,10 +175,152 @@ function forecastAt(lat, lon) {
   return { ...out, runs, units: Object.fromEntries(vars.map((v) => [v, pm.vars[v].unit])), cell: { row, col, offset_km: Math.round(Math.hypot(x - (EDGE_X + (col + 0.5) * 2000), y - (EDGE_Y - (row + 0.5) * 2000)) / 100) / 10 } };
 }
 
+/* ── the next hour and a half, minute by minute: the radar carried forward ──────
+   The Met Office composite comes every 15 minutes and reaches AWS 10 minutes after its time, so
+   the newest scan is 10 to 25 minutes old: read as "now" it lags a downpour by that much (21 Oct
+   2026: a road flooding while the page still said "Rain"). Instead the rain is followed. The last
+   three scans round the place are matched (at 4 km over 240 km, then at 2 km) to find how far the
+   rain moved in each 15 minutes, and the newest scan is carried on by that motion: the rain at
+   the place at any minute is what the scan holds upwind of it, by the motion times the time
+   since the scan. A position is less certain the further it is carried, so the read is a
+   Gaussian round that point that widens with the lead, giving the expected rate (mm/h) and the
+   chance of rain (the weighted share of the read that is raining). */
+const NC_MINUTES = 90, NC_MAX_LEAD = 120, NC_MAX_AGE = 45;                    // minutes
+const NC_WET = Math.round((Math.sqrt(0.1) / Math.sqrt(128)) * 254);          // 0.1 mm/h in the radar's square-root steps
+const radarFile = (t) => path.join(LIVE, 'radar', `${stampOf(t)}.bin`);
+
+/* the square round (row, col), `half` 1 km cells each way, as k x k blocks: each block's mean in
+   the radar's own square-root steps (so one downpour does not drown the pattern), NaN off the radar */
+function blocks(f, row, col, half, k) {
+  const n = Math.floor((2 * half + 1) / k);
+  const r0 = row - Math.floor((n * k) / 2), c0 = col - Math.floor((n * k) / 2);
+  const g = new Float32Array(n * n);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      let s = 0, m = 0;
+      for (let a = 0; a < k; a++) {
+        const r = r0 + i * k + a;
+        if (r < 0 || r >= f.ny) continue;
+        const o = r * f.nx;
+        for (let b = 0; b < k; b++) {
+          const c = c0 + j * k + b;
+          if (c < 0 || c >= f.nx) continue;
+          const q = f.q[o + c];
+          if (q !== 255) { s += q; m++; }
+        }
+      }
+      g[i * n + j] = m ? s / m : NaN;
+    }
+  }
+  return { g, n };
+}
+/* how well the newer grid matches the older one moved by (dy, dx) blocks: the correlation */
+function corr(A, B, n, dy, dx) {
+  let N = 0, sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+  for (let i = Math.max(0, dy); i < Math.min(n, n + dy); i++) {
+    for (let j = Math.max(0, dx); j < Math.min(n, n + dx); j++) {
+      const a = A[i * n + j], b = B[(i - dy) * n + (j - dx)];
+      if (Number.isNaN(a) || Number.isNaN(b)) continue;
+      N++; sa += a; sb += b; saa += a * a; sbb += b * b; sab += a * b;
+    }
+  }
+  if (N < n * n * 0.25) return -1;
+  const va = saa - (sa * sa) / N, vb = sbb - (sb * sb) / N;
+  return va > 0 && vb > 0 ? (sab - (sa * sb) / N) / Math.sqrt(va * vb) : -1;
+}
+/* the best shift within `reach` of (cy, cx), to a fraction of a block (a parabola through the peak) */
+function bestShift(A, B, n, reach, cy = 0, cx = 0) {
+  const w = 2 * reach + 1, R = new Float32Array(w * w);
+  let bi = 0;
+  for (let y = 0; y < w; y++) for (let x = 0; x < w; x++) { R[y * w + x] = corr(A, B, n, cy - reach + y, cx - reach + x); if (R[y * w + x] > R[bi]) bi = y * w + x; }
+  const by = Math.floor(bi / w), bx = bi % w, c = R[bi];
+  const vertex = (m, p) => { const d = m - 2 * c + p; return m > -1 && p > -1 && d < 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (m - p)) / d)) : 0; };
+  const fy = by > 0 && by < w - 1 ? vertex(R[(by - 1) * w + bx], R[(by + 1) * w + bx]) : 0;
+  const fx = bx > 0 && bx < w - 1 ? vertex(R[by * w + bx - 1], R[by * w + bx + 1]) : 0;
+  return { r: c, dy: cy - reach + by + fy, dx: cx - reach + bx + fx };
+}
+/* how the rain moved between two scans round a cell, in 1 km cells a minute (rows run south) */
+function motionBetween(fNew, fOld, row, col, minutes) {
+  const A4 = blocks(fNew, row, col, 120, 4), B4 = blocks(fOld, row, col, 120, 4);
+  let wet = 0;
+  for (const v of A4.g) if (v >= NC_WET) wet++;
+  if (wet < A4.n * A4.n * 0.004) return null;                                // too little rain round here to follow
+  const coarse = bestShift(A4.g, B4.g, A4.n, Math.ceil((9 * minutes) / 15));   // up to 36 km in 15 minutes
+  if (coarse.r < 0.3) return null;
+  const A2 = blocks(fNew, row, col, 80, 2), B2 = blocks(fOld, row, col, 80, 2);
+  const fine = bestShift(A2.g, B2.g, A2.n, 2, Math.round(coarse.dy * 2), Math.round(coarse.dx * 2));
+  const m = fine.r >= coarse.r - 0.05 ? { r: fine.r, dy: fine.dy * 2, dx: fine.dx * 2 } : { r: coarse.r, dy: coarse.dy * 4, dx: coarse.dx * 4 };
+  return { r: m.r, vr: m.dy / minutes, vc: m.dx / minutes };
+}
+const motionCache = new Map();
+/* the motion round a cell from the newest scans: both pairs, the newer counting double */
+function motionAt(times, row, col) {
+  const key = `${times.at(-1)}|${Math.round(row / 40)}|${Math.round(col / 40)}`;
+  if (motionCache.has(key)) return motionCache.get(key);
+  const fs3 = times.slice(-3).reverse().map((t) => ({ t: Date.parse(t), f: frameAt(radarFile(t)) }));
+  const pairs = [];
+  for (let k = 0; k + 1 < fs3.length; k++) {
+    const [a, b] = [fs3[k], fs3[k + 1]];
+    const min = (a.t - b.t) / 60e3;
+    if (!a.f || !b.f || min <= 0 || min > 30) continue;
+    const m = motionBetween(a.f, b.f, row, col, min);
+    if (m) pairs.push({ ...m, w: m.r * (k ? 1 : 2) });
+  }
+  const W = pairs.reduce((s, p) => s + p.w, 0);
+  const mv = W ? { vr: pairs.reduce((s, p) => s + p.vr * p.w, 0) / W, vc: pairs.reduce((s, p) => s + p.vc * p.w, 0) / W, r: Math.max(...pairs.map((p) => p.r)) } : null;
+  motionCache.set(key, mv);
+  while (motionCache.size > 400) motionCache.delete(motionCache.keys().next().value);
+  return mv;
+}
+function nowcastAt(lat, lon) {
+  const times = readJson(path.join(LIVE, 'radar', 'index.json'))?.times || [];
+  const t0 = times.at(-1);
+  if (!t0 || Date.now() - Date.parse(t0) > NC_MAX_AGE * 60e3) return null;
+  const f = frameAt(radarFile(t0));
+  if (!f) return null;
+  const [row, col] = cellOf(lon, lat, f.dx);
+  if (row < 0 || col < 0 || row >= f.ny || col >= f.nx || f.q[row * f.nx + col] === 255) return null;
+  const mv = motionAt(times, row, col);
+  const vr = mv?.vr ?? 0, vc = mv?.vc ?? 0;
+  const start = Math.floor(Date.now() / 60e3) * 60e3, scan = Date.parse(t0);
+  const rate = [], chance = [];
+  for (let m = 0; m <= NC_MINUTES; m++) {
+    const lead = (start + m * 60e3 - scan) / 60e3;
+    if (lead > NC_MAX_LEAD) break;
+    /* where the rain over the place at this minute is in the scan, and how sure that is: a
+       Gaussian of 0.7 km at the scan, about 3 km an hour on (wider when the motion is unknown) */
+    const sr = row - vr * lead, sc = col - vc * lead;
+    const sig = 0.7 + (mv ? 0.035 : 0.06) * lead, reach = Math.ceil(sig * 2);
+    let sw = 0, sv = 0, swet = 0;
+    for (let r = Math.floor(sr) - reach; r <= Math.ceil(sr) + reach; r++) {
+      if (r < 0 || r >= f.ny) continue;
+      for (let c = Math.floor(sc) - reach; c <= Math.ceil(sc) + reach; c++) {
+        if (c < 0 || c >= f.nx) continue;
+        const v = f.lut[f.q[r * f.nx + c]];
+        if (Number.isNaN(v)) continue;
+        const d2 = (r - sr) ** 2 + (c - sc) ** 2;
+        if (d2 > 4 * sig * sig) continue;
+        const w = Math.exp(-d2 / (2 * sig * sig));
+        sw += w; sv += w * v; if (v >= 0.1) swet += w;
+      }
+    }
+    rate.push(sw ? r2(sv / sw) : null);
+    chance.push(sw ? Math.round((swet / sw) * 100) : null);
+  }
+  /* the motion for the page's words: speed and the compass direction it is heading */
+  const kmh = mv ? Math.hypot(vr, vc) * 60 * (f.dx / 1000) : null;
+  return {
+    scan: t0, start: new Date(start).toISOString(), step: 1, rate, chance,
+    motion: mv ? { kmh: Math.round(kmh), towards: Math.round(((Math.atan2(vc, -vr) * 180) / Math.PI + 360) % 360) } : null,
+  };
+}
+
+const tryNowcast = (lat, lon) => { try { return nowcastAt(lat, lon); } catch { return null; } };   // never costs the page its forecast
+
 /* ── now and today so far ──────────────────────────────────────────────────── */
 const NOW_VARS = ['t2', 'td2', 'rh2', 'wind10', 'wdir10', 'gust10', 'mslp', 'feels', 'windchill', 'tcc'];
 const stampOf = (iso) => iso.replace(/[-:]/g, '').slice(0, 13);              // 2026-10-20T17:15 -> 20261020T1715
-function nowAt(lat, lon) {
+function nowAt(lat, lon, nc = tryNowcast(lat, lon)) {
   const cat = readJson(path.join(LIVE, 'catalog.json'));
   const out = {};
   let valid = null;
@@ -192,11 +337,16 @@ function nowAt(lat, lon) {
      dropped, so the page uses the forecast hour, and so is a radar scan over 45 minutes old. */
   const age = (t) => Date.now() - Date.parse(t);
   if (valid && age(valid) > 90 * 60e3) { for (const k of Object.keys(out)) delete out[k]; valid = null; }
-  /* is it raining there now: the newest radar frame at the place */
-  const rt = readJson(path.join(LIVE, 'radar', 'index.json'))?.times?.at(-1);
-  if (rt && age(rt) <= 45 * 60e3) {
-    const rain = sample(frameAt(path.join(LIVE, 'radar', `${stampOf(rt)}.bin`)), lon, lat);
-    if (rain != null) { out.radar = r2(rain); out.radar_valid = rt; }
+  /* is it raining there now: the radar carried forward to this minute (above), or failing that
+     the newest scan at the place */
+  if (nc?.rate[0] != null) {
+    out.radar = nc.rate[0]; out.radar_valid = nc.start; out.radar_scan = nc.scan;
+  } else {
+    const rt = readJson(path.join(LIVE, 'radar', 'index.json'))?.times?.at(-1);
+    if (rt && age(rt) <= NC_MAX_AGE * 60e3) {
+      const rain = sample(frameAt(radarFile(rt)), lon, lat);
+      if (rain != null) { out.radar = r2(rain); out.radar_valid = rt; out.radar_scan = rt; }
+    }
   }
   if (valid) return { valid, ...out };
   return out.radar != null ? out : null;
@@ -302,8 +452,9 @@ export function mountLocationWeather(app) {
     try { fc = forecastAt(lat, lon); } catch { fc = { error: 'read' }; }
     if (fc.error === 'outside') return res.json({ code: 'OUTSIDE_UK', resolvedName: name });
     if (fc.error) return res.status(503).json({ error: 'The Met Office UKV forecast is being prepared. Try again in a few minutes.' });
+    const nc = tryNowcast(lat, lon);                                         // null: the newest scan and the hourly forecast
     res.set('Cache-Control', 'no-cache');
-    res.json({ location: { name, lat, lon, country }, forecast: fc, now: nowAt(lat, lon), observed: observedAt(lat, lon), generated: new Date().toISOString() });
+    res.json({ location: { name, lat, lon, country }, forecast: fc, now: nowAt(lat, lon, nc), nowcast: nc, observed: observedAt(lat, lon), generated: new Date().toISOString() });
   });
 
   app.get('/api/location/search', async (req, res) => {

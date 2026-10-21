@@ -5,7 +5,9 @@
      • the hero: the temperature now, from the 15-minute UKV + station analysis
      • weather warnings whose area covers the place
      • the hourly strip to T+120 (hourly to T+54, then three-hourly, as UKV publishes)
-     • rain in the next 12 hours, when there is any
+     • precipitation, when there is any: the next hour minute by minute (the Met Office radar
+       carried forward by the rain's own motion), or the next 12 hours from UKV
+     • rain splashing on the top row of cards while it rains (CardRain in SkyBackdrop.jsx)
      • the days, with their ranges on one shared scale
      • the Met Office radar for the past three hours and UKV rain for the next hours
      • fourteen detail tiles and ten interactive charts
@@ -22,7 +24,7 @@ import LocationWarnings from '@/components/location/LocationWarnings';
 import LocationRadar from '@/components/location/LocationRadar';
 import LocationTiles from '@/components/location/LocationTiles';
 import LocationCharts, { tempColour } from '@/components/location/LocationCharts';
-import SkyBackdrop, { skyDarkness } from '@/components/location/SkyBackdrop';
+import SkyBackdrop, { CardRain, skyDarkness } from '@/components/location/SkyBackdrop';
 import SkyPreview, { PREVIEW_START, previewSky } from '@/components/location/SkyPreview';
 import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
 import WxIcon from '@/components/location/WxIcon';
@@ -31,9 +33,10 @@ import { currentUser, loadRecent, rememberSearch, forgetSearch, clearRecent } fr
 import { fetchAllWarningsForPoint } from '@/lib/locationWarnings';
 import {
   fetchLocation, shape, condLabel, isWet, nextHoursText, dayText, hhmm, hourOf, sunElevation, compass,
+  minutelyText, wetMinute, bandOf,
 } from '@/lib/ukvLocation';
 
-const REFRESH_MS = 10 * 60e3;
+const REFRESH_MS = 5 * 60e3;                       // a new radar scan every 15 minutes: the next hour follows each one
 const runName = (iso) => {
   const d = new Date(iso);
   return `${String(d.getUTCHours()).padStart(2, '0')}Z ${d.toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' })}`;
@@ -103,31 +106,115 @@ function HourlyCard({ model, T, stripRef }) {
   );
 }
 
-/* ── rain in the next 12 hours (only when there is some) ─────────────────── */
-function RainSoonCard({ model }) {
+/* ── precipitation: the next hour minute by minute, or the next 12 hours (only when there is some) ──
+   The next hour is the Met Office radar carried forward by the rain's own motion (the server's
+   nowcast); the 12 hours are UKV. Both use one scale with equal room for light, moderate and
+   heavy (square root up to heavy at 4 mm/h, compressed above), so a downpour reads as one. */
+const barHeight = (r) => { if (!(r > 0)) return 0; const s = Math.sqrt(r); return s < 2 ? s / 3 : Math.min(1, (s + 2) / 6); };
+const BAND_WORDS = ['Dry', 'Light', 'Moderate', 'Heavy'];
+const HEADING = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+function PrecipGuides() {
+  return (
+    <>
+      {[1, 4].map((r) => <i key={r} className="lw-pguide" style={{ bottom: `${barHeight(r) * 100}%` }} />)}
+      {BAND_WORDS.slice(1).map((w, k) => <span key={w} className="lw-pband" style={{ bottom: `${(k + 0.5) * (100 / 3)}%` }}>{w}</span>)}
+    </>
+  );
+}
+function PrecipCard({ model }) {
+  const [view, setView] = useState(null);                         // null: the hour when rain is near, else the 12 hours
+  const [hover, setHover] = useState(null);
+  const barsRef = useRef(null);
+  const mm = model.minutely;
   const hs = model.full.filter((h) => h.t > Date.now() - 30 * 60e3).slice(0, 12);
-  const wet = hs.filter((h) => isWet(h.cond));
-  if (!wet.length || hs.length < 4) return null;
-  const rate = (h) => (h.span > 0 ? (h.precip ?? 0) / h.span : h.precipRate ?? 0);
-  const peak = wet.reduce((a, b) => (rate(b) > rate(a) ? b : a));
-  const first = wet[0];
+  const wetHours = hs.filter((h) => isWet(h.cond));
+  const wetSoon = !!mm?.mins.some(wetMinute);
+  if (!wetSoon && !(wetHours.length && hs.length >= 4)) return null;
+  const v = mm ? view || (wetSoon || !wetHours.length ? 'hour' : 'day') : 'day';
   const nowWet = isWet(model.now.cond);
-  const heaviest = peak === first || peak === hs[0] ? '' : `, heaviest around ${hhmm(peak.t)}`;
-  const head = nowWet
-    ? `${condLabel(model.now.cond, true)} now${heaviest}.`
-    : `${condLabel(first.cond, first.isDay)} from about ${hhmm(first.t)}${heaviest}.`;
+  const nowLabel = nowWet ? condLabel(model.now.cond, true) : null;
+  const pick = (list) => (e) => {
+    const r = barsRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setHover(Math.max(0, Math.min(list.length - 1, Math.floor(((e.clientX - r.left) / r.width) * list.length))));
+  };
+
+  let body;
+  if (v === 'hour') {
+    const { mins } = mm;
+    const word = (b) => (b ? `${BAND_WORDS[b]} ${mm.snow ? 'snow' : 'rain'}` : 'Dry');
+    const hm = hover != null ? mins[hover] : null;
+    const motion = mm.motion && mm.motion.kmh >= 3 ? `, the rain moving ${HEADING[Math.round(mm.motion.towards / 45) % 8]} at ${Math.round(mm.motion.kmh / 1.609)} mph` : '';
+    body = (
+      <>
+        <p className="lw-summary lw-psum">{minutelyText(mm, nowLabel)}</p>
+        <div className="lw-pchart" onPointerMove={pick(mins)} onPointerDown={pick(mins)} onPointerLeave={() => setHover(null)}
+          role="img" aria-label={`Rain each minute for the next hour. ${minutelyText(mm, nowLabel)}`}>
+          <PrecipGuides />
+          <div className="lw-pbars" ref={barsRef}>
+            {mins.map((m) => (
+              <i key={m.t} className={m.rate < 0.1 ? 'is-dry' : mm.snow ? 'is-snow' : ''}
+                style={{ height: `${Math.max(m.rate < 0.1 ? 1.5 : 4, barHeight(m.rate) * 100)}%`, opacity: m.rate < 0.1 ? 1 : 0.4 + 0.6 * (m.chance / 100) }} />
+            ))}
+            {hover != null && <b className="lw-pcursor" style={{ left: `${((hover + 0.5) / mins.length) * 100}%` }} />}
+          </div>
+        </div>
+        <div className="lw-paxis"><span>Now</span><span>15 min</span><span>30 min</span><span>45 min</span><span>{mins.length > 55 ? '60 min' : `${mins.length - 1} min`}</span></div>
+        <p className="lw-pnote">
+          {hm ? <><b>{hhmm(hm.t)}</b> · {word(bandOf(hm.rate))}{hm.rate >= 0.1 ? ` · ${hm.rate.toFixed(1)} mm/h · ${hm.chance}% chance` : ''}</>
+            : `Met Office radar at ${hhmm(mm.scan)}, carried forward to now${motion}.`}
+        </p>
+      </>
+    );
+  } else {
+    const rate = (h) => (h.span > 0 ? (h.precip ?? 0) / h.span : h.precipRate ?? 0);
+    const first = wetHours[0];
+    const peak = wetHours.length ? wetHours.reduce((a, b) => (rate(b) > rate(a) ? b : a)) : null;
+    const heaviest = !peak || peak === first || peak === hs[0] ? '' : `, heaviest around ${hhmm(peak.t)}`;
+    const head = !wetHours.length ? 'No rain in the next 12 hours.' : nowWet
+      ? `${condLabel(model.now.cond, true)} now${heaviest}.`
+      : `${condLabel(first.cond, first.isDay)} from about ${hhmm(first.t)}${heaviest}.`;
+    const total = hs.reduce((s, h) => s + (h.span > 0 ? h.precip ?? 0 : 0), 0);
+    const hh = hover != null ? hs[hover] : null;
+    body = (
+      <>
+        <p className="lw-summary lw-psum">{head}</p>
+        <div className="lw-pchart" onPointerMove={pick(hs)} onPointerDown={pick(hs)} onPointerLeave={() => setHover(null)}
+          role="img" aria-label={`Rain each hour for the next 12 hours. ${head}`}>
+          <PrecipGuides />
+          <div className="lw-pbars is-hours" ref={barsRef}>
+            {hs.map((h, k) => {
+              const r = rate(h);
+              const snowy = (h.snow ?? 0) > (h.precip ?? 0) / 2;
+              return <i key={h.t} className={`${r < 0.05 ? 'is-dry' : snowy ? 'is-snow' : ''}${hover === k ? ' is-on' : ''}`} style={{ height: `${Math.max(r < 0.05 ? 2 : 4, barHeight(r) * 100)}%` }} />;
+            })}
+          </div>
+        </div>
+        <div className="lw-phours">
+          {hs.map((h, k) => (
+            <span key={h.t}><b>{k === 0 ? 'Now' : String(hourOf(h.t)).padStart(2, '0')}</b>{h.pRain >= 10 ? <em>{h.pRain}%</em> : ' '}</span>
+          ))}
+        </div>
+        <p className="lw-pnote">
+          {hh ? <><b>{hhmm(hh.t)}</b> · {condLabel(hh.cond, hh.isDay)} · {rate(hh).toFixed(1)} mm/h{hh.pRain != null ? ` · ${hh.pRain}% chance within 10 km` : ''}</>
+            : total >= 0.1 ? `About ${total >= 10 ? Math.round(total) : total.toFixed(1)} mm in the next 12 hours (Met Office UKV). The % is the chance of rain within 10 km.`
+              : 'Met Office UKV. The % is the chance of rain within 10 km.'}
+        </p>
+      </>
+    );
+  }
   return (
     <div className="lw-glass lw-card">
-      <div className="lw-title"><CloudRain />Rain in the next 12 hours</div>
-      <p className="lw-summary" style={{ borderBottom: 0, paddingBottom: 0, marginBottom: 4 }}>{head}</p>
-      <div className="lw-rainbars" aria-label="Rain each hour for the next 12 hours">
-        {hs.map((h) => {
-          const r = rate(h);
-          const snowy = (h.snow ?? 0) > (h.precip ?? 0) / 2;
-          return <i key={h.t} title={`${hhmm(h.t)}: ${r.toFixed(1)} mm/h`} className={r < 0.05 ? 'is-dry' : snowy ? 'is-snow' : ''} style={{ height: `${Math.max(3, Math.min(100, (Math.sqrt(r) / Math.sqrt(8)) * 100))}%` }} />;
-        })}
+      <div className="lw-title">
+        <CloudRain />Precipitation
+        {mm && (
+          <span className="lw-seg lw-seg-sm" role="group" aria-label="Precipitation view" style={{ marginLeft: 'auto' }}>
+            <button type="button" aria-pressed={v === 'hour'} onClick={() => { setView('hour'); setHover(null); }}>Next hour</button>
+            <button type="button" aria-pressed={v === 'day'} onClick={() => { setView('day'); setHover(null); }}>12 hours</button>
+          </span>
+        )}
       </div>
-      <div className="lw-rainaxis"><span>Now</span><span>{hhmm(hs[Math.floor(hs.length / 2)].t)}</span><span>{hhmm(hs[hs.length - 1].t)}</span></div>
+      {body}
     </div>
   );
 }
@@ -284,7 +371,7 @@ export default function LocationForecast() {
     }
   }, []);
 
-  /* keep it current: re-read every ten minutes, and re-derive "now" every minute */
+  /* keep it current: re-read every five minutes, and re-derive "now" (and the next hour) every minute */
   useEffect(() => {
     if (!place) return undefined;
     const a = setInterval(() => run(place, { quiet: true }), REFRESH_MS);
@@ -367,6 +454,7 @@ export default function LocationForecast() {
   return (
     <div className="lw-page" data-sky={dark < 0.3 ? 'bright' : dark < 0.55 ? 'mid' : 'dark'}>
       <SkyBackdrop {...sky} />
+      {model && !hidePage && <CardRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
 
       {outside && (
         <div role="dialog" aria-modal="true" aria-labelledby="lw-out" onClick={() => setOutside(null)}
@@ -450,7 +538,7 @@ export default function LocationForecast() {
             <div className="lw-grid">
               <div className="lw-col">
                 <HourlyCard model={model} T={T} stripRef={stripRef} />
-                <RainSoonCard model={model} />
+                <PrecipCard model={model} />
                 <DaysCard model={model} T={T} dayIdx={dayIdx} onDay={pickDay} />
                 <div className="lw-glass lw-card">
                   <div className="lw-title"><Radar />Rain radar<span className="lw-title-aside">Met Office 1 km · then UKV</span></div>
@@ -471,6 +559,7 @@ export default function LocationForecast() {
               {runs.length ? ` — ${runs.map((r) => `${runName(r.run)} run to T+${r.top}`).join(', then ')}` : ''}.
               {model.cell ? ` The nearest model grid point is ${model.cell.offset_km} km away.` : ''}
               <br />Now: UKV analysis corrected by station reports every 15 minutes. Radar: Met Office 1 km composite.
+              The next hour: the newest radar scan carried forward by the way the rain has moved over the last half hour.
               Chance of rain counts model rain within 10 km; chance of lightning within 16 km.
             </p>
           </>
