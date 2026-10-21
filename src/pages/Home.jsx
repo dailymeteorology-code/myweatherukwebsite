@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -593,12 +594,15 @@ export default function Home() {
     setSummerThemeOn(settings.summer_theme);
     try { localStorage.setItem(SUMMER_KEY, String(settings.summer_theme)); } catch { /* private mode */ }
   }, [settings?.summer_theme]);
-  /* /#forecasts (the admin overview's "Add a forecast graphic") lands on the graphics */
+  /* /#forecasts (the menu's "MyWeatherUK Graphics", and the admin overview's "Add a forecast
+     graphic") lands on the graphics — from another page, and from this one, where following the
+     link does not remount the page, so it watches the location rather than reading it once. */
+  const location = useLocation();
   useEffect(() => {
-    if (window.location.hash !== '#forecasts') return undefined;
-    const t = setTimeout(() => document.getElementById('forecasts')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 700);
+    if (location.hash !== '#forecasts') return undefined;
+    const t = setTimeout(() => document.getElementById('forecasts')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 500);
     return () => clearTimeout(t);
-  }, []);
+  }, [location.hash, location.key]);
 
   const { data: featuredGraphics = [] } = useQuery({
     queryKey: ['featuredGraphics'],

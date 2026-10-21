@@ -32,7 +32,11 @@ import { useLogo } from '@/components/MobileHeaderLogo';
 
 /* ── the map of the site ────────────────────────────────────────────────────
  * `blurb` is what makes a mega-menu worth having over a flat list: a visitor
- * can tell TCM Outlooks from Weather Patterns without clicking both.
+ * can tell TCM Outlooks from Weather Patterns without clicking both. Each one
+ * says what you will find on the page and where it comes from, in a line or
+ * two — and has to be kept true when the page changes: several had drifted
+ * (Model Data has not been "UKMO, UKV and ECMWF" since it moved to five
+ * models; Lightning is worldwide, recorded round the clock, with AI warnings).
  * `unavailable` dims an entry and badges it "Issues", for a page that is
  * reachable but known to be showing bad data. Nothing carries it at the
  * moment — Lightning Map and TCM Outlooks did, and no longer do.
@@ -42,51 +46,54 @@ const GROUPS = [
     id: 'forecast',
     label: 'Forecast',
     items: [
-      { label: 'Home', path: '/', icon: Home, blurb: 'Warnings, radar and today at a glance' },
-      { label: 'Location Weather', path: '/LocationWeather', icon: MapPin, blurb: 'Hour-by-hour for any UK place' },
-      { label: 'Model Data', path: '/ModelData', icon: Database, blurb: 'UKMO, UKV and ECMWF charts' },
-      { label: 'Lightning', path: '/Lightning', icon: CloudLightning, blurb: 'Live strikes across the UK and Europe' },
-      { label: 'TCM Outlooks', path: '/TCMOutlooks', icon: Zap, blurb: 'Thunderstorm risk areas by day' },
-      { label: 'Weather Patterns', path: '/WeatherPatterns', icon: Layers, blurb: 'Three scenarios for each of the next two weeks' },
-      { label: 'Weather Scenarios', path: '/WeatherScenarios', icon: Radar, blurb: 'Every season of UK weather' },
+      { label: 'Home', path: '/', icon: Home, blurb: 'Warnings, rain radar, live lightning and the weather around the world' },
+      { label: 'Location Weather', path: '/LocationWeather', icon: MapPin, blurb: 'Hour-by-hour forecast for anywhere in the UK and Ireland, from the Met Office UKV' },
+      { label: 'Model Data', path: '/ModelData', icon: Database, blurb: 'Maps from UKV, Met Office Global, ECMWF and GFS, plus live radar and satellite' },
+      { label: 'Lightning', path: '/Lightning', icon: CloudLightning, blurb: 'Live strikes worldwide, past days to replay, and AI lightning warnings' },
+      { label: 'TCM Outlooks', path: '/TCMOutlooks', icon: Zap, blurb: 'Where thunderstorms are likely in the coming days, from our TCM model' },
+      { label: 'Weather Patterns', path: '/WeatherPatterns', icon: Layers, blurb: 'The three ways each of the next two weeks could go, with the chance of each' },
+      { label: 'Weather Scenarios', path: '/WeatherScenarios', icon: Radar, blurb: 'A library of the weather the UK can get, month by month and region by region' },
     ],
   },
   {
     id: 'graphics',
     label: 'Graphics',
+    /* What a visitor reads first: the graphics in force, then the past ones, then the tools. */
     items: [
-      { label: 'Graphics', path: '/Graphics', icon: ImageIcon, blurb: 'Published forecast graphics' },
-      { label: 'Thunderstorm Studio', path: '/ThunderstormStudio', icon: Zap, blurb: 'Build your own outlook graphic' },
-      { label: 'MyWeatherUK Graphics', path: '/MyWeatherGraphics', icon: ImageIcon, blurb: 'The full graphics library' },
-      { label: 'Archive', path: '/MyWeatherArchive', icon: Archive, blurb: 'Everything previously published' },
+      /* The graphics in force live on the home page (it has the section the admin overview
+         links to as well). This went to /MyWeatherGraphics, which drew nothing at all. */
+      { label: 'MyWeatherUK Graphics', path: '/#forecasts', icon: ImageIcon, blurb: 'Our forecast graphics in force right now' },
+      { label: 'Archive', path: '/MyWeatherArchive', icon: Archive, blurb: 'Every graphic we have issued, to look back on once it has ended' },
+      { label: 'Thunderstorm Studio', path: '/ThunderstormStudio', icon: Zap, blurb: 'Make your own thunderstorm outlook graphic and save it to your account' },
+      { label: 'Graphics', path: '/Graphics', icon: ImageIcon, blurb: 'Add, edit and design graphics, with the graphic studio tools' },
     ],
   },
   {
     id: 'verification',
     label: 'Verification',
     items: [
-      { label: 'Forecast Verification', path: '/ForecastVerification', icon: BarChart3, blurb: 'Forecast levels vs observed strikes' },
-      { label: 'TCM Verification', path: '/TCMVerification', icon: Target, blurb: 'Past events: outlook vs reality' },
-      { label: 'TCM Archive', path: '/TCMArchive', icon: Archive, blurb: 'Previous model runs' },
-      { label: 'Weather Criteria', path: '/WeatherCriteria', icon: ClipboardCheck, blurb: 'How each risk level is defined' },
-      { label: 'Model Feedback', path: '/ModelFeedback', icon: Gauge, blurb: 'Accuracy log', adminOnly: true },
+      { label: 'Forecast Verification', path: '/ForecastVerification', icon: BarChart3, blurb: 'How accurate our thunderstorm forecasts are, checked daily against real strikes' },
+      { label: 'TCM Verification', path: '/TCMVerification', icon: Target, blurb: 'Past thunderstorm days: what the outlook said, and where lightning struck' },
+      { label: 'TCM Archive', path: '/TCMArchive', icon: Archive, blurb: 'Every past TCM outlook by date, with each model run behind it' },
+      { label: 'Weather Criteria', path: '/WeatherCriteria', icon: ClipboardCheck, blurb: 'The thresholds behind each thunderstorm and snow risk level' },
+      { label: 'Model Feedback', path: '/ModelFeedback', icon: Gauge, blurb: 'Log of forecast accuracy against the weather that happened', adminOnly: true },
     ],
   },
   {
     id: 'news',
     label: 'News',
     items: [
-      { label: 'News', path: '/News', icon: Newspaper, blurb: 'Analysis and stories' },
-      { label: 'Newsletter', path: '/NewsletterSignup', icon: Mail, blurb: 'Outlooks straight to your inbox' },
+      { label: 'News', path: '/News', icon: Newspaper, blurb: 'Weather stories and analysis for the UK and Ireland' },
+      { label: 'Newsletter', path: '/NewsletterSignup', icon: Mail, blurb: 'Free weekly storm outlooks, model reports and high-risk alerts by email' },
     ],
   },
 ];
 
 /** Account lives apart from the content groups, on the right of the bar. */
 const ACCOUNT_ITEMS = [
-  { label: 'Settings', path: '/Settings', icon: SettingsIcon, blurb: 'Units, theme and notifications' },
-  { label: 'Subscription', path: '/Subscription', icon: CreditCard, blurb: 'Manage your plan' },
-  { label: 'Admin', path: '/AdminSettings', icon: ShieldAlert, blurb: 'Site administration', adminOnly: true },
+  { label: 'Settings', path: '/Settings', icon: SettingsIcon, blurb: 'Units, language and your account' },
+  { label: 'Subscription', path: '/Subscription', icon: CreditCard, blurb: 'Plans, what each one includes, and API credits' },
+  { label: 'Admin', path: '/AdminSettings', icon: ShieldAlert, blurb: 'Run the site: warnings, graphics, news and settings', adminOnly: true },
 ];
 
 function visible(items, { isAdmin, isBeta, isAuthenticated }) {
@@ -103,7 +110,7 @@ const isActivePath = (pathname, path) =>
 
 /* ── one link, shared by the desktop panel and the mobile sheet ──────────── */
 
-function NavLink({ item, isDark, active, onNavigate, compact }) {
+function NavLink({ item, isDark, active, onNavigate }) {
   const Icon = item.icon;
   const muted = item.unavailable;
 
@@ -116,7 +123,7 @@ function NavLink({ item, isDark, active, onNavigate, compact }) {
         display: 'flex',
         alignItems: 'flex-start',
         gap: 11,
-        padding: compact ? '10px 12px' : '10px 12px',
+        padding: '10px 12px',
         borderRadius: 10,
         textDecoration: 'none',
         background: active ? (isDark ? 'rgba(56,189,248,0.10)' : 'rgba(2,132,199,0.07)') : 'transparent',
@@ -169,14 +176,16 @@ function NavLink({ item, isDark, active, onNavigate, compact }) {
             </span>
           )}
         </span>
-        {!compact && item.blurb && (
+        {item.blurb && (
+          /* A shade lighter (dark) and darker (light) than it was: slate-500 on the dark panel
+             and slate-400 on white were both too faint to read comfortably at this size. */
           <span
             style={{
               display: 'block',
-              marginTop: 2,
-              fontSize: 11.5,
-              lineHeight: 1.35,
-              color: isDark ? '#64748b' : '#94a3b8',
+              marginTop: 3,
+              fontSize: 12,
+              lineHeight: 1.4,
+              color: isDark ? '#94a3b8' : '#64748b',
             }}
           >
             {item.blurb}
@@ -530,7 +539,7 @@ function MobileSheet({ roles }) {
                         fontWeight: 800,
                         letterSpacing: '0.11em',
                         textTransform: 'uppercase',
-                        color: isDark ? '#475569' : '#94a3b8',
+                        color: isDark ? '#64748b' : '#94a3b8',
                       }}
                     >
                       {group.label}

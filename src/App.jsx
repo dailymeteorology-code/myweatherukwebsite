@@ -22,7 +22,6 @@ import TCMArchive from '@/pages/TCMArchive';
 import MyWeatherArchive from '@/pages/MyWeatherArchive';
 import WeatherScenarios from '@/pages/WeatherScenarios';
 import ForecastVerification from '@/pages/ForecastVerification';
-import MyWeatherGraphics from '@/pages/MyWeatherGraphics';
 import ThunderstormStudio from '@/pages/ThunderstormStudio';
 import LiveStream from '@/pages/LiveStream';
 import ModelFeedback from '@/pages/ModelFeedback';
@@ -538,7 +537,8 @@ const AuthenticatedApp = () => {
               <Route path="/MyWeatherArchive" element={<LayoutWrapper currentPageName="MyWeatherArchive"><MyWeatherArchive /></LayoutWrapper>} />
               <Route path="/WeatherScenarios" element={<LayoutWrapper currentPageName="WeatherScenarios"><WeatherScenarios /></LayoutWrapper>} />
               <Route path="/ForecastVerification" element={<LayoutWrapper currentPageName="ForecastVerification"><ForecastVerification /></LayoutWrapper>} />
-              <Route path="/MyWeatherGraphics" element={<LayoutWrapper currentPageName="MyWeatherGraphics"><MyWeatherGraphics /></LayoutWrapper>} />
+              {/* the page here drew nothing; the graphics in force are on the home page */}
+              <Route path="/MyWeatherGraphics" element={<Navigate to="/#forecasts" replace />} />
               <Route path="/ThunderstormStudio" element={<LayoutWrapper currentPageName="ThunderstormStudio"><ThunderstormStudio /></LayoutWrapper>} />
               <Route path="/ModelFeedback" element={<LayoutWrapper currentPageName="ModelFeedback"><ModelFeedback /></LayoutWrapper>} />
               <Route path="/TCMVerification" element={<LayoutWrapper currentPageName="TCMVerification"><TCMVerification /></LayoutWrapper>} />
