@@ -1,0 +1,38 @@
+# Lightning capture on GitHub's servers, so no strike is lost while the PC (and the site) is off.
+#
+# One run listens at a time (tools/lightning-capture/capture.mjs): Blitzortung live and the Met
+# Office every 5 minutes, merged every 15 minutes into the `lightning-archive` release, one file
+# per UTC day. A run lasts about 5.5 hours and starts the next one half an hour before it ends;
+# the schedule below only restarts the chain if a hand-over was ever dropped (a scheduled run
+# exits at once when another is listening). The site's server fills any time it was off from the
+# release (server/lightning). Public repository: the runner minutes are free.
+name: Lightning capture
+
+on:
+  schedule:
+    - cron: '11,41 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['tools/lightning-capture/**', '.github/workflows/lightning.yml']
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tools/lightning-capture
+            server/aiw
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tools/lightning-capture/capture.mjs
