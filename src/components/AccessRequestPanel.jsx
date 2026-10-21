@@ -6,12 +6,10 @@ import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { toast } from 'sonner';
-import { useTheme } from '@/components/ThemeContext';
 
 export default function AccessRequestPanel() {
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [adminNotes, setAdminNotes] = useState('');
-  const { isDark } = useTheme();
   const queryClient = useQueryClient();
 
   const { data: requests = [], isLoading } = useQuery({
@@ -117,28 +115,24 @@ export default function AccessRequestPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className={`text-lg font-semibold mb-4 ${isDark ? 'text-white' : 'text-slate-900'}`}>
+        <h3 className="text-lg font-semibold mb-4 ad-ink">
           Pending Requests ({pendingRequests.length})
         </h3>
         {pendingRequests.length === 0 ? (
-          <p className={`text-sm ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>No pending requests</p>
+          <p className="text-sm ad-ink-mid">No pending requests</p>
         ) : (
           <div className="space-y-3">
             {pendingRequests.map((request) => (
               <Card
                 key={request.id}
-                className={`p-4 cursor-pointer transition-colors ${
-                  selectedRequest?.id === request.id
-                    ? isDark ? 'bg-sky-500/20 border-sky-500' : 'bg-sky-50 border-sky-300'
-                    : isDark ? 'bg-slate-800 hover:bg-slate-700' : 'bg-white hover:bg-slate-50'
-                }`}
+                className={`p-4 cursor-pointer transition-colors ad-legacy-card${selectedRequest?.id === request.id ? ' ad-picked' : ''}`}
                 onClick={() => setSelectedRequest(request)}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
-                    <p className={`font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>{request.full_name}</p>
-                    <p className={`text-sm ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>{request.email}</p>
-                    <p className={`text-xs mt-1 ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>@{request.social_media_handle}</p>
+                    <p className="font-semibold ad-ink">{request.full_name}</p>
+                    <p className="text-sm ad-ink-mid">{request.email}</p>
+                    <p className="text-xs mt-1 ad-ink-dim">@{request.social_media_handle}</p>
                   </div>
                   {getStatusBadge(request.status)}
                 </div>
@@ -149,29 +143,29 @@ export default function AccessRequestPanel() {
       </div>
 
       {selectedRequest && selectedRequest.status === 'pending' && (
-        <Card className={`p-6 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
-          <h4 className={`text-lg font-semibold mb-4 ${isDark ? 'text-white' : 'text-slate-900'}`}>Review Request</h4>
+        <Card className="p-6 ad-legacy-card">
+          <h4 className="text-lg font-semibold mb-4 ad-ink">Review Request</h4>
           <div className="space-y-3 mb-4">
             <div>
-              <p className={`text-xs font-semibold uppercase ${isDark ? 'text-slate-500' : 'text-slate-600'}`}>Full Name</p>
-              <p className={isDark ? 'text-white' : 'text-slate-900'}>{selectedRequest.full_name}</p>
+              <p className="text-xs font-semibold uppercase ad-ink-dim">Full Name</p>
+              <p className="ad-ink">{selectedRequest.full_name}</p>
             </div>
             <div>
-              <p className={`text-xs font-semibold uppercase ${isDark ? 'text-slate-500' : 'text-slate-600'}`}>Email</p>
-              <p className={isDark ? 'text-white' : 'text-slate-900'}>{selectedRequest.email}</p>
+              <p className="text-xs font-semibold uppercase ad-ink-dim">Email</p>
+              <p className="ad-ink">{selectedRequest.email}</p>
             </div>
             <div>
-              <p className={`text-xs font-semibold uppercase ${isDark ? 'text-slate-500' : 'text-slate-600'}`}>Reason / Social Handle</p>
-              <p className={isDark ? 'text-white' : 'text-slate-900'}>{selectedRequest.social_media_handle}</p>
+              <p className="text-xs font-semibold uppercase ad-ink-dim">Reason / Social Handle</p>
+              <p className="ad-ink">{selectedRequest.social_media_handle}</p>
             </div>
           </div>
           <div className="mb-4">
-            <label className={`block text-sm font-medium mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>Admin Notes (optional)</label>
+            <label className="block text-sm font-medium mb-2 ad-ink-mid">Admin Notes (optional)</label>
             <Textarea
               value={adminNotes}
               onChange={(e) => setAdminNotes(e.target.value)}
               placeholder="Add notes or rejection reason..."
-              className={`min-h-20 ${isDark ? 'bg-slate-700 border-slate-600 text-white' : ''}`}
+              className="min-h-20 ad-field-bg"
             />
           </div>
           <div className="flex gap-2">
@@ -189,14 +183,14 @@ export default function AccessRequestPanel() {
 
       {processedRequests.length > 0 && (
         <div>
-          <h3 className={`text-lg font-semibold mb-4 ${isDark ? 'text-white' : 'text-slate-900'}`}>Processed ({processedRequests.length})</h3>
+          <h3 className="text-lg font-semibold mb-4 ad-ink">Processed ({processedRequests.length})</h3>
           <div className="space-y-2">
             {processedRequests.map((request) => (
-              <Card key={request.id} className={`p-3 ${isDark ? 'bg-slate-800' : 'bg-slate-50'}`}>
+              <Card key={request.id} className="p-3 ad-legacy-card">
                 <div className="flex items-start justify-between">
                   <div>
-                    <p className={`font-medium text-sm ${isDark ? 'text-white' : 'text-slate-900'}`}>{request.full_name}</p>
-                    <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>{request.email}</p>
+                    <p className="font-medium text-sm ad-ink">{request.full_name}</p>
+                    <p className="text-xs ad-ink-mid">{request.email}</p>
                   </div>
                   {getStatusBadge(request.status)}
                 </div>

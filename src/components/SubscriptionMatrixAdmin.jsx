@@ -10,22 +10,23 @@
    Saves the whole config as one JSON blob via saveSubConfig().
    ════════════════════════════════════════════════════════════════════════════ */
 import React, { useEffect, useState } from 'react';
+import { AC, ADMIN_FONT, tint } from '@/components/admin/adminTheme';
 import { Plus, Trash2, Save, Loader2, Check, X as XIcon, Star, RotateCcw, ExternalLink } from 'lucide-react';
 import { loadSubConfig, saveSubConfig, DEFAULT_SUB_CONFIG, cellFor } from '@/lib/subscriptionConfig';
 
+/* the admin colours: CSS variables that Admin Settings sets for its light and dark themes */
 const C = {
-  text: '#f1f5f9', mid: '#94a3b8', faint: '#64748b', dim: '#475569',
-  surface: 'rgba(255,255,255,0.03)', surface2: 'rgba(255,255,255,0.05)',
-  border: 'rgba(255,255,255,0.09)', border2: 'rgba(255,255,255,0.16)',
-  sky: '#38bdf8', green: '#22c55e', red: '#ef4444', violet: '#a78bfa', amber: '#f59e0b',
+  text: AC.text, mid: AC.textMid, faint: AC.textDim, dim: AC.textFaint,
+  surface: AC.surface, surface2: AC.surface2, border: AC.border2, border2: AC.border3,
+  sky: AC.sky, green: AC.green, red: AC.red, violet: AC.violet, amber: AC.amber,
 };
-const FONT = "'DM Sans', system-ui, sans-serif";
+const FONT = ADMIN_FONT;
 const clone = (x) => JSON.parse(JSON.stringify(x));
 let _n = 0;
 const uid = (p) => `${p}_${Date.now().toString(36)}_${_n++}`;
 
 const inp = {
-  width: '100%', boxSizing: 'border-box', padding: '8px 11px', background: 'rgba(2,6,15,0.6)',
+  width: '100%', boxSizing: 'border-box', padding: '8px 11px', background: 'var(--ad-surface3)',
   border: `1px solid ${C.border2}`, borderRadius: 9, color: C.text, fontSize: 13, fontFamily: FONT, outline: 'none',
 };
 const btn = {
@@ -57,7 +58,7 @@ function CellEditor({ cell, onChange }) {
               style={{
                 flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 3,
                 padding: '6px 0', borderRadius: 7, cursor: 'pointer', fontFamily: FONT, fontSize: 11, fontWeight: 800,
-                background: on ? `${color}22` : 'rgba(255,255,255,0.04)',
+                background: on ? `${tint(color, '22')}` : 'rgba(255,255,255,0.04)',
                 border: `1px solid ${on ? color : 'rgba(255,255,255,0.08)'}`,
                 color: on ? color : C.faint,
               }}>
@@ -254,7 +255,7 @@ export default function SubscriptionMatrixAdmin() {
           <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 120 + tiers.length * 150 }}>
             <thead>
               <tr>
-                <th style={{ position: 'sticky', left: 0, background: '#0c1424', textAlign: 'left', padding: '12px 14px', fontSize: 11, color: C.mid, borderBottom: `1px solid ${C.border}`, minWidth: 200 }}>Product</th>
+                <th style={{ position: 'sticky', left: 0, background: 'var(--ad-bg)', textAlign: 'left', padding: '12px 14px', fontSize: 11, color: C.mid, borderBottom: `1px solid ${C.border}`, minWidth: 200 }}>Product</th>
                 {tiers.map(t => (
                   <th key={t.id} style={{ padding: '12px 10px', fontSize: 11, color: C.mid, borderBottom: `1px solid ${C.border}`, minWidth: 140 }}>{t.name || '—'}</th>
                 ))}
@@ -264,7 +265,7 @@ export default function SubscriptionMatrixAdmin() {
             <tbody>
               {products.map((p, i) => (
                 <tr key={p.id}>
-                  <td style={{ position: 'sticky', left: 0, background: '#0a1120', padding: '10px 14px', borderBottom: `1px solid ${C.border}` }}>
+                  <td style={{ position: 'sticky', left: 0, background: 'var(--ad-bg)', padding: '10px 14px', borderBottom: `1px solid ${C.border}` }}>
                     <input value={p.name} onChange={(e) => mutate(c => { c.products[i].name = e.target.value; })} style={{ ...inp, minWidth: 170 }} />
                   </td>
                   {tiers.map(t => (

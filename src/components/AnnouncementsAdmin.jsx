@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { AC, ADMIN_FONT, tint } from '@/components/admin/adminTheme';
 import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -8,17 +9,9 @@ import {
 import { toast } from 'sonner';
 
 // ─── Design tokens ─────────────────────────────────────────────────────────────
-const C = {
-  surface:   '#0c1422', surface2:  '#101c2e', surface3:  '#142030',
-  border:    'rgba(148,163,184,0.07)', border2: 'rgba(148,163,184,0.12)', border3: 'rgba(148,163,184,0.18)',
-  text:      '#f1f5f9', textMid: '#94a3b8', textDim: 'rgba(148,163,184,0.5)', textFaint: 'rgba(148,163,184,0.3)',
-  sky:       '#38bdf8', skyLow: 'rgba(56,189,248,0.06)', skyBorder: 'rgba(56,189,248,0.2)',
-  violet:    '#a78bfa', violetLow: 'rgba(167,139,250,0.08)', violetBorder: 'rgba(167,139,250,0.2)',
-  green:     '#4ade80', greenLow: 'rgba(74,222,128,0.08)',
-  amber:     '#fbbf24', amberLow: 'rgba(251,191,36,0.08)', amberBorder: 'rgba(251,191,36,0.2)',
-  red:       '#f87171', redLow: 'rgba(248,113,113,0.08)', redBorder: 'rgba(248,113,113,0.2)',
-};
-const FONT = "'Geist', 'DM Sans', system-ui, sans-serif";
+/* the admin colours: CSS variables that Admin Settings sets for its light and dark themes */
+const C = { ...AC, violetBorder: tint(AC.violet, '33'), amberBorder: tint(AC.amber, '33'), redBorder: tint(AC.red, '33') };
+const FONT = ADMIN_FONT;
 const inputBase = {
   width: '100%', boxSizing: 'border-box', padding: '10px 14px',
   background: C.surface3, border: `1px solid ${C.border2}`, borderRadius: 10,
@@ -45,7 +38,7 @@ const EMPTY = { title: '', message: '', is_active: true, priority: 'info', categ
 function DInput({ focusBorder = C.skyBorder, ...props }) {
   const [focused, setFocused] = useState(false);
   return (
-    <input {...props} style={{ ...inputBase, ...(focused ? { borderColor: focusBorder, boxShadow: `0 0 0 3px ${focusBorder}18` } : {}), ...props.style }}
+    <input {...props} style={{ ...inputBase, ...(focused ? { borderColor: focusBorder, boxShadow: `0 0 0 3px ${tint(focusBorder, '18')}` } : {}), ...props.style }}
       onFocus={e => { setFocused(true); props.onFocus?.(e); }}
       onBlur={e => { setFocused(false); props.onBlur?.(e); }} />
   );
@@ -53,7 +46,7 @@ function DInput({ focusBorder = C.skyBorder, ...props }) {
 function DTextarea({ rows = 3, focusBorder = C.skyBorder, ...props }) {
   const [focused, setFocused] = useState(false);
   return (
-    <textarea rows={rows} {...props} style={{ ...inputBase, resize: 'vertical', ...(focused ? { borderColor: focusBorder, boxShadow: `0 0 0 3px ${focusBorder}18` } : {}), ...props.style }}
+    <textarea rows={rows} {...props} style={{ ...inputBase, resize: 'vertical', ...(focused ? { borderColor: focusBorder, boxShadow: `0 0 0 3px ${tint(focusBorder, '18')}` } : {}), ...props.style }}
       onFocus={e => { setFocused(true); props.onFocus?.(e); }}
       onBlur={e => { setFocused(false); props.onBlur?.(e); }} />
   );
@@ -62,7 +55,7 @@ function DSelect({ children, ...props }) {
   const [focused, setFocused] = useState(false);
   return (
     <div style={{ position: 'relative' }}>
-      <select {...props} style={{ ...inputBase, appearance: 'none', paddingRight: 36, cursor: 'pointer', ...(focused ? { borderColor: C.skyBorder, boxShadow: `0 0 0 3px ${C.skyBorder}18` } : {}), ...props.style }}
+      <select {...props} style={{ ...inputBase, appearance: 'none', paddingRight: 36, cursor: 'pointer', ...(focused ? { borderColor: C.skyBorder, boxShadow: `0 0 0 3px ${tint(C.skyBorder, '18')}` } : {}), ...props.style }}
         onFocus={e => { setFocused(true); props.onFocus?.(e); }}
         onBlur={e => { setFocused(false); props.onBlur?.(e); }}>
         {children}
@@ -95,7 +88,7 @@ function AnnouncementRow({ a, onEdit, onDelete }) {
       onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
     >
       {/* Priority dot */}
-      <div style={{ width: 8, height: 8, borderRadius: '50%', background: pri.color, marginTop: 5, flexShrink: 0, boxShadow: `0 0 0 3px ${pri.color}20` }} />
+      <div style={{ width: 8, height: 8, borderRadius: '50%', background: pri.color, marginTop: 5, flexShrink: 0, boxShadow: `0 0 0 3px ${tint(pri.color, '20')}` }} />
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 5 }}>
@@ -112,7 +105,7 @@ function AnnouncementRow({ a, onEdit, onDelete }) {
         {[{ icon: Pencil, onClick: onEdit, hover: C.sky, low: C.skyLow }, { icon: Trash2, onClick: onDelete, hover: C.red, low: C.redLow }].map(({ icon: Icon, onClick, hover, low }) => (
           <button key={hover} onClick={onClick}
             style={{ width: 30, height: 30, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: '1px solid transparent', cursor: 'pointer', color: C.textDim, transition: 'all 0.15s', fontFamily: FONT }}
-            onMouseEnter={e => { e.currentTarget.style.background = low; e.currentTarget.style.color = hover; e.currentTarget.style.borderColor = `${hover}30`; }}
+            onMouseEnter={e => { e.currentTarget.style.background = low; e.currentTarget.style.color = hover; e.currentTarget.style.borderColor = `${tint(hover, '30')}`; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.textDim; e.currentTarget.style.borderColor = 'transparent'; }}>
             <Icon style={{ width: 13, height: 13 }} />
           </button>

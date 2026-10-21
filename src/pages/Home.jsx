@@ -865,7 +865,7 @@ export default function Home() {
             .then(() => loadWarningsFromDB())
             .catch((e) => console.warn('[Home] cold-start warnings fetch failed:', e?.message));
         }
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
     })();
 
     const unsub = base44.entities.CachedWarnings.subscribe((event) => {
@@ -892,6 +892,17 @@ export default function Home() {
     queryFn: async () => {try {const l = await base44.entities.SiteSettings.list();return l?.[0] || null;} catch {return null;}},
     refetchInterval: 5000, retry: 2, retryDelay: 1000
   });
+  /* The summer theme is a site setting (Admin Settings → Site Control), so every visitor gets it.
+     It used to be read only from the admin's own browser storage, where the switch wrote it. */
+  useEffect(() => {
+    if (typeof settings?.summer_theme === 'boolean') setSummerThemeOn(settings.summer_theme);
+  }, [settings?.summer_theme]);
+  /* /#forecasts (the admin overview's "Add a forecast graphic") lands on the graphics */
+  useEffect(() => {
+    if (window.location.hash !== '#forecasts') return undefined;
+    const t = setTimeout(() => document.getElementById('forecasts')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 700);
+    return () => clearTimeout(t);
+  }, []);
 
   const { data: featuredGraphics = [] } = useQuery({
     queryKey: ['featuredGraphics'],

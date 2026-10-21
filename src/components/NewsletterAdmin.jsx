@@ -1,16 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { AC } from '@/components/admin/adminTheme';
 import { base44 } from '@/api/base44Client';
 import { Mail, Send, Users, CheckCircle, XCircle, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 
-const C = {
-  surface: '#0c1422', surface2: '#101c2e', surface3: '#142030',
-  border: 'rgba(148,163,184,0.07)', border2: 'rgba(148,163,184,0.12)',
-  sky: '#38bdf8', skyLow: 'rgba(56,189,248,0.06)', skyBorder: 'rgba(56,189,248,0.2)',
-  text: '#f1f5f9', textMid: '#94a3b8', textDim: 'rgba(148,163,184,0.5)',
-  green: '#4ade80', greenLow: 'rgba(74,222,128,0.08)',
-  red: '#f87171', redLow: 'rgba(248,113,113,0.08)',
-  amber: '#fbbf24',
-};
+/* the admin colours: CSS variables that Admin Settings sets for its light and dark themes */
+const C = AC;
 
 export default function NewsletterAdmin() {
   const [subscribers, setSubscribers] = useState([]);

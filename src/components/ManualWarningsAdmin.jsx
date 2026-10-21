@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { AC, ADMIN_FONT, tint } from '@/components/admin/adminTheme';
 import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -12,31 +13,9 @@ import MobileSelect from '@/components/MobileSelect';
 import ImpactDrawingMap from '@/components/ImpactDrawingMap';
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
-const C = {
-  bg:        '#05090f',
-  surface:   '#0c1422',
-  surface2:  '#101c2e',
-  surface3:  '#142030',
-  border:    'rgba(148,163,184,0.07)',
-  border2:   'rgba(148,163,184,0.12)',
-  border3:   'rgba(148,163,184,0.18)',
-  text:      '#f1f5f9',
-  textMid:   '#94a3b8',
-  textDim:   'rgba(148,163,184,0.5)',
-  textFaint: 'rgba(148,163,184,0.3)',
-  sky:       '#38bdf8',
-  skyLow:    'rgba(56,189,248,0.06)',
-  skyBorder: 'rgba(56,189,248,0.2)',
-  violet:    '#a78bfa',
-  green:     '#4ade80',
-  greenLow:  'rgba(74,222,128,0.08)',
-  amber:     '#fbbf24',
-  amberLow:  'rgba(251,191,36,0.08)',
-  red:       '#f87171',
-  redLow:    'rgba(248,113,113,0.08)',
-  orange:    '#fb923c',
-};
-const FONT = "'Geist', 'DM Sans', system-ui, sans-serif";
+/* the admin colours: CSS variables that Admin Settings sets for its light and dark themes */
+const C = AC;
+const FONT = ADMIN_FONT;
 
 const inputBase = {
   width: '100%', boxSizing: 'border-box',
@@ -111,7 +90,7 @@ function DInput({ focusBorder = C.skyBorder, ...props }) {
   const [focused, setFocused] = useState(false);
   return (
     <input {...props}
-      style={{ ...inputBase, ...(focused ? { borderColor: focusBorder, boxShadow: `0 0 0 3px ${focusBorder}18` } : {}), ...props.style }}
+      style={{ ...inputBase, ...(focused ? { borderColor: focusBorder, boxShadow: `0 0 0 3px ${tint(focusBorder, '18')}` } : {}), ...props.style }}
       onFocus={e => { setFocused(true); props.onFocus?.(e); }}
       onBlur={e => { setFocused(false); props.onBlur?.(e); }}
     />
@@ -122,7 +101,7 @@ function DTextarea({ rows = 3, focusBorder = C.skyBorder, ...props }) {
   const [focused, setFocused] = useState(false);
   return (
     <textarea rows={rows} {...props}
-      style={{ ...inputBase, resize: 'vertical', ...(focused ? { borderColor: focusBorder, boxShadow: `0 0 0 3px ${focusBorder}18` } : {}), ...props.style }}
+      style={{ ...inputBase, resize: 'vertical', ...(focused ? { borderColor: focusBorder, boxShadow: `0 0 0 3px ${tint(focusBorder, '18')}` } : {}), ...props.style }}
       onFocus={e => { setFocused(true); props.onFocus?.(e); }}
       onBlur={e => { setFocused(false); props.onBlur?.(e); }}
     />
@@ -173,7 +152,7 @@ function WarningRow({ warning: w, onEdit, onDelete, deleting }) {
       <div style={{
         width: 8, height: 8, borderRadius: '50%',
         background: sev.dot, flexShrink: 0, marginTop: 5,
-        boxShadow: `0 0 0 3px ${sev.dot}22`,
+        boxShadow: `0 0 0 3px ${tint(sev.dot, '22')}`,
       }} />
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -230,7 +209,7 @@ function WarningRow({ warning: w, onEdit, onDelete, deleting }) {
         ].map(({ icon: Icon, onClick, hover, title, danger }) => (
           <button key={title} onClick={onClick} disabled={deleting} title={title}
             style={{ width: 30, height: 30, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: `1px solid transparent`, cursor: 'pointer', transition: 'all 0.15s', color: C.textDim, fontFamily: FONT }}
-            onMouseEnter={e => { e.currentTarget.style.background = danger ? C.redLow : C.skyLow; e.currentTarget.style.color = hover; e.currentTarget.style.borderColor = `${hover}30`; }}
+            onMouseEnter={e => { e.currentTarget.style.background = danger ? C.redLow : C.skyLow; e.currentTarget.style.color = hover; e.currentTarget.style.borderColor = `${tint(hover, '30')}`; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.textDim; e.currentTarget.style.borderColor = 'transparent'; }}
           >
             <Icon style={{ width: 13, height: 13, ...(deleting && danger ? { animation: 'spin 0.8s linear infinite' } : {}) }} />
@@ -289,7 +268,7 @@ export default function ManualWarningsAdmin() {
     mutationFn: async (data) => {
       // `regions` is only used in-memory for the import flow / map preview — it's
       // not a ManualWarning field, so drop it before persisting (areas covers it).
-      const { regions, ...clean } = data;
+      const { regions: _regions, ...clean } = data;
       const payload = { ...clean, valid_from: clean.valid_from || null, valid_to: clean.valid_to || null };
       if (clean.id) { const { id, ...rest } = payload; return base44.entities.ManualWarning.update(id, rest); }
       return base44.entities.ManualWarning.create(payload);
@@ -490,7 +469,7 @@ export default function ManualWarningsAdmin() {
                       const active = editing.severity === s;
                       return (
                         <button key={s} type="button" onClick={() => patch('severity', s)}
-                          style={{ flex: 1, padding: '10px 0', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: FONT, transition: 'all 0.2s', background: active ? sc.bg : C.surface3, border: `1.5px solid ${active ? sc.border : C.border2}`, color: active ? sc.text : C.textDim, boxShadow: active ? `0 0 0 3px ${sc.dot}15` : 'none' }}
+                          style={{ flex: 1, padding: '10px 0', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: FONT, transition: 'all 0.2s', background: active ? sc.bg : C.surface3, border: `1.5px solid ${active ? sc.border : C.border2}`, color: active ? sc.text : C.textDim, boxShadow: active ? `0 0 0 3px ${tint(sc.dot, '15')}` : 'none' }}
                         >{s}</button>
                       );
                     })}

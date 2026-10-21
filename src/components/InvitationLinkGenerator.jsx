@@ -5,12 +5,10 @@ import { Card } from "@/components/ui/card";
 import { Copy, RefreshCw, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { createPageUrl } from '../utils';
-import { useTheme } from '@/components/ThemeContext';
 
 export default function InvitationLinkGenerator() {
   const [invitationToken, setInvitationToken] = useState(localStorage.getItem('invitationToken') || generateToken());
   const [copied, setCopied] = useState(false);
-  const { isDark } = useTheme();
 
   function generateToken() {
     return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
@@ -33,11 +31,11 @@ export default function InvitationLinkGenerator() {
   };
 
   return (
-    <Card className={`p-6 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
-      <h3 className={`text-lg font-semibold mb-4 ${isDark ? 'text-white' : 'text-slate-900'}`}>
+    <Card className="p-6 ad-legacy-card">
+      <h3 className="text-lg font-semibold mb-4 ad-ink">
         Invitation Link
       </h3>
-      <p className={`text-sm mb-4 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+      <p className="text-sm mb-4 ad-ink-mid">
         Share this link with people you want to invite to request access to your site.
       </p>
 
@@ -47,7 +45,7 @@ export default function InvitationLinkGenerator() {
             type="text"
             value={invitationUrl}
             readOnly
-            className={`flex-1 ${isDark ? 'bg-slate-700 border-slate-600 text-white' : ''}`}
+            className="flex-1 ad-field-bg"
           />
           <Button
             onClick={handleCopy}
@@ -69,8 +67,8 @@ export default function InvitationLinkGenerator() {
         </Button>
       </div>
 
-      <div className={`mt-4 p-3 rounded-lg ${isDark ? 'bg-slate-700/50' : 'bg-slate-100'}`}>
-        <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+      <div className="mt-4 p-3 rounded-lg ad-soft">
+        <p className="text-xs ad-ink-mid">
           <strong>Current Token:</strong> {invitationToken}
         </p>
       </div>
