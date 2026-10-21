@@ -171,6 +171,7 @@ export default function Lightning() {
   const [lastLive, setLastLive] = useState(null);
 
   const mapEl = useRef(null);
+  const stageEl = useRef(null);
   const map = useRef(null);
   const [mapReady, setMapReady] = useState(false);
   const tiles = useRef(null);
@@ -246,12 +247,43 @@ export default function Lightning() {
     const v = VIEWS[region];
     map.current.flyTo(v.center, v.zoom, { duration: 0.9 });
   }, [region, mapReady]);
-  useEffect(() => { setTimeout(() => map.current?.invalidateSize(), 60); }, [full]);
+  /* Full screen. The map always fills the window at once (fixed, its section lifted above the site's
+     bars — it used to stay inside a stacking layer below the top bar, which then covered the map's
+     own controls, the way back out among them), and where the browser allows it, its own full
+     screen is added on top. Leaving that (Esc, or the browser's own control) leaves ours too —
+     unless the browser dropped it straight away, as some embedded views and phones do, in which case
+     the window-filling version simply stays. */
+  const realFs = useRef(0);                     // when the browser's full screen was entered (0 = not)
+  const toggleFull = () => {
+    if (!full) {
+      setFull(true);
+      const el = stageEl.current;
+      if (el?.requestFullscreen && document.fullscreenEnabled) {
+        el.requestFullscreen().then(() => { realFs.current = Date.now(); }).catch(() => { /* window-filling only */ });
+      }
+    } else {
+      realFs.current = 0;
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => { /* already out */ });
+      setFull(false);
+    }
+  };
+  useEffect(() => {
+    const sync = () => {
+      if (document.fullscreenElement) return;
+      if (realFs.current && Date.now() - realFs.current > 1000) setFull(false);
+      realFs.current = 0;
+    };
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
+  useEffect(() => { setTimeout(() => map.current?.invalidateSize(), 80); }, [full]);
   useEffect(() => {
     if (!full) return undefined;
-    const k = (e) => { if (e.key === 'Escape') setFull(false); };
+    const k = (e) => { if (e.key === 'Escape' && !document.fullscreenElement) setFull(false); };
     window.addEventListener('keydown', k);
-    return () => window.removeEventListener('keydown', k);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';                       // no page scrolling behind it
+    return () => { window.removeEventListener('keydown', k); document.body.style.overflow = overflow; };
   }, [full]);
 
   /* ── loading a window or a day ── */
@@ -555,12 +587,12 @@ export default function Lightning() {
   const capturedHours = feeds?.blitzortung?.hours?.reduce((a, b) => a + b, 0) ?? null;
 
   return (
-    <div className={`lx-page${light ? ' lx-light' : ''}`}>
+    <div className={`lx-page${light ? ' lx-light' : ''}${full ? ' is-full' : ''}`}>
       <style>{CSS + AIW_MAP_CSS}</style>
       <div className="lx-ambient" aria-hidden="true"><i /><i /><i /></div>
       <div className="lx-shell">
         {/* ── the map ── */}
-        <section className={`lx-stage${full ? ' is-full' : ''}`} aria-label="Lightning map">
+        <section ref={stageEl} className={`lx-stage${full ? ' is-full' : ''}`} aria-label="Lightning map">
           <div ref={mapEl} className="lx-map" />
 
           <div className="lx-top">
@@ -578,7 +610,9 @@ export default function Lightning() {
               <button type="button" className={`lx-icon lx-glass${layersOpen ? ' is-on' : ''}`} onClick={() => setLayersOpen((o) => !o)} aria-expanded={layersOpen} title="Layers"><Layers size={16} /><span>Layers</span></button>
               <button type="button" className={`lx-icon lx-glass${boxMode ? ' is-on' : ''}`} onClick={() => { setBoxMode((b) => !b); setBoxResult(null); }} title="Count the strikes in an area"><Square size={15} /><span>Count</span></button>
               <button type="button" className={`lx-icon lx-glass${prefs.sound ? ' is-on' : ''}`} onClick={() => set((p) => ({ sound: !p.sound }))} title={prefs.sound ? 'Thunder on' : 'Thunder off'} aria-pressed={prefs.sound}>{prefs.sound ? <Volume2 size={16} /> : <VolumeX size={16} />}</button>
-              <button type="button" className="lx-icon lx-glass" onClick={() => setFull((f) => !f)} title={full ? 'Exit full screen (Esc)' : 'Full screen'}>{full ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
+              <button type="button" className={`lx-icon lx-glass${full ? ' lx-exit' : ''}`} onClick={toggleFull} title={full ? 'Exit full screen (Esc)' : 'Full screen'} aria-label={full ? 'Exit full screen' : 'Full screen'}>
+                {full ? <><Minimize2 size={16} /><span>Exit full screen</span></> : <Maximize2 size={16} />}
+              </button>
             </div>
           </div>
 
@@ -829,7 +863,13 @@ const CSS = `
 @media (max-width: 1080px) { .lx-shell { grid-template-columns: minmax(0, 1fr); height: auto; } .lx-stage { height: 72vh; height: 72svh; min-height: 460px; } }
 @media (max-width: 767px) { .lx-shell { padding: 8px 10px 90px; } }
 .lx-stage { position: relative; border-radius: 24px; overflow: hidden; border: 1px solid var(--glass-hairline); box-shadow: var(--glass-shadow); background: var(--map-bg); isolation: isolate; }
-.lx-stage.is-full { position: fixed; inset: 0; z-index: 9997; border-radius: 0; height: 100vh; height: 100dvh; }
+.lx-stage.is-full { position: fixed; inset: 0; z-index: 9997; border-radius: 0; height: 100vh; height: 100dvh; border: 0; }
+/* the shell is a stacking layer of its own (z-index 1), which kept a full-screen map under the site's
+   top bar; in full screen it goes above the site's bars */
+.lx-page.is-full .lx-shell { z-index: 10000; }
+.lx-stage:fullscreen { width: 100vw; height: 100vh; border-radius: 0; border: 0; }
+.lx-icon.lx-exit { color: var(--page-bg); background: var(--ink-1); }
+@media (max-width: 767px) { .lx-icon.lx-exit { width: auto; padding: 0 12px; } .lx-icon.lx-exit span { display: inline; } }
 .lx-map { position: absolute; inset: 0; background: var(--map-bg); }
 .lx-map .leaflet-container, .lx-map.leaflet-container { background: var(--map-bg); font: inherit; }
 .lx-top { position: absolute; z-index: 1001; top: 12px; left: 12px; right: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; pointer-events: none; }
