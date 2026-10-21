@@ -794,7 +794,8 @@ export function CardRain({ cond, rate = 0, wind = 0, wdir = 240, selector = '.lw
    it never cuts off.
 
    Each card gets a canvas of its own as its first child, under its content (z-index -1 inside
-   the card's own stacking context, which its backdrop blur gives it). One loop draws the cards
+   the card's own stacking context, which its backdrop blur gives it), softly out of focus so
+   the card's numbers stay easy to read. One loop draws the cards
    in view at about 30 frames a second, from a droplet sprite made once. Nothing is drawn for
    readers who ask their system for reduced motion. */
 const WINDOW_RAIN = { drizzle: 0.25, lightRain: 0.5, rain: 2, heavyRain: 6, showers: 1.5, heavyShowers: 6, torrentialRain: 22, freezingRain: 1.5, thunder: 6, thunderShowers: 4, sleet: 1, hail: 3 };
@@ -849,7 +850,9 @@ export function WindowRain({ cond, rate = 0, wind = 0, wdir = 240, selector = '.
         const cv = document.createElement('canvas');
         cv.className = 'lw-window-rain';
         cv.setAttribute('aria-hidden', 'true');
-        cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;border-radius:inherit;';
+        /* out of focus, as drops on a window behind the card's text are: they show it is raining
+           without getting in the way of the numbers (sharp drops made them hard to read) */
+        cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;border-radius:inherit;filter:blur(2px);opacity:.62;';
         el.prepend(cv);
         const c = { el, cv, ctx: cv.getContext('2d'), beads: [], visible: true, w: 1, h: 1, dpr: 1 };
         cards.set(el, c);
