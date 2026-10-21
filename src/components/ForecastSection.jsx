@@ -1165,13 +1165,6 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
     if (url) updateMutation.mutate({ id: forecast.id, data: { image_url: url } });
   };
 
-  const handleFurtherInfoUpdate = async (data) => {
-    if (!furtherInfoForecast) return;
-    await base44.entities.WeatherGraphic.update(furtherInfoForecast.id, data);
-    queryClient.invalidateQueries({ queryKey: ['forecasts'] });
-    setFurtherInfoForecast(prev => ({ ...prev, ...data }));
-  };
-
   const handleCreate = async (form) => {
     if (submitting || createMutation.isPending) return;
     setSubmitting(true);
@@ -1332,9 +1325,8 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
       {furtherInfoForecast && (
         <ForecastFurtherInfo
           forecast={furtherInfoForecast}
-          isOwner={isOwner}
           onClose={() => setFurtherInfoForecast(null)}
-          onUpdate={handleFurtherInfoUpdate}
+          onView={(f) => { setFurtherInfoForecast(null); setViewing(f); }}
         />
       )}
 

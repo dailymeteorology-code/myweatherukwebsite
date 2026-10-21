@@ -282,31 +282,39 @@ export function inkOn(colour) {
     with the graphic's band for it (Hail 40% · ENH), each lowest-to-highest band (High lightning
     TSTM–SLGT), then the measured values. Every stored hazard is shown: the lowest/highest bands
     the editor saves used to be left out, because this read keys the editor no longer writes. */
-export function ThunderstormRisks({ data, className = '' }) {
-  if (!data || typeof data !== 'object') return null;
+/** A graphic's thunderstorm details, read the way the graphic words them: `items` are the hazards
+    with a chance (`pct`, placed on the ladder) or a band, lowest to highest where it is a range
+    (`range`); `measured` are the measured values. Shared by the chips here and the home page's
+    "Further info" panel, so the two can never read the same data differently. */
+export function readThunderstorm(data) {
+  const empty = { items: [], measured: [] };
+  if (!data || typeof data !== 'object') return empty;
   const pct = (v) => (typeof v === 'number' ? v : typeof v === 'string' && /^\d+(\.\d+)?$/.test(v) ? Number(v) : null);
-
   const items = [];
   for (const { key, label } of PERCENT_RISKS) {
     const v = data[key];
     const p = pct(v);
-    if (p != null) { if (p > 0) items.push({ label, value: `${Math.round(p)}%`, levels: [levelOfPercent(p)].filter(Boolean) }); }
-    else if (normLevel(v)) items.push({ label, levels: [normLevel(v)] });            // stored as a band
+    if (p != null) { if (p > 0) items.push({ key, label, pct: Math.round(p), value: `${Math.round(p)}%`, levels: [levelOfPercent(p)].filter(Boolean) }); }
+    else if (normLevel(v)) items.push({ key, label, levels: [normLevel(v)] });       // stored as a band
   }
   for (const { key, label } of RANGE_RISKS) {
     const lo = normLevel(data[`${key}_min`]), hi = normLevel(data[`${key}_max`]);
-    const one = normLevel(data[key]);
+    const single = normLevel(data[key]);
     const levels = [...new Set([lo, hi].filter(Boolean))];
-    if (levels.length) items.push({ label, levels, range: true });
-    else if (one) items.push({ label, levels: [one] });
-    else if (data[key] === true) items.push({ label, levels: [] });                     // older graphics: just "yes"
+    if (levels.length) items.push({ key, label, levels, range: true });
+    else if (single) items.push({ key, label, levels: [single] });
+    else if (data[key] === true) items.push({ key, label, levels: [] });                // older graphics: just "yes"
   }
   const measured = MEASURED.map(({ key, label, unit }) => {
     const v = data[key];
     if (v == null || v === '') return null;
-    return { label, value: unit ? `${v} ${unit}` : String(v) };
+    return { key, label, value: unit ? `${v} ${unit}` : String(v) };
   }).filter(Boolean);
+  return { items, measured };
+}
 
+export function ThunderstormRisks({ data, className = '' }) {
+  const { items, measured } = readThunderstorm(data);
   if (!items.length && !measured.length) return null;
   /* on glass: the page's tokens where it has them (light or dark), white on dark elsewhere */
   const chip = {
