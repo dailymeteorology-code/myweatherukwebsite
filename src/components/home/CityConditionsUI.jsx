@@ -220,7 +220,7 @@ export function BandHeading({ group, cities }) {
    there now) under its Apple-style symbol. UK and Irish cards open the full forecast. */
 export function CityCard({ city, index, bandId, isWarmest }) {
   const { fmtTemp, fmtWind } = useUnits();
-  const { name, current, localTime, error, cond, day, sun, morning, rate, cloud, desc, href } = city;
+  const { name, current, localTime, error, cond, day, sun, morning, rate, cloud, desc, href, windy } = city;
   const accent = BAND_ACCENT[bandId];
   const Shell = href ? Link : 'div';
   const shellProps = href
@@ -279,7 +279,7 @@ export function CityCard({ city, index, bandId, isWarmest }) {
                 )}
               </span>
             </span>
-            {cond && <WxIcon cond={cond} day={day} size={42} style={{ flex: 'none', marginTop: -4, marginRight: -4, filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.35))' }} />}
+            {cond && <WxIcon cond={cond} day={day} windy={windy} size={42} style={{ flex: 'none', marginTop: -4, marginRight: -4, filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.35))' }} />}
           </div>
 
           {error && !current ? (

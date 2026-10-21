@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import useBlitzortung from '@/components/tcm/useBlitzortung';
-import { classify, condLabel, sunElevation } from '@/lib/ukvLocation';
+import { classify, condLabel, sunElevation, windyOf } from '@/lib/ukvLocation';
 import { LightningBanner, BandHeading, CityCard } from '@/components/home/CityConditionsUI';
 
 /**
@@ -221,8 +221,10 @@ export default function CityConditions() {
       UKV_CITIES.forEach((c, i) => {
         const n = ukv?.places?.[i];
         if (!n || n.t2 == null) { if (!next[c.id]?.current) next[c.id] = { error: true }; return; }
-        const cond = classify({ tcc: n.tcc, precipRate: n.radar ?? 0, span: 0 });
+        const wx = { tcc: n.tcc, precipRate: n.radar ?? 0, span: 0, wind: n.wind10, gust: n.gust10, t2: n.t2 };
+        const cond = classify(wx);
         next[c.id] = {
+          windy: windyOf(wx),
           current: { temperature_2m: n.t2, apparent_temperature: n.feels ?? n.t2, relative_humidity_2m: n.rh2, wind_speed_10m: n.wind10, wind_direction_10m: n.wdir10 },
           cond, rate: n.radar ?? 0, cloud: n.tcc ?? CLOUD[cond] ?? 90, valid: n.valid,
         };
@@ -257,7 +259,7 @@ export default function CityConditions() {
     return {
       ...c, ...r, sun, day, localTime,
       morning: Number(localTime.slice(0, 2)) < 12,
-      desc: r.cond ? condLabel(r.cond, day) : null,
+      desc: r.cond ? condLabel(r.cond, day, r.windy) : null,
       href: OPENS_FORECAST.has(c.group) ? `/LocationWeather?lat=${c.lat}&lon=${c.lon}&name=${encodeURIComponent(c.name)}` : null,
     };
   }), [readings, tick]);

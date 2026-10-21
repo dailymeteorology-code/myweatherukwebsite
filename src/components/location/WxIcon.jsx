@@ -7,7 +7,10 @@
    drawn, so the shapes never smudge into each other. What falls is spaced so no two flakes,
    stones or drops touch, and nothing touches the cloud above it.
 
-   `cond` is a weather type from src/lib/ukvLocation.js classify(). */
+   `cond` is a weather type from src/lib/ukvLocation.js classify(), or 'sunrise' / 'sunset'.
+   `windy` adds the wind: the symbol steps back a little and two gusts curl out beneath it, so
+   any weather can say it is windy. 'windy' on its own is three gusts; a blizzard has its wind
+   drawn in. */
 import React, { useId } from 'react';
 
 const CLOUD_TONES = {
@@ -156,6 +159,66 @@ const FogLines = ({ y = 46 }) => (
   </g>
 );
 
+/* gusts: a line with a curl at its end (up or down), in the pale grey of the clouds */
+const GUST = '#E3EAF2';
+const Gust = ({ x, y, len, r, up = true, w = 3 }) => (
+  <path d={`M${x} ${y} H${x + len} a${r} ${r} 0 1 ${up ? 0 : 1} ${-r} ${up ? -r : r}`} fill="none" stroke={GUST} strokeWidth={w} strokeLinecap="round" />
+);
+/* the wind under any symbol (the symbol itself is drawn at 80 % above it) */
+const WindMark = () => (
+  <g>
+    <Gust x={33} y={51} len={21} r={4.5} up />
+    <Gust x={27} y={58.5} len={29} r={4} up={false} />
+  </g>
+);
+/* torrential rain: five long, heavy streaks in two staggered rows */
+const Torrent = () => (
+  <g stroke="#1F6FEB" strokeWidth="3.6" strokeLinecap="round">
+    {[14, 23, 32, 41, 50].map((x, i) => <line key={x} x1={x} y1={47 + (i % 2) * 3} x2={x - 3.6} y2={47 + (i % 2) * 3 + 12} />)}
+  </g>
+);
+/* freezing rain: cold rain, an ice crystal, and the glaze it leaves */
+const FreezingRain = () => (
+  <>
+    <g stroke="#7DD3FC" strokeWidth="3" strokeLinecap="round">
+      <line x1="19" y1="50" x2="16.6" y2="56.5" />
+      <line x1="45" y1="50" x2="42.6" y2="56.5" />
+    </g>
+    <g stroke="#BAE6FD" strokeWidth="1.7" strokeLinecap="round">
+      {[90, 30, 150].map((a) => { const c = Math.cos((a * Math.PI) / 180) * 3.6, n = Math.sin((a * Math.PI) / 180) * 3.6; return <line key={a} x1={32 - c} y1={54 - n} x2={32 + c} y2={54 + n} />; })}
+    </g>
+    <rect x="14" y="61" width="36" height="2.6" rx="1.3" fill="#BAE6FD" />
+  </>
+);
+/* a blizzard: snow driven sideways through the wind */
+const Blizzard = () => (
+  <>
+    <Gust x={7} y={47.5} len={22} r={4} up w={2.8} />
+    <Gust x={20} y={58} len={26} r={4} up={false} w={2.8} />
+    <Flake x={41} y={48} r={3.3} />
+    <Flake x={52} y={56} r={3.3} />
+    <Flake x={11} y={57} r={3.3} />
+  </>
+);
+/* heat haze under a hot sun */
+const Haze = () => (
+  <g fill="none" stroke="#FF8A3D" strokeWidth="2.6" strokeLinecap="round">
+    {[48, 55].map((y, i) => <path key={y} d={`M${14 + i * 5} ${y} q4 -3.5 8 0 t8 0 t8 0 t8 0`} />)}
+  </g>
+);
+/* the sun on the horizon, an arrow up for sunrise and down for sunset */
+const Horizon = ({ up, uid }) => {
+  const clip = `${uid}hz`;
+  return (
+    <>
+      <defs><clipPath id={clip}><rect x="-8" y="-8" width="80" height="54.5" /></clipPath></defs>
+      <g clipPath={`url(#${clip})`}><Sun cx={32} cy={47} r={11} uid={uid} /></g>
+      <line x1="7" y1="49.5" x2="57" y2="49.5" stroke="#E3EAF2" strokeWidth="3.2" strokeLinecap="round" />
+      <path d={up ? 'M32 22 V6 M25.5 12.5 L32 6 L38.5 12.5' : 'M32 6 V22 M25.5 15.5 L32 22 L38.5 15.5'} fill="none" stroke="#FFC22E" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" />
+    </>
+  );
+};
+
 /* the sky body peeking out behind a cloud: a sun by day, a moon by night */
 const Peek = ({ day, uid, cx = 24, cy = 22, r = 10 }) => (day ? <Sun cx={cx} cy={cy} r={r} uid={uid} /> : <Moon cx={cx} cy={cy} r={r + 1} uid={uid} />);
 
@@ -179,7 +242,7 @@ const TwoClouds = ({ uid, back = 'back', front = 'white' }) => {
 const SHOWER_PEEK = { cx: 22, cy: 21, r: 9.5 };
 const SHOWER_CLOUD = { x: 12, y: 18, s: 0.92 };
 
-export default function WxIcon({ cond = 'cloudy', day = true, size = 32, title, style }) {
+export default function WxIcon({ cond = 'cloudy', day = true, windy = false, size = 32, title, style }) {
   const uid = useId().replace(/:/g, '');
   let body;
   switch (cond) {
@@ -198,7 +261,7 @@ export default function WxIcon({ cond = 'cloudy', day = true, size = 32, title, 
       body = <PeekBehind day={day} uid={uid} peek={{ cx: 23, cy: 22, r: 11 }} cloud={{ x: 12, y: 25, s: 0.95 }} />;
       break;
     case 'cloudy':
-      body = <TwoClouds uid={uid} />;
+      body = <Cloud x={6} y={17} s={1.08} uid={uid} />;
       break;
     case 'overcast':
       body = <TwoClouds uid={uid} back="grey" front="back" />;
@@ -227,6 +290,41 @@ export default function WxIcon({ cond = 'cloudy', day = true, size = 32, title, 
     case 'heavyShowers':
       body = (<><PeekBehind day={day} uid={uid} peek={SHOWER_PEEK} cloud={SHOWER_CLOUD} tone="grey" /><Rain n={3} heavy /></>);
       break;
+    case 'torrentialRain':
+      body = (<><Cloud x={8} y={12} s={1} tone="dark" uid={uid} /><Torrent /></>);
+      break;
+    case 'freezingRain':
+      body = (<><Cloud x={8} y={14} s={1} tone="back" uid={uid} /><FreezingRain /></>);
+      break;
+    case 'blizzard':
+      body = (<><Cloud x={10} y={8} s={0.95} tone="grey" uid={uid} /><Blizzard /></>);
+      break;
+    case 'windy':
+      body = (
+        <>
+          <Gust x={8} y={24} len={30} r={7} up w={3.6} />
+          <Gust x={8} y={35} len={40} r={6} up={false} w={3.6} />
+          <Gust x={14} y={46} len={22} r={5} up={false} w={3.6} />
+        </>
+      );
+      break;
+    case 'hot':
+      body = day
+        ? (<><Sun cx={32} cy={26} r={13} uid={uid} /><Haze /></>)
+        : <Moon cx={30} cy={33} r={17} uid={uid} stars />;
+      break;
+    case 'thunderShowers':
+      body = (
+        <>
+          <PeekBehind day={day} uid={uid} peek={SHOWER_PEEK} cloud={SHOWER_CLOUD} tone="grey" />
+          <g transform="translate(4 3)"><Bolt /></g>
+        </>
+      );
+      break;
+    case 'sunrise':
+    case 'sunset':
+      body = <Horizon up={cond === 'sunrise'} uid={uid} />;
+      break;
     case 'thunder':
       body = (
         <>
@@ -254,9 +352,10 @@ export default function WxIcon({ cond = 'cloudy', day = true, size = 32, title, 
     default:
       body = <Cloud x={6} y={18} s={1.05} uid={uid} />;
   }
+  const marked = windy && !['windy', 'blizzard', 'sunrise', 'sunset'].includes(cond);
   return (
     <svg viewBox="0 0 64 64" width={size} height={size} role="img" aria-label={title || cond} style={{ flexShrink: 0, overflow: 'visible', ...style }}>
-      {body}
+      {marked ? <><g transform="scale(0.8)">{body}</g><WindMark /></> : body}
     </svg>
   );
 }

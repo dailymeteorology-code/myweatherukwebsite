@@ -7,7 +7,8 @@
      • the hourly strip to T+120 (hourly to T+54, then three-hourly, as UKV publishes)
      • precipitation, when there is any: the next hour minute by minute (the Met Office radar
        carried forward by the rain's own motion), or the next 12 hours from UKV
-     • rain splashing on the top row of cards while it rains (CardRain in SkyBackdrop.jsx)
+     • rain splashing on the top row of cards while it rains (CardRain in SkyBackdrop.jsx), and
+       drops on every card's glass, as on a window (WindowRain)
      • the days, with their ranges on one shared scale
      • the Met Office radar for the past three hours and UKV rain for the next hours
      • fourteen detail tiles and ten interactive charts
@@ -24,7 +25,7 @@ import LocationWarnings from '@/components/location/LocationWarnings';
 import LocationRadar from '@/components/location/LocationRadar';
 import LocationTiles from '@/components/location/LocationTiles';
 import LocationCharts, { tempColour } from '@/components/location/LocationCharts';
-import SkyBackdrop, { CardRain, skyDarkness } from '@/components/location/SkyBackdrop';
+import SkyBackdrop, { CardRain, WindowRain, skyDarkness } from '@/components/location/SkyBackdrop';
 import SkyPreview, { PREVIEW_START, previewSky } from '@/components/location/SkyPreview';
 import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
 import WxIcon from '@/components/location/WxIcon';
@@ -79,7 +80,7 @@ function HourlyCard({ model, T, stripRef }) {
               <div key={`s${it.t}`} className="lw-hour">
                 <span className="lw-h-day" />
                 <span className="lw-h-time">{hhmm(it.t)}</span>
-                <WxIcon cond="clear" day size={30} title={it.sun} />
+                <WxIcon cond={it.sun === 'Sunrise' ? 'sunrise' : 'sunset'} day size={30} title={it.sun} />
                 <span className="lw-h-pop" />
                 <span className="lw-h-temp" style={{ fontSize: 13, fontWeight: 600 }}>{it.sun}</span>
               </div>
@@ -91,7 +92,8 @@ function HourlyCard({ model, T, stripRef }) {
             <div key={h.t} className={`lw-hour${k === 0 ? ' is-now' : ''}${dayStart ? ' is-day-start' : ''}`} data-day={h.day}>
               <span className="lw-h-day">{dayStart ? day : ''}</span>
               <span className="lw-h-time">{k === 0 ? 'Now' : h.span > 1 ? hhmm(h.t) : String(hourOf(h.t)).padStart(2, '0')}</span>
-              <WxIcon cond={k === 0 ? model.now.cond : h.cond} day={k === 0 ? model.now.isDay : h.isDay} size={30} title={condLabel(h.cond, h.isDay)} />
+              <WxIcon cond={k === 0 ? model.now.cond : h.cond} day={k === 0 ? model.now.isDay : h.isDay} windy={k === 0 ? model.now.windy : h.windy} size={30}
+                title={k === 0 ? condLabel(model.now.cond, model.now.isDay, model.now.windy) : condLabel(h.cond, h.isDay, h.windy)} />
               <span className="lw-h-pop">{pop}</span>
               <span className="lw-h-temp">{Math.round(T(k === 0 ? model.now.t2 : h.t2))}°</span>
               <span className="lw-h-wind" title={`Wind ${Math.round(h.wind)} mph from the ${compass(h.wdir)}`}>
@@ -236,7 +238,7 @@ function DaysCard({ model, T, dayIdx, onDay }) {
             <button type="button" className={`lw-day${i === dayIdx ? ' is-on' : ''}`} onClick={() => onDay(i)} aria-pressed={i === dayIdx}>
               <span className="lw-day-name">{d.label}</span>
               <span className="lw-day-icon">
-                <WxIcon cond={d.cond} day size={30} title={condLabel(d.cond, true)} />
+                <WxIcon cond={d.cond} day windy={d.windy} size={30} title={condLabel(d.cond, true, d.windy)} />
                 {d.pRain != null && d.pRain >= 20 && isWet(d.cond) ? <b>{d.pRain}%</b> : null}
               </span>
               <span className="lw-day-lo">{Math.round(T(d.lo))}°</span>
@@ -455,6 +457,7 @@ export default function LocationForecast() {
     <div className="lw-page" data-sky={dark < 0.3 ? 'bright' : dark < 0.55 ? 'mid' : 'dark'}>
       <SkyBackdrop {...sky} />
       {model && !hidePage && <CardRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
+      {model && !hidePage && <WindowRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
 
       {outside && (
         <div role="dialog" aria-modal="true" aria-labelledby="lw-out" onClick={() => setOutside(null)}
@@ -520,7 +523,7 @@ export default function LocationForecast() {
             <header className="lw-hero" aria-live="polite">
               <div className="lw-hero-name">{model.location.name}</div>
               <div className="lw-hero-temp">{deg(model.now.t2)}</div>
-              <div className="lw-hero-cond">{condLabel(model.now.cond, model.now.isDay)}</div>
+              <div className="lw-hero-cond">{condLabel(model.now.cond, model.now.isDay, model.now.windy)}</div>
               {today && <div className="lw-hero-hl">H:{deg(today.hi)}&nbsp;&nbsp;L:{deg(today.lo)}</div>}
               <div className="lw-hero-meta">
                 Feels like {deg(model.now.feels)}

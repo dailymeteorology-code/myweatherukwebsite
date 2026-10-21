@@ -102,28 +102,49 @@ export function beaufort(mph) {
 /* ── the weather type of an hour ─────────────────────────────────────────────
    From the model's own fields, in order of what matters most: thunder, then what
    is falling (type from the snow share, intensity from the hour's amount, showers
-   when the cloud is broken), then fog, then cloud. Day or night from the sun. */
-const RANK = { thunder: 9, hail: 8, heavySnow: 8, snow: 7, sleet: 7, snowShowers: 7, heavyRain: 6, heavyShowers: 6, rain: 5, showers: 4, lightRain: 3, drizzle: 2, fog: 1.5, mist: 1, overcast: 0.8, cloudy: 0.6, partly: 0.4, mostlyClear: 0.2, clear: 0 };
-const LABEL = {
-  thunder: 'Thunderstorms', hail: 'Hail', heavySnow: 'Heavy snow', snow: 'Snow', snowShowers: 'Snow showers', sleet: 'Sleet',
-  heavyRain: 'Heavy rain', heavyShowers: 'Heavy showers', rain: 'Rain', showers: 'Showers', lightRain: 'Light rain', drizzle: 'Drizzle',
-  fog: 'Fog', mist: 'Mist', overcast: 'Overcast', cloudy: 'Cloudy', partly: 'Partly cloudy',
+   when the cloud is broken; snow in a strong wind is a blizzard, rain at or below
+   freezing is freezing rain, 16 mm/h and over is torrential), then fog, then a
+   gale on a dry hour, heat, and the cloud. Day or night from the sun.
+
+   Wind is also a mark on its own (windyOf): an hour can be "Rain" and windy, and its
+   symbol then carries the wind. Speeds are mph, the page's unit. */
+const RANK = {
+  thunder: 9, thunderShowers: 9, blizzard: 8.5, hail: 8, heavySnow: 8, freezingRain: 7.5, torrentialRain: 7, snow: 7, sleet: 7, snowShowers: 7,
+  heavyRain: 6, heavyShowers: 6, rain: 5, showers: 4, lightRain: 3, drizzle: 2,
+  fog: 1.5, mist: 1, windy: 0.9, overcast: 0.8, cloudy: 0.6, partly: 0.4, mostlyClear: 0.2, hot: 0.1, clear: 0,
 };
-export function condLabel(key, day) {
-  if (key === 'clear') return day ? 'Sunny' : 'Clear';
-  if (key === 'mostlyClear') return day ? 'Mostly sunny' : 'Mostly clear';
-  return LABEL[key] || 'Cloudy';
+const LABEL = {
+  thunder: 'Thunderstorms', thunderShowers: 'Thundery showers', blizzard: 'Blizzard', hail: 'Hail', heavySnow: 'Heavy snow', snow: 'Snow',
+  snowShowers: 'Snow showers', sleet: 'Sleet', freezingRain: 'Freezing rain', torrentialRain: 'Torrential rain',
+  heavyRain: 'Heavy rain', heavyShowers: 'Heavy showers', rain: 'Rain', showers: 'Showers', lightRain: 'Light rain', drizzle: 'Drizzle',
+  fog: 'Fog', mist: 'Mist', windy: 'Windy', overcast: 'Overcast', cloudy: 'Cloudy', partly: 'Partly cloudy', hot: 'Hot and sunny',
+  sunrise: 'Sunrise', sunset: 'Sunset',
+};
+/* windy: a mean wind of 25 mph or gusts of 40 (Beaufort 6, near-gale gusts); a gale on a dry
+   hour (35 mph, or gusts of 50) is the weather itself */
+export const windyOf = (h) => (h?.gust ?? 0) >= 40 || (h?.wind ?? 0) >= 25;
+const galeOf = (h) => (h?.gust ?? 0) >= 50 || (h?.wind ?? 0) >= 35;
+/** The words for a weather type; `windy` adds the wind where the type does not already say it. */
+export function condLabel(key, day, windy = false) {
+  const base = key === 'clear' ? (day ? 'Sunny' : 'Clear') : key === 'mostlyClear' ? (day ? 'Mostly sunny' : 'Mostly clear')
+    : key === 'hot' && !day ? 'Warm night' : LABEL[key] || 'Cloudy';
+  return windy && !['windy', 'blizzard', 'sunrise', 'sunset'].includes(key) ? `${base} and windy` : base;
 }
 export function classify(h) {
   const rate = h.span > 0 && h.precip != null ? h.precip / h.span : h.precipRate ?? 0;
   const wet = rate >= 0.1 || (h.precipRate ?? 0) >= 0.2;
   const showery = (h.tcc ?? 100) < 85 || (h.cape ?? 0) >= 150;
   const snowShare = (h.precip ?? 0) > 0 && h.snow != null ? h.snow / h.precip : (h.precipRate ? (h.snowRate ?? 0) / h.precipRate : 0);
-  if (wet && ((h.pThunder ?? 0) >= 30 || (h.lightning ?? 0) >= 0.01 || (h.lightning == null && (h.cape ?? 0) >= 600 && rate >= 1))) return 'thunder';
+  if (wet && ((h.pThunder ?? 0) >= 30 || (h.lightning ?? 0) >= 0.01 || (h.lightning == null && (h.cape ?? 0) >= 600 && rate >= 1))) return showery && (h.tcc ?? 100) < 85 ? 'thunderShowers' : 'thunder';
   if (wet) {
     if ((h.hailRate ?? 0) >= 0.05) return 'hail';
-    if (snowShare >= 0.7) return rate >= 2 ? 'heavySnow' : showery && rate < 1 ? 'snowShowers' : 'snow';
+    if (snowShare >= 0.7) {
+      if (rate >= 0.7 && windyOf(h)) return 'blizzard';
+      return rate >= 2 ? 'heavySnow' : showery && rate < 1 ? 'snowShowers' : 'snow';
+    }
     if (snowShare >= 0.3) return 'sleet';
+    if (h.t2 != null && h.t2 <= 0) return 'freezingRain';
+    if (rate >= 16) return 'torrentialRain';
     if (rate >= 4) return showery ? 'heavyShowers' : 'heavyRain';
     if (rate >= 1) return showery ? 'showers' : 'rain';
     if (rate >= 0.25) return showery ? 'showers' : 'lightRain';
@@ -131,7 +152,9 @@ export function classify(h) {
   }
   if (h.vis != null && (h.vis < 1 || (h.fog ?? 0) >= 60)) return 'fog';
   if (h.vis != null && h.vis < 5) return 'mist';
+  if (galeOf(h)) return 'windy';
   const c = h.tcc ?? 50;
+  if (c < 40 && (h.t2 ?? 0) >= 27 && (h.isDay ?? (h.sun ?? 0) > 0)) return 'hot';
   if (c < 12) return 'clear';
   if (c < 40 || ((h.lcc ?? 0) + (h.mcc ?? 0) < 20 && c < 70)) return 'mostlyClear';
   if (c < 75) return 'partly';
@@ -176,6 +199,7 @@ export function shape(resp) {
     h.sun = sunElevation(t, lat, lon);
     h.isDay = h.sun > -0.833;
     h.cond = h.full ? classify(h) : null;
+    h.windy = h.full && windyOf(h);
     return h;
   });
   /* a temperature-only hour borrows the look of the nearest full hour */
@@ -184,7 +208,7 @@ export function shape(resp) {
     if (h.full) continue;
     let best = null;
     for (const f of full) if (!best || Math.abs(f.t - h.t) < Math.abs(best.t - h.t)) best = f;
-    if (best) h.cond = best.cond;
+    if (best) { h.cond = best.cond; h.windy = best.windy; }
   }
 
   const nowMs = Date.now();
@@ -205,6 +229,7 @@ export function shape(resp) {
   nowHour.isDay = nowHour.sun > -0.833;
   nowHour.feels = an?.feels ?? feelsLike(nowHour.t2, nowHour.td, nowHour.wind);
   nowHour.cond = classify(nowHour);
+  nowHour.windy = windyOf(nowHour);
 
   /* days, in UK time */
   const today = ukDay(nowMs);
@@ -238,12 +263,15 @@ export function shape(resp) {
         const fogs = dry.filter((h) => h.cond === 'fog').length;
         const c = dry.reduce((s, h) => s + (h.tcc ?? 50), 0) / Math.max(1, dry.length);
         cond = fogs >= Math.max(2, dry.length / 2) ? 'fog' : c < 15 ? 'clear' : c < 40 ? 'mostlyClear' : c < 75 ? 'partly' : c < 93 ? 'cloudy' : 'overcast';
+        if (dry.filter((h) => h.cond === 'windy').length >= 2) cond = 'windy';
+        else if (dry.filter((h) => h.cond === 'hot').length >= 2) cond = 'hot';
       }
     }
     const max = (k) => { const v = fullHs.map((h) => h[k]).filter((x) => x != null); return v.length ? Math.max(...v) : null; };
     const strongest = fullHs.reduce((a, b) => ((b.wind ?? 0) > (a?.wind ?? -1) ? b : a), null);
+    const windyHours = pool.filter((h) => h.windy).length;
     return {
-      day, label: dayLabel(day, today), isToday, hi, lo, cond, rain, snow,
+      day, label: dayLabel(day, today), isToday, hi, lo, cond, rain, snow, windy: windyHours >= 2,
       pRain: max('pRain'), pThunder: max('pThunder'), gust: max('gust'), wind: max('wind'), wdir: strongest?.wdir ?? null,
       uvi: max('uvi'), cape: max('cape'), sun: sunTimes(day, lat, lon), hours: hs,
       partial: hs.length && (hs[hs.length - 1].t - hs[0].t) < 18 * 36e5 && !isToday,
@@ -341,7 +369,7 @@ export function nextHoursText(m) {
 }
 
 export function dayText(d) {
-  const bits = [condLabel(d.cond, true)];
+  const bits = [condLabel(d.cond, true, d.windy)];
   if (d.rain >= 0.2) bits.push(`${d.rain >= 10 ? Math.round(d.rain) : d.rain.toFixed(1)} mm of ${d.snow > d.rain / 2 ? 'snow (water equivalent)' : 'rain'}`);
   if ((d.gust ?? 0) >= 35) bits.push(`gusts ${Math.round(d.gust)} mph`);
   return bits.join(' · ');

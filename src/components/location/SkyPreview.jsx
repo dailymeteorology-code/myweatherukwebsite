@@ -6,12 +6,14 @@ import { Palette, X, Eye, EyeOff, Play, Pause } from 'lucide-react';
 import WxIcon from './WxIcon';
 import { condLabel } from '@/lib/ukvLocation';
 
-const CONDS = ['clear', 'mostlyClear', 'partly', 'cloudy', 'overcast', 'fog', 'mist', 'drizzle', 'lightRain', 'rain', 'heavyRain',
-  'showers', 'heavyShowers', 'thunder', 'sleet', 'snow', 'heavySnow', 'snowShowers', 'hail'];
+const CONDS = ['clear', 'mostlyClear', 'partly', 'cloudy', 'overcast', 'hot', 'windy', 'fog', 'mist', 'drizzle', 'lightRain', 'rain', 'heavyRain',
+  'torrentialRain', 'showers', 'heavyShowers', 'thunder', 'thunderShowers', 'freezingRain', 'sleet', 'snow', 'heavySnow', 'snowShowers', 'blizzard', 'hail'];
 /* [key, label, sun elevation (degrees), morning] */
 const TIMES = [['day', 'Day', 40, true], ['sunrise', 'Sunrise', 2, true], ['sunset', 'Sunset', 2, false], ['night', 'Night', -20, false]];
-const RATE = { drizzle: 0.3, lightRain: 0.6, rain: 2, heavyRain: 8, showers: 2, heavyShowers: 6, thunder: 6, sleet: 1, snow: 1, heavySnow: 3, snowShowers: 1, hail: 3 };
-const CLOUD = { clear: 5, mostlyClear: 25, partly: 55, cloudy: 85, overcast: 100, fog: 100, mist: 70 };
+const RATE = { drizzle: 0.3, lightRain: 0.6, rain: 2, heavyRain: 8, torrentialRain: 24, showers: 2, heavyShowers: 6, thunder: 6, thunderShowers: 4, freezingRain: 1.5, sleet: 1, snow: 1, heavySnow: 3, snowShowers: 1, blizzard: 2.5, hail: 3 };
+const CLOUD = { clear: 5, mostlyClear: 25, partly: 55, cloudy: 85, overcast: 100, fog: 100, mist: 70, hot: 5, windy: 45 };
+/* the types that are wind themselves start windy; any other can be made windy with the slider */
+const WIND = { windy: 44, blizzard: 38 };
 
 export const PREVIEW_START = { cond: 'clear', time: 'day', wind: 12 };
 
@@ -45,8 +47,8 @@ export default function SkyPreview({ value, onChange, onClose, hidePage, onHideP
       </span></div>
 
       <div className="lw-preview-now">
-        <WxIcon cond={value.cond} day={day} size={40} />
-        <div><b>{condLabel(value.cond, day)}</b><span>{t[1]} · wind {value.wind} mph</span></div>
+        <WxIcon cond={value.cond} day={day} windy={value.wind >= 25} size={40} />
+        <div><b>{condLabel(value.cond, day, value.wind >= 25)}</b><span>{t[1]} · wind {value.wind} mph</span></div>
       </div>
 
       <div className="lw-seg" role="group" aria-label="Time of day" style={{ display: 'flex', marginBottom: 10 }}>
@@ -55,7 +57,7 @@ export default function SkyPreview({ value, onChange, onClose, hidePage, onHideP
 
       <div className="lw-preview-grid" role="group" aria-label="Weather">
         {CONDS.map((c) => (
-          <button key={c} type="button" className="lw-chip" aria-pressed={value.cond === c} onClick={() => { setPlaying(false); onChange((v) => ({ ...v, cond: c })); }}>
+          <button key={c} type="button" className="lw-chip" aria-pressed={value.cond === c} onClick={() => { setPlaying(false); onChange((v) => ({ ...v, cond: c, wind: WIND[c] ?? (WIND[v.cond] ? 12 : v.wind) })); }}>
             <WxIcon cond={c} day={day} size={20} />{condLabel(c, day)}
           </button>
         ))}

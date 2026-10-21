@@ -8,7 +8,7 @@ import React, { useEffect, useState } from 'react';
 import { MapPin, Clock, Crosshair, X, Loader2, ShieldCheck } from 'lucide-react';
 import LocationSearchBox from './LocationSearchBox';
 import WxIcon from './WxIcon';
-import { classify, condLabel, sunElevation } from '@/lib/ukvLocation';
+import { classify, condLabel, sunElevation, windyOf } from '@/lib/ukvLocation';
 
 const POPULAR = [
   { name: 'London', region: 'Greater London', lat: 51.5074, lon: -0.1278 },
@@ -115,7 +115,9 @@ export default function LocationLanding({
           {POPULAR.map((c, i) => {
             const n = now?.[i];
             const day = sunElevation(Date.now(), c.lat, c.lon) > -0.833;
-            const cond = n ? classify({ tcc: n.tcc, precipRate: n.radar ?? 0, span: 0 }) : null;
+            const wx = n && { tcc: n.tcc, precipRate: n.radar ?? 0, span: 0, wind: n.wind10, gust: n.gust10, t2: n.t2 };
+            const cond = wx ? classify(wx) : null;
+            const windy = wx ? windyOf(wx) : false;
             return (
               <button key={c.name} type="button" className="lw-city" onClick={() => onSearch({ name: c.name, region: c.region, lat: c.lat, lon: c.lon })}>
                 <span className="lw-city-top">
@@ -123,8 +125,8 @@ export default function LocationLanding({
                   {n?.t2 != null && <span className="lw-city-temp">{Math.round(unit === 'F' ? (n.t2 * 9) / 5 + 32 : n.t2)}°</span>}
                 </span>
                 <span className="lw-city-bottom">
-                  {cond && <WxIcon cond={cond} day={day} size={22} />}
-                  <span>{cond ? condLabel(cond, day) : c.region}</span>
+                  {cond && <WxIcon cond={cond} day={day} windy={windy} size={22} />}
+                  <span>{cond ? condLabel(cond, day, windy) : c.region}</span>
                 </span>
               </button>
             );
