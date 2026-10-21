@@ -187,13 +187,19 @@ function nowAt(lat, lon) {
     out[v] = r2(val);
     valid = valid && valid > t ? valid : t;
   }
+  /* Only what is current counts as "now". After the PC had slept, the page showed last night's
+     analysis as this morning's weather ("cloudy" in heavy rain): an analysis over 90 minutes old is
+     dropped, so the page uses the forecast hour, and so is a radar scan over 45 minutes old. */
+  const age = (t) => Date.now() - Date.parse(t);
+  if (valid && age(valid) > 90 * 60e3) { for (const k of Object.keys(out)) delete out[k]; valid = null; }
   /* is it raining there now: the newest radar frame at the place */
   const rt = readJson(path.join(LIVE, 'radar', 'index.json'))?.times?.at(-1);
-  if (rt) {
+  if (rt && age(rt) <= 45 * 60e3) {
     const rain = sample(frameAt(path.join(LIVE, 'radar', `${stampOf(rt)}.bin`)), lon, lat);
     if (rain != null) { out.radar = r2(rain); out.radar_valid = rt; }
   }
-  return valid ? { valid, ...out } : null;
+  if (valid) return { valid, ...out };
+  return out.radar != null ? out : null;
 }
 const OBS_FIELDS = ['t2_max', 't2_min', 'precip_total', 'gust10_max', 'wind10_max', 'rain_rate_max', 'feels_min', 'feels_max', 'rh2_min', 'td2_max'];
 const londonDay = (d = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);

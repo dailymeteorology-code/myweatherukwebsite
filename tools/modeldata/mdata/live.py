@@ -286,31 +286,45 @@ def catalog():
     write_json(LIVE / 'catalog.json', {'updated': datetime.now(timezone.utc).isoformat(), 'products': out})
 
 
-def update():
+SATELLITES = [k for k in PRODUCTS if k != 'radar']
+
+
+def update(lane='all'):
+    """lane 'fast': the radar, lightning and the current-conditions analysis, which the home page,
+    Location Weather and the radar loops read; lane 'sat': the satellite imagery. They run as
+    separate jobs so that satellite catch-up (after the PC has slept, three hours of nine products)
+    can never hold the radar and "right now" back, which is how they sat on last night's values
+    for half an hour on 21 Oct 2026. 'all' does both, in that order."""
     logging.disable(logging.WARNING)
     warnings.filterwarnings('ignore')
     t0 = time.time()
     LIVE.mkdir(parents=True, exist_ok=True)
     _ll1km()
-    with cf.ThreadPoolExecutor(4) as ex:
-        res = list(ex.map(update_product, PRODUCTS))
-    try:
-        n = lightning()
-    except Exception as e:
-        n = f'failed: {e}'
-    try:                                       # current conditions + the observed day (mdata/now.py)
-        from . import now
-        nw = now.update()
-    except Exception as e:
-        nw = f'failed: {type(e).__name__}: {e}'
-        traceback.print_exc()
-    catalog()
-    print(f'live: {res} lightning={n} now={nw} in {time.time() - t0:.0f} s')
+    res, n, nw = [], '-', '-'
+    if lane in ('fast', 'all'):
+        res.append(update_product('radar'))
+        catalog()                              # the radar shows as soon as it is in
+        try:
+            n = lightning()
+        except Exception as e:
+            n = f'failed: {e}'
+        try:                                   # current conditions + the observed day (mdata/now.py)
+            from . import now
+            nw = now.update()
+        except Exception as e:
+            nw = f'failed: {type(e).__name__}: {e}'
+            traceback.print_exc()
+        catalog()
+    if lane in ('sat', 'all'):
+        with cf.ThreadPoolExecutor(4) as ex:
+            res += list(ex.map(update_product, SATELLITES))
+        catalog()
+    print(f'live[{lane}]: {res} lightning={n} now={nw} in {time.time() - t0:.0f} s')
 
 
 if __name__ == '__main__':
     try:
-        {'update': update}[sys.argv[1]]()
+        {'update': lambda: update(sys.argv[2] if len(sys.argv) > 2 else 'all')}[sys.argv[1]]()
     except Exception:
         traceback.print_exc()
         sys.exit(1)

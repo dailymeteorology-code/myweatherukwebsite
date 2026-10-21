@@ -31,7 +31,8 @@ const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
 const MAX_USER_JOBS = 3;               // what someone is waiting for
 const MAX_PREFETCH_JOBS = 1;           // background warming, never in the way
-const MAX_POINT_JOBS = 1;              // the Location page's UKV frames: their own lane, not behind the warming
+const MAX_POINT_JOBS = 3;              // the Location page's UKV frames: their own lane, not behind the warming,
+                                        // three at a time so a new run is ready in minutes, not an hour
 const LIMIT = (p) => (p === 'point' ? MAX_POINT_JOBS : p ? MAX_PREFETCH_JOBS : MAX_USER_JOBS);
 
 const running = new Map();            // key -> { child, prefetch }
@@ -118,13 +119,16 @@ const PREFETCH = ['precip_rate', 'precip_total', 't2', 'gust10', 'mslp', 'refc',
 /* Met Office Global files are whole-globe downloads (~7 MB a field a step): warm only the top three */
 const PREFETCH_LIMIT = { mo_global: 3, gefs_mean: 2 };
 
-let liveBusy = false;
-function refreshLive() {
-  if (liveBusy) return;
-  liveBusy = true;
-  python(['mdata.live', 'update'], (code, err) => {
-    liveBusy = false;
-    if (code) console.warn(`[modeldata] live update failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
+/* Two lanes, each one job at a time: 'fast' (radar, lightning, the current-conditions analysis)
+   and 'sat' (satellite imagery). Satellite catch-up after the PC has slept is long, and in one job
+   it held the radar and "right now" on the night before for half an hour. */
+const liveBusy = { fast: false, sat: false };
+function refreshLive(lane) {
+  if (liveBusy[lane]) return;
+  liveBusy[lane] = true;
+  python(['mdata.live', 'update', lane], (code, err) => {
+    liveBusy[lane] = false;
+    if (code) console.warn(`[modeldata] live ${lane} update failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
   });
 }
 
@@ -158,8 +162,8 @@ export function builtCubes() {
 }
 
 /* Which UKV runs to cube: the newest that reaches T+120 (03Z and 15Z), and the newest that reaches
-   T+54 once it is six hours newer than both that and every cube already built. A place's first two
-   days then come from a run at most about nine hours old, without cubing every run. */
+   T+54 once it is three hours newer than both that and every cube already built. A place's first two
+   days then come from a run at most about six hours old (every long run, in practice). */
 function pointTargets(cat) {
   const m = cat?.models?.find((x) => x.id === 'ukv');
   if (!m?.runs?.length) return [];
@@ -169,7 +173,7 @@ function pointTargets(cat) {
   const built = builtCubes();
   const ref = Math.max(built.length ? tagMs(built[built.length - 1]) : 0, long ? tagMs(runTag(long.run)) : 0);
   const out = long ? [long] : [];
-  if (short && short !== long && tagMs(runTag(short.run)) - ref >= 6 * 3600e3) out.unshift(short);
+  if (short && short !== long && tagMs(runTag(short.run)) - ref >= 3 * 3600e3) out.unshift(short);
   return out;
 }
 
@@ -199,8 +203,10 @@ export function mountModelData(app) {
   if (!fs.existsSync(path.join(DATA, 'static', 'sat_day.jpg'))) python(['mdata.static'], (c, e) => c && console.warn(`[modeldata] static build failed: ${e.slice(-300)}`));
   refreshCatalog();
   setInterval(refreshCatalog, 3 * 60 * 1000).unref();      // new runs and new steps within ~3 min of reaching AWS
-  refreshLive();
-  setInterval(refreshLive, 2 * 60 * 1000).unref();         // satellite, radar, lightning
+  refreshLive('fast');
+  setInterval(() => refreshLive('fast'), 60 * 1000).unref();       // radar, lightning, right now: within a minute of reaching AWS
+  refreshLive('sat');
+  setInterval(() => refreshLive('sat'), 3 * 60 * 1000).unref();    // satellite imagery
 
   app.get('/api/modeldata/catalog', (req, res) => {
     const f = path.join(DATA, 'catalog.json');
