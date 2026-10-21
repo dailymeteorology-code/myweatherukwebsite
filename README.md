@@ -215,8 +215,6 @@ The seed sets up a working shell: a `SiteSettings` record, the three
   self-contained.
 - `sendOutlookEmailAlert` used a Base44-brokered Gmail connection. It reports
   "Gmail not connected" unless you put an OAuth token in `GMAIL_ACCESS_TOKEN`.
-- `RelayStatusPanel` still points at a `base44.app` ingest URL that no longer
-  resolves to anything you own.
 - Stripe subscription pages render but have no payment backend behind them.
 
 ## Layout
