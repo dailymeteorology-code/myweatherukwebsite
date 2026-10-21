@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { getState, saveState, AIW_DIR } from './store.js';
-import { getConfig, levelRank, SEVERITIES } from './config.js';
+import { getLiveConfig, levelRank, SEVERITIES } from './config.js';
 import { LEADS } from './nowcast.js';
 import {
   fieldToGeoJSON, geoCentroid, geoAreaKm2, isValidGeometry, overlapFraction, bearingDeg, haversineKm, pointInGeo,
@@ -390,7 +390,7 @@ function logForecast(w, now) {
  */
 export function reconcile({ assessed, tracks, now, feedOk, modelInfo, dataQuality, paused }) {
   const s = getState();
-  const cfg = getConfig();
+  const cfg = getLiveConfig();
   const changed = new Set();
   const active = s.warnings.filter((w) => w.status === 'active' && !w.isTest);
 

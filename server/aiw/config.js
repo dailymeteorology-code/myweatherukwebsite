@@ -74,6 +74,20 @@ export function getConfig() {
   return deepMerge(DEFAULT_CONFIG, s.config || {});
 }
 
+/* A trained model speaks a different probability scale from the baseline (the baseline is
+   over-confident: when it says 85% lightning follows about a third of the time), so each model
+   carries its own area and corridor thresholds, chosen in training to cover as much lightning as
+   the configured thresholds do with the baseline. The engine uses those while the model is active;
+   the admin settings keep showing, and editing, the configured values. */
+let modelThresholds = null;
+export function setModelThresholds(t) {
+  modelThresholds = t && t.areaProbability > 0 && t.corridorProbability > 0 && t.corridorProbability < t.areaProbability ? t : null;
+}
+export function getLiveConfig() {
+  const c = getConfig();
+  return modelThresholds ? { ...c, areaProbability: modelThresholds.areaProbability, corridorProbability: modelThresholds.corridorProbability } : c;
+}
+
 export function setConfig(patch) {
   const s = getState();
   const merged = deepMerge(getConfig(), patch || {});

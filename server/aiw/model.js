@@ -31,6 +31,11 @@ export const FEATURE_NAMES = [
   'CAPE unavailable',
   'advected density x lead (decay)',
   'track age (cycles, capped)',
+  // the rest of the model atmosphere (GFS); appended, so a model trained before them still reads
+  // its own weights in the same order
+  'surface lifted index / 10 (negative = unstable)',
+  'wind shear 10 m to 500 hPa / 100 km/h',
+  'log1p(model convective rain, mm/h)',
 ];
 
 /** Feature vector for one grid point. */
@@ -48,6 +53,9 @@ export function featureVector(fields, L, k, ctx) {
     capeKnown ? 0 : 1,
     d10 * lead,
     Math.min(ctx.cycles, 20) / 10,
+    Number.isFinite(ctx.liftedIndex) ? Math.max(-10, Math.min(15, ctx.liftedIndex)) / 10 : 0,
+    Number.isFinite(ctx.shearKmh) ? Math.min(150, Math.max(0, ctx.shearKmh)) / 100 : 0,
+    Number.isFinite(ctx.showersMmH) ? Math.log1p(Math.max(0, ctx.showersMmH)) : 0,
   ];
 }
 
@@ -79,7 +87,8 @@ export function makeLogistic(spec) {
     predict(fields, L, k, ctx) {
       const x = featureVector(fields, L, k, ctx);
       let z = 0;
-      for (let i = 0; i < x.length; i += 1) z += spec.weights[i] * x[i];
+      const n = Math.min(x.length, spec.weights.length);      // a model from before newer features uses its own
+      for (let i = 0; i < n; i += 1) z += spec.weights[i] * x[i];
       return sigmoid(z);
     },
   };

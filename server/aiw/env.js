@@ -1,108 +1,165 @@
 /**
- * Model-atmosphere inputs for each storm, from Open-Meteo (no key needed; the
- * project already uses it). Open-Meteo blends the best available national and
- * global NWP models for each location, so the same call works worldwide.
+ * Model-atmosphere inputs for each storm, from NOAA GFS 0.25° on AWS open data.
  *
- *   cape                Convective Available Potential Energy, J/kg
- *   liftedIndex         stability; negative = unstable
- *   cin                 convective inhibition, J/kg
- *   steering            700 hPa wind — a reasonable proxy for storm motion
- *   shear0_6kmKmh       vector difference, 10 m to 500 hPa — organisation
- *   showersMmH          model convective precipitation
+ *   cape                Convective Available Potential Energy (surface-based), J/kg
+ *   liftedIndex         surface lifted index; negative = unstable
+ *   cin                 convective inhibition, J/kg (a magnitude: 0 = none)
+ *   steering            700 hPa wind, a reasonable proxy for storm motion
+ *   shear0_6kmKmh       vector difference between the 10 m and 500 hPa winds: organisation
+ *   showersMmH          model convective precipitation rate
  *
- * Cached per 0.5° tile per hour, and rate-limited, because a busy day can
- * have a few hundred storms worldwide and the free tier is generous but not
- * unlimited. A failed call returns null, which the model treats as "CAPE
- * unavailable" — it never invents a value.
+ * gfs_env.py writes one file per valid hour (the newest GFS run covering it, regridded to a 0.5°
+ * global grid) into ENV_DIR; this reads a point out of it. The live engine never waits: envPeek
+ * answers from the hour already on disk (or the hour before) and starts fetching what is missing,
+ * and a timer keeps this hour and the next ready. Training asks envAt for past hours, which fetches
+ * them on demand (GFS runs stay on AWS), so a model trains on exactly the inputs it will see live.
+ * A missing hour returns null, which the model treats as "CAPE unavailable" — never invented.
  */
-const BASE = 'https://api.open-meteo.com/v1/forecast';
-const VARS = ['cape', 'lifted_index', 'convective_inhibition', 'wind_speed_700hPa', 'wind_direction_700hPa',
-  'wind_speed_500hPa', 'wind_direction_500hPa', 'wind_speed_10m', 'wind_direction_10m', 'showers'];
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { resolvePython } from '../python.js';
 
-const cache = new Map(); // tileKey|hour -> { at, value }
-let callsThisMinute = 0; let minuteStart = Date.now();
-const MAX_PER_MINUTE = Number(process.env.AIW_OPENMETEO_PER_MIN || 30);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+export const ENV_DIR = process.env.AIW_ENV_DIR || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/aiw-env' : path.join(HERE, '..', 'data', 'aiw-env'));
+const KEEP_DAYS = Number(process.env.AIW_ENV_DAYS || 60);
+export const ENV_SOURCE = 'NOAA GFS 0.25° (AWS open data)';
 
-export const envHealth = { lastOkAt: null, lastError: null, calls: 0, failures: 0, cached: 0 };
+export const envHealth = { source: 'gfs', lastOkAt: null, lastError: null, hoursFetched: 0, failures: 0, cached: 0 };
 
-function vec(speedKmh, dirDeg) {
-  // Meteorological direction is where the wind comes FROM; motion is toward.
-  const toward = ((dirDeg + 180) * Math.PI) / 180;
-  return { vx: (speedKmh / 60) * Math.sin(toward), vy: (speedKmh / 60) * Math.cos(toward) };
-}
+const tagOf = (hour) => new Date(hour * 3600e3).toISOString().slice(0, 13).replace(/[-T]/g, '');
 
-export async function envAt(lat, lon, now = Date.now()) {
-  const tile = `${(Math.round(lat * 2) / 2).toFixed(1)},${(Math.round(lon * 2) / 2).toFixed(1)}`;
-  const hour = Math.floor(now / 3600e3);
-  const key = `${tile}|${hour}`;
-  if (cache.has(key)) { envHealth.cached += 1; return cache.get(key).value; }
-  if (now - minuteStart > 60e3) { minuteStart = now; callsThisMinute = 0; }
-  if (callsThisMinute >= MAX_PER_MINUTE) return null; // try again next cycle
-  callsThisMinute += 1;
-  const [tlat, tlon] = tile.split(',').map(Number);
-  // Request exactly the hour wanted. start_hour/end_hour work for the past
-  // ~3 months as well as the future, so training on archived strikes gets the
-  // same inputs, from the same source, as the live engine.
-  const hh = new Date(hour * 3600e3).toISOString().slice(0, 13) + ':00';
-  const url = `${BASE}?latitude=${tlat}&longitude=${tlon}&hourly=${VARS.join(',')}&start_hour=${hh}&end_hour=${hh}&timezone=UTC&wind_speed_unit=kmh`;
+/* ── hour files ── */
+const loaded = new Map();            // hour -> { head, grids: { name: Int16Array } }
+function load(hour) {
+  if (loaded.has(hour)) return loaded.get(hour);
+  const tag = tagOf(hour);
+  let head, buf;
   try {
-    envHealth.calls += 1;
-    const res = await fetch(url, { signal: AbortSignal.timeout(12000), headers: { 'user-agent': 'MyWeatherUK-AIW/1.0' } });
-    if (!res.ok) throw new Error(`Open-Meteo ${res.status}`);
-    const j = await res.json();
-    const times = j.hourly?.time || [];
-    // The hour containing `now`.
-    const iso = new Date(hour * 3600e3).toISOString().slice(0, 13);
-    let idx = times.findIndex((t) => t.startsWith(iso));
-    if (idx < 0) idx = 0;
-    const h = (v) => { const a = j.hourly?.[v]; const x = a ? a[idx] : null; return Number.isFinite(x) ? x : null; };
-    const s700 = h('wind_speed_700hPa'); const d700 = h('wind_direction_700hPa');
-    const s500 = h('wind_speed_500hPa'); const d500 = h('wind_direction_500hPa');
-    const s10 = h('wind_speed_10m'); const d10 = h('wind_direction_10m');
-    let shear = null;
-    if (s500 != null && d500 != null && s10 != null && d10 != null) {
-      const a = vec(s500, d500); const b = vec(s10, d10);
-      shear = Math.hypot(a.vx - b.vx, a.vy - b.vy) * 60;
-    }
-    const value = {
-      source: 'open-meteo', model: 'best-match', validHour: new Date(hour * 3600e3).toISOString(),
-      tile,
-      cape: h('cape'), liftedIndex: h('lifted_index'), cin: h('convective_inhibition'),
-      showersMmH: h('showers'),
-      steering: s700 != null && d700 != null ? { ...vec(s700, d700), speedKmh: s700, fromDeg: d700, source: 'steering-700hPa' } : null,
-      shear0_6kmKmh: shear,
-    };
-    cache.set(key, { at: now, value });
-    if (cache.size > 5000) cache.delete(cache.keys().next().value);
-    envHealth.lastOkAt = now;
-    return value;
-  } catch (err) {
-    envHealth.failures += 1; envHealth.lastError = String(err.message || err);
-    return null;
-  }
+    head = JSON.parse(fs.readFileSync(path.join(ENV_DIR, `${tag}.json`), 'utf8'));
+    buf = fs.readFileSync(path.join(ENV_DIR, `${tag}.bin`));
+  } catch { return null; }
+  const n = head.nx * head.ny;
+  if (buf.length !== n * 2 * head.fields.length) return null;
+  const grids = {};
+  head.fields.forEach((f, i) => {                                   // little-endian, as this machine is
+    const a = new Int16Array(buf.buffer.slice(buf.byteOffset + i * n * 2, buf.byteOffset + (i + 1) * n * 2));
+    grids[f.name] = { a, scale: f.scale };
+  });
+  const entry = { head, grids };
+  loaded.set(hour, entry);
+  while (loaded.size > 6) loaded.delete(loaded.keys().next().value);
+  return entry;
 }
 
+/* ── fetching (one Python run for any number of hours) ── */
+const pending = new Map();           // hour -> Promise
+function fetchHours(hours) {
+  const want = [...new Set(hours)].filter((h) => !pending.has(h) && !fs.existsSync(path.join(ENV_DIR, `${tagOf(h)}.bin`)));
+  if (!want.length) return Promise.all(hours.map((h) => pending.get(h)).filter(Boolean));
+  const py = resolvePython();
+  const run = new Promise((resolve) => {
+    let p;
+    try {
+      p = spawn(py.cmd, [path.join(HERE, 'gfs_env.py'), ENV_DIR, ...want.map(tagOf)], { windowsHide: true, env: { ...process.env, ...py.env } });
+    } catch (e) { envHealth.lastError = e.message; envHealth.failures += 1; resolve(); return; }
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', () => {});
+    const kill = setTimeout(() => p.kill(), 15 * 60e3);
+    const done = () => {
+      clearTimeout(kill);
+      for (const line of out.split(/\r?\n/)) {
+        if (!line.startsWith('{')) continue;
+        try {
+          const j = JSON.parse(line);
+          if (j.ok) { envHealth.hoursFetched += 1; envHealth.lastOkAt = Date.now(); } else { envHealth.failures += 1; envHealth.lastError = j.error; }
+        } catch { /* a torn line */ }
+      }
+      for (const h of want) pending.delete(h);
+      resolve();
+    };
+    p.on('error', (e) => { envHealth.lastError = `could not start Python (${e.message})`; envHealth.failures += 1; done(); });
+    p.on('close', done);
+  });
+  for (const h of want) pending.set(h, run);
+  return run;
+}
 
-/* In-flight requests, so a busy cycle never asks for the same tile twice. */
-const inflight = new Map();
+/** Make sure these valid hours (epoch hours) are on disk; training calls this first for every
+ *  hour that has lightning in it. */
+export async function prefetchHours(hours, batch = 24) {
+  const list = [...new Set(hours)].sort((a, b) => a - b);
+  for (let i = 0; i < list.length; i += batch) await fetchHours(list.slice(i, i + batch));
+}
 
-/**
- * Non-blocking lookup for the live engine: returns the cached value at once
- * (or null) and, if there is none, starts fetching it in the background so it
- * is ready next cycle. The forecasting cycle must never wait on the network —
- * fetching inputs for 40 storms one after another took over half a minute.
- */
-export function envPeek(lat, lon, now = Date.now()) {
-  const tile = `${(Math.round(lat * 2) / 2).toFixed(1)},${(Math.round(lon * 2) / 2).toFixed(1)}`;
+/* ── a point ── */
+function sample(entry, lat, lon) {
+  const { head, grids } = entry;
+  const fy = (head.lat0 - lat) / -head.dlat;                       // rows run north to south
+  const fx = ((((lon - head.lon0) % 360) + 360) % 360) / head.dlon;
+  const j = Math.min(head.ny - 2, Math.max(0, Math.floor(fy))), i = Math.floor(fx) % head.nx;
+  const i2 = (i + 1) % head.nx, u = fx - Math.floor(fx), v = Math.min(1, Math.max(0, fy - j));
+  const at = (name) => {
+    const g = grids[name]; if (!g) return null;
+    const a = g.a, nx = head.nx;
+    const val = (a[j * nx + i] * (1 - u) + a[j * nx + i2] * u) * (1 - v) + (a[(j + 1) * nx + i] * (1 - u) + a[(j + 1) * nx + i2] * u) * v;
+    return val / g.scale;
+  };
+  const u10 = at('u10'), v10 = at('v10'), u500 = at('u500'), v500 = at('v500'), u700 = at('u700'), v700 = at('v700');
+  const cape = at('cape'), lftx = at('lftx'), cin = at('cin'), cprat = at('cprat');
+  const kmh = (x) => x * 3.6;
+  const steering = u700 != null && v700 != null ? {
+    vx: kmh(u700) / 60, vy: kmh(v700) / 60,                       // km per minute, towards
+    speedKmh: Math.round(kmh(Math.hypot(u700, v700))),
+    fromDeg: Math.round(((Math.atan2(-u700, -v700) * 180) / Math.PI + 360) % 360),
+    source: 'steering-700hPa',
+  } : null;
+  return {
+    source: 'gfs', model: `GFS ${head.cycle.slice(11, 13)}Z +${head.fh} h`, validHour: head.valid.replace('+00:00', 'Z'),
+    tile: `${(Math.round(lat * 2) / 2).toFixed(1)},${(Math.round(lon * 2) / 2).toFixed(1)}`,
+    cape: cape == null ? null : Math.round(Math.max(0, cape)), liftedIndex: lftx == null ? null : +lftx.toFixed(1),
+    cin: cin == null ? null : Math.round(Math.abs(cin)), showersMmH: cprat == null ? null : +Math.max(0, cprat).toFixed(2),
+    steering,
+    shear0_6kmKmh: u10 != null && u500 != null ? Math.round(kmh(Math.hypot(u500 - u10, v500 - v10))) : null,
+  };
+}
+
+/** The atmosphere at a point for the hour containing `now`, fetching that hour if it is not on
+ *  disk yet (training, and anything else that can wait). */
+export async function envAt(lat, lon, now = Date.now()) {
   const hour = Math.floor(now / 3600e3);
-  const key = `${tile}|${hour}`;
-  const hit = cache.get(key);
-  if (hit) { envHealth.cached += 1; return hit.value; }
-  // The previous hour's values are a far better prior than nothing while the
-  // new hour is being fetched.
-  const prev = cache.get(`${tile}|${hour - 1}`);
-  if (!inflight.has(key)) {
-    inflight.set(key, envAt(lat, lon, now).finally(() => inflight.delete(key)));
-  }
-  return prev ? prev.value : null;
+  let e = load(hour);
+  if (!e) { await fetchHours([hour]); e = load(hour); }
+  if (!e) return null;
+  envHealth.cached += 1;
+  return sample(e, lat, lon);
+}
+
+/** The live engine's lookup: never waits. This hour if it is on disk, else the hour before while
+ *  this one is fetched in the background. */
+export function envPeek(lat, lon, now = Date.now()) {
+  const hour = Math.floor(now / 3600e3);
+  const e = load(hour);
+  if (e) { envHealth.cached += 1; return sample(e, lat, lon); }
+  fetchHours([hour, hour + 1]);
+  const prev = load(hour - 1);
+  return prev ? sample(prev, lat, lon) : null;
+}
+
+/** Keep this hour and the next on disk, and drop hour-files older than KEEP_DAYS. */
+export function startEnvUpkeep() {
+  const tick = () => {
+    const hour = Math.floor(Date.now() / 3600e3);
+    fetchHours([hour, hour + 1]);
+    const cutoff = tagOf(hour - KEEP_DAYS * 24);
+    try {
+      for (const f of fs.readdirSync(ENV_DIR)) if (/^\d{10}\.(bin|json)$/.test(f) && f.slice(0, 10) < cutoff) fs.rmSync(path.join(ENV_DIR, f), { force: true });
+    } catch { /* nothing yet */ }
+  };
+  fs.mkdirSync(ENV_DIR, { recursive: true });
+  tick();
+  const t = setInterval(tick, 10 * 60e3);
+  t.unref?.();
 }

@@ -1,7 +1,8 @@
 /**
  * Training and evaluation pipeline for the lightning nowcast model.
  *
- *   node server/aiw/train.js                 train on everything archived
+ *   node server/aiw/train.js                 train on the last 7 days archived
+ *   node server/aiw/train.js --days 14       …or a longer stretch
  *   node server/aiw/train.js --from 2026-10-01 --to 2026-10-20
  *   node server/aiw/train.js --deploy        deploy if it passes the gate
  *
@@ -30,14 +31,15 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readStrikes, archiveSummary, writeJsonAtomic, MODEL_DIR, getState, saveState } from './store.js';
+import { readStrikes, archiveSummary, writeJsonAtomic, MODEL_DIR, getState, saveState, TRAIN_STRIKE_DIR } from './store.js';
 import {
   clusterStrikes, summariseCluster, updateTracks, crossCorrelationMotion, historyMotion, blendMotion,
   buildFields, trendOf, LEADS, observedHits, HIT_RADIUS_KM,
 } from './nowcast.js';
 import { featureVector, fitLogistic, BASELINE, createScorer, FEATURE_NAMES } from './model.js';
 import { coverageAt } from './ingest.js';
-import { envAt } from './env.js';
+import { getConfig } from './config.js';
+import { envAt, prefetchHours } from './env.js';
 import { haversineKm } from './geometry.js';
 
 /** The deployment gate. A model that fails any of these stays in research. */
@@ -47,6 +49,28 @@ export const GATE = {
   mustBeatBaseline: true,     // lower Brier score than advected persistence…
   mustBeatPersistence: true,  // …and than plain persistence, on held-out data
 };
+
+/* Probability thresholds tried when matching the model to the baseline's coverage. */
+const SWEEP = [0.01, 0.015, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6];
+const makeSweep = () => ({ obs: 0, hit: SWEEP.map(() => 0), fa: SWEEP.map(() => 0) });
+function addSweep(sw, p, o, w) {
+  if (o) sw.obs += w;
+  for (let i = 0; i < SWEEP.length && p >= SWEEP[i]; i += 1) { if (o) sw.hit[i] += w; else sw.fa[i] += w; }
+}
+function sweepAt(sw, i) {
+  const h = sw.hit[i], f = sw.fa[i];
+  return { threshold: SWEEP[i], pod: sw.obs ? h / sw.obs : 0, far: h + f ? f / (h + f) : 0, csi: sw.obs + f ? h / (sw.obs + f) : 0 };
+}
+/** The model's threshold that catches at least as much lightning as the baseline does at `baseT`:
+ *  the highest such threshold, so the warned area is no bigger than it has to be. */
+function matchThreshold(swM, swB, baseT) {
+  const ib = SWEEP.reduce((b, t, i) => (Math.abs(t - baseT) < Math.abs(SWEEP[b] - baseT) ? i : b), 0);
+  const target = sweepAt(swB, ib);
+  let best = 0;
+  for (let i = 0; i < SWEEP.length; i += 1) if (sweepAt(swM, i).pod >= target.pod) best = i;
+  const model = sweepAt(swM, best);
+  return { threshold: SWEEP[best], model, baseline: target, reachesCoverage: model.pod >= target.pod };
+}
 
 function seededRandom(seed) {
   let s = seed >>> 0;
@@ -58,7 +82,9 @@ function seededRandom(seed) {
  * the observed outcome rasters. Uses the live engine's code paths.
  */
 export async function* replay({ from, to, stepMin = 2, withEnv = true, onProgress }) {
-  const all = readStrikes(from - 35 * 60e3, to + 31 * 60e3);
+  const all = readStrikes(from - 35 * 60e3, to + 31 * 60e3, TRAIN_STRIKE_DIR);
+  // the model atmosphere for every hour that has lightning, fetched up front in batches
+  if (withEnv) await prefetchHours(all.filter((s) => s.time >= from && s.time < to).map((s) => Math.floor(s.time / 3600e3)));
   const tracks = new Map();
   let seq = 0;
   const nextId = () => `R${seq++}`;
@@ -96,7 +122,8 @@ export async function* replay({ from, to, stepMin = 2, withEnv = true, onProgres
       const persistence = observedHits(fields.grid, local, now - 10 * 60e3, now + 1);
       yield {
         now, track, fields, outcomes, persistence,
-        ctx: { trend: trend.logRatio, n10: track.n10, cape: env?.cape, cycles: track.cycles },
+        ctx: { trend: trend.logRatio, n10: track.n10, cape: env?.cape, cycles: track.cycles,
+          liftedIndex: env?.liftedIndex, shearKmh: env?.shear0_6kmKmh, showersMmH: env?.showersMmH },
         region: coverageAt(track.lat, track.lon).id,
         ratePerMin: trend.latest10 / 10,
       };
@@ -118,11 +145,14 @@ function parseArgs(argv) {
   return out;
 }
 
-export async function train({ from, to, stepMin = 2, negRate = 0.04, seed = 7, deploy = false, log = console.log } = {}) {
-  const summary = archiveSummary();
+/* Sampling keeps memory bounded however much lightning there is: a busy two hours worldwide is
+   ~5 million lightning grid-points and ~90 million quiet ones. Both are sampled, and each kept
+   sample is weighted by the inverse of its rate, so the fitted probabilities stay calibrated. */
+export async function train({ from, to, days = 7, stepMin = 4, negRate = 0.001, posRate = 0.02, seed = 7, deploy = false, log = console.log } = {}) {
+  const summary = archiveSummary(TRAIN_STRIKE_DIR);
   if (!summary.firstHour) throw new Error('No archived strikes yet — the server records them from the moment it starts.');
-  from = from ?? summary.firstHour + 35 * 60e3;
   to = to ?? Math.min(Date.now() - 31 * 60e3, summary.lastHour + 3600e3);
+  from = from ?? Math.max(summary.firstHour + 35 * 60e3, to - days * 86400e3);
   if (to - from < 90 * 60e3) throw new Error(`Only ${Math.round((to - from) / 60e3)} usable minutes archived; need at least 90.`);
   const split = from + 0.7 * (to - from);
   const gap = 35 * 60e3;
@@ -131,6 +161,7 @@ export async function train({ from, to, stepMin = 2, negRate = 0.04, seed = 7, d
 
   const X = []; const y = []; const w = [];
   const scorers = { model: null, baseline: createScorer(), persistence: createScorer() };
+  const sweepB = makeSweep();
   const byLead = {}; const byRegion = {};
   for (const L of LEADS) byLead[L] = { baseline: createScorer(), persistence: createScorer(), model: createScorer() };
   const testItems = [];
@@ -148,7 +179,7 @@ export async function train({ from, to, stepMin = 2, negRate = 0.04, seed = 7, d
       for (let k = 0; k < n; k += 1) {
         const o = out[k];
         let weight = 1;
-        if (!o) { if (rnd() > negRate) continue; weight = 1 / negRate; }
+        if (!o) { if (rnd() > negRate) continue; weight = 1 / negRate; } else if (posRate < 1) { if (rnd() > posRate) continue; weight = 1 / posRate; }
         if (isTrain) {
           X.push(featureVector(item.fields, L, k, item.ctx)); y.push(o); w.push(weight);
           if (o) trainPos += 1;
@@ -160,6 +191,7 @@ export async function train({ from, to, stepMin = 2, negRate = 0.04, seed = 7, d
           const pb = BASELINE.predict(item.fields, L, k);
           const pp = item.persistence[k];
           scorers.baseline.add(pb, o, weight); scorers.persistence.add(pp, o, weight);
+          addSweep(sweepB, pb, o, weight);
           byLead[L].baseline.add(pb, o, weight); byLead[L].persistence.add(pp, o, weight);
           byRegion[item.region] = byRegion[item.region] || { baseline: createScorer(), persistence: createScorer(), model: createScorer() };
           byRegion[item.region].baseline.add(pb, o, weight); byRegion[item.region].persistence.add(pp, o, weight);
@@ -174,12 +206,20 @@ export async function train({ from, to, stepMin = 2, negRate = 0.04, seed = 7, d
   const version = `logistic-${new Date().toISOString().replace(/[-:]/g, '').slice(0, 13)}`;
   const spec = { version, weights, features: FEATURE_NAMES };
   scorers.model = createScorer();
+  const sweepM = makeSweep();
   for (const [x, L, region, o, weight] of testItems) {
     let z = 0;
     for (let i = 0; i < x.length; i += 1) z += weights[i] * x[i];
     const p = 1 / (1 + Math.exp(-z));
     scorers.model.add(p, o, weight); byLead[L].model.add(p, o, weight); byRegion[region].model.add(p, o, weight);
+    addSweep(sweepM, p, o, weight);
   }
+  // the model's own warning thresholds: the same coverage of lightning as the baseline gives at the
+  // configured thresholds (see config.js getLiveConfig)
+  const cfg = getConfig();
+  const area = matchThreshold(sweepM, sweepB, cfg.areaProbability);
+  const corridor = matchThreshold(sweepM, sweepB, cfg.corridorProbability);
+  if (corridor.threshold >= area.threshold) corridor.threshold = SWEEP[Math.max(0, SWEEP.indexOf(area.threshold) - 1)];
 
   const test = {
     overall: scorers.model.result(),
@@ -196,6 +236,8 @@ export async function train({ from, to, stepMin = 2, negRate = 0.04, seed = 7, d
   if (testPos < GATE.minTestPositives) gateFailures.push(`only ${testPos} lightning samples in the test period (need ${GATE.minTestPositives})`);
   if (GATE.mustBeatBaseline && !beatsBaseline) gateFailures.push('did not beat the advected-persistence baseline');
   if (GATE.mustBeatPersistence && !beatsPersistence) gateFailures.push('did not beat plain persistence');
+  if (!area.reachesCoverage) gateFailures.push(`cannot cover as much lightning as the baseline (${(area.baseline.pod * 100).toFixed(0)}%) at any threshold`);
+  else if (area.model.far > area.baseline.far) gateFailures.push(`at the baseline's coverage it raises more false alarms (${(area.model.far * 100).toFixed(0)}% vs ${(area.baseline.far * 100).toFixed(0)}%)`);
 
   const sorted = rates.filter((r) => r > 0).sort((a, b) => a - b);
   const pct = (q) => (sorted.length ? +sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))].toFixed(2) : null);
@@ -204,11 +246,16 @@ export async function train({ from, to, stepMin = 2, negRate = 0.04, seed = 7, d
     ...spec, kind: 'logistic', createdAt: Date.now(),
     hitRadiusKm: HIT_RADIUS_KM, leads: LEADS,
     data: {
-      from, to, split, gapMin: gap / 60e3, stepMin, negRate, seed,
+      from, to, split, gapMin: gap / 60e3, stepMin, negRate, posRate, seed, source: TRAIN_STRIKE_DIR,
       archiveHours: +archiveHours.toFixed(1), trainSamples: X.length, trainPositives: trainPos,
       testSamples: testItems.length, testPositives: testPos,
     },
-    metrics: { test, beatsBaselines: beatsBaseline && beatsPersistence },
+    metrics: {
+      test, beatsBaselines: beatsBaseline && beatsPersistence,
+      matched: { area, corridor },
+      sweep: { thresholds: SWEEP, model: SWEEP.map((_, i) => sweepAt(sweepM, i)), baseline: SWEEP.map((_, i) => sweepAt(sweepB, i)) },
+    },
+    thresholds: { areaProbability: area.threshold, corridorProbability: corridor.threshold },
     cellRatePercentiles: { p50: pct(0.5), p75: pct(0.75), p90: pct(0.9), p97: pct(0.97), p99: pct(0.99), cells: sorted.length },
     gate: { passed: gateFailures.length === 0, failures: gateFailures, criteria: GATE },
     status: 'research',
@@ -221,6 +268,7 @@ export async function train({ from, to, stepMin = 2, negRate = 0.04, seed = 7, d
   if (process.env.AIW_SPAWNED !== '1') { registerModel(record); saveState({ now: true }); }
 
   log(`[train] ${version}: Brier ${fmt(test.overall.brier)} (baseline ${fmt(test.baseline.brier)}, persistence ${fmt(test.persistence.brier)}), CSI ${fmt(test.overall.csi)}`);
+  log(`[train] warning area at p >= ${area.threshold}: catches ${(area.model.pod * 100).toFixed(1)}% of lightning (baseline ${(area.baseline.pod * 100).toFixed(1)}% at ${cfg.areaProbability}), false alarms ${(area.model.far * 100).toFixed(1)}% (baseline ${(area.baseline.far * 100).toFixed(1)}%)`);
   log(`[train] gate ${record.gate.passed ? 'PASSED' : 'not passed: ' + gateFailures.join('; ')} -> ${record.status}`);
   return record;
 }
@@ -258,7 +306,10 @@ if (isMain) {
   train({
     from: args.from ? Date.parse(args.from) : undefined,
     to: args.to ? Date.parse(args.to) : undefined,
-    stepMin: args.step ? Number(args.step) : 2,
+    days: args.days ? Number(args.days) : undefined,
+    stepMin: args.step ? Number(args.step) : undefined,
+    negRate: args.neg ? Number(args.neg) : undefined,
+    posRate: args.pos ? Number(args.pos) : undefined,
     deploy: !!args.deploy,
   }).then(() => process.exit(0)).catch((e) => { console.error('[train] failed:', e.message); process.exit(1); });
 }

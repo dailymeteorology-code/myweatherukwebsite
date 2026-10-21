@@ -29,7 +29,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { requireAdmin } from '../auth.js';
-import { getState, saveState, archiveSummary, MODEL_DIR, readJson, AIW_DIR } from './store.js';
+import { getState, saveState, archiveSummary, MODEL_DIR, readJson, AIW_DIR, TRAIN_STRIKE_DIR } from './store.js';
 import { COVERAGE, coverageAt } from './ingest.js';
 import { getConfig, setConfig, DEFAULT_CONFIG, levelRank } from './config.js';
 import { allWarnings, findWarning, endWarning, issueTestWarning } from './warnings.js';
@@ -163,7 +163,7 @@ export function createRouter({ engine, ingest }) {
       coverage: COVERAGE.map((c) => ({ id: c.id, quality: c.quality, bbox: c.bbox })),
       inputs: {
         lightning: 'Blitzortung.org (live, community network)',
-        environment: 'Open-Meteo model atmosphere: CAPE, lifted index, CIN, 700 hPa steering wind, 0–6 km shear, convective precipitation',
+        environment: 'NOAA GFS 0.25° model atmosphere (AWS open data): CAPE, lifted index, CIN, 700 hPa steering wind, 10 m–500 hPa shear, convective precipitation',
         radar: 'not integrated',
         satellite: 'not integrated',
         geography: gazetteerSource(),
@@ -289,7 +289,7 @@ export function createRouter({ engine, ingest }) {
       health: s.health, engine: engine.status, model: engine.modelInfo(),
       activeModel: active ? { version: active.version, metrics: active.metrics, data: active.data, gate: active.gate, weights: active.weights, features: active.features } : null,
       latestModel: latest ? { version: latest.version, metrics: latest.metrics, data: latest.data, gate: latest.gate, status: latest.status, cellRatePercentiles: latest.cellRatePercentiles, suggestedThresholds: deriveThresholds(latest) } : null,
-      models, archive: archiveSummary(), trainJob,
+      models, archive: archiveSummary(TRAIN_STRIKE_DIR), trainJob,
       config: getConfig(), defaults: DEFAULT_CONFIG,
       audit: s.audit.slice(-100).reverse(),
       announcements: s.announcements.slice(-60).reverse(),

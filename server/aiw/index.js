@@ -10,8 +10,9 @@
 import { createIngest } from './ingest.js';
 import { createEngine } from './engine.js';
 import { createRouter } from './api.js';
-import { flushArchive, readStrikes, archiveSummary, getState } from './store.js';
+import { flushArchive, readStrikes, archiveSummary, getState, TRAIN_STRIKE_DIR } from './store.js';
 import { compactArchive } from './warnings.js';
+import { startEnvUpkeep } from './env.js';
 
 const WORKER_URL = 'https://blitzortungworker-3.onrender.com/strikes';
 
@@ -32,6 +33,7 @@ export function startAiw(app) {
   broadcast = api.broadcast;
   app.use('/api/aiw', api.router);
   engine.start();
+  startEnvUpkeep();                // the model atmosphere for this hour and the next (GFS, AWS)
 
   // Backfill whatever the Render relay still holds (≈25–40 min, Europe) so a
   // fresh start has history for motion estimates immediately.
@@ -52,7 +54,7 @@ export function startAiw(app) {
     const s = getState();
     const last = (s.models || []).at(-1);
     if (last && Date.now() - last.createdAt < 20 * 3600e3) return;
-    const a = archiveSummary();
+    const a = archiveSummary(TRAIN_STRIKE_DIR);
     if (!a.firstHour || (a.lastHour - a.firstHour) / 3600e3 < 24) return;
     api.startTraining({ deploy: true, reason: 'scheduled daily retrain' });
   }, 60e3);

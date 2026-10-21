@@ -16,6 +16,11 @@
  * seconds) on D:, Blitzortung kept 45 days and the Met Office 400. The last 48 hours of both are
  * held in memory in typed arrays (a busy day is a million strikes worldwide).
  *
+ * While this PC is off, GitHub keeps listening (.github/workflows/lightning.yml) and stores each
+ * day in the `lightning-archive` release. This server logs when it is running (uptime.json); on
+ * start-up and every 20 minutes it downloads only the days that cover time it was off and merges them
+ * in, a strike heard by both counted once — so the archive has no holes either way.
+ *
  *   GET /api/lightning/summary            counts (5 min, hour, today, 24 h in 15-minute bars) for
  *                                         the UK, Europe and the world, and how each feed is doing
  *   GET /api/lightning/strikes            ?from=&to= (ms) or ?day=YYYY-MM-DD (UK day), &region=
@@ -46,6 +51,7 @@ export const REGIONS = {
   world: { s: -90, n: 90, w: -180, e: 180 },
 };
 const MEMORY_MS = 48 * 3600e3;
+const CLOUD = { repo: 'dailymeteorology-code/myweatherukwebsite', tag: 'lightning-archive' };
 const RETAIN_DAYS = { bz: 45, mo: 400 };
 const MAX_RETURN = 300000;
 const POLL_MS = 60e3;
@@ -394,9 +400,11 @@ export function createLightning({ ingest } = {}) {
           name: 'Blitzortung.org', status: bzStatus?.status || 'unknown', sockets: bzStatus?.sockets ?? null,
           lastStrikeAgeMs: bzStatus?.lastStrikeAgeMs ?? null, covers: uk === 'bz' ? 'everywhere' : 'outside the UK & Ireland',
           heldInMemory: cols[0].size,
-          // hours of the last 24 with any Blitzortung strike: a gap means this server was not running
+          // hours of the last 24 with any Blitzortung strike: a gap means neither this server nor
+          // the cloud capture was listening
           hours: bzHours,
         },
+        cloud: { ...cloud, archive: `github.com/${CLOUD.repo}/releases/tag/${CLOUD.tag}` },
       },
       seq,
     };
@@ -485,8 +493,126 @@ export function createLightning({ ingest } = {}) {
     if (n) console.log(`[lightning] imported ${n} hours of Blitzortung strikes from the AI-warnings archive`);
   }
 
+  /* ── when this server was running, so the gaps can be filled from the cloud ── */
+  const UPTIME_FILE = path.join(DATA, 'uptime.json');
+  let uptime = [];
+  function startUptime() {
+    try { uptime = JSON.parse(fs.readFileSync(UPTIME_FILE, 'utf8')); } catch { uptime = []; }
+    const now = Date.now();
+    uptime.push([now, now]);
+    const beat = () => {
+      uptime[uptime.length - 1][1] = Date.now();
+      const cut = Date.now() - 50 * 86400e3;
+      uptime = uptime.filter((iv) => iv[1] >= cut);
+      try { fs.writeFileSync(UPTIME_FILE, JSON.stringify(uptime)); } catch { /* next minute */ }
+    };
+    beat();
+    setInterval(beat, 60e3).unref?.();
+  }
+  /** The parts of [t0, t1) this server was not running for (a minute's grace either side). */
+  function downtime(t0, t1) {
+    const ivs = uptime.map(([a, b]) => [a + 60e3, b - 60e3]).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+    const gaps = [];
+    let cur = t0;
+    for (const [a, b] of ivs) {
+      if (b <= cur) continue;
+      if (a >= t1) break;
+      if (a > cur) gaps.push([cur, Math.min(a, t1)]);
+      cur = Math.max(cur, b);
+      if (cur >= t1) break;
+    }
+    if (cur < t1) gaps.push([cur, t1]);
+    return gaps;
+  }
+
+  /* ── the cloud archive ── */
+  const SYNC_FILE = path.join(DATA, 'cloud-sync.json');
+  const cloud = { lastCheckAt: null, lastMergeAt: null, lastError: null, merged: 0, filesFetched: 0, latestUpload: null };
+  let filled = null;                                         // "bz-YYYY-MM-DD" -> filled up to (ms)
+  /** Merge one day's lines into the archive (and memory), skipping strikes already held. */
+  function mergeDay(src, day, text) {
+    const s = SRC.indexOf(src);
+    const fuzzy = s === 0;
+    const key = (t, la, lo) => (fuzzy ? `${Math.floor(t / 1000)}|${la.toFixed(3)}|${lo.toFixed(3)}` : moKey(t, +la.toFixed(4), +lo.toFixed(4)));
+    const held = new Set();
+    const d0 = Date.parse(`${day}T00:00:00Z`);
+    for (let h = d0; h < d0 + 86400e3; h += 3600e3) for (const [t, la, lo] of readHour(s, h)) held.add(key(t, la, lo));
+    const isHeld = (t, la, lo) => {
+      if (!fuzzy) return held.has(key(t, la, lo));
+      const sec = Math.floor(t / 1000), tail = `|${la.toFixed(3)}|${lo.toFixed(3)}`;
+      return held.has(`${sec}${tail}`) || held.has(`${sec - 1}${tail}`) || held.has(`${sec + 1}${tail}`);
+    };
+    const memFrom = Date.now() - MEMORY_MS;
+    const fresh = [];
+    for (const line of text.split('\n')) {
+      if (!line) continue;
+      const [t, la, lo] = line.split(',').map(Number);
+      if (!Number.isFinite(t) || !Number.isFinite(la) || !Number.isFinite(lo) || isHeld(t, la, lo)) continue;
+      held.add(key(t, la, lo));
+      fresh.push([t, la, lo]);
+    }
+    fresh.sort((a, b) => a[0] - b[0]);
+    for (const [t, la, lo] of fresh) {
+      if (t >= memFrom) {
+        if (s === 1 && !rememberMo(t, +la.toFixed(4), +lo.toFixed(4))) continue;
+        add(s, t, la, lo);                                        // memory + archive
+      } else {
+        pending[s].push(`${t},${la.toFixed(4)},${lo.toFixed(4)}`, t);   // archive only
+      }
+    }
+    return fresh.length;
+  }
+  async function syncCloud() {
+    cloud.lastCheckAt = Date.now();
+    if (!filled) { try { filled = JSON.parse(fs.readFileSync(SYNC_FILE, 'utf8')); } catch { filled = {}; } }
+    try {
+      const assets = [];
+      for (let page = 1; page <= 3; page += 1) {
+        const rel = await fetch(`https://api.github.com/repos/${CLOUD.repo}/releases/tags/${CLOUD.tag}`, { headers: { 'User-Agent': UA, Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(20000) });
+        if (rel.status === 404) { cloud.lastError = 'no cloud archive yet'; return; }
+        if (!rel.ok) throw new Error(`GitHub ${rel.status}`);
+        const id = (await rel.json()).id;
+        const r = await fetch(`https://api.github.com/repos/${CLOUD.repo}/releases/${id}/assets?per_page=100&page=${page}`, { headers: { 'User-Agent': UA, Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(20000) });
+        if (!r.ok) throw new Error(`GitHub ${r.status}`);
+        const list = await r.json();
+        assets.push(...list);
+        if (list.length < 100) break;
+      }
+      const oldest = new Date(Date.now() - RETAIN_DAYS.bz * 86400e3).toISOString().slice(0, 10);
+      for (const a of assets) if (/\.csv\.gz$/.test(a.name)) cloud.latestUpload = Math.max(cloud.latestUpload || 0, Date.parse(a.updated_at));
+      for (const a of assets) {
+        const m = /^(bz|mo)-(\d{4}-\d{2}-\d{2})\.csv\.gz$/.exec(a.name);
+        if (!m || m[2] < oldest) continue;
+        const [, src, day] = m;
+        const name = `${src}-${day}`;
+        const d0 = Date.parse(`${day}T00:00:00Z`);
+        const updated = Date.parse(a.updated_at);
+        // only where this server was off, after what has already been filled, and only once the
+        // cloud copy is newer than the start of the gap
+        const gaps = downtime(Math.max(d0, filled[name] || 0), Math.min(d0 + 86400e3, Date.now()));
+        if (!gaps.length || updated < gaps[0][0] + 5 * 60e3) continue;
+        const buf = Buffer.from(await (await fetch(a.browser_download_url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(120000) })).arrayBuffer());
+        const n = mergeDay(src, day, zlib.gunzipSync(buf).toString('utf8'));
+        cloud.filesFetched += 1;
+        cloud.merged += n;
+        filled[name] = Math.min(updated, Date.now());
+        if (n) {                                            // that day's cached totals are out of date now
+          const cache = loadDayCache();
+          for (const k of Object.keys(cache)) if (k.startsWith(`${day}|`)) delete cache[k];
+          try { fs.writeFileSync(DAYS_FILE, JSON.stringify(cache)); } catch { /* recounted next time */ }
+        }
+        if (n) { cloud.lastMergeAt = Date.now(); console.log(`[lightning] cloud archive: ${n} ${src === 'bz' ? 'Blitzortung' : 'Met Office'} strikes added for ${day}`); }
+      }
+      try { fs.writeFileSync(SYNC_FILE, JSON.stringify(filled)); } catch { /* next time */ }
+      cloud.lastError = null;
+    } catch (e) {
+      cloud.lastError = e.message;
+    }
+  }
+
   function start() {
     fs.mkdirSync(DATA, { recursive: true });
+    startUptime();
     importAiwArchive();
     restore();
     if (ingest?.subscribe) {
@@ -497,7 +623,9 @@ export function createLightning({ ingest } = {}) {
       ownIngest.start();
     }
     pollMetOffice(2880);                                     // fill in anything missed while off
+    setTimeout(syncCloud, 20e3).unref?.();                  // fill whatever the PC missed
     const timers = [
+      setInterval(syncCloud, 20 * 60e3),
       setInterval(() => pollMetOffice(15), POLL_MS),
       setInterval(flush, 4000),
       setInterval(prune, 60e3),

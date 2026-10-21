@@ -11,8 +11,8 @@ visitor's browser computed separately from its own strike feed.
 | Piece | File | Notes |
 |---|---|---|
 | Lightning ingest | `server/aiw/ingest.js` | Blitzortung, 3 parallel sockets, validated + de-duplicated. Provider-adapter interface for adding feeds. |
-| Strike archive | `server/aiw/store.js` | `server/data/aiw/strikes/YYYY-MM-DD/HH.csv` — training + verification data. Kept 90 days (`AIW_ARCHIVE_DAYS`). |
-| Model atmosphere | `server/aiw/env.js` | Open-Meteo (no key): CAPE, lifted index, CIN, 700 hPa steering wind, 0–6 km shear, showers. Cached per 0.5° tile per hour. |
+| Strike archive | `server/aiw/store.js` | `server/data/aiw/strikes/YYYY-MM-DD/HH.csv` — restart recovery + verification. Training reads the site's fuller archive (`server/lightning`, on D:, gaps filled by the GitHub capture). Kept 90 days (`AIW_ARCHIVE_DAYS`). |
+| Model atmosphere | `server/aiw/env.js`, `gfs_env.py` | NOAA GFS 0.25° from AWS open data (newest run covering each hour, regridded to 0.5° and kept on D: one file per hour): CAPE, lifted index, CIN, 700 hPa steering wind, 10 m–500 hPa shear, convective precipitation. The same hour files feed training. |
 | Nowcast | `server/aiw/nowcast.js` | DBSCAN cells → tracks → motion (track history + cross-correlation + steering wind) → per-lead probability rasters (+5…+30 min). |
 | Storm systems | `server/aiw/systems.js` | Cells whose risk areas touch are merged — one warning per threat. |
 | Model | `server/aiw/model.js` | Baseline (advected persistence) until a trained logistic model passes the gate. |
@@ -47,20 +47,35 @@ path, time until it arrives, confidence, network coverage. Never from text.
 ## Training
 
 ```
-node server/aiw/train.js                # research run, writes data/aiw/models/
+node server/aiw/train.js                # research run on the last 7 days, writes data/aiw/models/
+node server/aiw/train.js --days 14      # a longer stretch
 node server/aiw/train.js --deploy       # deploys only if it passes the gate
 ```
 
-Replays the archive through the live code, labels each grid point by whether a
-strike actually fell within 8 km at each lead, splits **chronologically**
-(70/30 with a 35-min gap), fits weighted logistic regression, and scores model
-vs persistence vs baseline (Brier, skill, POD/FAR/CSI, reliability, per lead,
-per region). **Gate:** ≥24 h archived, ≥2,000 test lightning samples, beats
-both references. The server retrains daily at ~03:30 once there is a day of
-data; the admin panel can run it on demand.
+Trains on the site's lightning archive (`D:/MyWeatherUK-data/lightning/bz`, see
+`server/lightning`): every Blitzortung strike the server heard, plus what the GitHub
+capture (`.github/workflows/lightning.yml`) recorded while the PC was off. Replays it
+through the live code, labels each grid point by whether a strike actually fell
+within 8 km at each lead, splits **chronologically** (70/30 with a 35-min gap), fits
+weighted logistic regression, and scores model vs persistence vs baseline (Brier,
+skill, POD/FAR/CSI, reliability, per lead, per region). Lightning and quiet grid
+points are both sampled (2% and 0.1% by default) and weighted by the inverse rate,
+so memory stays bounded and probabilities stay calibrated. The model sees the
+storm's own history and the GFS atmosphere: CAPE, lifted index, 10 m–500 hPa shear
+and convective rain, fetched for every past hour exactly as the live engine sees
+them. **Gate:** ≥24 h archived, ≥2,000 test lightning samples, beats both
+references on Brier score, and — at the threshold where it covers as much lightning
+as the baseline does at the configured area probability — raises no more false
+alarms. The server retrains daily at ~03:30; the admin panel can run it on demand.
 
-**Status at build time:** the archive began on 10 Oct 2026 — there is not yet
-enough data to train, so the engine runs the baseline and every warning says so.
+**Thresholds per model.** The baseline is over-confident (it says 85% where lightning
+follows about a third of the time), so the configured `areaProbability` (0.40) and
+`corridorProbability` (0.20) mean something else on a calibrated model. Training
+sweeps thresholds on the held-out period and stores, with each model, the ones that
+catch at least as much lightning as the baseline does at the configured values
+(`thresholds` in the model file). While that model is active the engine uses them
+(`getLiveConfig` in config.js); the admin settings still show and edit the configured
+values, which apply to the baseline.
 
 ## Testing
 

@@ -25,6 +25,11 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const AIW_DIR = process.env.AIW_DATA_DIR || path.join(here, '..', 'data', 'aiw');
 export const STRIKE_DIR = path.join(AIW_DIR, 'strikes');
+/* What training learns from: the site's lightning archive (server/lightning), which holds every
+   Blitzortung strike this server saw plus whatever the GitHub capture recorded while it was off,
+   in the same hour-file layout. Falls back to this system's own archive. */
+const LIGHTNING_BZ = 'D:/MyWeatherUK-data/lightning/bz';
+export const TRAIN_STRIKE_DIR = process.env.AIW_TRAIN_STRIKES || (fs.existsSync(LIGHTNING_BZ) ? LIGHTNING_BZ : STRIKE_DIR);
 export const MODEL_DIR = path.join(AIW_DIR, 'models');
 const STATE_PATH = path.join(AIW_DIR, 'state.json');
 
@@ -92,11 +97,11 @@ export function _setStateForTests(s) { state = { ...EMPTY_STATE(), ...s }; }
 
 /* ── strike archive ───────────────────────────────────────────────────── */
 
-function hourFile(ms) {
+function hourFile(ms, dir = STRIKE_DIR) {
   const d = new Date(ms);
   const day = d.toISOString().slice(0, 10);
   const hh = String(d.getUTCHours()).padStart(2, '0');
-  return path.join(STRIKE_DIR, day, `${hh}.csv`);
+  return path.join(dir, day, `${hh}.csv`);
 }
 
 let pending = [];
@@ -133,12 +138,12 @@ export function flushArchive() {
 }
 
 /** Read archived strikes in [fromMs, toMs). Sorted by time. */
-export function readStrikes(fromMs, toMs) {
+export function readStrikes(fromMs, toMs, dir = STRIKE_DIR) {
   const out = [];
   const start = Math.floor(fromMs / 3600e3) * 3600e3;
   for (let h = start; h < toMs; h += 3600e3) {
     let text;
-    try { text = fs.readFileSync(hourFile(h), 'utf8'); } catch { continue; }
+    try { text = fs.readFileSync(hourFile(h, dir), 'utf8'); } catch { continue; }
     for (const line of text.split('\n')) {
       if (!line) continue;
       const a = line.split(',');
@@ -151,16 +156,16 @@ export function readStrikes(fromMs, toMs) {
 }
 
 /** Hours of archive available, for the training report and the admin panel. */
-export function archiveSummary() {
+export function archiveSummary(dir = STRIKE_DIR) {
   let files = 0; let bytes = 0; let first = null; let last = null;
   let days = [];
-  try { days = fs.readdirSync(STRIKE_DIR).sort(); } catch { /* none yet */ }
+  try { days = fs.readdirSync(dir).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort(); } catch { /* none yet */ }
   for (const day of days) {
     let hours = [];
-    try { hours = fs.readdirSync(path.join(STRIKE_DIR, day)).sort(); } catch { continue; }
+    try { hours = fs.readdirSync(path.join(dir, day)).filter((h) => /^\d{2}\.csv$/.test(h)).sort(); } catch { continue; }
     for (const h of hours) {
       files += 1;
-      try { bytes += fs.statSync(path.join(STRIKE_DIR, day, h)).size; } catch { /* ignore */ }
+      try { bytes += fs.statSync(path.join(dir, day, h)).size; } catch { /* ignore */ }
       const ms = Date.parse(`${day}T${h.slice(0, 2)}:00:00Z`);
       if (first == null || ms < first) first = ms;
       if (last == null || ms > last) last = ms;

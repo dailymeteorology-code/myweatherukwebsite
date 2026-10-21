@@ -19,6 +19,7 @@ import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { requireAdmin } from '../auth.js';
+import { resolvePython } from '../python.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DATA = process.env.PATTERNS_DIR || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/patterns' : path.join(HERE, '..', 'data', 'patterns'));
@@ -26,26 +27,6 @@ const CACHE = process.env.PATTERNS_CACHE || (fs.existsSync('D:/') ? 'D:/MyWeathe
 const RUN_HOUR = 12;                        // UK time
 const TIMEOUT = 75 * 60e3;
 const ID_RE = /^\d{12}$/;
-
-/* ── Python ─────────────────────────────────────────────────────────────── */
-
-/** The interpreter with numpy and ecCodes: PATTERNS_PYTHON, else the ukv-platform virtualenv, else
- *  `python`. A virtualenv whose base install has moved still works through its base executable. */
-function python() {
-  if (process.env.PATTERNS_PYTHON) return { cmd: process.env.PATTERNS_PYTHON, env: {} };
-  const venv = path.resolve(HERE, '..', '..', '..', 'ukv-platform', '.venv');
-  const exe = path.join(venv, 'Scripts', 'python.exe');
-  const cfgFile = path.join(venv, 'pyvenv.cfg');
-  if (!fs.existsSync(exe) || !fs.existsSync(cfgFile)) return { cmd: 'python', env: {} };
-  const cfg = {};
-  for (const line of fs.readFileSync(cfgFile, 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^\s*([\w-]+)\s*=\s*(.*?)\s*$/);
-    if (m) cfg[m[1]] = m[2];
-  }
-  if (!cfg.home || fs.existsSync(path.join(cfg.home, 'python.exe'))) return { cmd: exe, env: {} };
-  if (cfg.executable && fs.existsSync(cfg.executable)) return { cmd: cfg.executable, env: { PYTHONPATH: path.join(venv, 'Lib', 'site-packages') } };
-  return { cmd: exe, env: {} };
-}
 
 /* ── UK time ────────────────────────────────────────────────────────────── */
 
@@ -111,7 +92,7 @@ let timer = null;
 
 function startRun(reason) {
   if (status.running) return false;
-  const py = python();
+  const py = resolvePython();
   Object.assign(status, { running: true, startedAt: new Date().toISOString(), stage: 'starting', week: null, pct: 0, lastError: null });
   console.log(`  [patterns] run started (${reason})`);
   fs.mkdirSync(DATA, { recursive: true });

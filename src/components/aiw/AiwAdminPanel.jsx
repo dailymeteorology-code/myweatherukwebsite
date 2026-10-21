@@ -98,7 +98,7 @@ function Health({ ov, act }) {
         {eng.lastError && <pre style={{ fontSize: '0.62rem', whiteSpace: 'pre-wrap', color: '#F44336' }}>{eng.lastError.slice(0, 600)}</pre>}
       </div>
       <div style={box}>
-        <b style={{ fontSize: '0.74rem' }}>Model atmosphere (Open-Meteo)</b>
+        <b style={{ fontSize: '0.74rem' }}>Model atmosphere (GFS, AWS)</b>
         <p style={{ margin: '5px 0 0', fontSize: '0.72rem' }}>Last OK {env.lastOkAt ? fmtAgo(env.lastOkAt) : 'never'} · {env.calls} calls · {env.failures} failures · {env.cached} cache hits</p>
         {env.lastError && <p style={{ margin: '3px 0 0', fontSize: '0.68rem', color: '#F44336' }}>{env.lastError}</p>}
         <p style={{ margin: '3px 0 0', fontSize: '0.68rem', color: 'var(--ink-3)' }}>Radar and satellite inputs are not integrated.</p>

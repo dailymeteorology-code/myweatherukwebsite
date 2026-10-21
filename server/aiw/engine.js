@@ -20,9 +20,9 @@ import {
   buildFields, trendOf, LEADS, HIT_RADIUS_KM,
 } from './nowcast.js';
 import { BASELINE, makeLogistic } from './model.js';
-import { envPeek, envHealth } from './env.js';
+import { envPeek, envHealth, ENV_SOURCE } from './env.js';
 import { assess, reconcile, tickTests } from './warnings.js';
-import { getConfig } from './config.js';
+import { getLiveConfig, setModelThresholds } from './config.js';
 import { pointInGeo, geoBBox, haversineKm } from './geometry.js';
 import { groupSystems, mergeSystem } from './systems.js';
 
@@ -44,10 +44,11 @@ export function createEngine({ ingest, broadcast = () => {} }) {
   function loadModel() {
     const s = getState();
     const v = s.activeModel;
-    if (!v) { model = BASELINE; return; }
+    if (!v) { model = BASELINE; setModelThresholds(null); return; }
     const spec = readJson(path.join(MODEL_DIR, `${v}.json`), null);
-    if (!spec?.weights) { console.warn(`[aiw] model ${v} missing — using baseline`); model = BASELINE; return; }
+    if (!spec?.weights) { console.warn(`[aiw] model ${v} missing — using baseline`); model = BASELINE; setModelThresholds(null); return; }
     model = makeLogistic(spec);
+    setModelThresholds(spec.thresholds || null);
   }
   function modelInfo() {
     if (model.kind === 'baseline') return { version: model.version, kind: 'baseline', trained: false, skillPositive: false };
@@ -83,7 +84,7 @@ export function createEngine({ ingest, broadcast = () => {} }) {
 
       const live = [...tracks.values()].filter((t) => !t.dead && t.lastSeen === now);
       status.tracksLive = live.length;
-      const cfg = getConfig();
+      const cfg = getLiveConfig();
       const info = modelInfo();
       status.modelVersion = info.version;
       const assessed = [];
@@ -131,7 +132,8 @@ export function createEngine({ ingest, broadcast = () => {} }) {
         const fields = buildFields(track, local, now, motion, { motionUncKmh: motion.spreadKmh ?? 15 });
         lap('fields');
         const trend = trendOf(local, track, now);
-        const ctx = { trend: trend.logRatio, n10: track.n10, cape: env?.cape, cycles: track.cycles };
+        const ctx = { trend: trend.logRatio, n10: track.n10, cape: env?.cape, cycles: track.cycles,
+          liftedIndex: env?.liftedIndex, shearKmh: env?.shear0_6kmKmh, showersMmH: env?.showersMmH };
         const probs = {};
         const n = fields.grid.nx * fields.grid.ny;
         for (const L of LEADS) {
@@ -178,7 +180,7 @@ export function createEngine({ ingest, broadcast = () => {} }) {
       const dataQuality = {
         feed: feedOk ? 'live' : 'stale',
         feeds: Object.fromEntries(Object.entries(feeds).map(([k, v]) => [k, { status: v.status, lastStrikeAgeMs: v.lastStrikeAgeMs, sockets: v.sockets }])),
-        environment: envHealth.lastOkAt ? { source: 'open-meteo', lastOkAgeMs: now - envHealth.lastOkAt } : { source: 'open-meteo', status: 'unavailable' },
+        environment: envHealth.lastOkAt ? { source: ENV_SOURCE, lastOkAgeMs: now - envHealth.lastOkAt } : { source: ENV_SOURCE, status: envHealth.cached ? 'from disk' : 'unavailable' },
         radar: 'not integrated', satellite: 'not integrated',
         at: now,
       };

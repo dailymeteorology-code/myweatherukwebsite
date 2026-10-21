@@ -718,12 +718,16 @@ export default function Lightning() {
                   <i className={feeds?.blitzortung?.status === 'live' ? 'is-on' : ''} />
                   <div><b>Blitzortung</b><span>{feeds?.blitzortung?.covers || 'elsewhere'} · {feeds?.blitzortung?.sockets != null ? `${feeds.blitzortung.sockets} connections` : '—'}{feeds?.blitzortung?.lastStrikeAgeMs != null ? ` · last ${Math.round(feeds.blitzortung.lastStrikeAgeMs / 1000)} s ago` : ''}</span></div>
                 </div>
+                <div className="lx-feed">
+                  <i className={feeds?.cloud?.latestUpload && Date.now() - feeds.cloud.latestUpload < 45 * 60e3 ? 'is-on' : ''} />
+                  <div><b>Backup recorder</b><span>on GitHub, while this PC is off · {feeds?.cloud?.latestUpload ? <Ago t={feeds.cloud.latestUpload} prefix="last saved " /> : feeds?.cloud?.lastError || (feeds?.cloud?.lastCheckAt ? 'waiting for its first save' : 'not checked yet')}</span></div>
+                </div>
                 {feeds?.blitzortung?.hours && (
                   <>
-                    <div className="lx-hours" title="Each block is an hour: filled when this server was recording Blitzortung">
+                    <div className="lx-hours" title="Each block is an hour: filled when Blitzortung was being recorded, here or by the backup recorder">
                       {feeds.blitzortung.hours.map((h, i) => <i key={i} className={h ? 'is-on' : ''} />)}
                     </div>
-                    <p className="lx-fine">Blitzortung recorded for {capturedHours} of the last 24 hours (it is only recorded while this site’s server is on). UK & Ireland strikes come from the Met Office, whose feed fills any gap, so they are complete.{lastLive ? <> Map updated <Ago t={lastLive} />.</> : ''}</p>
+                    <p className="lx-fine">Blitzortung recorded for {capturedHours} of the last 24 hours. While this PC is off a recorder on GitHub keeps listening, and its strikes are added here when the site is back (within 20 minutes). UK & Ireland strikes come from the Met Office, whose own 48-hour feed fills any gap.{lastLive ? <> Map updated <Ago t={lastLive} />.</> : ''}</p>
                   </>
                 )}
               </section>
