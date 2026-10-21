@@ -409,7 +409,14 @@ function FeaturedGraphic({ forecast, isOwner, onEdit, onArchive, onFurtherInfo, 
               <input type="file" style={{ display: 'none' }} accept="image/*" onChange={(e) => onUpdateImage(e, forecast)} />
             </label>
           )}
-          {isOwner && <button type="button" className="fg-btn" onClick={() => onArchive(forecast.id)}><Archive size={14} />Archive</button>}
+          {/* This used to be a button called "Archive", next to the heading's "Archive" link to the
+              archive page, and it archived the graphic on one tap: on 20 Oct 2026 that took the
+              graphic for the next night off the home page. It now says what it does and asks. */}
+          {isOwner && (
+            <button type="button" className="fg-btn" onClick={() => {
+              if (window.confirm(`Take "${forecast.title || 'this graphic'}" off the home page and move it to the archive?\n\nIt can be put back from the archive.`)) onArchive(forecast.id);
+            }}><Archive size={14} />Move to archive</button>
+          )}
         </div>
       </div>
     </motion.article>

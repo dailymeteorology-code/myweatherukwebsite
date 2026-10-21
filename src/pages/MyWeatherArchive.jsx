@@ -720,7 +720,7 @@ function ArchiveCard({ g, index, onOpen, isOwner, onEdit }) {
   );
 }
 
-function ArchiveDetail({ g, onClose, onPrev, onNext, onView, isOwner, onEdit }) {
+function ArchiveDetail({ g, onClose, onPrev, onNext, onView, isOwner, onEdit, onRestore, restoring }) {
   useEffect(() => {
     const key = (e) => {
       if (document.querySelector('.gv')) return;                       // the full-screen viewer has the keys
@@ -807,6 +807,12 @@ function ArchiveDetail({ g, onClose, onPrev, onNext, onView, isOwner, onEdit }) 
           <div className="ga-actions">
             {g.image_url && <button type="button" className="ga-btn is-primary" onClick={() => onView(g)}><Maximize2 size={14} />View full size</button>}
             {isOwner && <button type="button" className="ga-btn" onClick={() => onEdit(g)}><Edit2 size={14} />Edit</button>}
+            {/* archived by hand before it ended: it can go straight back on the home page */}
+            {isOwner && g.is_archived && (!g.expires_at || new Date(g.expires_at).getTime() > Date.now()) && (
+              <button type="button" className="ga-btn" onClick={() => onRestore(g)} disabled={restoring}>
+                {restoring ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}Put back on the home page
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1027,6 +1033,8 @@ export default function MyWeatherArchive() {
           g={open}
           isOwner={isOwner}
           onEdit={setEditing}
+          onRestore={(x) => updateMutation.mutate({ id: x.id, data: { is_archived: false } }, { onSuccess: () => setOpenId(null) })}
+          restoring={updateMutation.isPending}
           onClose={() => setOpenId(null)}
           onPrev={openIdx > 0 ? () => setOpenId(filtered[openIdx - 1].id) : null}
           onNext={openIdx < filtered.length - 1 ? () => setOpenId(filtered[openIdx + 1].id) : null}
