@@ -9,7 +9,7 @@ import {
   ChevronLeft, ChevronRight, Maximize2, ArrowUpDown,
 } from 'lucide-react';
 import { useTheme } from '@/components/ThemeContext';
-import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GRAPHIC_LEVEL_STYLE, inkOn } from '@/components/graphics/GraphicMeta';
+import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GraphicLevelPill, GraphicLevelChoice, graphicLevel, normLevel } from '@/components/graphics/GraphicMeta';
 import GraphicViewer from '@/components/graphics/GraphicViewer';
 import { sized, sizedSet } from '@/lib/sizedImage';
 import { cleanHtml, plainText } from '@/lib/cleanHtml';
@@ -73,16 +73,11 @@ const COND_CFG = {
   'Daily Risks': { accent: '#fbbf24', dim: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)',  text: '#fde68a' },
 };
 
-const RISK_CFG = {
-  'Very Low': { bg: 'rgba(21,128,61,0.14)',  border: 'rgba(21,128,61,0.45)',  text: '#86efac', dot: '#15803d' },
-  Low:        { bg: 'rgba(74,222,128,0.12)', border: 'rgba(74,222,128,0.35)', text: '#bbf7d0', dot: '#4ade80' },
-  Marginal:   { bg: 'rgba(250,204,21,0.12)', border: 'rgba(250,204,21,0.35)', text: '#fde047', dot: '#facc15' },
-  Slight:     { bg: 'rgba(249,115,22,0.12)', border: 'rgba(249,115,22,0.35)', text: '#fdba74', dot: '#f97316' },
-  Moderate:   { bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.4)',   text: '#fca5a5', dot: '#ef4444' },
-  High:       { bg: 'rgba(168,85,247,0.14)', border: 'rgba(168,85,247,0.4)',  text: '#d8b4fe', dot: '#a855f7' },
-  Severe:     { bg: 'rgba(10,10,12,0.85)',   border: '#000000',               text: '#f8fafc', dot: '#0a0a0c' },
-};
-const RISK_LEVELS = ['Very Low', 'Low', 'Marginal', 'Slight', 'Moderate', 'High', 'Severe'];
+/* the risk ladder is the Thunderstorm graphic's own (components/graphics/GraphicMeta): its colours
+   and its short labels, TSTM to SVRE, so what is picked and shown here is what the graphic drew */
+const RISK_LEVELS = GRAPHIC_LEVEL_NAMES;
+/* a graphic's levels, with older graphics' short labels ("SLGT") read as the level they are */
+const levelsList = (v) => [...new Set(normalizeList(v).map((l) => normLevel(l) || l))];
 
 const CONDITION_SUBTYPES = {
   Snow: ['Light Snow', 'Heavy Snow', 'Snow Showers', 'Sleet', 'Blizzard', 'Drifting Snow', 'Snow & Ice Mix'],
@@ -200,12 +195,6 @@ function RichTextEditor({ value, onChange, placeholder, rows = 4 }) {
 /* ─────────────────────────────────────────────
    LOCATION ENTRY WITH RISK (archive edit)
 ───────────────────────────────────────────── */
-const ARCH_RISK_LEVELS = ['None', 'Very Low', 'Low', 'Marginal', 'Slight', 'Moderate', 'High', 'Severe'];
-const ARCH_RISK_COLORS = {
-  None: '#64748b', 'Very Low': '#86efac', Low: '#bbf7d0', Marginal: '#fde047',
-  Slight: '#fdba74', Moderate: '#fca5a5', High: '#d8b4fe', Severe: '#f8fafc',
-};
-
 function ArchiveLocationEntry({ loc, onRemove, onChange }) {
   const [open, setOpen] = useState(false);
   return (
@@ -224,54 +213,18 @@ function ArchiveLocationEntry({ loc, onRemove, onChange }) {
         ><X size={10} /></button>
       </div>
       {open && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div>
-            <div style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(148,163,184,0.5)', marginBottom: 4 }}>Overall Risk</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {ARCH_RISK_LEVELS.map(level => (
-                <button key={level} type="button"
-                  onClick={() => onChange({ ...loc, overall_risk: level === 'None' ? null : level })}
-                  style={{
-                    padding: '2px 8px', borderRadius: 999, fontSize: 9, fontFamily: 'monospace', cursor: 'pointer',
-                    background: (loc.overall_risk || null) === (level === 'None' ? null : level) && (level === 'None' ? !loc.overall_risk : loc.overall_risk === level) ? `${ARCH_RISK_COLORS[level]}22` : 'transparent',
-                    border: `1px solid ${loc.overall_risk === level || (!loc.overall_risk && level === 'None') ? ARCH_RISK_COLORS[level] : 'rgba(255,255,255,0.1)'}`,
-                    color: loc.overall_risk === level || (!loc.overall_risk && level === 'None') ? ARCH_RISK_COLORS[level] : 'rgba(148,163,184,0.5)',
-                  }}>{level}</button>
-              ))}
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <div>
-              <div style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#86efac', marginBottom: 4 }}>Lowest Risk</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                {ARCH_RISK_LEVELS.filter(l => l !== 'None').map(level => (
-                  <button key={level} type="button"
-                    onClick={() => onChange({ ...loc, lowest_risk: loc.lowest_risk === level ? null : level })}
-                    style={{
-                      padding: '2px 7px', borderRadius: 999, fontSize: 9, fontFamily: 'monospace', cursor: 'pointer',
-                      background: loc.lowest_risk === level ? `${ARCH_RISK_COLORS[level]}22` : 'transparent',
-                      border: `1px solid ${loc.lowest_risk === level ? ARCH_RISK_COLORS[level] : 'rgba(255,255,255,0.09)'}`,
-                      color: loc.lowest_risk === level ? ARCH_RISK_COLORS[level] : 'rgba(148,163,184,0.4)',
-                    }}>{level}</button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+          {[['overall_risk', 'Overall risk', 'rgba(148,163,184,0.6)'], ['lowest_risk', 'Lowest risk', '#86efac'], ['highest_risk', 'Highest risk', '#fca5a5']].map(([key, label, tone]) => (
+            <div key={key}>
+              <div style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', color: tone, marginBottom: 4 }}>{label}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {RISK_LEVELS.map((level) => (
+                  <GraphicLevelChoice key={level} level={level} small selected={normLevel(loc[key]) === level}
+                    onClick={() => onChange({ ...loc, [key]: normLevel(loc[key]) === level ? null : level })} />
                 ))}
               </div>
             </div>
-            <div>
-              <div style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#fca5a5', marginBottom: 4 }}>Highest Risk</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                {ARCH_RISK_LEVELS.filter(l => l !== 'None').map(level => (
-                  <button key={level} type="button"
-                    onClick={() => onChange({ ...loc, highest_risk: loc.highest_risk === level ? null : level })}
-                    style={{
-                      padding: '2px 7px', borderRadius: 999, fontSize: 9, fontFamily: 'monospace', cursor: 'pointer',
-                      background: loc.highest_risk === level ? `${ARCH_RISK_COLORS[level]}22` : 'transparent',
-                      border: `1px solid ${loc.highest_risk === level ? ARCH_RISK_COLORS[level] : 'rgba(255,255,255,0.09)'}`,
-                      color: loc.highest_risk === level ? ARCH_RISK_COLORS[level] : 'rgba(148,163,184,0.4)',
-                    }}>{level}</button>
-                ))}
-              </div>
-            </div>
-          </div>
+          ))}
         </div>
       )}
     </div>
@@ -322,7 +275,7 @@ function ArchiveEditModal({ graphic, onClose, onSave, uploading, onUpload }) {
     expires_at:         graphic.expires_at ? graphic.expires_at.slice(0, 16) : '',
     in_force_from:      graphic.in_force_from ? graphic.in_force_from.slice(0, 16) : '',
     impact_levels:      normalizeList(graphic.impact_levels).length
-                          ? normalizeList(graphic.impact_levels)
+                          ? levelsList(graphic.impact_levels)
                           : (graphic.impact_level ? [graphic.impact_level] : []),
     locations_impacted: normalizeLocationsObjs(graphic.locations_impacted),
     update_reason:      '',
@@ -485,27 +438,9 @@ function ArchiveEditModal({ graphic, onClose, onSave, uploading, onUpload }) {
 
               <EdField label="Risk Level" hint="select all that apply">
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {RISK_LEVELS.map(level => {
-                    const cfg = RISK_CFG[level];
-                    const sel = form.impact_levels.includes(level);
-                    const isSevere = level === 'Severe';
-                    return (
-                      <button key={level} type="button" onClick={() => toggleArr('impact_levels', level)}
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 5,
-                          padding: '5px 13px', borderRadius: 999, fontSize: 11,
-                          fontFamily: 'monospace', textTransform: 'uppercase', cursor: 'pointer',
-                          background: sel ? cfg.bg : 'transparent',
-                          border: `1px solid ${sel ? cfg.border : (isSevere ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.1)')}`,
-                          color: sel ? cfg.text : 'rgba(148,163,184,0.5)',
-                          boxShadow: sel && isSevere ? '0 0 0 1px #000' : 'none',
-                        }}>
-                        {sel && <Check size={10} />}
-                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: cfg.dot, border: isSevere ? '1px solid rgba(255,255,255,0.4)' : 'none' }} />
-                        {level}
-                      </button>
-                    );
-                  })}
+                  {RISK_LEVELS.map((level) => (
+                    <GraphicLevelChoice key={level} level={level} range selected={form.impact_levels.includes(level)} onClick={() => toggleArr('impact_levels', level)} />
+                  ))}
                 </div>
               </EdField>
 
@@ -639,7 +574,7 @@ const GA_CSS = `
 .ga-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 22px; }
 .ga-stat { padding: 14px 16px; min-width: 0; }
 .ga-stat span { display: block; font-size: .66rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
-.ga-stat b { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 4px; overflow-wrap: anywhere; font-size: clamp(1rem, 4.2vw, 1.35rem); font-weight: 650; letter-spacing: -.02em; }
+.ga-stat b { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 4px; overflow-wrap: break-word; font-size: clamp(.98rem, 1.9vw, 1.35rem); font-weight: 650; letter-spacing: -.02em; }
 .ga-stat small { font-size: .82rem; font-weight: 500; color: var(--ink-2); }
 .ga-toolbar { position: sticky; top: 64px; z-index: 30; display: flex; flex-direction: column; gap: 10px; padding: 12px; margin-bottom: 8px; border-radius: 22px; }
 @media (max-width: 767px) { .ga-toolbar { top: 56px; } }
@@ -675,7 +610,7 @@ const GA_CSS = `
 .ga-tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .ga-tag { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 99px; font-size: .72rem; font-weight: 650; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); white-space: nowrap; }
 .ga-tag i { width: 7px; height: 7px; border-radius: 99px; }
-.ga-level { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 99px; font-size: .72rem; font-weight: 700; white-space: nowrap; }
+.ga-level { padding: 3px 9px !important; font-size: .72rem !important; }
 .ga-card-title { font-size: .98rem; font-weight: 650; line-height: 1.3; letter-spacing: -.01em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ga-card-meta { font-size: .78rem; color: var(--ink-3); }
 .ga-edit { position: absolute; top: 16px; right: 16px; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; cursor: pointer; color: #fff; background: rgba(10,16,28,.5); border: 1px solid rgba(255,255,255,.22); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); opacity: 0; transition: opacity .15s; }
@@ -686,14 +621,19 @@ const GA_CSS = `
 .ga-modal { position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(2,6,14,.55); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); animation: ga-fade .2s ease both; }
 @keyframes ga-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes ga-rise { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
-.ga-detail { width: min(1080px, 100%); max-height: calc(100vh - 48px); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); overflow: hidden; animation: ga-rise .28s cubic-bezier(.22,1,.36,1) both;
+/* A wide screen: picture and text side by side, the panel at most the window's height, and the
+   text column scrolling inside it. The row has to be told it may shrink (minmax(0, 1fr)); without
+   it the row grew to the text's full height, the panel clipped it, and anything below the fold
+   (the description's end, the places, the buttons) could not be scrolled to. */
+.ga-detail { width: min(1080px, 100%); max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: hidden; animation: ga-rise .28s cubic-bezier(.22,1,.36,1) both;
   --glass-fill: var(--glass-fill-strong); }
 .ga-page:not(.ga-light) .ga-detail { background: rgba(16,24,38,.82); }
 .ga-page.ga-light .ga-detail { background: rgba(255,255,255,.9); }
-.ga-detail-media { display: flex; align-items: center; justify-content: center; padding: 16px; min-height: 0; }
+.ga-detail-media { display: flex; align-items: center; justify-content: center; padding: 16px; min-height: 0; overflow: hidden; }
 .ga-detail-media button { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; max-height: 100%; }
 .ga-detail-media img { display: block; max-width: 100%; max-height: calc(100vh - 80px); object-fit: contain; border-radius: 18px; box-shadow: 0 18px 40px -16px rgba(0,0,0,.55); }
-.ga-detail-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 20px 22px 22px 6px; overflow-y: auto; }
+.ga-detail-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; min-height: 0; padding: 20px 22px 22px 6px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.ga-detail-body > * { flex-shrink: 0; }
 .ga-detail-top { display: flex; align-items: center; gap: 8px; }
 .ga-detail-top .ga-tags { flex: 1; }
 .ga-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: 12px; cursor: pointer; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); }
@@ -716,7 +656,7 @@ const GA_CSS = `
 .ga-btn.is-primary { color: var(--page-bg); background: var(--ink-1); border-color: transparent; }
 @media (max-width: 860px) {
   .ga-modal { padding: 0; align-items: flex-end; }
-  .ga-detail { grid-template-columns: minmax(0, 1fr); max-height: 94vh; border-radius: 24px 24px 0 0; overflow-y: auto; }
+  .ga-detail { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; max-height: 94vh; max-height: 94dvh; border-radius: 24px 24px 0 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .ga-detail-media { padding: 12px 12px 0; }
   .ga-detail-media img { max-height: 58vh; }
   .ga-detail-body { padding: 16px 16px calc(20px + env(safe-area-inset-bottom, 0px)); overflow: visible; }
@@ -727,7 +667,8 @@ const GA_CSS = `
   .ga-card-hit { padding: 6px; }
   .ga-thumb { border-radius: 14px; }
   .ga-card-body { gap: 5px; padding: 9px 4px 4px; }
-  .ga-card .ga-tag, .ga-card .ga-level { padding: 2px 7px; font-size: .64rem; }
+  .ga-card .ga-tag { padding: 2px 7px; font-size: .64rem; }
+  .ga-card .ga-level { padding: 2px 7px !important; font-size: .64rem !important; }
   .ga-card-title { font-size: .84rem; }
   .ga-card-meta { font-size: .7rem; }
   .ga-edit { top: 12px; right: 12px; width: 30px; height: 30px; border-radius: 10px; }
@@ -741,15 +682,13 @@ const MEASURE = {
   rain_total_mm: ['Rain total', 'mm'], wind_gust_mph: ['Wind gusts', 'mph'], temp_range_c: ['Temperature range', '°C'], visibility_m: ['Visibility', 'm'],
 };
 const condsOf = (g) => { const l = normalizeList(g.weather_conditions); return l.length ? l : g.weather_condition ? [g.weather_condition] : []; };
-const levelsOf = (g) => { const l = normalizeList(g.impact_levels); return l.length ? l : g.impact_level ? [g.impact_level] : []; };
+const levelsOf = (g) => { const l = levelsList(g.impact_levels); return l.length ? l : g.impact_level ? [normLevel(g.impact_level) || g.impact_level] : []; };
 const levelRank = (l) => GRAPHIC_LEVEL_NAMES.indexOf(l);
 const topLevel = (g) => levelsOf(g).reduce((a, b) => (levelRank(b) > levelRank(a) ? b : a), null);
 const issuedOf = (g) => g.created_date || g.expires_at;
-const levelColour = (l) => GRAPHIC_LEVEL_STYLE[l]?.dot || RISK_CFG[l]?.dot || '#94a3b8';
-
+/* a risk level as the Thunderstorm graphic prints it (SLGT, ENH…), in its colour */
 function Level({ level }) {
-  const c = levelColour(level);
-  return <span className="ga-level" style={{ background: c, color: inkOn(c) }}>{level}</span>;
+  return <GraphicLevelPill level={level} className="ga-level" />;
 }
 function Tag({ dot, children }) {
   return <span className="ga-tag">{dot && <i style={{ background: dot }} />}{children}</span>;
@@ -1054,7 +993,7 @@ export default function MyWeatherArchive() {
             {levelsPresent.length > 1 && (
               <select className="ga-select" value={risk} onChange={(e) => setRisk(e.target.value)} aria-label="Risk level">
                 <option value="Any">Any risk</option>
-                {levelsPresent.map((l) => <option key={l} value={l}>{l}</option>)}
+                {levelsPresent.map((l) => { const g = graphicLevel(l); return <option key={l} value={l}>{g ? `${g.short}${g.range ? ` · ${g.range}` : ''}` : l}</option>; })}
               </select>
             )}
           </div>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { RISK_COLOR, RISK_BORDER, RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConfig';
+import { RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConfig';
 
 /**
  * What a published graphic says about itself: its weather conditions, the
@@ -106,13 +106,100 @@ export const GRAPHIC_LEVEL_STYLE = Object.fromEntries(
   ])
 );
 
-/** Risks stored as a named band. Order matters: it is the reading order. */
-const BAND_RISKS = [
+/* A level as stored: its name ("Marginal"), or on some older graphics the studio's short label
+   ("SLGT"). Either way, the ladder's entry for it. */
+const BY_LEVEL = Object.fromEntries(GRAPHIC_RISK_LEVELS.map((l) => [l.level, l]));
+const BY_SHORT = Object.fromEntries(GRAPHIC_RISK_LEVELS.map((l) => [l.short, l]));
+export const graphicLevel = (v) => (v == null ? null : BY_LEVEL[v] || BY_SHORT[String(v).toUpperCase()] || null);
+/** The level name for a stored value (short labels mapped back), or null for none / unknown. */
+export const normLevel = (v) => graphicLevel(v)?.level || null;
+
+/** A percentage on the graphic's ladder: 5–11% TSTM … 65–100% HIGH. Severe is drawn as a
+    hatch on the graphic, not reached by a percentage, so it is never the answer here. */
+export function levelOfPercent(p) {
+  const n = Number(p);
+  if (!Number.isFinite(n)) return null;
+  let out = null;
+  for (const r of RISK_META) if (r.level !== 'No Risk' && r.level !== 'Severe' && n >= r.min) out = r.level;
+  return out;
+}
+
+/** How the graphic's key draws a level: a solid chip in its colour, Severe as an indigo hatch,
+    Conditional Severe as a grey fill inside a dashed outline. */
+export function levelLook(level) {
+  const g = graphicLevel(level);
+  if (!g) return { background: 'var(--glass-fill-strong, rgba(255,255,255,0.12))', color: 'var(--ink-1, #f8fafc)' };
+  if (g.level === 'Severe') {
+    return { background: `repeating-linear-gradient(45deg, ${g.color} 0 3px, rgba(49,46,129,0.35) 3px 7px)`, color: '#ffffff', boxShadow: `inset 0 0 0 1.5px ${g.color}` };
+  }
+  if (g.level === 'Conditional Severe') {
+    return { background: 'rgba(200,205,215,0.22)', color: 'var(--ink-1, #f8fafc)', outline: '1.5px dashed var(--ink-2, #94a3b8)', outlineOffset: -1.5 };
+  }
+  return { background: g.color, color: inkOn(g.color) };
+}
+
+/** A risk level exactly as the Thunderstorm graphic prints it: its short label (TSTM, MRGL, SLGT,
+    ENH, MDT, HIGH, COND SVRE, SVRE) in its colour, with the full name and range in the tooltip
+    and, with `range`, the range beside it. */
+export function GraphicLevelPill({ level, range = false, className = '', style }) {
+  const g = graphicLevel(level);
+  return (
+    <span
+      className={className}
+      title={g ? `${g.level}${g.range ? ` · ${g.range}` : ''}` : String(level)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 99,
+        fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.04em', lineHeight: 1.45, whiteSpace: 'nowrap',
+        ...levelLook(level), ...style,
+      }}
+    >
+      {g ? g.short : String(level)}
+      {range && g?.range && <span style={{ fontWeight: 600, opacity: 0.78, letterSpacing: 0, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.9em' }}>{g.range}</span>}
+    </span>
+  );
+}
+
+/** A button that picks a level, drawn like a row of the graphic's key: the colour swatch, the
+    short label and (with `range`) the range. Glass tokens where the page has them. */
+export function GraphicLevelChoice({ level, selected, onClick, range = false, small = false }) {
+  const g = graphicLevel(level);
+  const swatch = { ...levelLook(level) };
+  delete swatch.color;                                            // the swatch is only the chip
+  const tone = !g ? '#94a3b8' : g.level === 'Conditional Severe' ? 'var(--ink-2, #94a3b8)' : g.level === 'Severe' ? '#6366f1' : g.color;
+  return (
+    <button
+      type="button" onClick={onClick} aria-pressed={!!selected}
+      title={g ? `${g.level}${g.range ? ` · ${g.range}` : ''}` : String(level)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: small ? 5 : 7, padding: small ? '3px 9px 3px 6px' : '6px 12px 6px 8px',
+        borderRadius: 99, cursor: 'pointer', font: 'inherit', fontSize: small ? 10.5 : 12, fontWeight: 700, letterSpacing: '0.03em', whiteSpace: 'nowrap',
+        color: selected ? 'var(--ink-1, #f8fafc)' : 'var(--ink-2, rgba(203,213,225,0.75))',
+        background: selected ? `color-mix(in srgb, ${g && g.level !== 'Conditional Severe' ? g.color : '#94a3b8'} 20%, transparent)` : 'var(--glass-fill, rgba(255,255,255,0.04))',
+        border: `1px solid ${selected ? tone : 'var(--glass-hairline, rgba(255,255,255,0.1))'}`,
+        boxShadow: selected ? `0 0 0 1px ${tone}` : 'none',
+        transition: 'background .15s, border-color .15s, box-shadow .15s',
+      }}
+    >
+      <span style={{ width: small ? 16 : 22, height: small ? 8 : 10, borderRadius: 3, flexShrink: 0, ...swatch }} />
+      {g ? g.short : String(level)}
+      {range && g?.range && (
+        <span style={{ fontWeight: 600, opacity: 0.7, letterSpacing: 0, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.88em' }}>{g.range}</span>
+      )}
+    </button>
+  );
+}
+
+/* The thunderstorm details a graphic carries (ThunderstormPanel writes them):
+   percentages for five hazards, placed on the graphic's ladder; a lowest-to-highest band for
+   three more (older graphics stored a single band, or just true); and measured values. */
+const PERCENT_RISKS = [
   { key: 'tornado_risk', label: 'Tornado' },
   { key: 'hail_risk', label: 'Hail' },
   { key: 'flash_flood_risk', label: 'Flash flooding' },
   { key: 'strong_winds_risk', label: 'Strong winds' },
   { key: 'supercell_risk', label: 'Supercells' },
+];
+const RANGE_RISKS = [
   { key: 'high_lightning', label: 'High lightning' },
   { key: 'severe', label: 'Severe' },
   { key: 'heavy_rain', label: 'Heavy rain' },
@@ -128,17 +215,6 @@ const MEASURED = [
 
 const asList = (v) => (Array.isArray(v) ? v.filter(Boolean) : v ? [v] : []);
 
-/** A band value can be stored as a level name or as a 0–100 score. */
-function bandOf(value) {
-  if (value == null || value === '' || value === 'No Risk') return null;
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number') {
-    let level = RISK_META[0].level;
-    for (const r of RISK_META) if (value >= r.min) level = r.level;
-    return level === 'No Risk' ? null : level;
-  }
-  return null;
-}
 
 function Chip({ label, value, color }) {
   return (
@@ -202,57 +278,61 @@ export function inkOn(colour) {
   return lum > 0.62 ? '#111827' : '#ffffff';
 }
 
-/** Thunderstorm risk detail — bands first, then any measured values. */
+/** Thunderstorm risk detail, the way the Thunderstorm graphic words it: each hazard's percentage
+    with the graphic's band for it (Hail 40% · ENH), each lowest-to-highest band (High lightning
+    TSTM–SLGT), then the measured values. Every stored hazard is shown: the lowest/highest bands
+    the editor saves used to be left out, because this read keys the editor no longer writes. */
 export function ThunderstormRisks({ data, className = '' }) {
   if (!data || typeof data !== 'object') return null;
+  const pct = (v) => (typeof v === 'number' ? v : typeof v === 'string' && /^\d+(\.\d+)?$/.test(v) ? Number(v) : null);
 
-  const bands = BAND_RISKS.map(({ key, label }) => ({ label, level: bandOf(data[key]) })).filter(
-    (r) => r.level
-  );
+  const items = [];
+  for (const { key, label } of PERCENT_RISKS) {
+    const v = data[key];
+    const p = pct(v);
+    if (p != null) { if (p > 0) items.push({ label, value: `${Math.round(p)}%`, levels: [levelOfPercent(p)].filter(Boolean) }); }
+    else if (normLevel(v)) items.push({ label, levels: [normLevel(v)] });            // stored as a band
+  }
+  for (const { key, label } of RANGE_RISKS) {
+    const lo = normLevel(data[`${key}_min`]), hi = normLevel(data[`${key}_max`]);
+    const one = normLevel(data[key]);
+    const levels = [...new Set([lo, hi].filter(Boolean))];
+    if (levels.length) items.push({ label, levels, range: true });
+    else if (one) items.push({ label, levels: [one] });
+    else if (data[key] === true) items.push({ label, levels: [] });                     // older graphics: just "yes"
+  }
   const measured = MEASURED.map(({ key, label, unit }) => {
     const v = data[key];
     if (v == null || v === '') return null;
-    return { label, value: unit ? `${v}${unit}` : String(v) };
+    return { label, value: unit ? `${v} ${unit}` : String(v) };
   }).filter(Boolean);
 
-  if (!bands.length && !measured.length) return null;
-
-  /* Each risk is the hazard's name on glass and its level in a solid pill of the level's colour.
-     It used to be the level's colour on a fill of the same colour, which left "Moderate" (red on
-     red) unreadable; the pill's text is white or near-black, whichever the colour can carry. */
+  if (!items.length && !measured.length) return null;
+  /* on glass: the page's tokens where it has them (light or dark), white on dark elsewhere */
+  const chip = {
+    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 4px 3px 10px', borderRadius: 99,
+    fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', color: 'var(--ink-1, rgba(255,255,255,0.9))',
+    background: 'var(--glass-fill-strong, rgba(255,255,255,0.10))', border: '1px solid var(--glass-hairline, rgba(255,255,255,0.15))',
+  };
   return (
     <div className={`flex flex-wrap items-center gap-1.5 ${className}`}>
-      {bands.map(({ label, level }) => {
-        const c = RISK_COLOR(level, 'thunderstorm');
-        return (
-          <span
-            key={label}
-            title={`${label}: ${level}`}
-            className="inline-flex items-center gap-1.5 rounded-full py-[2px] pl-2 pr-[3px] text-[10px] font-semibold whitespace-nowrap"
-            style={{
-              color: 'var(--ink-1, rgba(255,255,255,0.9))',
-              background: 'var(--glass-fill-strong, rgba(255,255,255,0.10))',
-              border: `1px solid ${RISK_BORDER(level, 'thunderstorm')}`,
-            }}
-          >
-            {label}
-            <span className="rounded-full px-1.5 font-bold" style={{ background: c, color: inkOn(c) }}>{level}</span>
-          </span>
-        );
-      })}
-      {measured.map(({ label, value }) => (
-        <span
-          key={label}
-          className="inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[10px] font-medium whitespace-nowrap"
-          /* the page's glass tokens where it has them (the home page, light or dark), white on dark elsewhere */
-          style={{
-            color: 'var(--ink-1, rgba(255,255,255,0.85))',
-            background: 'var(--glass-fill-strong, rgba(255,255,255,0.10))',
-            border: '1px solid var(--glass-hairline, rgba(255,255,255,0.15))',
-          }}
-        >
+      {items.map(({ label, value, levels, range }) => (
+        <span key={label} style={{ ...chip, paddingRight: levels.length ? 4 : 10 }}
+          title={`${label}${value ? ` ${value}` : ''}${levels.length ? `: ${levels.map((l) => graphicLevel(l)?.short || l).join(' to ')}` : ''}`}>
           {label}
-          <span className="font-bold">{value}</span>
+          {value && <b style={{ fontWeight: 800 }}>{value}</b>}
+          {levels.map((l, i) => (
+            <React.Fragment key={l}>
+              {range && i > 0 && <span style={{ opacity: 0.55, margin: '0 -3px' }}>–</span>}
+              <GraphicLevelPill level={l} style={{ fontSize: 10, padding: '1px 7px' }} />
+            </React.Fragment>
+          ))}
+        </span>
+      ))}
+      {measured.map(({ label, value }) => (
+        <span key={label} style={{ ...chip, paddingRight: 10, fontWeight: 500 }}>
+          {label}
+          <b style={{ fontWeight: 800 }}>{value}</b>
         </span>
       ))}
     </div>

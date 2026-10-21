@@ -6,7 +6,8 @@ import {
   CloudSun, X, Upload, Loader2,
   ChevronRight, MapPin, Check, Plus, Archive,
   AlertTriangle, Zap, Wind, Droplets, Snowflake, Flame,
-  Bold, Italic, Palette, Edit2, Flag, RefreshCw, ChevronDown, Maximize2
+  Bold, Italic, Palette, Edit2, Flag, RefreshCw, ChevronDown, Maximize2,
+  ImagePlus, Info, CheckCircle2, CalendarClock, Clock3, Gauge, Type, AlignLeft, Eraser,
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -14,7 +15,8 @@ import { format, isValid, isPast } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import ForecastFurtherInfo from './ForecastFurtherInfo';
 import ThunderstormPanel from './ThunderstormPanel';
-import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GRAPHIC_LEVEL_STYLE, GRAPHIC_LEVEL_LABEL } from '@/components/graphics/GraphicMeta';
+import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GraphicLevelChoice, GraphicLevelPill, normLevel } from '@/components/graphics/GraphicMeta';
+import { useTheme } from '@/components/ThemeContext';
 import { sized, sizedSet } from '@/lib/sizedImage';
 import { cleanHtml, plainText } from '@/lib/cleanHtml';
 import GraphicViewer from '@/components/graphics/GraphicViewer';
@@ -62,7 +64,6 @@ const DEFAULT_CFG = { accent: '#94a3b8', dim: 'rgba(148,163,184,0.1)', border: '
    define its own seven bands with its own palette, so "Very Low" was green on a
    forecast graphic and blue in the studio, and Conditional Severe could not be
    set on a graphic at all. */
-const IMPACT_CONFIG = GRAPHIC_LEVEL_STYLE;
 const IMPACT_LEVELS = GRAPHIC_LEVEL_NAMES;
 
 const CONDITIONS = Object.keys(CONDITION_CONFIG);
@@ -149,160 +150,94 @@ const TEXT_COLOURS = [
 ];
 
 /* ─────────────────────────────────────────────
-   RICH TEXT EDITOR
+   RICH TEXT EDITOR (the description, in the add / edit sheet)
+   Bold, italic, a colour and "clear formatting"; Enter is a line break and a paste comes in as
+   plain text (anything pasted from Word or a web page used to carry its fonts and backgrounds
+   into the published description). Styles: .gm-rte-* in GM_CSS.
 ───────────────────────────────────────────── */
-function RichTextEditor({ value, onChange, placeholder, rows = 3 }) {
+function RichTextEditor({ value, onChange, placeholder }) {
   const editorRef = useRef(null);
+  const barRef = useRef(null);
   const [showColours, setShowColours] = useState(false);
+  const [words, setWords] = useState(() => plainText(value).split(/\s+/).filter(Boolean).length);
 
-  // Sync contentEditable with outer value on first mount only
-  const initialized = useRef(false);
-  React.useEffect(() => {
-    if (!initialized.current && editorRef.current) {
-      editorRef.current.innerHTML = value || '';
-      initialized.current = true;
-    }
+  // the editor owns its content after the first render (it is re-keyed to start again)
+  useEffect(() => {
+    if (editorRef.current) editorRef.current.innerHTML = value || '';
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!showColours) return undefined;
+    const away = (e) => { if (!barRef.current?.contains(e.target)) setShowColours(false); };
+    document.addEventListener('pointerdown', away);
+    return () => document.removeEventListener('pointerdown', away);
+  }, [showColours]);
+
+  // Browsers wrap new lines in <div>/<p>; keep the description as text and <br>s.
+  const normalizeHtml = (html) => html
+    .replace(/<div><br\s*\/?><\/div>/gi, '<br>')
+    .replace(/<div>(.*?)<\/div>/gi, (_, inner) => inner + '<br>')
+    .replace(/<p><br\s*\/?><\/p>/gi, '<br>')
+    .replace(/<p>(.*?)<\/p>/gi, (_, inner) => inner + '<br>')
+    .replace(/(<br\s*\/?>)+$/i, '');
+
+  const emit = () => {
+    const el = editorRef.current;
+    if (!el) return;
+    onChange(normalizeHtml(el.innerHTML));
+    setWords(el.innerText.split(/\s+/).filter(Boolean).length);
+  };
   const exec = (cmd, val = null) => {
     editorRef.current?.focus();
     document.execCommand(cmd, false, val);
-    onChange(normalizeHtml(editorRef.current.innerHTML));
+    emit();
   };
-
-  const applyColour = (colour) => {
-    exec('foreColor', colour);
-    setShowColours(false);
-  };
-
-  // Normalize contentEditable HTML: convert block-level <div>/<p> wrappers
-  // that browsers insert for newlines into <br> tags instead.
-  const normalizeHtml = (html) => {
-    // Replace <div>content</div> and <p>content</p> with content<br>
-    // but avoid double-br on empty divs (which become just <br>)
-    return html
-      .replace(/<div><br\s*\/?><\/div>/gi, '<br>')
-      .replace(/<div>(.*?)<\/div>/gi, (_, inner) => inner + '<br>')
-      .replace(/<p><br\s*\/?><\/p>/gi, '<br>')
-      .replace(/<p>(.*?)<\/p>/gi, (_, inner) => inner + '<br>')
-      // strip trailing lone <br> at end
-      .replace(/(<br\s*\/?>)+$/i, '');
-  };
-
-  const handleInput = () => {
-    onChange(normalizeHtml(editorRef.current.innerHTML));
-  };
-
-  // Strip all formatting on paste — insert only the raw plain text. Without
-  // this, pasting from Word/Docs/web injects background colours, font spans and
-  // other inline styles that bleed into the rendered description.
   const handlePaste = (e) => {
+    if ([...(e.clipboardData?.files || [])].some((f) => f.type.startsWith('image/'))) return;   // an image: the sheet takes it as the graphic
     e.preventDefault();
-    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
-    document.execCommand('insertText', false, text);
-    onChange(normalizeHtml(editorRef.current.innerHTML));
+    document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text/plain'));
+    emit();
   };
-
-  // Force browser to insert <br> on Enter instead of <div>
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      document.execCommand('insertLineBreak');
-    }
+    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); document.execCommand('insertLineBreak'); }
   };
+  const tool = (title, Icon, run) => (
+    <button type="button" title={title} aria-label={title} onMouseDown={(e) => { e.preventDefault(); run(); }}><Icon /></button>
+  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-      {/* Toolbar */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 4,
-        padding: '5px 8px',
-        background: 'rgba(0,0,0,0.4)',
-        border: '1px solid rgba(255,255,255,0.1)',
-        borderBottom: 'none',
-        borderRadius: '10px 10px 0 0',
-      }}>
-        <ToolbarBtn onClick={() => exec('bold')} title="Bold"><Bold size={11} /></ToolbarBtn>
-        <ToolbarBtn onClick={() => exec('italic')} title="Italic"><Italic size={11} /></ToolbarBtn>
-        <div style={{ position: 'relative' }}>
-          <ToolbarBtn onClick={() => setShowColours(v => !v)} title="Colour">
-            <Palette size={11} />
-          </ToolbarBtn>
-          {showColours && (
-            <div style={{
-              position: 'absolute', top: '100%', left: 0, zIndex: 100, marginTop: 4,
-              background: 'var(--bg-elevated, #0d1829)', border: '1px solid var(--border, rgba(255,255,255,0.12))',
-              borderRadius: 10, padding: '8px 9px',
-              display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6,
-              width: 196,
-              boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-            }}>
-              {TEXT_COLOURS.map(c => (
-                <button
-                  key={c.value}
-                  onMouseDown={e => { e.preventDefault(); applyColour(c.value); }}
-                  title={c.label}
-                  style={{
-                    width: 18, height: 18, borderRadius: '50%',
-                    background: c.value, border: '2px solid rgba(255,255,255,0.15)',
-                    cursor: 'pointer', flexShrink: 0,
-                  }}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+    <div className="gm-rte">
+      <div className="gm-rte-bar" ref={barRef}>
+        {tool('Bold', Bold, () => exec('bold'))}
+        {tool('Italic', Italic, () => exec('italic'))}
+        {tool('Text colour', Palette, () => setShowColours((v) => !v))}
+        <span className="gm-rte-sep" />
+        {tool('Clear formatting', Eraser, () => exec('removeFormat'))}
+        <span className="gm-rte-count">{words} word{words === 1 ? '' : 's'}</span>
+        {showColours && (
+          <div className="gm-swatches" role="menu" aria-label="Text colour">
+            {TEXT_COLOURS.map((c) => (
+              <button key={c.value} type="button" title={c.label} aria-label={c.label} style={{ background: c.value }}
+                onMouseDown={(e) => { e.preventDefault(); exec('foreColor', c.value); setShowColours(false); }} />
+            ))}
+          </div>
+        )}
       </div>
-      {/* Editable area */}
       <div
         ref={editorRef}
+        className="gm-rte-area"
         contentEditable
         suppressContentEditableWarning
-        onInput={handleInput}
+        role="textbox"
+        aria-multiline="true"
+        aria-label="Description"
+        onInput={emit}
         onPaste={handlePaste}
         onKeyDown={handleKeyDown}
         data-placeholder={placeholder}
-        style={{
-          background: 'rgba(0,0,0,0.3)',
-          border: '1px solid rgba(255,255,255,0.1)',
-          borderRadius: '0 0 10px 10px',
-          color: '#e2e8f0',
-          fontSize: 13,
-          padding: '8px 12px',
-          minHeight: rows * 22,
-          outline: 'none',
-          lineHeight: 1.7,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-        }}
       />
-      <style>{`
-        [contenteditable]:empty:before {
-          content: attr(data-placeholder);
-          color: rgba(148,163,184,0.4);
-          pointer-events: none;
-        }
-      `}</style>
     </div>
-  );
-}
-
-function ToolbarBtn({ onClick, children, title }) {
-  return (
-    <button
-      onMouseDown={e => { e.preventDefault(); onClick(); }}
-      title={title}
-      style={{
-        width: 24, height: 24, borderRadius: 6,
-        background: 'transparent', border: '1px solid transparent',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        cursor: 'pointer', color: '#64748b', transition: 'all 0.15s',
-      }}
-      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = '#94a3b8'; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#64748b'; }}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -354,9 +289,7 @@ const FG_CSS = `
 .fg-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 99px; font-size: .78rem; font-weight: 600; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); white-space: nowrap; }
 .fg-chip i { width: 8px; height: 8px; border-radius: 99px; flex-shrink: 0; }
 .fg-risks { gap: 6px !important; }
-.fg-risks > span { font-size: .76rem !important; padding: 4px 4px 4px 11px !important; }
-.fg-risks > span:not([title]) { padding-right: 11px !important; }
-.fg-risks > span > span { padding: 1px 8px !important; }
+.fg-risks > span { font-size: .76rem !important; }
 .fg-title { margin: 0; font-size: clamp(1.3rem, 2.8vw, 1.85rem); font-weight: 700; letter-spacing: -0.025em; line-height: 1.15; color: var(--ink-1); text-wrap: balance; }
 .fg-times { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .fg-time { padding: 10px 12px; border-radius: 14px; background: var(--glass-fill); border: 1px solid var(--glass-hairline); }
@@ -386,7 +319,8 @@ const FG_CSS = `
 `;
 
 const condsOf = (f) => (f.weather_conditions?.length ? f.weather_conditions : f.weather_condition ? [f.weather_condition] : []);
-const levelsOf = (f) => (f.impact_levels?.length ? f.impact_levels : f.impact_level ? [f.impact_level] : []);
+/* the levels as the ladder names them: some older graphics stored the studio's short label ("SLGT") */
+const levelsOf = (f) => [...new Set((f.impact_levels?.length ? f.impact_levels : f.impact_level ? [f.impact_level] : []).map((l) => normLevel(l) || l))];
 
 function Chip({ dot, children }) {
   return <span className="fg-chip">{dot && <i style={{ background: dot }} />}{children}</span>;
@@ -428,7 +362,7 @@ function FeaturedGraphic({ forecast, isOwner, onEdit, onArchive, onFurtherInfo, 
       <div className="fg-body">
         <div className="fg-chips">
           {condsOf(forecast).map((c) => <Chip key={c} dot={(CONDITION_CONFIG[c] || DEFAULT_CFG).accent}>{c}</Chip>)}
-          {levelsOf(forecast).map((l) => IMPACT_CONFIG[l] && <Chip key={l} dot={IMPACT_CONFIG[l].dot}>{l}</Chip>)}
+          {levelsOf(forecast).map((l) => <GraphicLevelPill key={l} level={l} style={{ fontSize: '.76rem', padding: '4px 11px' }} />)}
           {forecast.forecast_update_label && <Chip dot={forecast.is_initial_forecast ? '#38bdf8' : '#f59e0b'}>{forecast.forecast_update_label}</Chip>}
           {expiringSoon && <Chip dot="#ef4444">Expiring soon</Chip>}
         </div>
@@ -454,7 +388,8 @@ function FeaturedGraphic({ forecast, isOwner, onEdit, onArchive, onFurtherInfo, 
         )}
 
         {forecast.locations_impacted?.length > 0 && (
-          <div className="fg-locs"><MapPin size={14} /><span>{forecast.locations_impacted.join(', ')}</span></div>
+          /* places can carry their own risk, so they are objects, not strings: joining them printed "[object Object]" */
+          <div className="fg-locs"><MapPin size={14} /><span>{forecast.locations_impacted.map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean).join(', ')}</span></div>
         )}
 
         {forecast.update_reason && lastUpdatedAt && (
@@ -495,8 +430,208 @@ function MiniGraphic({ forecast, active, onSelect }) {
   );
 }
 
+/* The add / edit sheet's styles. Its own glass tokens, the home page's values, in a dark set and
+   a light one (.is-light): it renders over whichever page opened it, so it cannot lean on that
+   page's. Light and dark are different materials, as on the home page: in the dark the glass is
+   white at low alpha over a deep sheet, in the light a near-opaque white with real hairlines. */
+const GM_CSS = `
+.gm { --gm-sheet: rgba(13,19,31,.82); --gm-card: rgba(255,255,255,.045); --gm-card-2: rgba(255,255,255,.1); --gm-field: rgba(0,0,0,.24);
+  --glass-fill: rgba(255,255,255,.05); --glass-fill-strong: rgba(255,255,255,.09); --glass-hairline: rgba(255,255,255,.11); --glass-highlight: rgba(255,255,255,.14);
+  --ink-1: #f2f6fc; --ink-2: #9fb0c6; --ink-3: rgba(159,176,198,.66); --gm-accent: #56b6f5; --gm-accent-ink: #04121f; --gm-danger: #f87171; --gm-warn: #fbbf24;
+  --gm-scrim: rgba(2,6,14,.56); --gm-shadow: 0 1px 2px rgba(0,0,0,.35), 0 40px 90px -20px rgba(0,0,0,.75);
+  position: fixed; inset: 0; z-index: 80; display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: var(--gm-scrim); -webkit-backdrop-filter: blur(10px) saturate(120%); backdrop-filter: blur(10px) saturate(120%);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, sans-serif;
+  color: var(--ink-1); -webkit-font-smoothing: antialiased; text-align: left; }
+.gm.is-light { --gm-sheet: rgba(244,247,252,.88); --gm-card: rgba(255,255,255,.74); --gm-card-2: #ffffff; --gm-field: rgba(255,255,255,.95);
+  --glass-fill: rgba(255,255,255,.72); --glass-fill-strong: #ffffff; --glass-hairline: rgba(15,23,42,.1); --glass-highlight: rgba(255,255,255,.95);
+  --ink-1: #0b1220; --ink-2: #4a5b70; --ink-3: rgba(74,91,112,.72); --gm-accent: #1d74c4; --gm-accent-ink: #ffffff; --gm-danger: #dc2626; --gm-warn: #b45309;
+  --gm-scrim: rgba(15,23,42,.3); --gm-shadow: 0 1px 2px rgba(15,23,42,.06), 0 40px 90px -24px rgba(15,23,42,.38); }
+.gm *, .gm *::before, .gm *::after { box-sizing: border-box; }
+.gm-sheet { position: relative; display: flex; flex-direction: column; width: min(1120px, 100%); height: min(900px, calc(100vh - 48px)); height: min(900px, calc(100dvh - 48px));
+  border-radius: 28px; overflow: hidden; background: var(--gm-sheet); border: 1px solid var(--glass-hairline); box-shadow: var(--gm-shadow), inset 0 1px 0 var(--glass-highlight);
+  -webkit-backdrop-filter: blur(34px) saturate(185%); backdrop-filter: blur(34px) saturate(185%); }
+.gm-sheet::before { content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: radial-gradient(110% 55% at 0% -10%, rgba(86,182,245,.16), transparent 55%), radial-gradient(80% 45% at 100% 0%, rgba(167,139,250,.12), transparent 60%); }
+.gm-head { position: relative; display: flex; align-items: center; gap: 12px; padding: 16px 16px 14px 20px; border-bottom: 1px solid var(--glass-hairline); }
+.gm-badge { display: grid; place-items: center; width: 42px; height: 42px; flex-shrink: 0; border-radius: 14px; color: var(--gm-accent); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); box-shadow: inset 0 1px 0 var(--glass-highlight); }
+.gm-head h3 { margin: 0; font-size: 1.14rem; font-weight: 700; letter-spacing: -.02em; color: var(--ink-1); }
+.gm-head p { margin: 2px 0 0; font-size: .8rem; line-height: 1.35; color: var(--ink-3); }
+.gm-x { margin-left: auto; display: grid; place-items: center; width: 38px; height: 38px; flex-shrink: 0; border-radius: 13px; cursor: pointer; color: var(--ink-2); background: var(--glass-fill); border: 1px solid var(--glass-hairline); }
+.gm-x:hover { color: var(--ink-1); background: var(--glass-fill-strong); }
+.gm-body { position: relative; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  display: grid; grid-template-columns: minmax(270px, 370px) minmax(0, 1fr); gap: 18px; padding: 18px 20px 26px; align-items: start; }
+.gm-side { position: sticky; top: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.gm-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.gm-card { border-radius: 20px; padding: 14px 16px 16px; background: var(--gm-card); border: 1px solid var(--glass-hairline); box-shadow: inset 0 1px 0 var(--glass-highlight); }
+.gm-card h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.gm-card h4 svg { width: 15px; height: 15px; color: var(--ink-2); }
+.gm-card h4 em { margin-left: auto; font-style: normal; font-weight: 600; letter-spacing: 0; text-transform: none; font-size: .8rem; color: var(--ink-2); }
+.gm-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.gm-field > span:first-child { font-size: .8rem; font-weight: 600; color: var(--ink-2); }
+.gm-field > span:first-child small { margin-left: 4px; font-size: .74rem; font-weight: 500; color: var(--ink-3); }
+.gm-input, .gm-select { width: 100%; min-height: 42px; padding: 0 13px; border-radius: 13px; font: inherit; font-size: 15px; color: var(--ink-1); background: var(--gm-field); border: 1px solid var(--glass-hairline); outline: none; transition: border-color .15s, box-shadow .15s; }
+.gm-input::placeholder { color: var(--ink-3); }
+.gm-input:focus, .gm-select:focus { border-color: var(--gm-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gm-accent) 24%, transparent); }
+.gm-input.is-big { min-height: 50px; font-size: 1.06rem; font-weight: 600; }
+.gm-input[type='datetime-local'] { font-size: 14px; color-scheme: dark; }
+.gm.is-light .gm-input[type='datetime-local'] { color-scheme: light; }
+.gm-select { appearance: none; -webkit-appearance: none; padding-right: 34px; cursor: pointer; font-size: 14px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 17px) 52%, calc(100% - 12px) 52%; background-size: 5px 5px; background-repeat: no-repeat; }
+.gm-select option { color: #0b1220; background: #fff; }
+.gm-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.gm-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.gm-chip { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 13px 0 11px; border-radius: 99px; cursor: pointer; font: inherit; font-size: .85rem; font-weight: 600; color: var(--ink-2); background: var(--glass-fill); border: 1px solid var(--glass-hairline); transition: background .15s, color .15s, border-color .15s, box-shadow .15s; }
+.gm-chip:hover { color: var(--ink-1); background: var(--glass-fill-strong); }
+.gm-chip svg { width: 15px; height: 15px; flex-shrink: 0; }
+.gm-chip[aria-pressed='true'] { color: var(--ink-1); background: color-mix(in srgb, var(--c, var(--gm-accent)) 20%, transparent); border-color: var(--c, var(--gm-accent)); box-shadow: 0 0 0 1px var(--c, var(--gm-accent)); }
+.gm-chip.is-sm { min-height: 30px; padding: 0 11px; font-size: .79rem; font-weight: 550; }
+.gm-sub { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; padding: 12px; border-radius: 16px; background: color-mix(in srgb, var(--c) 9%, transparent); border: 1px solid color-mix(in srgb, var(--c) 32%, transparent); }
+.gm-sub > b { display: flex; align-items: center; gap: 7px; font-size: .8rem; font-weight: 700; color: var(--ink-1); }
+.gm-sub > b svg { width: 15px; height: 15px; color: var(--c); }
+.gm-quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.gm-quick button { min-height: 28px; padding: 0 10px; border-radius: 99px; cursor: pointer; font: inherit; font-size: .76rem; font-weight: 600; color: var(--ink-2); background: var(--glass-fill); border: 1px solid var(--glass-hairline); }
+.gm-quick button:hover { color: var(--ink-1); background: var(--glass-fill-strong); }
+.gm-span { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; font-size: .84rem; line-height: 1.4; color: var(--ink-2); }
+.gm-span svg { width: 15px; height: 15px; flex-shrink: 0; }
+.gm-span.is-bad { color: var(--gm-danger); }
+.gm-span.is-warn { color: var(--gm-warn); }
+.gm-ladder { display: flex; flex-wrap: wrap; gap: 7px; }
+.gm-hint { margin: 10px 0 0; font-size: .78rem; line-height: 1.45; color: var(--ink-3); }
+.gm-drop { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; width: 100%; aspect-ratio: 9 / 13; padding: 22px; border-radius: 22px; text-align: center; cursor: pointer; font: inherit; color: var(--ink-1);
+  background: var(--gm-card); border: 1.5px dashed color-mix(in srgb, var(--ink-3) 75%, transparent); transition: border-color .15s, background .15s, transform .15s; }
+.gm-drop:hover, .gm-drop.is-over { border-color: var(--gm-accent); background: color-mix(in srgb, var(--gm-accent) 9%, var(--gm-card)); }
+.gm-drop.is-over { transform: scale(1.01); }
+.gm-drop-icon { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 19px; color: var(--gm-accent); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); box-shadow: inset 0 1px 0 var(--glass-highlight); }
+.gm-drop b { font-size: 1rem; font-weight: 650; }
+.gm-drop span { font-size: .8rem; line-height: 1.5; color: var(--ink-3); }
+.gm-drop kbd { font: inherit; font-size: .74rem; font-weight: 600; padding: 1px 6px; border-radius: 6px; color: var(--ink-2); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); }
+.gm-shot { position: relative; overflow: hidden; border-radius: 22px; background: rgba(0,0,0,.2); border: 1px solid var(--glass-hairline); transition: box-shadow .15s; }
+.gm-shot.is-over { box-shadow: 0 0 0 3px var(--gm-accent); }
+.gm-shot img { display: block; width: 100%; max-height: min(62vh, 640px); object-fit: contain; }
+.gm-shot-bar { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.gm-shot-bar span.gm-pill { margin-right: auto; }
+.gm-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 11px; border-radius: 99px; font: inherit; font-size: .75rem; font-weight: 600; color: #fff; background: rgba(10,16,28,.56); border: 1px solid rgba(255,255,255,.22); -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%); }
+button.gm-pill { cursor: pointer; }
+button.gm-pill:hover { background: rgba(10,16,28,.78); }
+.gm-busy { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 8px; font-size: .86rem; font-weight: 600; color: #fff; background: rgba(6,10,18,.45); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.gm-note { display: flex; align-items: flex-start; gap: 9px; margin: 0; padding: 10px 12px; border-radius: 14px; font-size: .82rem; line-height: 1.45; color: var(--ink-2); background: var(--gm-card); border: 1px solid var(--glass-hairline); }
+.gm-note svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
+.gm-note.is-warn { color: var(--gm-warn); background: color-mix(in srgb, var(--gm-warn) 10%, transparent); border-color: color-mix(in srgb, var(--gm-warn) 32%, transparent); }
+.gm-note.is-info { color: var(--ink-1); background: color-mix(in srgb, var(--gm-accent) 12%, transparent); border-color: color-mix(in srgb, var(--gm-accent) 32%, transparent); }
+.gm-note.is-info svg { color: var(--gm-accent); }
+.gm-note button { margin-left: auto; padding: 0; border: 0; background: none; font: inherit; font-weight: 700; color: var(--gm-accent); cursor: pointer; white-space: nowrap; }
+.gm-preview { display: flex; flex-direction: column; gap: 8px; }
+.gm-preview > p { margin: 0; font-size: .68rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.gm-preview h5 { margin: 0; font-size: 1.02rem; font-weight: 700; letter-spacing: -.015em; line-height: 1.25; color: var(--ink-1); overflow-wrap: break-word; }
+.gm-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.gm-tag { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: .74rem; font-weight: 600; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); }
+.gm-tag i { width: 7px; height: 7px; border-radius: 99px; }
+.gm-preview small { font-size: .79rem; color: var(--ink-3); }
+.gm-add { display: flex; gap: 8px; }
+.gm-add .gm-input { flex: 1; }
+.gm-iconbtn { display: grid; place-items: center; width: 42px; height: 42px; flex-shrink: 0; border-radius: 13px; cursor: pointer; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); }
+.gm-iconbtn:hover:not(:disabled) { border-color: var(--gm-accent); color: var(--gm-accent); }
+.gm-iconbtn:disabled { opacity: .4; cursor: default; }
+.gm-places { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
+.gm-place { border-radius: 15px; background: var(--glass-fill); border: 1px solid var(--glass-hairline); }
+.gm-place-top { display: flex; align-items: center; gap: 7px; min-height: 44px; padding: 6px 8px 6px 12px; }
+.gm-place-top > svg { width: 15px; height: 15px; flex-shrink: 0; color: var(--ink-3); }
+.gm-place-top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9rem; font-weight: 600; }
+.gm-place-btn { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 9px; border-radius: 10px; cursor: pointer; font: inherit; font-size: .76rem; font-weight: 600; color: var(--ink-2); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); }
+.gm-place-btn:hover { color: var(--ink-1); }
+.gm-place-btn.is-del:hover { color: var(--gm-danger); border-color: color-mix(in srgb, var(--gm-danger) 50%, transparent); }
+.gm-place-risk { display: flex; flex-direction: column; gap: 10px; padding: 2px 12px 12px; }
+.gm-place-risk > div > span { display: block; margin-bottom: 6px; font-size: .68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.gm-switch { display: flex; align-items: center; gap: 12px; }
+.gm-switch > svg { width: 18px; height: 18px; flex-shrink: 0; }
+.gm-switch > div { flex: 1; min-width: 0; }
+.gm-switch b { display: block; font-size: .92rem; font-weight: 600; }
+.gm-switch small { display: block; margin-top: 1px; font-size: .78rem; line-height: 1.35; color: var(--ink-3); }
+.gm-toggle { position: relative; width: 51px; height: 31px; flex-shrink: 0; padding: 0; border-radius: 99px; cursor: pointer; border: 0; background: color-mix(in srgb, var(--ink-3) 42%, transparent); transition: background .2s; }
+.gm-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 99px; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.3); transition: transform .22s cubic-bezier(.22,1,.36,1); }
+.gm-toggle[aria-checked='true'] { background: var(--c, #34c759); }
+.gm-toggle[aria-checked='true']::after { transform: translateX(20px); }
+.gm-sep { height: 1px; margin: 12px 0; background: var(--glass-hairline); }
+.gm-rte { border-radius: 14px; border: 1px solid var(--glass-hairline); background: var(--gm-field); }
+.gm-rte:focus-within { border-color: var(--gm-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gm-accent) 24%, transparent); }
+.gm-rte-bar { position: relative; display: flex; align-items: center; gap: 2px; padding: 5px; border-bottom: 1px solid var(--glass-hairline); }
+.gm-rte-bar > button { display: grid; place-items: center; width: 34px; height: 30px; border-radius: 9px; cursor: pointer; color: var(--ink-2); background: transparent; border: 0; }
+.gm-rte-bar > button:hover { color: var(--ink-1); background: var(--glass-fill-strong); }
+.gm-rte-bar > button svg { width: 15px; height: 15px; }
+.gm-rte-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--glass-hairline); }
+.gm-rte-count { margin-left: auto; padding-right: 8px; font-size: .74rem; color: var(--ink-3); }
+.gm-rte-area { min-height: 140px; max-height: 360px; overflow-y: auto; padding: 11px 13px; font-size: 15px; line-height: 1.65; color: var(--ink-1); outline: none; white-space: pre-wrap; word-break: break-word; }
+.gm-rte-area:empty::before { content: attr(data-placeholder); color: var(--ink-3); pointer-events: none; }
+.gm-swatches { position: absolute; top: calc(100% + 6px); left: 4px; z-index: 5; display: grid; grid-template-columns: repeat(8, 22px); gap: 8px; padding: 11px; border-radius: 16px;
+  background: var(--gm-sheet); border: 1px solid var(--glass-hairline); box-shadow: var(--gm-shadow); -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%); }
+.gm-swatches button { width: 22px; height: 22px; padding: 0; border-radius: 99px; cursor: pointer; border: 2px solid var(--glass-hairline); transition: transform .12s; }
+.gm-swatches button:hover { transform: scale(1.15); }
+.gm-ts { display: flex; flex-direction: column; gap: 16px; }
+.gm-ts-group { display: flex; flex-direction: column; gap: 9px; }
+.gm-ts-label { margin: 0; font-size: .8rem; font-weight: 600; color: var(--ink-2); }
+.gm-ts-label small { margin-left: 5px; font-weight: 500; color: var(--ink-3); }
+.gm-ts-row { display: grid; grid-template-columns: 132px minmax(0, 1fr) 76px 92px; align-items: center; gap: 10px; }
+.gm-ts-name { display: inline-flex; align-items: center; gap: 7px; min-width: 0; font-size: .86rem; font-weight: 600; color: var(--ink-1); }
+.gm-ts-name svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--ink-2); }
+.gm-ts-range { -webkit-appearance: none; appearance: none; width: 100%; height: 8px; margin: 0; border-radius: 99px; cursor: pointer; outline: none;
+  background: linear-gradient(90deg, var(--c) 0 var(--p), color-mix(in srgb, var(--ink-3) 30%, transparent) var(--p) 100%); }
+.gm-ts-range::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; border-radius: 99px; background: #fff; border: 0; box-shadow: 0 1px 4px rgba(0,0,0,.35), 0 0 0 1px rgba(0,0,0,.06); }
+.gm-ts-range::-moz-range-thumb { width: 22px; height: 22px; border-radius: 99px; background: #fff; border: 0; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+.gm-ts-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--gm-accent) 40%, transparent); }
+.gm-ts-pct { display: inline-flex; align-items: center; gap: 4px; font-size: .84rem; font-weight: 600; color: var(--ink-2); }
+.gm-ts-pct .gm-input { min-height: 36px; padding: 0 8px; text-align: right; font-size: 14px; font-weight: 700; }
+.gm-ts-band { display: flex; justify-content: flex-end; }
+.gm-ts-band em { font-style: normal; font-size: .76rem; color: var(--ink-3); }
+.gm-ts-pair { display: grid; grid-template-columns: 132px minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 10px; }
+.gm-ts-pair .gm-select { min-height: 38px; }
+.gm-ts-measures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.gm-foot { position: relative; display: flex; align-items: center; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)) 20px; border-top: 1px solid var(--glass-hairline); background: color-mix(in srgb, var(--gm-sheet) 70%, transparent); }
+.gm-status { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 0; font-size: .84rem; line-height: 1.35; color: var(--ink-3); }
+.gm-status svg { width: 16px; height: 16px; flex-shrink: 0; }
+.gm-status.is-err { color: var(--gm-danger); }
+.gm-status.is-ok { color: var(--ink-2); }
+.gm-status.is-ok svg { color: #34c759; }
+.gm-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 18px; border-radius: 14px; cursor: pointer; font: inherit; font-size: .92rem; font-weight: 650; white-space: nowrap; color: var(--ink-1); background: var(--glass-fill-strong); border: 1px solid var(--glass-hairline); }
+.gm-btn:hover:not(:disabled) { background: var(--gm-card-2); }
+.gm-btn.is-primary { color: var(--gm-accent-ink); background: var(--gm-accent); border-color: transparent; box-shadow: 0 10px 24px -10px color-mix(in srgb, var(--gm-accent) 75%, transparent); }
+.gm-btn.is-primary:hover:not(:disabled) { background: var(--gm-accent); filter: brightness(1.07); }
+.gm-btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+.gm-spin { animation: gm-spin 1s linear infinite; }
+@keyframes gm-spin { to { transform: rotate(360deg); } }
+@media (max-width: 860px) {
+  .gm { padding: 0; align-items: flex-end; }
+  .gm-sheet { width: 100%; height: 94vh; height: 94dvh; border-radius: 26px 26px 0 0; }
+  .gm-head { padding: 14px 12px 12px 16px; }
+  .gm-head p { display: none; }
+  .gm-body { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 12px 12px 20px; }
+  .gm-side { position: static; }
+  .gm-drop { aspect-ratio: auto; min-height: 200px; }
+  .gm-shot img { max-height: 46vh; }
+  .gm-row, .gm-ts-measures { grid-template-columns: minmax(0, 1fr); }
+  .gm-ts-row { grid-template-columns: minmax(0, 1fr) 72px 86px; row-gap: 6px; }
+  .gm-ts-row .gm-ts-name { grid-column: 1 / -1; }
+  .gm-ts-pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .gm-ts-pair .gm-ts-name { grid-column: 1 / -1; }
+  .gm-foot { flex-wrap: wrap; padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .gm-status { flex-basis: 100%; }
+  .gm-foot .gm-btn { flex: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .gm-toggle, .gm-toggle::after, .gm-drop, .gm-swatches button { transition: none; } }
+`;
+
 /* ─────────────────────────────────────────────
-   ADD / EDIT MODAL (shared)
+   ADD / EDIT A GRAPHIC — one liquid-glass sheet, light and dark
+   The graphic on the left: dropped in, chosen, or pasted (Ctrl+V), with its size and a check
+   that it is the portrait shape the graphics are made in, and under it a preview of how its tags
+   will read on the home page. Everything about it on the right, in glass cards in the order it is
+   filled in. The risk ladder is the Thunderstorm graphic's own (TSTM to SVRE, the colours and
+   labels of its key) for the graphic, its places and its thunderstorm details. Times have quick
+   picks and say how long the graphic will be in force. A new graphic is kept as a draft while
+   it is written, so closing the sheet loses nothing. The footer says what is still needed;
+   Ctrl+Enter publishes. The sheet carries its own tokens (it renders over whichever page
+   opened it) and follows the site's theme.
 ───────────────────────────────────────────── */
 const EMPTY_GRAPHIC = {
   title: '', image_url: '', description: '',
@@ -506,698 +641,472 @@ const EMPTY_GRAPHIC = {
   impact_level: '', impact_levels: [],
   locations_impacted: [], impact_drawing: '', thunderstorm_data: {},
 };
+const NEW_FORM = { ...EMPTY_GRAPHIC, update_reason: '', update_label: '', is_initial_forecast: false, is_continuation: false, parent_graphic_id: null };
+const NEW_FORM_JSON = JSON.stringify(NEW_FORM);
+const newForm = () => JSON.parse(NEW_FORM_JSON);
 
-/* ─────────────────────────────────────────────
-   LOCATION ENTRY WITH RISK LEVELS (modal)
-───────────────────────────────────────────── */
-const MODAL_RISK_LEVELS = ['None', 'Very Low', 'Low', 'Marginal', 'Slight', 'Moderate', 'High', 'Severe'];
-const MODAL_RISK_COLORS = {
-  None: '#64748b', 'Very Low': '#86efac', Low: '#bbf7d0', Marginal: '#fde047',
-  Slight: '#fdba74', Moderate: '#fca5a5', High: '#d8b4fe', Severe: '#f8fafc',
+const DRAFT_KEY = 'mwuk_graphic_draft_v1';
+const readDraft = () => {
+  try { const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); return d && d.form ? d : null; } catch { return null; }
 };
+const clearDraft = () => { try { localStorage.removeItem(DRAFT_KEY); } catch { /* storage blocked */ } };
 
-function ModalLocationEntry({ loc, onRemove, onChange }) {
+/* The graphics store their times as UK wall-clock strings ("2026-10-21T18:00"), which is what a
+   datetime-local box reads and writes. */
+const pad2 = (n) => String(n).padStart(2, '0');
+const toLocalInput = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+const parseLocal = (v) => { if (!v) return null; const d = new Date(v); return isValid(d) ? d : null; };
+const spanWords = (ms) => {
+  const h = ms / 36e5;
+  if (h >= 47.5) return `${Math.round(h / 24)} days`;
+  if (h >= 1) { const r = Math.round(h * 2) / 2; return `${r} hour${r === 1 ? '' : 's'}`; }
+  return `${Math.max(1, Math.round(ms / 6e4))} min`;
+};
+const whenWords = (d) => d.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const nextSix = (from) => { const d = new Date(from); d.setHours(6, 0, 0, 0); if (d <= from) d.setDate(d.getDate() + 1); return d; };
+const placeName = (l) => (typeof l === 'string' ? l : l?.name || '');
+const asPlace = (l) => (typeof l === 'string' ? { name: l, overall_risk: null, highest_risk: null, lowest_risk: null } : l);
+const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+/* one place, with its risk on the graphic's ladder: overall, or lowest to highest */
+function PlaceRow({ loc, onRemove, onChange }) {
   const [open, setOpen] = useState(false);
+  const shown = loc.overall_risk ? [loc.overall_risk] : [...new Set([loc.lowest_risk, loc.highest_risk].filter(Boolean))];
   return (
-    <div style={{ borderRadius: 10, border: '1px solid rgba(255,255,255,0.09)', background: 'rgba(255,255,255,0.03)', padding: '7px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <MapPin size={10} style={{ color: 'rgba(148,163,184,0.4)', flexShrink: 0 }} />
-        <span style={{ fontSize: 12, color: '#e2e8f0', flex: 1 }}>{loc.name}</span>
-        <button type="button" onClick={() => setOpen(v => !v)}
-          style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '2px 8px', borderRadius: 6, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)', cursor: 'pointer', color: 'rgba(148,163,184,0.6)', fontSize: 9, fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          Risk <ChevronDown size={9} style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+    <div className="gm-place">
+      <div className="gm-place-top">
+        <MapPin />
+        <b title={loc.name}>{loc.name}</b>
+        {shown.map((l) => <GraphicLevelPill key={l} level={l} style={{ fontSize: 10, padding: '1px 7px' }} />)}
+        <button type="button" className="gm-place-btn" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          Risk<ChevronDown size={13} style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
         </button>
-        <button type="button" onClick={onRemove}
-          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'rgba(148,163,184,0.4)', display: 'flex', lineHeight: 1 }}
-          onMouseEnter={e => e.currentTarget.style.color = '#f87171'}
-          onMouseLeave={e => e.currentTarget.style.color = 'rgba(148,163,184,0.4)'}
-        ><X size={10} /></button>
+        <button type="button" className="gm-place-btn is-del" onClick={onRemove} aria-label={`Remove ${loc.name}`}><X size={13} /></button>
       </div>
       {open && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div>
-            <div style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(148,163,184,0.5)', marginBottom: 4 }}>Overall Risk</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {MODAL_RISK_LEVELS.map(level => (
-                <button key={level} type="button"
-                  onClick={() => onChange({ ...loc, overall_risk: level === 'None' ? null : level })}
-                  style={{
-                    padding: '2px 8px', borderRadius: 999, fontSize: 9, fontFamily: 'monospace', cursor: 'pointer',
-                    background: loc.overall_risk === level ? `${MODAL_RISK_COLORS[level]}22` : 'transparent',
-                    border: `1px solid ${loc.overall_risk === level ? MODAL_RISK_COLORS[level] : 'rgba(255,255,255,0.1)'}`,
-                    color: loc.overall_risk === level ? MODAL_RISK_COLORS[level] : 'rgba(148,163,184,0.5)',
-                  }}>{level}</button>
-              ))}
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <div>
-              <div style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#86efac', marginBottom: 4 }}>Lowest Risk</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                {MODAL_RISK_LEVELS.filter(l => l !== 'None').map(level => (
-                  <button key={level} type="button"
-                    onClick={() => onChange({ ...loc, lowest_risk: loc.lowest_risk === level ? null : level })}
-                    style={{
-                      padding: '2px 7px', borderRadius: 999, fontSize: 9, fontFamily: 'monospace', cursor: 'pointer',
-                      background: loc.lowest_risk === level ? `${MODAL_RISK_COLORS[level]}22` : 'transparent',
-                      border: `1px solid ${loc.lowest_risk === level ? MODAL_RISK_COLORS[level] : 'rgba(255,255,255,0.09)'}`,
-                      color: loc.lowest_risk === level ? MODAL_RISK_COLORS[level] : 'rgba(148,163,184,0.4)',
-                    }}>{level}</button>
+        <div className="gm-place-risk">
+          {[['overall_risk', 'Overall'], ['lowest_risk', 'Lowest'], ['highest_risk', 'Highest']].map(([key, label]) => (
+            <div key={key}>
+              <span>{label}</span>
+              <div className="gm-ladder">
+                {IMPACT_LEVELS.map((level) => (
+                  <GraphicLevelChoice key={level} level={level} small selected={normLevel(loc[key]) === level}
+                    onClick={() => onChange({ ...loc, [key]: normLevel(loc[key]) === level ? null : level })} />
                 ))}
               </div>
             </div>
-            <div>
-              <div style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#fca5a5', marginBottom: 4 }}>Highest Risk</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                {MODAL_RISK_LEVELS.filter(l => l !== 'None').map(level => (
-                  <button key={level} type="button"
-                    onClick={() => onChange({ ...loc, highest_risk: loc.highest_risk === level ? null : level })}
-                    style={{
-                      padding: '2px 7px', borderRadius: 999, fontSize: 9, fontFamily: 'monospace', cursor: 'pointer',
-                      background: loc.highest_risk === level ? `${MODAL_RISK_COLORS[level]}22` : 'transparent',
-                      border: `1px solid ${loc.highest_risk === level ? MODAL_RISK_COLORS[level] : 'rgba(255,255,255,0.09)'}`,
-                      color: loc.highest_risk === level ? MODAL_RISK_COLORS[level] : 'rgba(148,163,184,0.4)',
-                    }}>{level}</button>
-                ))}
-              </div>
-            </div>
-          </div>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-function ForecastModal({ mode = 'add', initial = null, onClose, onSave, uploading, onUpload, existingForecasts = [], saving = false, error = '' }) {
-  const normalizeLocations = (raw) => {
-    if (!raw) return [];
-    if (Array.isArray(raw)) return raw.map(l => typeof l === 'string' ? { name: l, overall_risk: null, highest_risk: null, lowest_risk: null } : l);
-    return [];
-  };
+function Switch({ on, onToggle, colour, label }) {
+  return <button type="button" role="switch" aria-checked={!!on} aria-label={label} className="gm-toggle" style={{ '--c': colour }} onClick={onToggle} />;
+}
 
+function ForecastModal({ mode = 'add', initial = null, onClose, onSave, uploading, onUploadFile, existingForecasts = [], saving = false, error = '' }) {
+  const { isDark } = useTheme();
+  const isEdit = mode === 'edit';
+  const [draft] = useState(() => (isEdit ? null : readDraft()));
+  const [restored, setRestored] = useState(() => !!draft);
+  const [editorKey, setEditorKey] = useState(0);
   const [form, setForm] = useState(() => {
-    if (mode === 'edit' && initial) {
+    if (isEdit && initial) {
+      const lv = Array.isArray(initial.impact_levels) && initial.impact_levels.length ? initial.impact_levels : initial.impact_level ? [initial.impact_level] : [];
       return {
+        ...newForm(),
         title:              initial.title || '',
         image_url:          initial.image_url || '',
         description:        initial.description || '',
         weather_condition:  initial.weather_condition || '',
-        weather_conditions: initial.weather_conditions || [],
+        weather_conditions: initial.weather_conditions?.length ? initial.weather_conditions : initial.weather_condition ? [initial.weather_condition] : [],
         condition_subtypes: initial.condition_subtypes || [],
         condition_ranges:   initial.condition_ranges || {},
         expires_at:         initial.expires_at ? initial.expires_at.slice(0, 16) : '',
         in_force_from:      initial.in_force_from ? initial.in_force_from.slice(0, 16) : '',
         impact_level:       initial.impact_level || '',
-        impact_levels:      initial.impact_levels || [],
-        locations_impacted: normalizeLocations(initial.locations_impacted),
+        impact_levels:      [...new Set(lv.map((l) => normLevel(l) || l))],    // older graphics stored "SLGT"
+        locations_impacted: (Array.isArray(initial.locations_impacted) ? initial.locations_impacted : []).map(asPlace),
         impact_drawing:     initial.impact_drawing || '',
         thunderstorm_data:  initial.thunderstorm_data || {},
-        update_reason:      '',
-        update_label:       '',
         is_initial_forecast: initial.is_initial_forecast ?? false,
-        is_continuation:    false,
-        parent_graphic_id:  null,
       };
     }
-    return { ...EMPTY_GRAPHIC, update_reason: '', update_label: '', is_initial_forecast: false, is_continuation: false, parent_graphic_id: null, locations_impacted: [] };
+    return draft ? { ...newForm(), ...draft.form } : newForm();
   });
+  const [placeInput, setPlaceInput] = useState('');
+  const [over, setOver] = useState(false);
+  const [fileNote, setFileNote] = useState('');
+  const [fileInfo, setFileInfo] = useState(null);
+  const [dims, setDims] = useState(null);
+  const fileRef = useRef(null);
+  const titleRef = useRef(null);
 
-  const [locationInput, setLocationInput] = useState('');
-  const set = (key, val) => setForm(p => ({ ...p, [key]: val }));
-
-  const toggleArr = (key, val) => setForm(p => ({
-    ...p,
-    [key]: p[key].includes(val) ? p[key].filter(x => x !== val) : [...p[key], val],
-  }));
-
-  // When a weather condition is removed, also drop its subtypes/ranges
-  const toggleCondition = (c) => setForm(p => {
+  const set = (key, val) => setForm((p) => ({ ...p, [key]: val }));
+  const toggleArr = (key, val) => setForm((p) => ({ ...p, [key]: p[key].includes(val) ? p[key].filter((x) => x !== val) : [...p[key], val] }));
+  // removing a condition also drops its options and figures
+  const toggleCondition = (c) => setForm((p) => {
     const has = p.weather_conditions.includes(c);
-    const nextConds = has ? p.weather_conditions.filter(x => x !== c) : [...p.weather_conditions, c];
-    let nextSubtypes = p.condition_subtypes;
-    let nextRanges = { ...p.condition_ranges };
-    if (has) {
-      const removedSubs = new Set(CONDITION_SUBTYPES[c] || []);
-      nextSubtypes = p.condition_subtypes.filter(s => !removedSubs.has(s));
-      for (const r of (CONDITION_RANGES[c] || [])) delete nextRanges[r.key];
-    }
-    return { ...p, weather_conditions: nextConds, condition_subtypes: nextSubtypes, condition_ranges: nextRanges };
+    const nextRanges = { ...p.condition_ranges };
+    if (has) for (const r of (CONDITION_RANGES[c] || [])) delete nextRanges[r.key];
+    const gone = has ? new Set(CONDITION_SUBTYPES[c] || []) : new Set();
+    return {
+      ...p,
+      weather_conditions: has ? p.weather_conditions.filter((x) => x !== c) : [...p.weather_conditions, c],
+      condition_subtypes: p.condition_subtypes.filter((s) => !gone.has(s)),
+      condition_ranges: nextRanges,
+    };
   });
+  const setRange = (key, val) => setForm((p) => ({ ...p, condition_ranges: { ...p.condition_ranges, [key]: val } }));
 
-  const setRange = (key, val) => setForm(p => ({
-    ...p, condition_ranges: { ...p.condition_ranges, [key]: val },
-  }));
-
-  const addLocation = () => {
-    const v = locationInput.trim();
-    if (v && !form.locations_impacted.some(l => (typeof l === 'string' ? l : l.name) === v)) {
-      set('locations_impacted', [...form.locations_impacted, { name: v, overall_risk: null, highest_risk: null, lowest_risk: null }]);
-      setLocationInput('');
-    }
+  /* places: one at a time, or several pasted with commas */
+  const addPlaces = () => {
+    const names = placeInput.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
+    if (!names.length) return;
+    setForm((p) => {
+      const have = new Set(p.locations_impacted.map((l) => placeName(l).toLowerCase()));
+      const add = names.filter((n) => !have.has(n.toLowerCase()) && have.add(n.toLowerCase()));
+      return { ...p, locations_impacted: [...p.locations_impacted, ...add.map((n) => asPlace(n))] };
+    });
+    setPlaceInput('');
   };
 
-  const inputStyle = {
-    background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.09)',
-    borderRadius: 10, color: '#e2e8f0', fontSize: 13,
-    padding: '8px 12px', width: '100%', fontFamily: 'inherit',
-    outline: 'none', transition: 'border-color 0.2s',
+  /* the graphic: chosen, dropped or pasted */
+  const takeFile = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { setFileNote('That is not an image. Use a PNG or JPG of the graphic.'); return; }
+    setFileNote('');
+    setDims(null);
+    setFileInfo({ name: file.name || 'Pasted image', size: file.size });
+    const url = await onUploadFile(file);
+    if (url) set('image_url', url);
+  };
+  const takeRef = useRef(takeFile);
+  takeRef.current = takeFile;
+
+  /* a new graphic is kept as a draft while it is written */
+  useEffect(() => {
+    if (isEdit) return undefined;
+    const t = setTimeout(() => {
+      const json = JSON.stringify(form);
+      try {
+        if (json === NEW_FORM_JSON) localStorage.removeItem(DRAFT_KEY);
+        else localStorage.setItem(DRAFT_KEY, JSON.stringify({ at: Date.now(), form }));
+      } catch { /* storage blocked: no draft */ }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [form, isEdit]);
+  const startAgain = () => {
+    clearDraft();
+    setForm(newForm());
+    setRestored(false);
+    setFileInfo(null); setDims(null); setFileNote('');
+    setEditorKey((k) => k + 1);
   };
 
-  const isEdit = mode === 'edit';
-
-  // Conditions currently selected that expose subtypes/ranges
-  const activeConditionsWithExtras = form.weather_conditions.filter(
-    c => (CONDITION_SUBTYPES[c]?.length || CONDITION_RANGES[c]?.length)
-  );
-
-  // Snapshot of the untouched form, so a stray backdrop click can't silently
-  // bin a part-filled graphic.
+  // an edit can still be thrown away by a stray click, so it asks; a new graphic is a draft
   const [pristine] = useState(() => JSON.stringify(form));
   const isDirty = JSON.stringify(form) !== pristine;
-
   const requestClose = () => {
-    if (isDirty && !window.confirm('Discard this graphic? Anything you have entered will be lost.')) return;
+    if (isEdit && isDirty && !window.confirm('Discard the changes to this graphic?')) return;
     onClose();
   };
 
-  // onClose is a fresh arrow on every parent render, so keep it in a ref and
-  // run this effect on mount/unmount only — otherwise the scroll lock would be
-  // torn down and re-applied on each keystroke.
+  const tIn = parseLocal(form.in_force_from), tEx = parseLocal(form.expires_at);
+  const badSpan = !!(tIn && tEx && tEx <= tIn);
+  const pastEnd = !!(tEx && tEx.getTime() < Date.now());
+  const missing = !form.title.trim() ? 'Give the graphic a title'
+    : isEdit && !form.update_label?.trim() ? 'Name this update (for example Update 1)'
+      : !isEdit && !form.image_url ? 'Add the graphic image'
+        : badSpan ? 'The end time is before the start'
+          : '';
+  const canSave = !missing && !saving && !uploading;
+  const save = () => { if (canSave) onSave(form); };
+  const saveRef = useRef(save);
+  saveRef.current = save;
   const closeRef = useRef(requestClose);
   closeRef.current = requestClose;
+
+  // The handlers are refs, so this runs on open and close only — otherwise the scroll lock
+  // would be torn down and put back on every keystroke.
   useEffect(() => {
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    const onKey = (e) => { if (e.key === 'Escape') closeRef.current(); };
+    const onKey = (e) => {
+      if (e.key === 'Escape') closeRef.current();
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveRef.current(); }
+    };
+    const onPaste = (e) => {
+      const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/'));
+      if (f) { e.preventDefault(); takeRef.current(f); }
+    };
     window.addEventListener('keydown', onKey);
+    window.addEventListener('paste', onPaste);
+    if (!isEdit) setTimeout(() => titleRef.current?.focus({ preventScroll: true }), 60);
     return () => {
       document.body.style.overflow = prevOverflow;
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('paste', onPaste);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Title is advertised as required, so enforce it rather than quietly saving
-  // the graphic as "Forecast".
-  const missing = !form.title.trim()
-    ? 'Give the graphic a title'
-    : isEdit
-      ? (!form.update_label?.trim() ? 'Add an update label' : '')
-      : (!form.image_url ? 'Upload a graphic image' : '');
-  const canSave = !missing && !saving && !uploading;
+  const quickIn = [['Now', () => new Date()], ['Next hour', () => { const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1); return d; }], ['06:00', () => nextSix(new Date())]];
+  const base = () => tIn || new Date();
+  const quickEnd = [['+6 h', () => new Date(base().getTime() + 6 * 36e5)], ['+12 h', () => new Date(base().getTime() + 12 * 36e5)], ['+24 h', () => new Date(base().getTime() + 24 * 36e5)], ['Next 06:00', () => nextSix(base())]];
+  const landscape = dims && dims.w > dims.h * 1.05;
 
-  // Rendered through a portal so the overlay is always positioned against the
-  // viewport, whatever filters or transforms the page wrapper happens to carry.
+  const status = error ? { cls: 'is-err', Icon: AlertTriangle, text: error }
+    : uploading ? { cls: '', Icon: Loader2, spin: true, text: 'Uploading the graphic…' }
+      : missing ? { cls: '', Icon: Info, text: `${missing} to publish.` }
+        : { cls: 'is-ok', Icon: CheckCircle2, text: `Ready to publish${isEdit ? ' the update' : ''} · Ctrl+Enter` };
+
   return createPortal(
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
+      className={`gm${isDark ? '' : ' is-light'}`}
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       onClick={requestClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 50,
-        background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(10px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '16px',
-      }}
     >
+      <style>{GM_CSS}</style>
       <motion.div
-        initial={{ scale: 0.96, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.96, opacity: 0 }}
-        transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-        onClick={e => e.stopPropagation()}
-        style={{
-          width: '100%', maxWidth: 740,
-          maxHeight: '90vh', overflowY: 'auto',
-          background: '#08101e',
-          border: '1px solid rgba(255,255,255,0.1)',
-          borderRadius: 20,
-          boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
-        }}
+        className="gm-sheet"
+        role="dialog" aria-modal="true" aria-labelledby="gm-title"
+        initial={{ opacity: 0, y: 18, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 18, scale: 0.985 }}
+        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+        onClick={(e) => e.stopPropagation()}
       >
-
-        <div style={{ padding: '16px 24px 32px' }}>
-          {/* Modal header */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.02em' }}>
-                {isEdit ? 'Edit Forecast Graphic' : 'New Forecast Graphic'}
-              </h3>
-              <p style={{ margin: '2px 0 0', fontSize: 11, color: 'rgba(148,163,184,0.6)', fontFamily: 'monospace' }}>
-                {isEdit ? 'Update the details below' : 'Fill in the details below'}
-              </p>
-            </div>
-            <button
-              onClick={requestClose}
-              style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#64748b' }}
-              onMouseEnter={e => e.currentTarget.style.color = '#94a3b8'}
-              onMouseLeave={e => e.currentTarget.style.color = '#64748b'}
-            >
-              <X size={14} />
-            </button>
+        <header className="gm-head">
+          <span className="gm-badge"><ImagePlus size={19} /></span>
+          <div style={{ minWidth: 0 }}>
+            <h3 id="gm-title">{isEdit ? 'Update this graphic' : 'New forecast graphic'}</h3>
+            <p>{isEdit ? 'The original stays on record as the initial forecast; this publishes as an update.' : 'Shown on the home page as soon as it is published.'}</p>
           </div>
+          <button type="button" className="gm-x" onClick={requestClose} aria-label="Close"><X size={17} /></button>
+        </header>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-            {/* LEFT */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <div className="gm-body">
+          {/* ── the graphic and how it will read ── */}
+          <aside className="gm-side">
+            {form.image_url ? (
+              <div className={`gm-shot${over ? ' is-over' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+                onDrop={(e) => { e.preventDefault(); setOver(false); takeFile(e.dataTransfer.files?.[0]); }}>
+                <img src={form.image_url} alt="The graphic" onLoad={(e) => setDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />
+                <div className="gm-shot-bar">
+                  {dims && <span className="gm-pill">{dims.w} × {dims.h}{fileInfo?.size ? ` · ${kb(fileInfo.size)}` : ''}</span>}
+                  <button type="button" className="gm-pill" onClick={() => fileRef.current?.click()}><RefreshCw size={13} />Replace</button>
+                  <button type="button" className="gm-pill" onClick={() => { set('image_url', ''); setDims(null); setFileInfo(null); }} aria-label="Remove the image"><X size={13} /></button>
+                </div>
+                {uploading && <div className="gm-busy"><Loader2 size={26} className="gm-spin" />Uploading…</div>}
+              </div>
+            ) : (
+              <button type="button" className={`gm-drop${over ? ' is-over' : ''}`} onClick={() => fileRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+                onDrop={(e) => { e.preventDefault(); setOver(false); takeFile(e.dataTransfer.files?.[0]); }}>
+                {uploading ? (
+                  <><Loader2 size={30} className="gm-spin" style={{ color: 'var(--gm-accent)' }} /><b>Uploading…</b><span>{fileInfo?.name}</span></>
+                ) : (
+                  <>
+                    <span className="gm-drop-icon"><Upload size={24} /></span>
+                    <b>Drop the graphic here</b>
+                    <span>or choose a file, or paste it with <kbd>Ctrl</kbd> + <kbd>V</kbd></span>
+                    <span>PNG or JPG · portrait 1080 × 1920 works best</span>
+                  </>
+                )}
+              </button>
+            )}
+            <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { takeFile(e.target.files?.[0]); e.target.value = ''; }} />
+            {fileNote && <div className="gm-note is-warn"><AlertTriangle />{fileNote}</div>}
+            {landscape && <div className="gm-note is-warn"><AlertTriangle />This image is landscape. MyWeatherUK graphics are portrait (1080 × 1920), so it will show small on phones.</div>}
 
-              <FormField label="Title *">
-                <input
-                  style={inputStyle} placeholder="e.g. South England Rain Warning"
-                  value={form.title} onChange={e => set('title', e.target.value)}
-                  onFocus={e => e.target.style.borderColor = 'rgba(148,163,184,0.3)'}
-                  onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.09)'}
-                />
-              </FormField>
+            <div className="gm-card gm-preview">
+              <p>On the home page</p>
+              <div className="gm-tags">
+                {form.weather_conditions.map((c) => <span key={c} className="gm-tag"><i style={{ background: (CONDITION_CONFIG[c] || DEFAULT_CFG).accent }} />{c}</span>)}
+                {IMPACT_LEVELS.filter((l) => form.impact_levels.includes(l)).map((l) => <GraphicLevelPill key={l} level={l} />)}
+                {form.is_initial_forecast && <span className="gm-tag"><i style={{ background: '#38bdf8' }} />Initial forecast</span>}
+                {isEdit && form.update_label?.trim() && <span className="gm-tag"><i style={{ background: '#f59e0b' }} />{form.update_label.trim()}</span>}
+              </div>
+              <h5>{form.title.trim() || 'Untitled graphic'}</h5>
+              {(tIn || tEx) && <small>{tIn ? `In force ${whenWords(tIn)}` : 'In force now'}{tEx ? ` → ${whenWords(tEx)}` : ''}</small>}
+            </div>
+          </aside>
 
-              <FormField label="Weather Conditions" hint="select all that apply">
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {CONDITIONS.map(c => {
+          {/* ── everything about it ── */}
+          <div className="gm-main">
+            {restored && (
+              <div className="gm-note is-info">
+                <Info />
+                <span>Your unsaved graphic from {new Date(draft.at).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' })} is back where you left it.</span>
+                <button type="button" onClick={startAgain}>Start again</button>
+              </div>
+            )}
+
+            {isEdit && (
+              <section className="gm-card">
+                <h4><RefreshCw />This update</h4>
+                <div className="gm-row">
+                  <label className="gm-field"><span>Update name <small>required</small></span>
+                    <input className="gm-input" placeholder="e.g. Update 1" value={form.update_label || ''} onChange={(e) => set('update_label', e.target.value)} />
+                  </label>
+                  <label className="gm-field"><span>What changed <small>optional</small></span>
+                    <input className="gm-input" placeholder="e.g. Risk area moved north" value={form.update_reason || ''} onChange={(e) => set('update_reason', e.target.value)} />
+                  </label>
+                </div>
+              </section>
+            )}
+
+            <section className="gm-card">
+              <h4><Type />Title and weather</h4>
+              <label className="gm-field"><span>Title</span>
+                <input ref={titleRef} className="gm-input is-big" placeholder="e.g. Thunderstorm outlook: Wednesday into Thursday" maxLength={140}
+                  value={form.title} onChange={(e) => set('title', e.target.value)} />
+              </label>
+              <div className="gm-field" style={{ marginTop: 14 }}>
+                <span>Weather <small>pick all that apply</small></span>
+                <div className="gm-chips">
+                  {CONDITIONS.map((c) => {
                     const cfg = CONDITION_CONFIG[c];
-                    const sel = form.weather_conditions.includes(c);
+                    const on = form.weather_conditions.includes(c);
                     return (
-                      <button key={c} type="button" onClick={() => toggleCondition(c)}
-                        style={{
-                          padding: '4px 12px', borderRadius: 999, fontSize: 11, fontFamily: 'monospace',
-                          letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
-                          background: sel ? cfg.dim : 'transparent',
-                          border: `1px solid ${sel ? cfg.border : 'rgba(255,255,255,0.1)'}`,
-                          color: sel ? cfg.text : 'rgba(148,163,184,0.5)',
-                          transform: sel ? 'scale(1.04)' : 'scale(1)',
-                          transition: 'all 0.18s',
-                        }}
-                      >
-                        {c}
+                      <button key={c} type="button" className="gm-chip" aria-pressed={on} style={{ '--c': cfg.accent }} onClick={() => toggleCondition(c)}>
+                        <cfg.Icon style={{ color: cfg.accent }} />{c}{on && <Check size={14} />}
                       </button>
                     );
                   })}
                 </div>
-              </FormField>
-
-              {/* Per-condition sub-types + ranges */}
-              {activeConditionsWithExtras.map(c => {
+              </div>
+              {form.weather_conditions.filter((c) => CONDITION_SUBTYPES[c]?.length || CONDITION_RANGES[c]?.length).map((c) => {
                 const cfg = CONDITION_CONFIG[c] || DEFAULT_CFG;
-                const subs = CONDITION_SUBTYPES[c] || [];
-                const ranges = CONDITION_RANGES[c] || [];
                 return (
-                  <div key={c} style={{
-                    borderRadius: 12, padding: '12px 13px',
-                    background: cfg.dim, border: `1px solid ${cfg.border}`,
-                    display: 'flex', flexDirection: 'column', gap: 12,
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                      <cfg.Icon size={13} style={{ color: cfg.accent }} />
-                      <span style={{ fontFamily: 'monospace', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: cfg.text }}>
-                        {c} — options
-                      </span>
+                  <div key={c} className="gm-sub" style={{ '--c': cfg.accent }}>
+                    <b><cfg.Icon />{c}</b>
+                    <div className="gm-chips">
+                      {(CONDITION_SUBTYPES[c] || []).map((s) => (
+                        <button key={s} type="button" className="gm-chip is-sm" aria-pressed={form.condition_subtypes.includes(s)} onClick={() => toggleArr('condition_subtypes', s)}>
+                          {form.condition_subtypes.includes(s) && <Check size={12} />}{s}
+                        </button>
+                      ))}
                     </div>
-
-                    {subs.length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                        {subs.map(s => {
-                          const sel = form.condition_subtypes.includes(s);
-                          return (
-                            <button key={s} type="button" onClick={() => toggleArr('condition_subtypes', s)}
-                              style={{
-                                display: 'inline-flex', alignItems: 'center', gap: 4,
-                                padding: '3px 10px', borderRadius: 999, fontSize: 10,
-                                fontFamily: 'monospace', letterSpacing: '0.04em', cursor: 'pointer',
-                                background: sel ? cfg.dim : 'rgba(255,255,255,0.03)',
-                                border: `1px solid ${sel ? cfg.border : 'rgba(255,255,255,0.08)'}`,
-                                color: sel ? cfg.text : 'rgba(148,163,184,0.55)',
-                                transition: 'all 0.15s',
-                              }}
-                            >
-                              {sel && <Check size={9} />}
-                              {s}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {ranges.length > 0 && (
-                      <div style={{ display: 'grid', gridTemplateColumns: ranges.length > 1 ? '1fr 1fr' : '1fr', gap: 8 }}>
-                        {ranges.map(r => (
-                          <div key={r.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <label style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(148,163,184,0.5)' }}>
-                              {r.label} <span style={{ color: cfg.accent }}>({r.unit})</span>
-                            </label>
-                            <input
-                              style={{ ...inputStyle, fontSize: 12, padding: '6px 10px' }}
-                              placeholder={r.placeholder}
-                              value={form.condition_ranges[r.key] || ''}
-                              onChange={e => setRange(r.key, e.target.value)}
-                              onFocus={e => e.target.style.borderColor = cfg.border}
-                              onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.09)'}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    {(CONDITION_RANGES[c] || []).map((r) => (
+                      <label key={r.key} className="gm-field"><span>{r.label} <small>{r.unit}</small></span>
+                        <input className="gm-input" placeholder={r.placeholder} value={form.condition_ranges[r.key] || ''} onChange={(e) => setRange(r.key, e.target.value)} />
+                      </label>
+                    ))}
                   </div>
                 );
               })}
+            </section>
 
-              <FormField label="Description">
-                <RichTextEditor
-                  value={form.description}
-                  onChange={v => set('description', v)}
-                  placeholder="Brief description of the forecast…"
-                  rows={4}
-                />
-              </FormField>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <FormField label="In Force From">
-                  <input type="datetime-local" style={{ ...inputStyle, fontSize: 11 }}
-                    value={form.in_force_from} onChange={e => set('in_force_from', e.target.value)} />
-                </FormField>
-                <FormField label="Expires At">
-                  <input type="datetime-local" style={{ ...inputStyle, fontSize: 11 }}
-                    value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
-                </FormField>
+            <section className="gm-card">
+              <h4><CalendarClock />When</h4>
+              <div className="gm-row">
+                <label className="gm-field"><span>In force from</span>
+                  <input type="datetime-local" className="gm-input" value={form.in_force_from} onChange={(e) => set('in_force_from', e.target.value)} />
+                  <span className="gm-quick">
+                    {quickIn.map(([t, at]) => <button key={t} type="button" onClick={() => set('in_force_from', toLocalInput(at()))}>{t}</button>)}
+                    {form.in_force_from && <button type="button" onClick={() => set('in_force_from', '')}>Clear</button>}
+                  </span>
+                </label>
+                <label className="gm-field"><span>Ends</span>
+                  <input type="datetime-local" className="gm-input" value={form.expires_at} onChange={(e) => set('expires_at', e.target.value)} />
+                  <span className="gm-quick">
+                    {quickEnd.map(([t, at]) => <button key={t} type="button" onClick={() => set('expires_at', toLocalInput(at()))}>{t}</button>)}
+                    {form.expires_at && <button type="button" onClick={() => set('expires_at', '')}>Clear</button>}
+                  </span>
+                </label>
               </div>
+              {badSpan ? <p className="gm-span is-bad"><AlertTriangle />The end is before the start.</p>
+                : pastEnd ? <p className="gm-span is-warn"><AlertTriangle />That end time has passed, so the graphic will go straight to the archive.</p>
+                  : tEx ? <p className="gm-span"><Clock3 />In force {tIn ? `for ${spanWords(tEx - tIn)}` : `from publishing until ${whenWords(tEx)}`}, then it moves to the archive.</p>
+                    : <p className="gm-span"><Clock3 />With no end time it stays on the home page until it is archived.</p>}
+            </section>
 
-              <FormField label="Risk Level" hint="select all that apply">
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {IMPACT_LEVELS.map(level => {
-                    const cfg = IMPACT_CONFIG[level];
-                    const sel = form.impact_levels.includes(level);
-                    const isSevere = level === 'Severe';
+            <section className="gm-card">
+              <h4><Gauge />Risk level{form.impact_levels.length > 0 && <em>{form.impact_levels.length} chosen</em>}</h4>
+              <div className="gm-ladder">
+                {IMPACT_LEVELS.map((level) => (
+                  <GraphicLevelChoice key={level} level={level} range selected={form.impact_levels.includes(level)} onClick={() => toggleArr('impact_levels', level)} />
+                ))}
+              </div>
+              <p className="gm-hint">The Thunderstorm graphic&rsquo;s own bands: the same colours and labels as its key. Pick every band the graphic shows.</p>
+            </section>
+
+            {form.weather_conditions.includes('Thunderstorms') && (
+              <section className="gm-card">
+                <h4><Zap />Thunderstorm details</h4>
+                <ThunderstormPanel data={form.thunderstorm_data || {}} onChange={(td) => set('thunderstorm_data', td)} />
+              </section>
+            )}
+
+            <section className="gm-card">
+              <h4><AlignLeft />Description</h4>
+              <RichTextEditor key={editorKey} value={form.description} onChange={(v) => set('description', v)} placeholder="What to expect, where and when…" />
+            </section>
+
+            <section className="gm-card">
+              <h4><MapPin />Places affected{form.locations_impacted.length > 0 && <em>{form.locations_impacted.length}</em>}</h4>
+              <div className="gm-add">
+                <input className="gm-input" placeholder="Add a place, or several separated by commas" value={placeInput}
+                  onChange={(e) => setPlaceInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPlaces(); } }} />
+                <button type="button" className="gm-iconbtn" onClick={addPlaces} disabled={!placeInput.trim()} aria-label="Add the place"><Plus size={17} /></button>
+              </div>
+              {form.locations_impacted.length > 0 && (
+                <div className="gm-places">
+                  {form.locations_impacted.map((raw) => {
+                    const loc = asPlace(raw);
                     return (
-                      <button key={level} type="button" title={level} onClick={() => toggleArr('impact_levels', level)}
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 5,
-                          padding: '5px 13px', borderRadius: 999, fontSize: 11,
-                          fontFamily: 'monospace', letterSpacing: '0.06em', textTransform: 'uppercase',
-                          cursor: 'pointer',
-                          background: sel ? cfg.bg : 'transparent',
-                          border: `1px solid ${sel ? cfg.border : (isSevere ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.1)')}`,
-                          color: sel ? cfg.text : 'rgba(148,163,184,0.5)',
-                          boxShadow: sel && isSevere ? '0 0 0 1px #000' : 'none',
-                          transition: 'all 0.18s',
-                        }}
-                      >
-                        {sel && <Check size={10} />}
-                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: cfg.dot, border: isSevere ? '1px solid rgba(255,255,255,0.4)' : 'none', flexShrink: 0 }} />
-                        {/* The studio's own wording, so what is picked here is
-                            what gets drawn on the graphic — a band called
-                            "Marginal" internally publishes as SLGT. The full
-                            name stays in the tooltip. */}
-                        {GRAPHIC_LEVEL_LABEL[level]?.short || level}
-                        {GRAPHIC_LEVEL_LABEL[level]?.range && (
-                          <span style={{ fontSize: 9, opacity: 0.65, letterSpacing: 0 }}>
-                            {GRAPHIC_LEVEL_LABEL[level].range}
-                          </span>
-                        )}
-                      </button>
+                      <PlaceRow key={loc.name} loc={loc}
+                        onRemove={() => set('locations_impacted', form.locations_impacted.filter((l) => placeName(l) !== loc.name))}
+                        onChange={(next) => set('locations_impacted', form.locations_impacted.map((l) => (placeName(l) === loc.name ? next : l)))} />
                     );
                   })}
                 </div>
-              </FormField>
-
-              {form.weather_conditions.includes('Thunderstorms') && (
-                <ThunderstormPanel
-                  data={form.thunderstorm_data || {}}
-                  onChange={td => set('thunderstorm_data', td)} />
               )}
+            </section>
 
-              {/* Update fields — edit mode only */}
-              {isEdit && (
+            <section className="gm-card">
+              <h4><Flag />Forecast type</h4>
+              <div className="gm-switch">
+                <Flag style={{ color: '#38bdf8' }} />
+                <div><b>Initial forecast</b><small>The first forecast for this event</small></div>
+                <Switch label="Initial forecast" colour="#38bdf8" on={form.is_initial_forecast}
+                  onToggle={() => setForm((p) => ({ ...p, is_initial_forecast: !p.is_initial_forecast, is_continuation: false, parent_graphic_id: null }))} />
+              </div>
+              {!form.is_initial_forecast && (
                 <>
-                  <FormField label="Update Name *" hint="e.g. Update 1, Update 2, Final Update">
-                    <input
-                      style={inputStyle}
-                      placeholder="e.g. Update 1"
-                      value={form.update_label || ''}
-                      onChange={e => set('update_label', e.target.value)}
-                      onFocus={e => e.target.style.borderColor = 'rgba(96,165,250,0.5)'}
-                      onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.09)'}
-                    />
-                    <p style={{ margin: '4px 0 0', fontSize: 10, color: 'rgba(96,165,250,0.6)', fontFamily: 'monospace' }}>
-                      The original forecast will be preserved as "Initial Forecast". This creates a new record marked with your update name.
-                    </p>
-                  </FormField>
-                  <FormField label="What changed? (optional)">
-                    <input
-                      style={inputStyle}
-                      placeholder="Describe the changes…"
-                      value={form.update_reason || ''}
-                      onChange={e => set('update_reason', e.target.value)}
-                      onFocus={e => e.target.style.borderColor = 'rgba(148,163,184,0.3)'}
-                      onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.09)'}
-                    />
-                  </FormField>
+                  <div className="gm-sep" />
+                  <div className="gm-switch">
+                    <RefreshCw style={{ color: '#f59e0b' }} />
+                    <div><b>Continues another graphic</b><small>That graphic moves to the archive when this one publishes</small></div>
+                    <Switch label="Continues another graphic" colour="#f59e0b" on={form.is_continuation}
+                      onToggle={() => setForm((p) => ({ ...p, is_continuation: !p.is_continuation, parent_graphic_id: null }))} />
+                  </div>
+                  {form.is_continuation && (
+                    <select className="gm-select" style={{ marginTop: 10 }} value={form.parent_graphic_id || ''} onChange={(e) => set('parent_graphic_id', e.target.value || null)}>
+                      <option value="">Choose the graphic this continues</option>
+                      {existingForecasts.filter((f) => !f.is_archived && f.id !== initial?.id).map((f) => <option key={f.id} value={f.id}>{f.title}</option>)}
+                    </select>
+                  )}
                 </>
               )}
-            </div>
-
-            {/* RIGHT */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-              {/* Image upload */}
-              {form.image_url ? (
-                <div style={{ position: 'relative', borderRadius: 14, overflow: 'hidden', background: 'rgba(0,0,0,0.3)' }}>
-                  <img src={form.image_url} alt="Preview" style={{ width: '100%', maxHeight: 200, objectFit: 'contain', display: 'block' }} />
-                  <button
-                    onClick={() => set('image_url', '')}
-                    style={{
-                      position: 'absolute', top: 8, right: 8,
-                      width: 28, height: 28, borderRadius: 8,
-                      background: 'rgba(0,0,0,0.7)', border: '1px solid rgba(255,255,255,0.15)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      cursor: 'pointer', color: '#94a3b8',
-                    }}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              ) : (
-                <label style={{
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  height: 180, borderRadius: 14, cursor: 'pointer',
-                  border: '1.5px dashed rgba(255,255,255,0.1)',
-                  background: 'rgba(255,255,255,0.02)',
-                  transition: 'border-color 0.2s, background 0.2s',
-                  gap: 8,
-                }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(148,163,184,0.3)'; e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
-                >
-                  {uploading ? (
-                    <Loader2 size={24} style={{ color: '#60a5fa', animation: 'spin 1s linear infinite' }} />
-                  ) : (
-                    <>
-                      <Upload size={22} style={{ color: 'rgba(148,163,184,0.4)' }} />
-                      <span style={{ fontFamily: 'monospace', fontSize: 10, color: 'rgba(148,163,184,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-                        Upload graphic
-                      </span>
-                    </>
-                  )}
-                  <input type="file" style={{ display: 'none' }} accept="image/*"
-                    onChange={async e => {
-                      const url = await onUpload(e, true);
-                      if (url) set('image_url', url);
-                    }} />
-                </label>
-              )}
-
-              {/* Locations */}
-              <FormField label="Locations Impacted">
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <input
-                    style={{ ...inputStyle, flex: 1 }}
-                    placeholder="Add a location…"
-                    value={locationInput}
-                    onChange={e => setLocationInput(e.target.value)}
-                    onFocus={e => e.target.style.borderColor = 'rgba(148,163,184,0.3)'}
-                    onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.09)'}
-                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addLocation(); } }}
-                  />
-                  <button type="button" onClick={addLocation}
-                    style={{
-                      width: 36, height: 36, borderRadius: 10, flexShrink: 0,
-                      background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      cursor: 'pointer', color: '#94a3b8', transition: 'all 0.2s',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-                {form.locations_impacted.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
-                    {form.locations_impacted.map((rawLoc) => {
-                      const loc = typeof rawLoc === 'string' ? { name: rawLoc, overall_risk: null, highest_risk: null, lowest_risk: null } : rawLoc;
-                      return (
-                        <ModalLocationEntry
-                          key={loc.name}
-                          loc={loc}
-                          onRemove={() => set('locations_impacted', form.locations_impacted.filter(l => (typeof l === 'string' ? l : l.name) !== loc.name))}
-                          onChange={(updated) => set('locations_impacted', form.locations_impacted.map(l => (typeof l === 'string' ? l : l.name) === loc.name ? updated : l))}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-              </FormField>
-
-              {/* Forecast Type */}
-              <FormField label="Forecast Type">
-                <div style={{
-                  borderRadius: 12, padding: '12px 14px',
-                  background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)',
-                  display: 'flex', flexDirection: 'column', gap: 12,
-                }}>
-                  {/* Initial forecast toggle */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <Flag size={13} style={{ color: '#38bdf8' }} />
-                      <div>
-                        <div style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 600 }}>Initial Forecast</div>
-                        <div style={{ fontSize: 10, color: 'rgba(148,163,184,0.5)', fontFamily: 'monospace' }}>First forecast for this event</div>
-                      </div>
-                    </div>
-                    <button type="button"
-                      onClick={() => setForm(p => ({ ...p, is_initial_forecast: !p.is_initial_forecast, is_continuation: p.is_initial_forecast ? p.is_continuation : false, parent_graphic_id: p.is_initial_forecast ? p.parent_graphic_id : null }))}
-                      style={{
-                        width: 40, height: 22, borderRadius: 11, cursor: 'pointer', transition: 'all 0.2s',
-                        background: form.is_initial_forecast ? 'rgba(56,189,248,0.3)' : 'rgba(255,255,255,0.07)',
-                        border: `1px solid ${form.is_initial_forecast ? 'rgba(56,189,248,0.5)' : 'rgba(255,255,255,0.1)'}`,
-                        position: 'relative', flexShrink: 0,
-                      }}
-                    >
-                      <div style={{
-                        width: 16, height: 16, borderRadius: '50%', position: 'absolute', top: 2,
-                        left: form.is_initial_forecast ? 20 : 2, transition: 'left 0.2s',
-                        background: form.is_initial_forecast ? '#38bdf8' : '#475569',
-                      }} />
-                    </button>
-                  </div>
-
-                  {/* Continuation toggle — only when not initial */}
-                  {!form.is_initial_forecast && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <RefreshCw size={13} style={{ color: '#f59e0b' }} />
-                          <div>
-                            <div style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 600 }}>Continuation</div>
-                            <div style={{ fontSize: 10, color: 'rgba(148,163,184,0.5)', fontFamily: 'monospace' }}>Moves selected graphic to archive</div>
-                          </div>
-                        </div>
-                        <button type="button"
-                          onClick={() => setForm(p => ({ ...p, is_continuation: !p.is_continuation, parent_graphic_id: null }))}
-                          style={{
-                            width: 40, height: 22, borderRadius: 11, cursor: 'pointer', transition: 'all 0.2s',
-                            background: form.is_continuation ? 'rgba(245,158,11,0.3)' : 'rgba(255,255,255,0.07)',
-                            border: `1px solid ${form.is_continuation ? 'rgba(245,158,11,0.5)' : 'rgba(255,255,255,0.1)'}`,
-                            position: 'relative', flexShrink: 0,
-                          }}
-                        >
-                          <div style={{
-                            width: 16, height: 16, borderRadius: '50%', position: 'absolute', top: 2,
-                            left: form.is_continuation ? 20 : 2, transition: 'left 0.2s',
-                            background: form.is_continuation ? '#f59e0b' : '#475569',
-                          }} />
-                        </button>
-                      </div>
-                      {form.is_continuation && (
-                        <select
-                          value={form.parent_graphic_id || ''}
-                          onChange={e => setForm(p => ({ ...p, parent_graphic_id: e.target.value || null }))}
-                          style={{ ...inputStyle, fontSize: 12 }}
-                        >
-                          <option value="">— Select graphic this continues —</option>
-                          {existingForecasts.filter(f => !f.is_archived && f.id !== initial?.id).map(f => (
-                            <option key={f.id} value={f.id}>{f.title}</option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </FormField>
-            </div>
-          </div>
-
-          {/* Footer */}
-          <div style={{ marginTop: 24, paddingTop: 18, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-
-            {/* A failed save used to leave the dialog sitting there with no
-                explanation — say what went wrong instead. */}
-            {error && (
-              <div style={{
-                display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12,
-                padding: '9px 12px', borderRadius: 10,
-                background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.3)',
-                color: '#fca5a5', fontSize: 12, lineHeight: 1.45,
-              }}>
-                <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                <span>{error}</span>
-              </div>
-            )}
-
-            {missing && !error && (
-              <p style={{
-                margin: '0 0 12px', fontFamily: 'monospace', fontSize: 10,
-                color: 'rgba(148,163,184,0.5)', textTransform: 'uppercase', letterSpacing: '0.08em',
-              }}>
-                {missing} to continue
-              </p>
-            )}
-
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={requestClose} disabled={saving} style={{
-                flex: 1, padding: '10px 0', borderRadius: 12,
-                background: 'transparent', border: '1px solid rgba(255,255,255,0.08)',
-                color: '#64748b', fontSize: 12, fontFamily: 'monospace', letterSpacing: '0.06em',
-                textTransform: 'uppercase', cursor: saving ? 'not-allowed' : 'pointer', transition: 'all 0.2s',
-              }}
-                onMouseEnter={e => { if (!saving) e.currentTarget.style.color = '#94a3b8'; }}
-                onMouseLeave={e => e.currentTarget.style.color = '#64748b'}
-              >
-                Cancel
-              </button>
-              <button
-                // Guarded as well as disabled: a double-click used to fire the
-                // create mutation twice and publish two copies of the graphic.
-                onClick={() => { if (canSave) onSave(form); }}
-                disabled={!canSave}
-                style={{
-                  flex: 1, padding: '10px 0', borderRadius: 12,
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-                  background: canSave ? 'rgba(96,165,250,0.15)' : 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${canSave ? 'rgba(96,165,250,0.35)' : 'rgba(255,255,255,0.06)'}`,
-                  color: canSave ? '#93c5fd' : 'rgba(148,163,184,0.3)',
-                  fontSize: 12, fontFamily: 'monospace', letterSpacing: '0.06em',
-                  textTransform: 'uppercase', cursor: canSave ? 'pointer' : 'not-allowed',
-                  transition: 'all 0.2s',
-                }}
-              >
-                {saving && <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />}
-                {saving ? 'Saving…' : isEdit ? 'Publish Update' : 'Add Forecast'}
-              </button>
-            </div>
+            </section>
           </div>
         </div>
+
+        <footer className="gm-foot">
+          <p className={`gm-status ${status.cls}`} role="status"><status.Icon className={status.spin ? 'gm-spin' : undefined} />{status.text}</p>
+          <button type="button" className="gm-btn" onClick={requestClose} disabled={saving}>{isEdit ? 'Cancel' : 'Close'}</button>
+          <button type="button" className="gm-btn is-primary" onClick={save} disabled={!canSave}>
+            {saving ? <Loader2 size={16} className="gm-spin" /> : <Check size={16} />}
+            {saving ? 'Publishing…' : isEdit ? 'Publish update' : 'Publish graphic'}
+          </button>
+        </footer>
       </motion.div>
     </motion.div>,
     document.body
-  );
-}
-
-function FormField({ label, hint, children }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <label style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(148,163,184,0.5)' }}>
-        {label}
-        {hint && <span style={{ marginLeft: 5, color: 'rgba(100,116,139,0.5)', textTransform: 'none', letterSpacing: 0 }}>— {hint}</span>}
-      </label>
-      {children}
-    </div>
   );
 }
 
@@ -1250,9 +1159,7 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['forecasts'] }),
   });
 
-  const handleImageUpload = async (e, isNew = false) => {
-    const input = e.target;
-    const file = input.files?.[0];
+  const uploadFile = async (file) => {
     if (!file) return undefined;
     setUploading(true);
     setSaveError('');
@@ -1266,9 +1173,13 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
       return undefined;
     } finally {
       setUploading(false);
-      // Clear the picker so the same file can be chosen again after a failure.
-      input.value = '';
     }
+  };
+  const handleImageUpload = async (e) => {
+    const input = e.target;
+    const url = await uploadFile(input.files?.[0]);
+    input.value = '';                     // so the same file can be chosen again after a failure
+    return url;
   };
 
   const handleUpdateImage = async (e, forecast) => {
@@ -1295,7 +1206,7 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
       }
     }
     createMutation.mutate({
-      title: form.title || 'Forecast',
+      title: form.title.trim() || 'Forecast',
       image_url: form.image_url,
       description: form.description,
       weather_condition:  form.weather_conditions[0] ?? undefined,
@@ -1311,7 +1222,7 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
       thunderstorm_data:  form.weather_conditions.includes('Thunderstorms') && Object.keys(form.thunderstorm_data || {}).length
         ? form.thunderstorm_data : undefined,
       is_initial_forecast: form.is_initial_forecast || false,
-    });
+    }, { onSuccess: clearDraft });         // published: the draft it was written in goes
   };
 
   const handleEditSave = async (form) => {
@@ -1419,7 +1330,7 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
             onClose={() => { setSaveError(''); setShowAddNew(false); }}
             onSave={handleCreate}
             uploading={uploading}
-            onUpload={handleImageUpload}
+            onUploadFile={uploadFile}
             existingForecasts={activeForecasts}
             saving={createMutation.isPending || submitting}
             error={saveError}
@@ -1432,7 +1343,7 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
             onClose={() => { setSaveError(''); setEditingForecast(null); }}
             onSave={handleEditSave}
             uploading={uploading}
-            onUpload={handleImageUpload}
+            onUploadFile={uploadFile}
             existingForecasts={activeForecasts}
             saving={createMutation.isPending || submitting}
             error={saveError}
