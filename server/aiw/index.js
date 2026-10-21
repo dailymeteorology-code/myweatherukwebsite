@@ -11,6 +11,7 @@ import { createIngest } from './ingest.js';
 import { createEngine } from './engine.js';
 import { createRouter } from './api.js';
 import { flushArchive, readStrikes, archiveSummary, getState } from './store.js';
+import { compactArchive } from './warnings.js';
 
 const WORKER_URL = 'https://blitzortungworker-3.onrender.com/strikes';
 
@@ -58,6 +59,8 @@ export function startAiw(app) {
   retrain.unref?.();
 
   process.on('exit', flushArchive);
+  // the warning history was written at full detail before 21 Oct 2026; slim it once, in the background
+  setTimeout(() => { compactArchive().catch((e) => console.warn(`[aiw] archive compaction failed: ${e.message}`)); }, 20e3).unref?.();
   console.log(`[aiw] started: ${history.length} strikes restored from archive, engine cycling every minute`);
   return { ingest, engine };
 }

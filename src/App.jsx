@@ -12,7 +12,7 @@ import SiteDisabled from '@/pages/SiteDisabled';
 import RestrictedSiteOverlay from '@/components/RestrictedSiteOverlay';
 import AdminSettings from '@/pages/AdminSettings';
 import AdminOnlyRoute from '@/components/AdminOnlyRoute';
-import TCM from '@/pages/TCM';
+import Lightning from '@/pages/Lightning';
 import WeatherCriteria from '@/pages/WeatherCriteria';
 import WeatherPatterns from '@/pages/WeatherPatterns';
 import TCMOutlooks from '@/pages/TCMOutlooks';
@@ -516,7 +516,7 @@ const AuthenticatedApp = () => {
                 <Route key={path} path={`/${path}`} element={<LayoutWrapper currentPageName={path}><Page /></LayoutWrapper>} />
               ))}
               <Route path="/AdminSettings" element={<AdminOnlyRoute><LayoutWrapper currentPageName="AdminSettings"><AdminSettings /></LayoutWrapper></AdminOnlyRoute>} />
-              <Route path="/Lightning" element={<LayoutWrapper currentPageName="Lightning"><TCM /></LayoutWrapper>} />
+              <Route path="/Lightning" element={<LayoutWrapper currentPageName="Lightning"><Lightning /></LayoutWrapper>} />
               {/* The page was "TCM Lightning" for its whole life, so every
                   bookmark, share and in-app deep link still points at the old
                   paths. They redirect rather than 404. */}

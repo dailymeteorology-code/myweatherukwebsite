@@ -34,6 +34,7 @@ import { mountTcmV5 } from './tcmV5.js';
 import { mountTcmNova } from './tcmNova.js';
 import { mountTcmV3 } from './tcmV3.js';
 import { startAiw } from './aiw/index.js';
+import { mountLightning } from './lightning/index.js';
 import { mountScenarios } from './scenarios/api.js';
 import { startLiveScenarios } from './scenarios/live/index.js';
 import { mountPastFuture } from './pastFuture/index.js';
@@ -402,8 +403,8 @@ app.post('/api/functions/:name', async (req, res) => {
 });
 
 /**
- * Function-to-function calls from inside an edge function (pollBlitzortung
- * chains to itself). Returns the parsed JSON body, matching the SDK.
+ * Function-to-function calls from inside an edge function. Returns the parsed
+ * JSON body, matching the SDK.
  */
 setFunctionInvoker(async (name, payload = {}) => {
   const override = overridden(name);
@@ -462,7 +463,10 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 
 /* AI lightning warnings: ingestion, nowcast engine and its /api/aiw routes.
    Registered before the SPA fallback below so the routes are reachable. */
-startAiw(app);
+/* The lightning archive listens to the AI-warnings strike intake rather than opening a second
+   set of Blitzortung sockets (it opens its own when AIW is switched off). */
+const aiw = startAiw(app);
+mountLightning(app, { ingest: aiw?.ingest });
 mountScenarios(app);
 mountPastFuture(app);
 mountModelData(app);

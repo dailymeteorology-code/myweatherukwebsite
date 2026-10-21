@@ -176,6 +176,7 @@ export function createIngest({ providers = [blitzortung], archive = true } = {})
   const keyQueue = [];
   const health = {};          // provider id -> health
   const stops = [];
+  const listeners = new Set(); // other parts of the site that want every new strike (the lightning archive)
 
   // Whole-second buckets, and a strike also matches the buckets either side:
   // with rounding alone, two reports of one strike 200 ms apart got different
@@ -197,6 +198,7 @@ export function createIngest({ providers = [blitzortung], archive = true } = {})
       recent.push(s); fresh.push(s);
     }
     if (fresh.length && archive) archiveStrikes(fresh);
+    if (fresh.length) for (const fn of listeners) { try { fn(fresh); } catch { /* a listener's problem stays its own */ } }
     return fresh;
   }
 
@@ -259,6 +261,8 @@ export function createIngest({ providers = [blitzortung], archive = true } = {})
     },
     /** For tests and the backtest replay. */
     inject(batch) { return add(batch); },
+    /** Hear about every new (validated, de-duplicated) strike. Returns an unsubscribe. */
+    subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     /** Preload history after a restart WITHOUT re-archiving it. */
     seed(batch) {
       for (const s of batch) {

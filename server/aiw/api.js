@@ -32,7 +32,7 @@ import { requireAdmin } from '../auth.js';
 import { getState, saveState, archiveSummary, MODEL_DIR, readJson, AIW_DIR } from './store.js';
 import { COVERAGE, coverageAt } from './ingest.js';
 import { getConfig, setConfig, DEFAULT_CONFIG, levelRank } from './config.js';
-import { allWarnings, endWarning, issueTestWarning } from './warnings.js';
+import { allWarnings, findWarning, endWarning, issueTestWarning } from './warnings.js';
 import { searchPlaces, gazetteerSource } from './geo.js';
 import { pointInGeo, haversineKm } from './geometry.js';
 import { deriveThresholds, registerModel } from './train.js';
@@ -236,7 +236,7 @@ export function createRouter({ engine, ingest }) {
 
   r.get('/warnings/:id', pub, (req, res) => {
     const id = String(req.params.id).slice(0, 40);
-    const w = allWarnings().find((x) => x.id === id);
+    const w = findWarning(id);
     if (!w) return res.status(404).json({ error: 'No such warning' });
     res.json(full(w, Date.now()));
   });

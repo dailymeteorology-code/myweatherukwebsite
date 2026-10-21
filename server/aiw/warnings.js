@@ -20,12 +20,13 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import readline from 'node:readline';
 import { getState, saveState, AIW_DIR } from './store.js';
 import { getConfig, levelRank, SEVERITIES } from './config.js';
 import { LEADS } from './nowcast.js';
 import {
   fieldToGeoJSON, geoCentroid, geoAreaKm2, isValidGeometry, overlapFraction, bearingDeg, haversineKm, pointInGeo,
-  geoBBox as geoBBoxImport,
+  geoBBox as geoBBoxImport, simplify,
 } from './geometry.js';
 import { describeGeography } from './geo.js';
 import { describe, shortSummary, title, announcementText, regionLabel } from './describe.js';
@@ -263,11 +264,48 @@ function buildFacts(w, a, now) {
   };
 }
 
+/**
+ * A light copy of an area for the version history, the forecast log and the archive: about a
+ * kilometre of detail and three decimals. The live polygons carry a vertex every few hundred
+ * metres, and keeping every version and every logged forecast of them at that detail is what
+ * made state.json tens of MB (rewritten every minute) and a month's archive 788 MB — past the
+ * largest string Node can read, so the warning history stopped loading.
+ */
+export function lightGeo(g, tolDeg = 0.008) {
+  if (!g || !g.coordinates) return g;
+  // simplify() measures each point against the line between a run's two ends; a closed ring's ends
+  // are the same point, so every distance is zero and nothing would go. Simplify it open, then close.
+  const ring = (r) => {
+    const closed = r.length > 3 && r[0][0] === r[r.length - 1][0] && r[0][1] === r[r.length - 1][1];
+    const open = closed ? r.slice(0, -1) : r;
+    const s = simplify(open, tolDeg).map(([x, y]) => [+x.toFixed(3), +y.toFixed(3)]);
+    if (closed) s.push(s[0]);
+    return s.length >= 4 ? s : r;
+  };
+  if (g.type === 'Polygon') return { type: 'Polygon', coordinates: g.coordinates.map(ring) };
+  if (g.type === 'MultiPolygon') return { type: 'MultiPolygon', coordinates: g.coordinates.map((p) => p.map(ring)) };
+  return g;
+}
+
+/** What a finished warning keeps in the archive: everything shown or scored later. Its forecast
+ *  log (already scored by then) goes, its shapes are lightened, and of its versions every detail is
+ *  kept but only the original's shape (the original is never overwritten; the rest repeat it). */
+export function archiveCopy(w) {
+  return {
+    ...w,
+    trackLog: undefined,
+    geometry: lightGeo(w.geometry, 0.004),
+    corridor: lightGeo(w.corridor, 0.01),
+    forecast: (w.forecast || []).map((f) => ({ ...f, geometry: lightGeo(f.geometry, 0.01) })),
+    versions: (w.versions || []).map(({ geometry, forecastEnd: _end, ...v }, i) => (i === 0 ? { ...v, geometry: lightGeo(geometry) } : v)),
+  };
+}
+
 function snapshot(w, now, reason) {
   w.versions = w.versions || [];
   w.versions.push({
     at: now, reason, severity: w.severity, expiresAt: w.expiresAt, description: w.description,
-    geometry: w.geometry, forecastEnd: w.forecast?.[w.forecast.length - 1]?.geometry || null, areaKm2: w.areaKm2,
+    geometry: lightGeo(w.geometry), forecastEnd: lightGeo(w.forecast?.[w.forecast.length - 1]?.geometry) || null, areaKm2: w.areaKm2,
     placeNames: (w.places || []).slice(0, 20),
   });
   if (w.versions.length > 40) w.versions.splice(1, w.versions.length - 40); // keep the original
@@ -340,7 +378,7 @@ function logForecast(w, now) {
   w.trackLog = w.trackLog || [];
   const last = w.trackLog[w.trackLog.length - 1];
   if (last && now - last.at < 10 * 60e3) return;
-  w.trackLog.push({ at: now, severity: w.severity, forecast: (w.forecast || []).map((f) => ({ lead: f.lead, geometry: f.geometry })) });
+  w.trackLog.push({ at: now, severity: w.severity, forecast: (w.forecast || []).map((f) => ({ lead: f.lead, geometry: lightGeo(f.geometry) })) });
   if (w.trackLog.length > 24) w.trackLog.shift();
 }
 
@@ -553,6 +591,85 @@ export function endWarning(w, status, reason, now, eventType = null, actor = 'en
 
 /* ── history archive ──────────────────────────────────────────────────── */
 
+/** Call fn for each line of a file, a few MB at a time, so a file of any size can be read. */
+function eachLine(file, fn) {
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch { return; }
+  const buf = Buffer.alloc(8 << 20);
+  let rest = '';
+  try {
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (!n) break;
+      const parts = (rest + buf.toString('utf8', 0, n)).split('\n');
+      rest = parts.pop();
+      for (const line of parts) if (line) fn(line);
+    }
+    if (rest) fn(rest);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * One-off repair: rewrite archive months that were written before archiveCopy (each warning with
+ * every logged forecast at full detail) and lighten the shapes held in state.json. Streams a line
+ * at a time and yields between lines, so the site keeps answering while it runs.
+ */
+const COMPACT_SCHEME = 2;
+export async function compactArchive() {
+  let files = [];
+  try { files = fs.readdirSync(ARCHIVE_DIR); } catch { return; }
+  const markFile = path.join(ARCHIVE_DIR, '.compacted.json');
+  let mark = {};
+  try { mark = JSON.parse(fs.readFileSync(markFile, 'utf8')); } catch { /* none yet */ }
+  // a compaction the server died in the middle of: put the month back together first
+  for (const f of files.filter((x) => x.startsWith('_old-warnings-'))) {
+    const file = path.join(ARCHIVE_DIR, f.slice(5));
+    const old = path.join(ARCHIVE_DIR, f);
+    try { fs.appendFileSync(old, fs.readFileSync(file)); } catch { /* nothing newer */ }
+    fs.renameSync(old, file);
+    fs.rmSync(path.join(ARCHIVE_DIR, `_new-${f.slice(5)}`), { force: true });
+  }
+  files = fs.readdirSync(ARCHIVE_DIR).filter((f) => f.startsWith('warnings-') && f.endsWith('.ndjson'));
+  for (const f of files) {
+    const file = path.join(ARCHIVE_DIR, f);
+    let size = 0;
+    try { size = fs.statSync(file).size; } catch { continue; }
+    if (size < 20 << 20 || mark[f] === COMPACT_SCHEME) continue;
+    // move the month aside so warnings archived meanwhile start a new file, compact the old one,
+    // then add whatever arrived and swap — the last two steps are synchronous, so nothing slips in
+    const old = path.join(ARCHIVE_DIR, `_old-${f}`);
+    const tmp = path.join(ARCHIVE_DIR, `_new-${f}`);
+    fs.renameSync(file, old);
+    const out = fs.createWriteStream(tmp);
+    const rl = readline.createInterface({ input: fs.createReadStream(old), crlfDelay: Infinity });
+    let lines = 0;
+    for await (const line of rl) {
+      if (!line) continue;
+      let text;
+      try { text = JSON.stringify(archiveCopy(JSON.parse(line))); } catch { continue; }   // a torn line
+      lines += 1;
+      if (!out.write(text + '\n')) await new Promise((r) => out.once('drain', r));
+      await new Promise((r) => setImmediate(r));
+    }
+    await new Promise((r) => out.end(r));
+    try { fs.appendFileSync(tmp, fs.readFileSync(file)); } catch { /* nothing arrived */ }
+    fs.renameSync(tmp, file);
+    fs.rmSync(old, { force: true });
+    mark[f] = COMPACT_SCHEME;
+    fs.writeFileSync(markFile, JSON.stringify(mark));
+    console.log(`[aiw] compacted ${f}: ${(size / 1048576).toFixed(0)} MB -> ${(fs.statSync(file).size / 1048576).toFixed(0)} MB (${lines} warnings)`);
+  }
+  historyCache = null;
+  const s = getState();
+  for (const w of s.warnings) {
+    w.versions = (w.versions || []).map((v) => ({ ...v, geometry: lightGeo(v.geometry), forecastEnd: lightGeo(v.forecastEnd) }));
+    w.trackLog = (w.trackLog || []).map((l) => ({ ...l, forecast: (l.forecast || []).map((x) => ({ ...x, geometry: lightGeo(x.geometry) })) }));
+  }
+  saveState({ now: true });
+}
+
 let historyCache = null;
 
 /** Finished warnings leave state.json for a monthly archive file after an hour. */
@@ -566,28 +683,46 @@ function archiveFinished(now) {
   if (!out.length) return;
   fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
   for (const w of out) {
-    fs.appendFileSync(path.join(ARCHIVE_DIR, `warnings-${new Date(w.issuedAt).toISOString().slice(0, 7)}.ndjson`), JSON.stringify(w) + '\n');
-    if (historyCache) historyCache.set(w.id, w);
+    const slim = archiveCopy(w);
+    fs.appendFileSync(path.join(ARCHIVE_DIR, `warnings-${new Date(w.issuedAt).toISOString().slice(0, 7)}.ndjson`), JSON.stringify(slim) + '\n');
+    if (historyCache) historyCache.set(w.id, slim);
   }
   s.warnings = keep;
 }
 
-/** Every warning ever issued: archived months + current state. */
+/** Months of archive held in memory for the lists; older warnings are still found by id. */
+const HISTORY_MONTHS = 3;
+
+/** Every warning in the last few months of the archive, plus current state. */
 export function allWarnings() {
   if (!historyCache) {
     historyCache = new Map();
     let files = [];
-    try { files = fs.readdirSync(ARCHIVE_DIR).filter((f) => f.startsWith('warnings-')).sort(); } catch { /* none */ }
+    try { files = fs.readdirSync(ARCHIVE_DIR).filter((f) => f.startsWith('warnings-') && f.endsWith('.ndjson')).sort().slice(-HISTORY_MONTHS); } catch { /* none */ }
     for (const f of files) {
-      for (const line of fs.readFileSync(path.join(ARCHIVE_DIR, f), 'utf8').split('\n')) {
-        if (!line) continue;
-        try { const w = JSON.parse(line); historyCache.set(w.id, w); } catch { /* skip */ }
-      }
+      eachLine(path.join(ARCHIVE_DIR, f), (line) => {
+        try { const w = JSON.parse(line); historyCache.set(w.id, w.trackLog ? archiveCopy(w) : w); } catch { /* skip */ }
+      });
     }
   }
   const map = new Map(historyCache);
   for (const w of getState().warnings) map.set(w.id, w);
   return [...map.values()];
+}
+
+/** One warning by id, wherever it is: in state, in the months held in memory, or else read from
+ *  its own month's file (ids carry their issue date, AIW-YYYYMMDD-…). */
+export function findWarning(id) {
+  const hit = allWarnings().find((x) => x.id === id);
+  if (hit) return hit;
+  const m = /^AIW-(\d{4})(\d{2})\d{2}-/.exec(id);
+  if (!m) return null;
+  let found = null;
+  eachLine(path.join(ARCHIVE_DIR, `warnings-${m[1]}-${m[2]}.ndjson`), (line) => {
+    if (found || !line.includes(`"id":"${id}"`)) return;
+    try { found = JSON.parse(line); } catch { /* torn line */ }
+  });
+  return found;
 }
 
 /* ── admin / test warnings ────────────────────────────────────────────── */

@@ -50,3 +50,5 @@ tools/tcm-v3/.bundle.mjs
 # Weather Patterns output and its download cache, when there is no D: drive (server/patterns).
 server/data/patterns/
 server/data/patterns-cache/
+# Lightning strike archive, when there is no D: drive (server/lightning).
+server/data/lightning/
