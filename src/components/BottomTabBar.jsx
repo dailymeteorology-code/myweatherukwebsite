@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Image, ShieldAlert, Newspaper } from 'lucide-react';
+import { Home, ShieldAlert, Newspaper } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { useTheme } from '@/components/ThemeContext';
 
 const TABS = [
   { name: 'Home',     icon: Home,           path: '/',              match: ['/'] },
   { name: 'News',     icon: Newspaper,      path: '/News',          match: ['/News'] },
-  { name: 'Graphics', icon: Image,          path: '/Graphics',      match: ['/Graphics'], requiresAuth: false },
   { name: 'Admin',    icon: ShieldAlert,    path: '/AdminSettings', match: ['/AdminSettings'], adminOnly: true },
 ];
 

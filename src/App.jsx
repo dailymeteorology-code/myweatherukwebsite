@@ -66,7 +66,7 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout
   : <>{children}</>;
 
 // ─── Route order — determines slide direction ─────────────────────────────
-const ROUTE_ORDER = ['/', '/Home', '/LocationWeather', '/News', '/Graphics', '/Lightning', '/TCMOutlooks', '/WeatherPatterns',
+const ROUTE_ORDER = ['/', '/Home', '/LocationWeather', '/News', '/Lightning', '/TCMOutlooks', '/WeatherPatterns',
   '/TCMArchive', '/MyWeatherArchive', '/WeatherCriteria', '/ForecastVerification', '/WeatherScenarios', '/Settings', '/AdminSettings'];
 function routeIndex(pathname) {
   const idx = ROUTE_ORDER.findIndex(r => pathname === r || pathname.startsWith(r + '/'));
@@ -75,7 +75,7 @@ function routeIndex(pathname) {
 
 const PAGE_LABELS = {
   '/': 'Home', '/Home': 'Home', '/News': 'News', '/Lightning': 'Lightning',
-  '/TCMOutlooks': 'TCM Outlooks', '/TCMNova': 'TCM NOVA', '/TCMV5': 'TCM NOVA', '/WeatherPatterns': 'Weather Patterns', '/Graphics': 'Graphics',
+  '/TCMOutlooks': 'TCM Outlooks', '/TCMNova': 'TCM NOVA', '/TCMV5': 'TCM NOVA', '/WeatherPatterns': 'Weather Patterns',
   '/Settings': 'Settings', '/AdminSettings': 'Admin',
   '/TCMArchive': 'Archive', '/MyWeatherArchive': 'Archive',
   '/LocationWeather': 'Location', '/WeatherCriteria': 'Criteria', '/ForecastVerification': 'Verification', '/WeatherScenarios': 'Scenarios',
@@ -537,8 +537,10 @@ const AuthenticatedApp = () => {
               <Route path="/MyWeatherArchive" element={<LayoutWrapper currentPageName="MyWeatherArchive"><MyWeatherArchive /></LayoutWrapper>} />
               <Route path="/WeatherScenarios" element={<LayoutWrapper currentPageName="WeatherScenarios"><WeatherScenarios /></LayoutWrapper>} />
               <Route path="/ForecastVerification" element={<LayoutWrapper currentPageName="ForecastVerification"><ForecastVerification /></LayoutWrapper>} />
-              {/* the page here drew nothing; the graphics in force are on the home page */}
-              <Route path="/MyWeatherGraphics" element={<Navigate to="/#forecasts" replace />} />
+              {/* the graphics in force are on the home page: these two pages are gone (MyWeatherGraphics
+                  drew nothing; Graphics was removed on 22 Oct 2026), and old links land there */}
+              <Route path="/MyWeatherGraphics" element={<Navigate to="/" replace />} />
+              <Route path="/Graphics" element={<Navigate to="/" replace />} />
               <Route path="/ThunderstormStudio" element={<LayoutWrapper currentPageName="ThunderstormStudio"><ThunderstormStudio /></LayoutWrapper>} />
               <Route path="/ModelFeedback" element={<LayoutWrapper currentPageName="ModelFeedback"><ModelFeedback /></LayoutWrapper>} />
               <Route path="/TCMVerification" element={<LayoutWrapper currentPageName="TCMVerification"><TCMVerification /></LayoutWrapper>} />

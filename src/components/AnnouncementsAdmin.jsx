@@ -31,7 +31,7 @@ const PRI = {
   warning: { color: C.amber, bg: C.amberLow, border: C.amberBorder, label: 'Warning' },
   urgent:  { color: C.red,   bg: C.redLow,   border: C.redBorder,  label: 'Urgent' },
 };
-const PAGES = ['', 'Home', 'Graphics', 'LocationWeather', 'Subscription', 'Dashboard'];
+const PAGES = ['', 'Home', 'LocationWeather', 'Subscription', 'Dashboard'];
 const EMPTY = { title: '', message: '', is_active: true, priority: 'info', category: 'general', target_page: '', link_url: '', link_label: '' };
 
 // ─── Primitives ────────────────────────────────────────────────────────────────

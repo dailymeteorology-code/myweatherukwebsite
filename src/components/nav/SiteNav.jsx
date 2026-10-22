@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Home, MapPin, Database, CloudLightning, Layers, Zap,
-  Image as ImageIcon, Archive, BarChart3, Target, ClipboardCheck, Gauge,
+  Archive, BarChart3, Target, ClipboardCheck, Gauge,
   Newspaper, Mail, Settings as SettingsIcon, CreditCard, ShieldAlert,
   ChevronDown, Menu, X, Radar, Sun, Moon,
 } from 'lucide-react';
@@ -58,14 +58,12 @@ const GROUPS = [
   {
     id: 'graphics',
     label: 'Graphics',
-    /* What a visitor reads first: the graphics in force, then the past ones, then the tools. */
+    /* The graphics in force are the first thing on the home page, so the menu has no shortcut to
+       them; the past ones and the studio are here. (The Graphics page is gone: graphics are
+       posted from the home page and made in the admin Graphic Studio.) */
     items: [
-      /* The graphics in force live on the home page (it has the section the admin overview
-         links to as well). This went to /MyWeatherGraphics, which drew nothing at all. */
-      { label: 'MyWeatherUK Graphics', path: '/#forecasts', icon: ImageIcon, blurb: 'Our forecast graphics in force right now' },
       { label: 'Archive', path: '/MyWeatherArchive', icon: Archive, blurb: 'Every graphic we have issued, to look back on once it has ended' },
       { label: 'Thunderstorm Studio', path: '/ThunderstormStudio', icon: Zap, blurb: 'Make your own thunderstorm outlook graphic and save it to your account' },
-      { label: 'Graphics', path: '/Graphics', icon: ImageIcon, blurb: 'Add, edit and design graphics, with the graphic studio tools' },
     ],
   },
   {

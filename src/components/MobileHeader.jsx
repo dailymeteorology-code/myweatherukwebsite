@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ChevronLeft, Newspaper, Home } from 'lucide-react';
 import { useLogo } from '@/components/MobileHeaderLogo';
 
-const ROOT_PATHS = new Set(['/', '/Home', '/Graphics', '/Lightning', '/TCMOutlooks', '/WeatherPatterns', '/Settings', '/AdminSettings', '/News']);
+const ROOT_PATHS = new Set(['/', '/Home', '/Lightning', '/TCMOutlooks', '/WeatherPatterns', '/Settings', '/AdminSettings', '/News']);
 
 export default function MobileHeader({ siteSettings }) {
   const location = useLocation();

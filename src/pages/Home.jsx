@@ -594,8 +594,8 @@ export default function Home() {
     setSummerThemeOn(settings.summer_theme);
     try { localStorage.setItem(SUMMER_KEY, String(settings.summer_theme)); } catch { /* private mode */ }
   }, [settings?.summer_theme]);
-  /* /#forecasts (the menu's "MyWeatherUK Graphics", and the admin overview's "Add a forecast
-     graphic") lands on the graphics — from another page, and from this one, where following the
+  /* /#forecasts (the admin overview's "Graphics in force" and "Add a forecast graphic") lands on
+     the graphics — from another page, and from this one, where following the
      link does not remount the page, so it watches the location rather than reading it once. */
   const location = useLocation();
   useEffect(() => {
