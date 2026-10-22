@@ -123,26 +123,6 @@ export function pruneOldForecastRuns() {
   } catch {}
 }
 
-export function listSavedRuns(region) {
-  const out = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k || !k.startsWith(`${CACHE_PREFIX}_${region}_`) || k.includes('_latest')) continue;
-      try {
-        const parsed = JSON.parse(localStorage.getItem(k) || '{}');
-        if (!parsed?.builtAt || !parsed?.grid?.length) continue;
-        out.push({ key: k, runISO: parsed.run || null, builtAt: parsed.builtAt, region, gridPoints: parsed.grid.length });
-      } catch {}
-    }
-  } catch {}
-  return out.sort((a, b) => b.builtAt - a.builtAt);
-}
-
-export function deleteRunFromCache(cacheKey) {
-  try { localStorage.removeItem(cacheKey); } catch {}
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // RiskGridCache (DB) — shared, permanent store.
 //   Model runs:     tcm_<region>_<YYYY-MM-DDTHH>Z  (+ _latest pointer + archive)
@@ -461,17 +441,6 @@ export async function listAdminDrawnOutlooks(region) {
     }
   } catch { /* DB unavailable — fall back to LS */ }
   return lsCached ?? [];
-}
-
-export async function loadAdminDrawnOutlooksForDate(region, isoDate) {
-  try {
-    const rows = await base44.entities.RiskGridCache.list('-generated_at', 200);
-    if (!Array.isArray(rows)) return [];
-    return rows
-      .filter(r => r.cache_key?.startsWith(`tcm_drawn_${region}_${isoDate}`))
-      .map(r => r.grid_data)
-      .filter(Boolean);
-  } catch { return []; }
 }
 
 export async function deleteAdminDrawnOutlook(id, cacheKey, region) {

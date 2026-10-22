@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Home, MapPin, Database, CloudLightning, Layers, Zap,
-  Archive, BarChart3, Target, ClipboardCheck, Gauge,
+  Archive, BarChart3, Target,
   Newspaper, Mail, Settings as SettingsIcon, CreditCard, ShieldAlert,
   ChevronDown, Menu, X, Radar, Sun, Moon,
 } from 'lucide-react';
@@ -70,11 +70,9 @@ const GROUPS = [
     id: 'verification',
     label: 'Verification',
     items: [
-      { label: 'Forecast Verification', path: '/ForecastVerification', icon: BarChart3, blurb: 'How accurate our thunderstorm forecasts are, checked daily against real strikes' },
-      { label: 'TCM Verification', path: '/TCMVerification', icon: Target, blurb: 'Past thunderstorm days: what the outlook said, and where lightning struck' },
-      { label: 'TCM Archive', path: '/TCMArchive', icon: Archive, blurb: 'Every past TCM outlook by date, with each model run behind it' },
-      { label: 'Weather Criteria', path: '/WeatherCriteria', icon: ClipboardCheck, blurb: 'The thresholds behind each thunderstorm and snow risk level' },
-      { label: 'Model Feedback', path: '/ModelFeedback', icon: Gauge, blurb: 'Log of forecast accuracy against the weather that happened', adminOnly: true },
+      { label: 'Forecast Verification', path: '/ForecastVerification', icon: BarChart3, blurb: 'Our forecast graphics with the lightning that followed drawn on top' },
+      { label: 'TCM Verification', path: '/TCMVerification', icon: Target, blurb: 'Each day’s TCM NOVA lightning risk against the lightning that came' },
+      { label: 'TCM Archive', path: '/TCMArchive', icon: Archive, blurb: 'Every TCM NOVA run over a day old: the Main Run and the Hyper-Short' },
     ],
   },
   {

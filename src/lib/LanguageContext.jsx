@@ -14,7 +14,7 @@ export const TRANSLATIONS = {
   en: {
     // Nav / Layout
     home: 'Home', locationWeather: 'Location Weather', news: 'News', graphics: 'Graphics', newsletter: 'Newsletter',
-    settings: 'Settings', modelFeedback: 'Model Feedback', admin: 'Admin',
+    settings: 'Settings', admin: 'Admin',
     login: 'Login', logout: 'Logout',
     // Section Navigation
     activeWarnings: 'Active Warnings', upcomingWarnings: 'Upcoming Warnings',
@@ -47,7 +47,7 @@ export const TRANSLATIONS = {
   },
   es: {
     home: 'Inicio', locationWeather: 'Tiempo por ubicación', news: 'Noticias', graphics: 'Gráficos', newsletter: 'Boletín',
-    settings: 'Ajustes', modelFeedback: 'Retroalimentación del Modelo', admin: 'Administrador',
+    settings: 'Ajustes', admin: 'Administrador',
     login: 'Iniciar sesión', logout: 'Cerrar sesión',
     activeWarnings: 'Alertas Activas', upcomingWarnings: 'Alertas Próximas',
     myWeatherGraphics: 'Gráficos MyWeather', tcmLightning: 'TCM Rayos',
@@ -76,7 +76,7 @@ export const TRANSLATIONS = {
   },
   pl: {
     home: 'Strona główna', locationWeather: 'Pogoda dla lokalizacji', news: 'Aktualności', graphics: 'Grafiki', newsletter: 'Newsletter',
-    settings: 'Ustawienia', modelFeedback: 'Opinie o Modelu', admin: 'Administrator',
+    settings: 'Ustawienia', admin: 'Administrator',
     login: 'Zaloguj się', logout: 'Wyloguj się',
     activeWarnings: 'Aktywne Ostrzeżenia', upcomingWarnings: 'Nadchodzące Ostrzeżenia',
     myWeatherGraphics: 'Grafiki MyWeather', tcmLightning: 'TCM Błyskawice',
@@ -105,7 +105,7 @@ export const TRANSLATIONS = {
   },
   zh: {
     home: '首页', locationWeather: '本地天气', news: '新闻', graphics: '图形', newsletter: '时事通讯',
-    settings: '设置', modelFeedback: '模型反馈', admin: '管理员',
+    settings: '设置', admin: '管理员',
     login: '登录', logout: '登出',
     activeWarnings: '当前预警', upcomingWarnings: '即将发布的预警',
     myWeatherGraphics: 'MyWeather 图形', tcmLightning: 'TCM 闪电',
@@ -134,7 +134,7 @@ export const TRANSLATIONS = {
   },
   fr: {
     home: 'Accueil', locationWeather: 'Météo par lieu', news: 'Actualités', graphics: 'Graphiques', newsletter: 'Newsletter',
-    settings: 'Paramètres', modelFeedback: 'Retour sur le Modèle', admin: 'Administrateur',
+    settings: 'Paramètres', admin: 'Administrateur',
     login: 'Connexion', logout: 'Déconnexion',
     activeWarnings: 'Alertes Actives', upcomingWarnings: 'Alertes à Venir',
     myWeatherGraphics: 'Graphiques MyWeather', tcmLightning: 'TCM Foudre',
@@ -163,7 +163,7 @@ export const TRANSLATIONS = {
   },
   de: {
     home: 'Startseite', locationWeather: 'Wetter am Ort', news: 'Nachrichten', graphics: 'Grafiken', newsletter: 'Newsletter',
-    settings: 'Einstellungen', modelFeedback: 'Modell-Feedback', admin: 'Administrator',
+    settings: 'Einstellungen', admin: 'Administrator',
     login: 'Anmelden', logout: 'Abmelden',
     activeWarnings: 'Aktive Warnungen', upcomingWarnings: 'Bevorstehende Warnungen',
     myWeatherGraphics: 'MyWeather Grafiken', tcmLightning: 'TCM Blitz',

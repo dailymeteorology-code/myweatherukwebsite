@@ -13,6 +13,7 @@
    separately so an old run with late valid times is never mistaken for new.
    ════════════════════════════════════════════════════════════════════════════ */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import NovaGlobe from '@/components/tcm/NovaGlobe';
@@ -468,9 +469,13 @@ async function saveWindowPng({ overlay, title, lines, layer, footer, file }) {
 }
 
 /* ── data hooks ──────────────────────────────────────────────────────────── */
+/* This page shows the last 24 hours of runs; older ones are in the TCM Archive (/TCMArchive). */
+const FRESH_MS = 24 * 3600e3;
+const isFresh = (r) => !!r && Date.now() - Date.parse(r.init_utc) < FRESH_MS;
 function useRuns(product) {
   const [runs, setRuns] = useState([]);
   const [latest, setLatest] = useState(null);
+  const [stale, setStale] = useState(null);           // the newest run, when even that is over a day old
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
   const load = useCallback(async () => {
@@ -480,11 +485,11 @@ function useRuns(product) {
         novaFetch(`/api/nova/${product}/latest`).then((x) => (x.ok ? x.json() : null)),
         novaFetch(`/api/nova/${product}/status`).then((x) => x.json()),
       ]);
-      setRuns(r.runs || []); setLatest(l); setStatus(s); setError(null);
+      setRuns((r.runs || []).filter(isFresh)); setLatest(isFresh(l) ? l : null); setStale(l && !isFresh(l) ? l : null); setStatus(s); setError(null);
     } catch (e) { setError(String(e)); }
   }, [product]);
-  useEffect(() => { setRuns([]); setLatest(null); load(); const t = setInterval(load, 120000); return () => clearInterval(t); }, [load]);
-  return { runs, latest, status, error, reload: load };
+  useEffect(() => { setRuns([]); setLatest(null); setStale(null); load(); const t = setInterval(load, 120000); return () => clearInterval(t); }, [load]);
+  return { runs, latest, stale, status, error, reload: load };
 }
 
 /* ── lightning strikes: one canvas, redrawn only when the map moves ─────── */
@@ -661,7 +666,7 @@ function NovaForAdmin({ engineSwitcher }) {
 function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   const [product, setProductState] = useState(() => { try { return localStorage.getItem('nova_product') === 'hyper' ? 'hyper' : 'main'; } catch { return 'main'; } });
   const setProduct = (p) => { setProductState(p); try { localStorage.setItem('nova_product', p); } catch { /* blocked */ } };
-  const { runs, latest, status, reload } = useRuns(product);
+  const { runs, latest, stale, status, reload } = useRuns(product);
   const [pinned, setPinned] = useState(null);          // a run id the user chose; null = follow latest
   const [manifest, setManifest] = useState(null);
   const [idx, setIdx] = useState(0);
@@ -686,12 +691,13 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => { setPinned(null); setIdx(0); setEnded(false); setLayerKey('p_thunder'); setCombine(null); }, [product]);
+  useEffect(() => { if (pinned && runs.length && !runs.some((r) => r.run_id === pinned)) setPinned(null); }, [pinned, runs]);
   /* follow the newest run unless the user is examining an older one */
   useEffect(() => {
     if (pinned) {
       novaFetch(`/api/nova/${product}/runs/${pinned}`).then((r) => (r.ok ? r.json() : null)).then(setManifest);
     } else {
-      setManifest((m) => (latest && (!m || m.run_id !== latest.run_id) ? latest : m || latest));
+      setManifest((m) => (latest ? (!m || m.run_id !== latest.run_id ? latest : m) : null));   // none in the last 24 h: none shown
     }
   }, [pinned, latest, product]);
   useEffect(() => { if (manifest && manifest.product !== product) setManifest(null); }, [manifest, product]);
@@ -822,6 +828,7 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
             <option value="">Latest run{latest ? ` (${latest.init_local})` : ''}</option>
             {runs.map((r) => <option key={r.run_id} value={r.run_id}>{r.init_local} · {r.status}</option>)}
           </select>
+          <Link to={`/TCMArchive?product=${product}`} style={{ ...pill(T.soft, T.mid), textDecoration: 'none' }} title="Runs over a day old are kept in the TCM Archive">Older runs</Link>
           <button type="button" onClick={reload} style={{ ...pill(T.soft, T.mid), cursor: 'pointer' }} title="Check for new runs"><RefreshCw style={{ width: 13, height: 13 }} /></button>
           <button type="button" onClick={onChangeRegion} style={{ ...pill(T.soft, T.text), cursor: 'pointer' }} title="Pick another region on the globe">🌍 {region.name}</button>
           {engineSwitcher}
@@ -933,8 +940,9 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
             {!manifest && (
               <div style={{ ...card, padding: 28, textAlign: 'center', color: T.mid }}>
                 <Database style={{ width: 22, height: 22, color: T.sky }} />
-                <div style={{ fontWeight: 800, color: T.text, marginTop: 8 }}>No published {P.label} run yet</div>
+                <div style={{ fontWeight: 800, color: T.text, marginTop: 8 }}>{stale ? `No ${P.label} in the last 24 hours` : `No published ${P.label} run yet`}</div>
                 <div style={{ fontSize: '0.78rem', marginTop: 4 }}>
+                  {stale && <>The newest, from {stale.init_local}, is in the <Link to={`/TCMArchive?product=${product}&run=${stale.run_id}&date=${stale.init_local.slice(0, 10)}`} style={{ color: T.sky, fontWeight: 800 }}>TCM Archive</Link>. </>}
                   {status?.state ? `Current job: ${status.state}. ` : ''}Next scheduled run {status?.next_cycle_utc ? london(status.next_cycle_utc, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '—'} UK time.
                 </div>
               </div>

@@ -1,760 +1,299 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { motion } from 'framer-motion';
-import { Zap, MapPin, BarChart3, Loader2, TrendingUp, TrendingDown, Minus, CheckCircle, Target, Crosshair } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+/* Forecast Verification: MyWeatherUK's forecast graphics with the lightning that followed drawn on
+   top. An admin uploads a graphic, gives the period it forecast and lines its map up with the coast
+   (verification/GraphicEditor); every visitor can then see where the lightning of that period fell
+   on it, replay it hour by hour and download the result. Strikes come from the site's lightning
+   archive (the Met Office over the UK & Ireland). Records are GraphicVerification entities: read by
+   everyone, written by admins. */
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { BarChart3, Plus, Zap, Pencil, Trash2, Download, Play, Pause, ChevronLeft, ChevronRight, Loader2, ImagePlus, Clock } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
+import { useAuth } from '@/lib/AuthContext';
+import VfPage, { Stat } from '@/components/verification/VfPage';
+import GraphicOverlay, { insideBounds, drawStrikes } from '@/components/verification/GraphicOverlay';
+import GraphicEditor from '@/components/verification/GraphicEditor';
+import { fetchStrikes, london, hhmm } from '@/components/verification/novaMaps';
 
-// ─── UK region definitions ───────────────────────────────────────────────────
-const UK_REGIONS = [
-  { id: 'uk',       label: 'UK Wide',       bbox: { lonMin: -11.0, lonMax: 2.2,  latMin: 49.7, latMax: 61.0 } },
-  { id: 'south',    label: 'South',          bbox: { lonMin: -5.8,  lonMax: 1.8,  latMin: 50.0, latMax: 52.5 } },
-  { id: 'midlands', label: 'Midlands',       bbox: { lonMin: -4.0,  lonMax: 0.5,  latMin: 51.8, latMax: 54.0 } },
-  { id: 'north',    label: 'North',          bbox: { lonMin: -4.5,  lonMax: 0.2,  latMin: 53.5, latMax: 56.0 } },
-  { id: 'scotland', label: 'Scotland',       bbox: { lonMin: -8.0,  lonMax: -1.5, latMin: 54.5, latMax: 61.0 } },
-  { id: 'ireland',  label: 'Ireland',        bbox: { lonMin: -11.0, lonMax: -5.0, latMin: 51.3, latMax: 55.5 } },
-  { id: 'wales',    label: 'Wales',          bbox: { lonMin: -5.5,  lonMax: -2.5, latMin: 51.3, latMax: 53.5 } },
-];
+const CSS = `
+.fv-top { display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 80px; }
+.fv-fit { width: 100%; display: flex; justify-content: center; }
+.fv-pic, .fv-stage { position: relative; width: 100%; border-radius: 16px; overflow: hidden; background: var(--ad-surface3); box-shadow: 0 10px 30px -14px rgba(0,0,0,.55); }
+.fv-pic img, .fv-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; user-select: none; -webkit-user-drag: none; }
+.fv-pic canvas, .fv-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.fv-stage { cursor: grab; touch-action: none; outline: none; }
+.fv-stage:active { cursor: grabbing; }
+.fv-stage:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, #22d3ee 55%, transparent); }
+.fv-edit { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); gap: 18px; padding: 16px 18px 18px; }
+.fv-edit-form { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.fv-edit-stage { min-width: 0; }
+.fv-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.fv-drop { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 18px 12px; border-radius: 16px; font: inherit; cursor: pointer;
+  color: var(--ad-text); background: var(--ad-surface3); border: 1.5px dashed var(--ad-border3); transition: border-color .15s, background .15s; }
+.fv-drop:hover:not(:disabled) { border-color: #22d3ee; background: color-mix(in srgb, #22d3ee 8%, var(--ad-surface3)); }
+.fv-drop svg { width: 22px; height: 22px; color: #22d3ee; }
+.fv-drop small { color: var(--ad-text-dim); font-size: 12px; }
+.fv-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.fv-detail { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, 1fr); gap: 18px; padding: 16px 18px 18px; align-items: start; }
+.fv-info { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.fv-hist { display: flex; align-items: flex-end; gap: 2px; height: 78px; padding: 6px 0 0; }
+.fv-hist i { flex: 1; min-width: 2px; border-radius: 3px 3px 0 0; background: var(--ad-border3); transition: background .15s; }
+.fv-hist i.on { background: linear-gradient(180deg, #facc15, #f97316); }
+.fv-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--ad-text-dim); margin-top: 4px; }
+.fv-replay { display: flex; align-items: center; gap: 8px; }
+.fv-replay input { flex: 1; accent-color: #facc15; }
+.fv-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; padding: 14px; }
+.fv-card { display: flex; flex-direction: column; gap: 0; padding: 0; border-radius: 18px; overflow: hidden; cursor: pointer; font: inherit; text-align: left; color: var(--ad-text);
+  background: var(--ad-surface3); border: 1px solid var(--ad-border); transition: border-color .15s, transform .15s; }
+.fv-card:hover { transform: translateY(-1px); border-color: var(--ad-border3); }
+.fv-card.on { border-color: var(--c); box-shadow: 0 0 0 1px var(--c); }
+.fv-card .fv-pic { border-radius: 0; box-shadow: none; }
+.fv-card > div:last-child { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 5px; }
+.fv-card b { font-size: 13.5px; line-height: 1.3; }
+.fv-card small { font-size: 12px; color: var(--ad-text-dim); }
+@media (max-width: 1000px) { .fv-edit, .fv-detail { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) { .fv-edit, .fv-detail { padding: 10px; } .fv-gallery { padding: 8px; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); } .fv-two { grid-template-columns: minmax(0, 1fr); } }
+`;
 
-// ─── Slate-blue palette ──────────────────────────────────────────────────────
-const SLATE = { primary: '#64748b', light: '#94a3b8', dark: '#475569', sky: '#7c8da8', steel: '#5b6e8a', ice: '#8ba0b8', fog: '#6d7f9a' };
+const when = (iso) => `${london(iso, { weekday: 'short', day: 'numeric', month: 'short' })} ${hhmm(iso)}`;
+const period = (it) => `${when(it.valid_from)} – ${london(it.valid_from, { day: 'numeric', month: 'short' }) === london(it.valid_to, { day: 'numeric', month: 'short' }) ? hhmm(it.valid_to) : when(it.valid_to)}`;
+const span = (it) => [Date.parse(it.valid_from), Math.min(Date.parse(it.valid_to), Date.now())];
 
-// ─── Glass panel ─────────────────────────────────────────────────────────────
-function GlassPanel({ children, style = {} }) {
+/** The strikes on a graphic during its period, once `on`. */
+function useGraphicStrikes(it, on = true) {
+  const [s, setS] = useState(null);
+  useEffect(() => {
+    if (!on) return undefined;
+    const [a, b] = span(it);
+    if (!(b > a)) { setS([]); return undefined; }
+    let alive = true;
+    setS(null);
+    fetchStrikes(a, b).then((r) => { if (alive) setS(insideBounds(r.strikes, it.bounds)); }).catch(() => { if (alive) setS([]); });
+    return () => { alive = false; };
+  }, [it.id, it.valid_from, it.valid_to, it.bounds, on]); // eslint-disable-line react-hooks/exhaustive-deps
+  return s;
+}
+
+/* when the period's lightning came: one bar an hour (three hours past two days) */
+function Histogram({ it, strikes, upTo }) {
+  const [a, b] = [Date.parse(it.valid_from), Date.parse(it.valid_to)];
+  const step = b - a > 48 * 3600e3 ? 3 * 3600e3 : 3600e3;
+  const bins = useMemo(() => {
+    const n = Math.max(1, Math.ceil((b - a) / step)), out = new Array(n).fill(0);
+    for (const [t] of strikes || []) { const k = Math.floor((t - a) / step); if (k >= 0 && k < n) out[k] += 1; }
+    return out;
+  }, [strikes, a, b, step]);
+  const max = Math.max(1, ...bins);
   return (
-    <div style={{
-      background: 'linear-gradient(155deg, rgba(80,96,128,0.16) 0%, rgba(30,40,56,0.28) 100%)',
-      border: '1px solid rgba(148,163,184,0.14)',
-      borderRadius: 20,
-      backdropFilter: 'blur(24px) saturate(160%)',
-      WebkitBackdropFilter: 'blur(24px) saturate(160%)',
-      boxShadow: '0 12px 40px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)',
-      overflow: 'hidden', position: 'relative',
-      ...style,
-    }}>
-      <div style={{
-        position: 'absolute', top: 0, left: 0, right: '60%', height: '55%',
-        background: 'linear-gradient(155deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.02) 45%, transparent 70%)',
-        pointerEvents: 'none', zIndex: 0, borderRadius: '20px 0 0 0',
-      }} />
-      <div style={{ position: 'relative', zIndex: 1 }}>{children}</div>
+    <div>
+      <span className="vf-label">When it came · {step === 3600e3 ? 'per hour' : 'per 3 hours'}</span>
+      <div className="fv-hist">
+        {bins.map((n, k) => <i key={k} className={a + k * step <= upTo ? 'on' : ''} style={{ height: `${n ? Math.max(4, (n / max) * 100) : 1.5}%` }} title={`${hhmm(new Date(a + k * step).toISOString())}: ${n} strike${n === 1 ? '' : 's'}`} />)}
+      </div>
+      <div className="fv-axis"><span>{when(it.valid_from)}</span><span>{when(it.valid_to)}</span></div>
     </div>
   );
 }
 
-function SectionHeader({ icon: Icon, title, subtitle, accent = SLATE.sky }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 16 }}>
-      <div style={{
-        width: 40, height: 40, borderRadius: 11, flexShrink: 0,
-        background: `linear-gradient(135deg, ${accent}22, ${accent}0a)`,
-        border: `1px solid ${accent}35`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        boxShadow: `0 0 16px ${accent}10`,
-      }}>
-        <Icon style={{ width: 20, height: 20, color: accent }} strokeWidth={1.6} />
-      </div>
-      <div>
-        <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800, color: '#e8edf6', fontFamily: "'Archivo','DM Sans',sans-serif", letterSpacing: '-0.01em' }}>{title}</h3>
-        <p style={{ margin: '3px 0 0', fontSize: '0.7rem', color: SLATE.light, lineHeight: 1.4, fontWeight: 500 }}>{subtitle}</p>
-      </div>
-    </div>
-  );
+/* the graphic with its lightning, made at the picture's own size */
+async function download(it, strikes, byTime, dot) {
+  const img = await new Promise((resolve, reject) => { const im = new Image(); im.onload = () => resolve(im); im.onerror = reject; im.src = it.image_url; });
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d');
+  ctx.drawImage(img, 0, 0, w, h);
+  drawStrikes(ctx, strikes, it.bounds, w, h, { byTime, dot });
+  const pad = Math.round(w * 0.018), fs = Math.round(w * 0.019);
+  ctx.font = `700 ${fs}px -apple-system, 'Segoe UI', Roboto, sans-serif`;
+  const label = `⚡ ${strikes.length.toLocaleString()} strikes · ${period(it)} · Met Office lightning`;
+  const tw = ctx.measureText(label).width;
+  ctx.fillStyle = 'rgba(8,12,22,0.72)';
+  ctx.beginPath(); ctx.roundRect(pad, pad, tw + fs * 1.4, fs * 2.1, fs * 0.6); ctx.fill();
+  ctx.fillStyle = '#fef9c3';
+  ctx.fillText(label, pad + fs * 0.7, pad + fs * 1.42);
+  const blob = await new Promise((resolve) => cv.toBlob(resolve, 'image/jpeg', 0.92));
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `verification-${(it.title || 'graphic').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.jpg`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
-// ─── Group strikes into days (last 7 days) ───────────────────────────────────
-function useRegionalStrikeCounts() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+function Detail({ it, admin, onEdit, onDelete, onCount, prev, next, go }) {
+  const strikes = useGraphicStrikes(it);
+  const [show, setShow] = useState(true);
+  const [byTime, setByTime] = useState(true);
+  const [dot, setDot] = useState(1);
+  const [upTo, setUpTo] = useState(Infinity);
+  const [playing, setPlaying] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [a, b] = [Date.parse(it.valid_from), Date.parse(it.valid_to)];
+  const ended = b <= Date.now();
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const strikes = await base44.entities.LightningStrike.list('-time', 30000);
-        if (cancelled) return;
+    if (!playing) return undefined;
+    const stepMs = (b - a) / 120;
+    const t = setInterval(() => setUpTo((u) => { const nu = (u === Infinity ? a : u) + stepMs; return nu >= b ? Infinity : nu; }), 70);
+    return () => clearInterval(t);
+  }, [playing, a, b]);
+  useEffect(() => { if (playing && upTo === Infinity) setPlaying(false); }, [playing, upTo]);
+  /* a finished period's count is kept with the graphic (for the totals at the top) */
+  useEffect(() => {
+    if (admin && ended && strikes && it.strike_count !== strikes.length) {
+      base44.entities.GraphicVerification.update(it.id, { strike_count: strikes.length }).then(() => onCount(strikes.length)).catch(() => {});
+    }
+  }, [admin, ended, strikes]); // eslint-disable-line react-hooks/exhaustive-deps
 
-        const now = new Date();
-        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
+  const shown = upTo === Infinity ? strikes?.length : strikes?.filter(([t]) => t <= upTo).length;
+  return (
+    <section className="vf-glass vf-card">
+      <div className="vf-head"><BarChart3 /><h2>{it.title || 'Forecast graphic'}</h2><small>{period(it)}</small><span className="vf-sp" />
+        <button type="button" className="vf-btn is-icon" disabled={!prev} onClick={() => go(prev)} aria-label="Older graphic"><ChevronLeft /></button>
+        <button type="button" className="vf-btn is-icon" disabled={!next} onClick={() => go(next)} aria-label="Newer graphic"><ChevronRight /></button>
+      </div>
+      <div className="fv-detail">
+        <GraphicOverlay item={it} strikes={strikes} show={show} upTo={upTo} byTime={byTime} dot={dot} maxVh={80} />
+        <div className="fv-info">
+          <div className="vf-stats" style={{ marginTop: 0, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+            <Stat label="Strikes on the graphic" value={strikes ? (shown ?? 0).toLocaleString() : '…'} note={upTo === Infinity ? (ended ? 'over the whole period' : 'so far; the period is still going') : `up to ${when(new Date(upTo).toISOString())}`} />
+            <Stat label="Period" value={`${Math.round((b - a) / 3600e3)} h`} note={ended ? 'finished' : 'still going'} />
+          </div>
+          {strikes === null ? <div className="vf-skel" style={{ height: 110 }} /> : <Histogram it={it} strikes={strikes} upTo={upTo} />}
+          <div className="fv-replay">
+            <button type="button" className="vf-btn is-icon" onClick={() => { if (!playing && upTo === Infinity) setUpTo(a); setPlaying((p) => !p); }} aria-label={playing ? 'Pause' : 'Replay the lightning'} disabled={!strikes?.length}>{playing ? <Pause /> : <Play />}</button>
+            <input type="range" min={a} max={b} step={(b - a) / 240} value={upTo === Infinity ? b : upTo} onChange={(e) => { setPlaying(false); const v = Number(e.target.value); setUpTo(v >= b ? Infinity : v); }} aria-label="Show the lightning up to" />
+            <span className="vf-chip"><Clock />{upTo === Infinity ? 'All' : hhmm(new Date(upTo).toISOString())}</span>
+          </div>
+          <div className="fv-tools">
+            <button type="button" className={`vf-btn${show ? ' is-on' : ''}`} style={{ '--c': '#facc15' }} onClick={() => setShow((s) => !s)} aria-pressed={show}><Zap />Strikes</button>
+            <div className="vf-seg">
+              <button type="button" className={byTime ? 'on' : ''} onClick={() => setByTime(true)}>By time</button>
+              <button type="button" className={!byTime ? 'on' : ''} onClick={() => setByTime(false)}>Yellow</button>
+            </div>
+            <div className="vf-seg" aria-label="Dot size">
+              {[[0.7, 'S'], [1, 'M'], [1.5, 'L']].map(([v, l]) => <button key={l} type="button" className={dot === v ? 'on' : ''} onClick={() => setDot(v)}>{l}</button>)}
+            </div>
+          </div>
+          {byTime && show && <div className="vf-legend"><span><i style={{ background: 'linear-gradient(90deg,#dc2626,#f97316,#facc15,#fffbe6)' }} />strikes, earliest to latest in the period</span></div>}
+          {it.notes && <div className="vf-note" style={{ whiteSpace: 'pre-wrap' }}>{it.notes}</div>}
+          <div className="fv-tools">
+            <button type="button" className="vf-btn" disabled={!strikes || busy} onClick={async () => { setBusy(true); try { await download(it, strikes, byTime, dot); } finally { setBusy(false); } }}>{busy ? <Loader2 className="vf-spin" /> : <Download />}Download</button>
+            {admin && <button type="button" className="vf-btn" onClick={onEdit}><Pencil />Edit</button>}
+            {admin && <button type="button" className="vf-btn is-danger" onClick={onDelete}><Trash2 />Delete</button>}
+          </div>
+          <p className="vf-note" style={{ margin: 0 }}>Lightning recorded by the Met Office over the UK &amp; Ireland during the graphic’s period, placed on its map.</p>
+        </div>
+      </div>
+    </section>
+  );
+}
 
-        // Build 7-day buckets
-        const days = [];
-        for (let d = 6; d >= 0; d--) {
-          const dayStart = new Date(now);
-          dayStart.setDate(dayStart.getDate() - d);
-          dayStart.setHours(0, 0, 0, 0);
-          const dayEnd = new Date(dayStart.getTime() + 24 * 3600 * 1000);
-          days.push({
-            date: dayStart.toISOString().slice(0, 10),
-            label: dayStart.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }),
-            startMs: dayStart.getTime(),
-            endMs: dayEnd.getTime(),
-            regions: Object.fromEntries(UK_REGIONS.map(r => [r.id, 0])),
-          });
-        }
-
-        // Count strikes per region per day
-        for (const s of strikes) {
-          if (s.time < sevenDaysAgo.getTime()) continue;
-          const dayIdx = days.findIndex(d => s.time >= d.startMs && s.time < d.endMs);
-          if (dayIdx === -1) continue;
-
-          for (const r of UK_REGIONS) {
-            if (s.lon >= r.bbox.lonMin && s.lon <= r.bbox.lonMax &&
-                s.lat >= r.bbox.latMin && s.lat <= r.bbox.latMax) {
-              days[dayIdx].regions[r.id]++;
-            }
-          }
-        }
-
-        if (!cancelled) setData(days);
-      } catch { /* fall through */ }
-      if (!cancelled) setLoading(false);
-    })();
-    return () => { cancelled = true; };
+function Card({ it, on, onPick }) {
+  const ref = useRef(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) { setSeen(true); io.disconnect(); } }, { rootMargin: '300px' });
+    io.observe(ref.current);
+    return () => io.disconnect();
   }, []);
-
-  return { data, loading };
-}
-
-// ─── Read TCM model run predictions from RiskGridCache ──────────────────────
-function useModelPredictions(strikeData) {
-  const [predictions, setPredictions] = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        // Read the latest TCM model run from RiskGridCache
-        const rows = await base44.entities.RiskGridCache.list('-generated_at', 20);
-        if (cancelled || !rows?.length) return;
-
-        // Find the most recent UK region run with grid_data
-        const ukRun = rows.find(r =>
-          r.cache_key?.startsWith('tcm_uk_') &&
-          !r.cache_key?.endsWith('_latest') &&
-          r.grid_data?.grid?.length
-        );
-        if (!ukRun || cancelled) return;
-
-        const grid = ukRun.grid_data.grid;
-        if (!grid.length) return;
-
-        // For each of the last 7 days, aggregate lightning scores per region
-        const enriched = strikeData.map(day => {
-          const preds = {};
-          for (const r of UK_REGIONS) {
-            // Score all grid points for this region on the lightning hazard
-            const scores = [];
-            let lightningTotal = 0;
-            let lightningPoints = 0;
-
-            for (const pt of grid) {
-              if (pt.lat < r.bbox.latMin || pt.lat > r.bbox.latMax ||
-                  pt.lon < r.bbox.lonMin || pt.lon > r.bbox.lonMax) continue;
-
-              // Get lightning score from the first day's perDay data
-              const dayData = pt.perDay?.[0];
-              if (!dayData) continue;
-              const lightScore = dayData.scores?.lightning || 0;
-              if (lightScore > 0) {
-                scores.push(lightScore);
-                lightningTotal += lightScore;
-                lightningPoints++;
-              }
-            }
-
-            // Convert scores to predicted strike counts
-            // Higher score = more strikes. Roughly: score 0-100 maps to 0-30 strikes
-            const avgScore = lightningPoints > 0 ? lightningTotal / lightningPoints : 0;
-            const predictedStrikes = Math.round(avgScore * 0.35 * lightningPoints / Math.max(1, lightningPoints));
-
-            // Generate an ensemble-style spread around the prediction
-            const base = predictedStrikes || 0;
-            preds[r.id] = {
-              mean: base,
-              median: base,
-              p25: Math.max(0, Math.round(base * 0.6)),
-              p75: Math.round(base * 1.5),
-              min: Math.max(0, Math.round(base * 0.3)),
-              max: Math.round(base * 2.0),
-            };
-          }
-          return { ...day, predictions: preds };
-        });
-
-        if (!cancelled) setPredictions(enriched);
-      } catch { /* model data unavailable */ }
-    })();
-    return () => { cancelled = true; };
-  }, [strikeData]);
-
-  return predictions;
-}
-
-// ─── Chart colors per region ─────────────────────────────────────────────────
-const REGION_COLORS = {
-  uk:       '#7c8da8',
-  south:    '#64748b',
-  midlands: '#8ba0b8',
-  north:    '#556380',
-  scotland: '#6d7f9a',
-  ireland:  '#5b6e8a',
-  wales:    '#94a3b8',
-};
-
-// ─── Custom tooltip ──────────────────────────────────────────────────────────
-function VerifTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
+  const strikes = useGraphicStrikes(it, seen);
   return (
-    <div style={{
-      background: 'linear-gradient(155deg, rgba(18,26,44,0.97) 0%, rgba(24,34,56,0.97) 100%)',
-      border: '1px solid rgba(148,163,184,0.22)', borderRadius: 14, padding: '13px 16px',
-      backdropFilter: 'blur(22px)', boxShadow: '0 10px 32px rgba(0,0,0,0.60)',
-      fontFamily: "'DM Sans',sans-serif",
-    }}>
-      <p style={{ margin: '0 0 8px', fontSize: 10, fontWeight: 700, color: SLATE.light, letterSpacing: '0.1em', textTransform: 'uppercase' }}>{label}</p>
-      {payload.map((entry, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-          <span style={{ width: 7, height: 7, borderRadius: 2, background: entry.color, flexShrink: 0 }} />
-          <span style={{ fontSize: 11, fontWeight: 600, color: '#cbd5e1', minWidth: 80 }}>{entry.name}</span>
-          <span style={{ fontSize: 12, fontWeight: 800, color: entry.color, fontFamily: 'monospace' }}>{entry.value} strikes</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─── Stat pill ───────────────────────────────────────────────────────────────
-function StatPill({ label, value, color = SLATE.sky, icon }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 10,
-      padding: '12px 15px', borderRadius: 13,
-      background: `linear-gradient(155deg, ${color}14, ${color}06)`,
-      border: `1px solid ${color}25`,
-    }}>
-      {icon && (
-        <div style={{
-          width: 34, height: 34, borderRadius: 9, flexShrink: 0,
-          background: `linear-gradient(135deg, ${color}20, ${color}0a)`,
-          border: `1px solid ${color}30`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          {icon}
-        </div>
-      )}
+    <button ref={ref} type="button" className={`fv-card${on ? ' on' : ''}`} onClick={onPick}>
+      <GraphicOverlay item={it} strikes={strikes} lazy />
       <div>
-        <p style={{ margin: 0, fontSize: 9.5, fontWeight: 700, color: SLATE.light, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: "'DM Sans',sans-serif" }}>{label}</p>
-        <p style={{ margin: '2px 0 0', fontSize: 19, fontWeight: 800, color: '#e8edf6', fontFamily: "'Archivo','DM Sans',sans-serif", letterSpacing: '-0.03em' }}>{value}</p>
+        <b>{it.title || 'Forecast graphic'}</b>
+        <small>{period(it)}</small>
+        <span className="vf-chip" style={{ '--k': '#facc15', alignSelf: 'flex-start' }}><Zap />{strikes ? `${strikes.length.toLocaleString()} strike${strikes.length === 1 ? '' : 's'}` : '…'}</span>
       </div>
-    </div>
-  );
-}
-
-// ─── Region selector chip ────────────────────────────────────────────────────
-function RegionChip({ region, selected, onClick }) {
-  const color = REGION_COLORS[region.id];
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        padding: '8px 16px', borderRadius: 22, fontSize: 12, fontWeight: selected ? 800 : 600,
-        cursor: 'pointer', fontFamily: "'DM Sans',sans-serif", letterSpacing: '0.03em',
-        background: selected ? `${color}20` : 'rgba(148,163,184,0.06)',
-        border: `1.5px solid ${selected ? color : 'rgba(148,163,184,0.15)'}`,
-        color: selected ? color : SLATE.light,
-        transition: 'all 0.2s',
-      }}>
-      {region.label}
     </button>
   );
 }
 
-// ─── Accuracy badge ──────────────────────────────────────────────────────────
-function AccuracyBadge({ accuracy }) {
-  const color = accuracy >= 80 ? '#22c55e' : accuracy >= 60 ? '#f59e0b' : '#ef4444';
-  const Icon = accuracy >= 80 ? TrendingUp : accuracy >= 60 ? Minus : TrendingDown;
-  return (
-    <div style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5,
-      padding: '4px 10px', borderRadius: 8,
-      background: `${color}15`, border: `1px solid ${color}30`,
-    }}>
-      <Icon style={{ width: 12, height: 12, color }} />
-      <span style={{ fontSize: 11, fontWeight: 800, color, fontFamily: 'monospace' }}>{accuracy}%</span>
-    </div>
-  );
-}
-
-// ─── Side-by-side comparison bar chart ───────────────────────────────────────
-function RegionalComparisonChart({ enrichedData, selectedRegion }) {
-  const region = UK_REGIONS.find(r => r.id === selectedRegion) || UK_REGIONS[0];
-  const color = REGION_COLORS[region.id];
-
-  const chartData = enrichedData.map(d => ({
-    date: d.label,
-    predicted: d.predictions[region.id].mean,
-    p25: d.predictions[region.id].p25,
-    p75: d.predictions[region.id].p75,
-    observed: d.regions[region.id],
-  }));
-
-  return (
-    <ResponsiveContainer width="100%" height={300}>
-      <BarChart data={chartData} margin={{ top: 8, right: 12, left: -8, bottom: 0 }}
-        barGap={2} barCategoryGap="25%">
-        <defs>
-          <linearGradient id="predBarFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.55" />
-            <stop offset="100%" stopColor={color} stopOpacity="0.12" />
-          </linearGradient>
-          <linearGradient id="obsBarFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#facc15" stopOpacity="0.60" />
-            <stop offset="100%" stopColor="#facc15" stopOpacity="0.15" />
-          </linearGradient>
-        </defs>
-        <CartesianGrid strokeDasharray="3 4" stroke="rgba(148,163,184,0.06)" vertical={false} />
-        <XAxis dataKey="date" tick={{ fontSize: 10, fill: SLATE.dark, fontFamily: "'DM Sans',sans-serif", fontWeight: 600 }}
-          axisLine={{ stroke: 'rgba(148,163,184,0.12)' }} tickLine={false} />
-        <YAxis tick={{ fontSize: 10, fill: SLATE.dark, fontFamily: 'monospace' }}
-          axisLine={{ stroke: 'rgba(148,163,184,0.12)' }} tickLine={false} allowDecimals={false} width={40} />
-        <Tooltip content={<VerifTooltip />} />
-        <Legend wrapperStyle={{ fontSize: 10, color: SLATE.light, fontWeight: 600, paddingTop: 8 }} />
-        <Bar dataKey="predicted" fill="url(#predBarFill)" stroke={color} strokeWidth={1}
-          radius={[5, 5, 0, 0]} name="Ensemble Predicted" barSize={16} />
-        <Bar dataKey="observed" fill="url(#obsBarFill)" stroke="#facc15" strokeWidth={1}
-          radius={[5, 5, 0, 0]} name="Observed Strikes" barSize={16} />
-      </BarChart>
-    </ResponsiveContainer>
-  );
-}
-
-// ─── Regional summary grid ───────────────────────────────────────────────────
-function RegionalSummaryGrid({ enrichedData, onSelectRegion }) {
-  if (!enrichedData?.length) return null;
-
-  // Aggregate per region
-  const summaries = UK_REGIONS.map(region => {
-    let totalPredicted = 0, totalObserved = 0;
-    enrichedData.forEach(d => {
-      totalPredicted += d.predictions[region.id].mean;
-      totalObserved += d.regions[region.id];
-    });
-    const accuracy = totalObserved > 0
-      ? Math.round(Math.min(100, Math.max(0, (1 - Math.abs(totalPredicted - totalObserved) / Math.max(totalPredicted, totalObserved)) * 100)))
-      : 100;
-    return { region, totalPredicted, totalObserved, accuracy };
-  });
-
-  const maxStrikes = Math.max(...summaries.map(s => Math.max(s.totalPredicted, s.totalObserved)), 1);
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {summaries.map(s => {
-        const color = REGION_COLORS[s.region.id];
-        const predPct = Math.round((s.totalPredicted / maxStrikes) * 100);
-        const obsPct = Math.round((s.totalObserved / maxStrikes) * 100);
-        return (
-          <motion.button
-            key={s.region.id}
-            whileHover={{ scale: 1.01, x: 4 }}
-            onClick={() => onSelectRegion(s.region.id)}
-            style={{
-              textAlign: 'left', width: '100%', cursor: 'pointer', fontFamily: 'inherit',
-              padding: '14px 16px', borderRadius: 14, outline: 'none',
-              background: `linear-gradient(155deg, ${color}0e, ${color}04)`,
-              border: `1px solid ${color}20`,
-            }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <MapPin style={{ width: 14, height: 14, color }} />
-                <span style={{ fontSize: 13, fontWeight: 800, color: '#e8edf6', fontFamily: "'Archivo','DM Sans',sans-serif" }}>
-                  {s.region.label}
-                </span>
-              </div>
-              <AccuracyBadge accuracy={s.accuracy} />
-            </div>
-
-            {/* Predicted bar */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 5 }}>
-              <span style={{ width: 90, fontSize: 10, fontWeight: 600, color: SLATE.light, textAlign: 'right', fontFamily: "'DM Sans',sans-serif" }}>Predicted</span>
-              <div style={{ flex: 1, height: 8, borderRadius: 4, background: 'rgba(148,163,184,0.08)', overflow: 'hidden' }}>
-                <motion.div
-                  initial={{ width: 0 }}
-                  animate={{ width: `${predPct}%` }}
-                  transition={{ duration: 0.8, ease: 'easeOut' }}
-                  style={{ height: '100%', borderRadius: 4, background: `linear-gradient(90deg, ${color}, ${color}cc)`, opacity: 0.8 }}
-                />
-              </div>
-              <span style={{ width: 40, fontSize: 10, fontWeight: 800, color, fontFamily: 'monospace' }}>{s.totalPredicted}</span>
-            </div>
-
-            {/* Observed bar */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ width: 90, fontSize: 10, fontWeight: 600, color: SLATE.light, textAlign: 'right', fontFamily: "'DM Sans',sans-serif" }}>Observed</span>
-              <div style={{ flex: 1, height: 8, borderRadius: 4, background: 'rgba(148,163,184,0.08)', overflow: 'hidden' }}>
-                <motion.div
-                  initial={{ width: 0 }}
-                  animate={{ width: `${obsPct}%` }}
-                  transition={{ duration: 0.8, ease: 'easeOut', delay: 0.1 }}
-                  style={{ height: '100%', borderRadius: 4, background: 'linear-gradient(90deg, #facc15, #fbbf24)', opacity: 0.8 }}
-                />
-              </div>
-              <span style={{ width: 40, fontSize: 10, fontWeight: 800, color: '#facc15', fontFamily: 'monospace' }}>{s.totalObserved}</span>
-            </div>
-          </motion.button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── Daily detail table ──────────────────────────────────────────────────────
-function DailyDetailTable({ enrichedData, selectedRegion }) {
-  const color = REGION_COLORS[selectedRegion];
-
-  return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-        <thead>
-          <tr style={{ borderBottom: '1px solid rgba(148,163,184,0.12)' }}>
-            <th style={thStyle}>Date</th>
-            <th style={thStyle}>Ens. Mean</th>
-            <th style={thStyle}>IQR Range</th>
-            <th style={thStyle}>Observed</th>
-            <th style={thStyle}>Δ</th>
-            <th style={{ ...thStyle, textAlign: 'right' }}>Accuracy</th>
-          </tr>
-        </thead>
-        <tbody>
-          {[...enrichedData].reverse().map((d, i) => {
-            const pred = d.predictions[selectedRegion];
-            const obs = d.regions[selectedRegion];
-            const delta = pred.mean - obs;
-            const accuracy = Math.max(0, obs) > 0
-              ? Math.round(Math.min(100, Math.max(0, (1 - Math.abs(delta) / Math.max(pred.mean, obs)) * 100)))
-              : 100;
-            const accColor = accuracy >= 80 ? '#22c55e' : accuracy >= 60 ? '#f59e0b' : '#ef4444';
-            return (
-              <motion.tr
-                key={d.date}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.04 }}
-                style={{ borderBottom: '1px solid rgba(148,163,184,0.06)' }}>
-                <td style={tdStyle}>{d.label}</td>
-                <td style={{ ...tdStyle, fontFamily: 'monospace', fontWeight: 700, color }}>{pred.mean}</td>
-                <td style={{ ...tdStyle, fontFamily: 'monospace', color: SLATE.light }}>
-                  {pred.p25}–{pred.p75}
-                </td>
-                <td style={{ ...tdStyle, fontFamily: 'monospace', fontWeight: 700, color: '#facc15' }}>{obs}</td>
-                <td style={{
-                  ...tdStyle, fontFamily: 'monospace', fontWeight: 800,
-                  color: delta === 0 ? SLATE.light : delta > 0 ? '#ef4444' : '#22c55e',
-                }}>
-                  {delta > 0 ? '+' : ''}{delta}
-                </td>
-                <td style={{ ...tdStyle, textAlign: 'right' }}>
-                  <span style={{
-                    padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 700,
-                    background: `${accColor}15`, border: `1px solid ${accColor}30`, color: accColor,
-                  }}>{accuracy}%</span>
-                </td>
-              </motion.tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-const thStyle = {
-  padding: '10px 12px', textAlign: 'left', fontWeight: 700, fontSize: 10,
-  color: SLATE.light, letterSpacing: '0.08em', textTransform: 'uppercase',
-  fontFamily: "'DM Sans',sans-serif",
-};
-const tdStyle = {
-  padding: '10px 12px', color: '#e2e8f0', fontWeight: 500,
-  fontFamily: "'DM Sans',sans-serif", whiteSpace: 'nowrap',
-};
-
-// ─── Main page ───────────────────────────────────────────────────────────────
 export default function ForecastVerification() {
-  const { data: strikeData, loading } = useRegionalStrikeCounts();
-  const [selectedRegion, setSelectedRegion] = useState('uk');
+  const { user } = useAuth();
+  const admin = user?.role === 'admin';
+  const [params, setParams] = useSearchParams();
+  const [items, setItems] = useState(null);
+  const [err, setErr] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const top = useRef(null);
 
-  const enrichedData = useModelPredictions(strikeData);
+  useEffect(() => {
+    base44.entities.GraphicVerification.list('-valid_from', 500)
+      .then((r) => setItems((r || []).filter((x) => x.image_url && x.bounds && x.valid_from && x.valid_to)))
+      .catch(() => setErr('The graphics could not be loaded.'));
+  }, []);
 
-  // Top-level aggregates for selected region
-  const regionSummary = useMemo(() => {
-    if (!enrichedData) return null;
-    let totalPredicted = 0, totalObserved = 0;
-    enrichedData.forEach(d => {
-      totalPredicted += d.predictions[selectedRegion].mean;
-      totalObserved += d.regions[selectedRegion];
-    });
-    const accuracy = totalObserved > 0
-      ? Math.round(Math.min(100, Math.max(0, (1 - Math.abs(totalPredicted - totalObserved) / Math.max(totalPredicted, totalObserved)) * 100)))
-      : 100;
-    const bias = totalObserved > 0 ? (totalPredicted / totalObserved).toFixed(2) : '—';
-    return { totalPredicted, totalObserved, accuracy, bias };
-  }, [enrichedData, selectedRegion]);
+  const sorted = useMemo(() => [...(items || [])].sort((x, y) => y.valid_from.localeCompare(x.valid_from)), [items]);
+  const id = params.get('id');
+  const current = sorted.find((x) => x.id === id) || sorted[0] || null;
+  const i = current ? sorted.indexOf(current) : -1;
+  const go = (x, scroll = false) => {
+    setParams((p) => { const n = new URLSearchParams(p); n.set('id', x); return n; }, { replace: true });
+    if (scroll) top.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const saved = (it) => {
+    setItems((list) => [...(list || []).filter((x) => x.id !== it.id), it]);
+    setEditing(null);
+    go(it.id, true);
+  };
+  const remove = async (it) => {
+    if (!window.confirm(`Delete “${it.title || 'this graphic'}” from Forecast Verification?`)) return;
+    try {
+      await base44.entities.GraphicVerification.delete(it.id);
+      setItems((list) => list.filter((x) => x.id !== it.id));
+      setParams((p) => { const n = new URLSearchParams(p); n.delete('id'); return n; }, { replace: true });
+    } catch (e) {
+      setErr(`It could not be deleted (${e.message || e}).`);
+    }
+  };
 
-  const region = UK_REGIONS.find(r => r.id === selectedRegion);
+  const total = sorted.reduce((s, x) => s + (Number.isFinite(x.strike_count) ? x.strike_count : 0), 0);
+  const hero = (
+    <>
+      {sorted.length > 0 && (
+        <div className="vf-stats">
+          <Stat label="Graphics checked" value={sorted.length} note={`newest ${london(sorted[0].valid_from, { day: 'numeric', month: 'short', year: 'numeric' })}`} />
+          <Stat label="Strikes" value={total.toLocaleString()} note="on the finished ones" />
+        </div>
+      )}
+      {admin && !editing && (
+        <div style={{ marginTop: 16 }}>
+          <button type="button" className="vf-btn is-primary" style={{ '--c': '#22d3ee' }} onClick={() => { setEditing('new'); setTimeout(() => top.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); }}><Plus />Add a graphic</button>
+        </div>
+      )}
+    </>
+  );
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(170deg, #060b18 0%, #0b1226 40%, #0e1a32 100%)',
-      fontFamily: "'Archivo','DM Sans',system-ui,sans-serif",
-      color: '#e8edf6',
-      padding: '0 0 60px',
-    }}>
-      {/* ─── HERO ────────────────────────────────────────────────────────────── */}
-      <div style={{
-        padding: '48px 20px 40px',
-        background: 'linear-gradient(155deg, rgba(12,20,38,0.96) 0%, rgba(18,30,52,0.92) 50%, rgba(14,24,42,0.96) 100%)',
-        borderBottom: `1px solid ${SLATE.primary}18`,
-        position: 'relative', overflow: 'hidden',
-      }}>
-        <div style={{ position: 'absolute', top: -100, right: -60, width: 400, height: 400, borderRadius: '50%', background: `radial-gradient(circle, ${SLATE.sky}0a 0%, transparent 65%)`, pointerEvents: 'none' }} />
-        <div style={{ position: 'absolute', bottom: -40, left: -80, width: 350, height: 350, borderRadius: '50%', background: `radial-gradient(circle, #facc1510 0%, transparent 60%)`, pointerEvents: 'none' }} />
-
-        <div style={{ maxWidth: 1200, margin: '0 auto', position: 'relative', zIndex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 7, padding: '6px 14px', borderRadius: 22,
-              background: `${SLATE.sky}12`, border: `1px solid ${SLATE.sky}28`,
-            }}>
-              <Target style={{ width: 13, height: 13, color: SLATE.sky }} />
-              <span style={{ fontSize: 10.5, fontWeight: 800, color: SLATE.sky, letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: "'DM Sans',sans-serif" }}>
-                Forecast Verification
-              </span>
-            </div>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 8,
-              background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)',
-            }}>
-              <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#fbbf24' }} />
-              <span style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', fontFamily: 'monospace' }}>Starting {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
-            </div>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 8,
-              background: `${SLATE.steel}10`, border: `1px solid ${SLATE.steel}25`,
-            }}>
-              <BarChart3 style={{ width: 11, height: 11, color: SLATE.steel }} />
-              <span style={{ fontSize: 10, fontWeight: 700, color: SLATE.steel, fontFamily: 'monospace' }}>TCM Model Run</span>
-            </div>
-          </div>
-
-          <h1 style={{
-            margin: '0 0 8px', fontSize: 'clamp(1.5rem, 4vw, 2.2rem)', fontWeight: 900,
-            fontFamily: "'Archivo','DM Sans',sans-serif", letterSpacing: '-0.035em',
-            background: `linear-gradient(135deg, ${SLATE.sky} 0%, ${SLATE.ice} 50%, ${SLATE.steel} 100%)`,
-            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', lineHeight: 1.1,
-          }}>
-            Regional Strike Verification
-          </h1>
-          <p style={{ margin: 0, fontSize: '0.85rem', color: SLATE.light, lineHeight: 1.6, maxWidth: 600, fontWeight: 500 }}>
-            Tracking TCM thunderstorm forecast accuracy from today onward — comparing model-predicted lightning activity
-            against real observed strike counts across UK regions.
-          </p>
+    <VfPage title="Forecast Verification" accent="#22d3ee" accent2="#a78bfa" css={CSS} hero={hero}
+      lede="Our forecast graphics with the lightning that followed drawn on top: every strike the Met Office recorded during the period, where it fell on the map. Replay it through the period, or download it.">
+      {err && <div className="vf-error">{err}</div>}
+      {(editing || current) && (
+        <div ref={top} className="fv-top">
+          {editing && <GraphicEditor item={editing === 'new' ? null : editing} onSaved={saved} onCancel={() => setEditing(null)} />}
+          {current && !editing && (
+            <Detail key={current.id} it={current} admin={admin} onEdit={() => setEditing(current)} onDelete={() => remove(current)}
+              onCount={(n) => setItems((list) => list.map((x) => (x.id === current.id ? { ...x, strike_count: n } : x)))}
+              prev={sorted[i + 1]?.id} next={i > 0 ? sorted[i - 1].id : null} go={(x) => go(x)} />
+          )}
         </div>
-      </div>
-
-      {/* ─── CONTENT ─────────────────────────────────────────────────────────── */}
-      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '28px 20px' }}>
-
-        {/* ─── METHODOLOGY ─────────────────────────────────────────────────────── */}
-        <GlassPanel style={{ padding: '24px 28px', marginBottom: 28 }}>
-          <SectionHeader icon={Target} title="How Is This Calculated?" subtitle="A plain-English guide to what every number on this page means" accent={SLATE.sky} />
-
-          {/* Step-by-step flow */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginBottom: 24 }}>
-            {[
-              {
-                step: '1',
-                emoji: '⚡',
-                title: 'We count real lightning strikes',
-                body: 'Every lightning bolt detected by the Blitzortung sensor network is saved to our database in real time. At the end of each day we count how many strikes fell inside each UK region (South England, Midlands, North England, Scotland, Wales, Ireland, and UK-wide). This is the "Observed" number.',
-                color: '#facc15',
-              },
-              {
-                step: '2',
-                emoji: '🧮',
-                title: 'We extract what the TCM model predicted',
-                body: 'The TCM (Thunderstorm Convective Model) assigns each grid point across the UK a lightning score from 0 to 100. We average all those scores within a region and scale that average into an estimated strike count. This is the "Predicted" number. Note: the TCM is primarily a risk tool, not a strike-count tool, so the prediction is a rough estimate.',
-                color: SLATE.sky,
-              },
-              {
-                step: '3',
-                emoji: '🎯',
-                title: 'Accuracy % — how close were we?',
-                body: 'Accuracy = 1 − (|Predicted − Observed| ÷ max(Predicted, Observed)) × 100. In plain English: if the model predicted 80 strikes and 100 were observed, the difference is 20. Divided by the larger number (100) that\'s 20%, so accuracy = 80%. A score of 100% is a perfect match. If both predicted and observed are zero (no storm, no strikes), that also counts as 100%.',
-                color: '#22c55e',
-              },
-              {
-                step: '4',
-                emoji: '📐',
-                title: 'Forecast Bias — which way does the model lean?',
-                body: 'Bias = Predicted ÷ Observed. If bias is 1.0 the model is well-calibrated. A bias above 1 means we predicted more strikes than happened (over-forecast). A bias below 1 means we predicted fewer than happened (under-forecast). Over time, a consistent bias tells us which direction to nudge the model.',
-                color: '#f97316',
-              },
-              {
-                step: '5',
-                emoji: '📅',
-                title: 'Data grows every day',
-                body: 'This page reset on 23 June 2026. A verification record is written automatically at midnight each day. The charts and tables will fill in as days pass — after a week you\'ll see a 7-day chart, after a month the trends become meaningful.',
-                color: SLATE.steel,
-              },
-            ].map((item, idx, arr) => (
-              <div key={item.step} style={{ display: 'flex', gap: 0 }}>
-                {/* Vertical timeline */}
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginRight: 18, flexShrink: 0 }}>
-                  <div style={{
-                    width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
-                    background: `${item.color}22`, border: `2px solid ${item.color}55`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 13, fontWeight: 900, color: item.color, fontFamily: "'Archivo',sans-serif",
-                  }}>{item.step}</div>
-                  {idx < arr.length - 1 && (
-                    <div style={{ width: 2, flex: 1, minHeight: 20, background: 'rgba(148,163,184,0.12)', margin: '4px 0' }} />
-                  )}
-                </div>
-                {/* Content */}
-                <div style={{ paddingBottom: idx < arr.length - 1 ? 22 : 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-                    <span style={{ fontSize: 16 }}>{item.emoji}</span>
-                    <span style={{ fontSize: 13, fontWeight: 800, color: '#e8edf6', fontFamily: "'Archivo','DM Sans',sans-serif" }}>{item.title}</span>
-                  </div>
-                  <p style={{ margin: 0, fontSize: 12, color: SLATE.light, lineHeight: 1.65, fontWeight: 500, maxWidth: 680 }}>{item.body}</p>
-                </div>
-              </div>
-            ))}
+      )}
+      {items === null && !err && <div className="vf-skel" style={{ height: 420, borderRadius: 24 }} />}
+      {items && sorted.length === 0 && !editing && (
+        <section className="vf-glass vf-card"><div className="vf-empty"><ImagePlus /><b>No graphics checked yet</b>
+          <p>{admin ? 'Add a forecast graphic and line its map up; the lightning of its period is drawn over it.' : 'Forecast graphics appear here with the lightning that followed drawn over them.'}</p>
+        </div></section>
+      )}
+      {sorted.length > 1 && (
+        <section className="vf-glass vf-card">
+          <div className="vf-head"><BarChart3 /><h2>Every graphic</h2><small>{sorted.length}, newest first</small></div>
+          <div className="fv-gallery">
+            {sorted.map((x) => <Card key={x.id} it={x} on={x.id === current?.id} onPick={() => { setEditing(null); go(x.id, true); }} />)}
           </div>
-
-          {/* Quick-reference key */}
-          <div style={{
-            padding: '14px 18px', borderRadius: 14,
-            background: 'rgba(148,163,184,0.05)', border: '1px solid rgba(148,163,184,0.12)',
-          }}>
-            <p style={{ margin: '0 0 10px', fontSize: 10.5, fontWeight: 800, color: SLATE.light, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Quick reference</p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-              {[
-                { label: 'Accuracy 80–100%', desc: 'Good', color: '#22c55e' },
-                { label: 'Accuracy 60–79%', desc: 'Acceptable', color: '#f59e0b' },
-                { label: 'Accuracy <60%', desc: 'Poor', color: '#ef4444' },
-                { label: 'Bias = 1.0', desc: 'Perfect calibration', color: SLATE.sky },
-                { label: 'Bias > 1.0', desc: 'Over-forecast', color: '#f97316' },
-                { label: 'Bias < 1.0', desc: 'Under-forecast', color: '#a78bfa' },
-              ].map(k => (
-                <div key={k.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 2, background: k.color, flexShrink: 0 }} />
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>{k.label}</span>
-                  <span style={{ fontSize: 11, color: SLATE.light }}>= {k.desc}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </GlassPanel>
-
-        {loading && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', gap: 12 }}>
-            <Loader2 style={{ width: 18, height: 18, color: SLATE.sky, animation: 'spin 1s linear infinite' }} />
-            <span style={{ fontSize: 13, fontWeight: 600, color: SLATE.light }}>Loading strike data…</span>
-          </div>
-        )}
-
-        {!loading && enrichedData && enrichedData.every(d => UK_REGIONS.every(r => d.regions[r.id] === 0)) && (
-          <GlassPanel style={{ padding: '40px 24px', textAlign: 'center', marginBottom: 24 }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>📊</div>
-            <h3 style={{ margin: '0 0 8px', fontSize: '1.1rem', fontWeight: 800, color: '#e8edf6' }}>Verification Starting Today</h3>
-            <p style={{ margin: 0, fontSize: 13, color: SLATE.light, lineHeight: 1.6, maxWidth: 480, marginLeft: 'auto', marginRight: 'auto' }}>
-              The forecast verification record has been reset. Data will accumulate as the TCM model runs daily and lightning strikes are recorded.
-              Check back tomorrow for the first verified day.
-            </p>
-          </GlassPanel>
-        )}
-
-        {!loading && enrichedData && enrichedData.some(d => UK_REGIONS.some(r => d.regions[r.id] > 0)) && (
-          <>
-            {/* KPI row */}
-            {regionSummary && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4 }}
-                style={{
-                  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                  gap: 12, marginBottom: 26,
-                }}>
-                <StatPill label="Predicted (7d)" value={regionSummary.totalPredicted} color={REGION_COLORS[selectedRegion]} icon={<Crosshair style={{ width: 16, height: 16, color: REGION_COLORS[selectedRegion] }} />} />
-                <StatPill label="Observed (7d)" value={regionSummary.totalObserved} color="#facc15" icon={<Zap style={{ width: 16, height: 16, color: '#facc15' }} />} />
-                <StatPill label="Accuracy" value={`${regionSummary.accuracy}%`} color={regionSummary.accuracy >= 80 ? '#22c55e' : '#f59e0b'} icon={<CheckCircle style={{ width: 16, height: 16, color: regionSummary.accuracy >= 80 ? '#22c55e' : '#f59e0b' }} />} />
-                <StatPill label="Forecast Bias" value={regionSummary.bias} color={SLATE.steel} icon={<Target style={{ width: 16, height: 16, color: SLATE.steel }} />} />
-              </motion.div>
-            )}
-
-            {/* Region selector */}
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 26 }}>
-              {UK_REGIONS.map(r => (
-                <RegionChip key={r.id} region={r} selected={selectedRegion === r.id} onClick={() => setSelectedRegion(r.id)} />
-              ))}
-            </div>
-
-            {/* Side-by-side bar chart */}
-            <motion.div
-              key={selectedRegion}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.35 }}
-            >
-              <GlassPanel style={{ padding: '22px 20px 14px', marginBottom: 24 }}>
-                <SectionHeader
-                  icon={BarChart3}
-                  title={`${region.label} · Predicted vs Observed`}
-                  subtitle="Ensemble mean prediction (5 members) against actual lightning strike counts · 7-day view"
-                  accent={REGION_COLORS[selectedRegion]}
-                />
-                <RegionalComparisonChart enrichedData={enrichedData} selectedRegion={selectedRegion} />
-              </GlassPanel>
-            </motion.div>
-
-            {/* Two-column: regional summary grid + daily detail table */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 20 }}>
-              <GlassPanel style={{ padding: '22px 20px 14px' }}>
-                <SectionHeader icon={MapPin} title="All Regions Summary" subtitle="7-day aggregate predicted vs observed per region" accent={SLATE.sky} />
-                <RegionalSummaryGrid enrichedData={enrichedData} onSelectRegion={setSelectedRegion} />
-              </GlassPanel>
-
-              <GlassPanel style={{ padding: '22px 20px 14px' }}>
-                <SectionHeader icon={Target} title={`${region.label} · Daily Detail`} subtitle="Day-by-day comparison with ensemble spread and accuracy" accent={REGION_COLORS[selectedRegion]} />
-                <DailyDetailTable enrichedData={enrichedData} selectedRegion={selectedRegion} />
-              </GlassPanel>
-            </div>
-
-            {/* Footer */}
-            <div style={{
-              marginTop: 28, padding: '16px 20px', borderRadius: 16,
-              background: `${SLATE.sky}06`, border: `1px solid ${SLATE.sky}12`,
-              display: 'flex', alignItems: 'center', gap: 12,
-            }}>
-              <BarChart3 style={{ width: 16, height: 16, color: SLATE.sky, flexShrink: 0 }} />
-              <div>
-                <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: '#e2e8f0', fontFamily: "'DM Sans',sans-serif" }}>
-                  Strike data from Blitzortung via LightningStrike DB · Model predictions from TCM RiskGridCache
-                </p>
-                <p style={{ margin: '2px 0 0', fontSize: 11, color: SLATE.light, fontWeight: 500 }}>
-                  Observed counts are live LightningStrike entity data. Predictions are sourced from the latest TCM admin model run.
-                </p>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
+        </section>
+      )}
+    </VfPage>
   );
 }

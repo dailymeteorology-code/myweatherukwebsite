@@ -12,7 +12,6 @@
 //   • the risk engine's score calibration     (lib/tcmEngineScores.js)
 //   • the live outlook map                    (pages/TCMOutlooksV3.jsx)
 //   • the contour thresholds                  (lib/tcmOutlookLayers.js)
-//   • the archive renderers                   (ArchiveMapPanel, TCMArchive)
 //   • the backend verification job            (verifyDailyForecast/entry.ts)
 //
 // WHY THIS MATTERS: this file previously carried a second, different scale
@@ -25,12 +24,11 @@
 // band is ever recalibrated, change it HERE and in verifyDailyForecast
 // together — nowhere else.
 //
-// ALSO FIXED HERE: RISK_COLOR / RISK_FILL / RISK_BORDER are called throughout
-// the app as (level, riskType) — e.g. RISK_COLOR('Marginal', 'thunderstorm')
-// in ArchiveSummaryCard, DiurnalTimingSection and TCMArchive — but were
+// ALSO FIXED HERE: RISK_COLOR is called as (level, riskType) — e.g.
+// RISK_COLOR('Marginal', 'thunderstorm') in DiurnalTimingSection — but was
 // defined as (riskType, level). Every call therefore missed the palette and
 // silently rendered the transparent "No Risk" entry or a fallback grey. The
-// helpers now take (level, riskType) to match every live call site, and
+// helper now takes (level, riskType) to match every live call site, and
 // getPalette() detects and corrects a swapped argument order defensively
 // (a band name can never collide with a hazard key, so this is unambiguous).
 //
@@ -62,7 +60,6 @@ export const RISK_META = [
 
 // Derived lookups — always derived from RISK_META so nothing can drift.
 export const RISK_INDEX = Object.fromEntries(RISK_META.map((r, i) => [r.level, i]));
-export const MIN_SCORE_PER_LEVEL = Object.fromEntries(RISK_META.map(r => [r.level, r.min]));
 
 // Every band above "No Risk", ascending — the drawable levels.
 export const ORDERED_LEVELS = RISK_META.slice(1).map(r => r.level);
@@ -174,10 +171,8 @@ export const LEVEL_OPACITY = {
   'Severe': 0.88,
 };
 
-// Colour helpers — (level, riskType), matching every call site in the app.
+// Colour helper — (level, riskType), matching every call site in the app.
 // riskType defaults to the thunderstorm palette (the general-outlook colours).
-export const RISK_FILL   = (level, riskType = 'thunderstorm') => getPalette(riskType, level).fill;
-export const RISK_BORDER = (level, riskType = 'thunderstorm') => getPalette(riskType, level).border;
 export const RISK_COLOR  = (level, riskType = 'thunderstorm') => {
   const p = getPalette(riskType, level);
   return p.color || p.border;

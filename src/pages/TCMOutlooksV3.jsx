@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, AlertTriangle, Clock, ShieldAlert, CloudLightning,
-  ChevronRight, ChevronDown, Wind, Zap, CloudRain, Activity,
+  ChevronDown, Wind, Zap, CloudRain, Activity,
   Play, RefreshCw, MapPin, Layers, Loader2,
   Sun, Database, Radio, Thermometer, BarChart2,
   Eye, TrendingUp, CheckCircle,
@@ -4100,10 +4100,6 @@ function TCMArchive({ region }) {
         <span style={{ fontSize: '0.68rem', fontWeight: 600, color: t.textMuted, marginLeft: 4 }}>
           {loadingRuns ? '…' : `${modelRuns.length} run${modelRuns.length !== 1 ? 's' : ''} saved`}
         </span>
-        <div style={{ flex: 1 }} />
-        <a href={`/TCMArchive?region=${region}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 8, background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.4)', color: '#38bdf8', fontSize: '0.72rem', fontWeight: 700, textDecoration: 'none' }}>
-          View full archive <ChevronRight style={{ width: 11, height: 11 }} />
-        </a>
       </div>
       <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
         {loadingRuns ? (

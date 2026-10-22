@@ -39,6 +39,7 @@ import { mountTcmNova } from './tcmNova.js';
 import { mountTcmV3 } from './tcmV3.js';
 import { startAiw } from './aiw/index.js';
 import { mountLightning } from './lightning/index.js';
+import { mountTcmArchive } from './tcmArchive/index.js';
 import { mountScenarios } from './scenarios/api.js';
 import { startLiveScenarios } from './scenarios/live/index.js';
 import { mountPastFuture } from './pastFuture/index.js';
@@ -537,7 +538,9 @@ app.post('/api/upload', requireAdmin, upload.single('file'), (req, res) => {
 /* The lightning archive listens to the AI-warnings strike intake rather than opening a second
    set of Blitzortung sockets (it opens its own when AIW is switched off). */
 const aiw = startAiw(app);
-mountLightning(app, { ingest: aiw?.ingest });
+const lightning = mountLightning(app, { ingest: aiw?.ingest });
+/* every TCM NOVA run, kept once the TCM page moves on, and each day verified against that lightning */
+mountTcmArchive(app, { lightning });
 mountScenarios(app);
 mountPastFuture(app);
 mountModelData(app);

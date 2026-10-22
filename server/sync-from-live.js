@@ -43,7 +43,6 @@ const DEFAULT_ENTITIES = [
   'ManualWarning',
   'MenuItemConfig',
   'ModelBiasCalibration',
-  'ModelFeedback',
   'NewsArticle',
   'NewsletterSubscriber',
   'PublishedFeatures',

@@ -13,7 +13,6 @@ import RestrictedSiteOverlay from '@/components/RestrictedSiteOverlay';
 import AdminSettings from '@/pages/AdminSettings';
 import AdminOnlyRoute from '@/components/AdminOnlyRoute';
 import Lightning from '@/pages/Lightning';
-import WeatherCriteria from '@/pages/WeatherCriteria';
 import WeatherPatterns from '@/pages/WeatherPatterns';
 import TCMOutlooks from '@/pages/TCMOutlooks';
 import News from '@/pages/News';
@@ -24,7 +23,6 @@ import WeatherScenarios from '@/pages/WeatherScenarios';
 import ForecastVerification from '@/pages/ForecastVerification';
 import GraphicStudio from '@/pages/GraphicStudio';
 import LiveStream from '@/pages/LiveStream';
-import ModelFeedback from '@/pages/ModelFeedback';
 import TCMVerification from '@/pages/TCMVerification';
 import NewsletterSignup from '@/pages/NewsletterSignup';
 import NewsletterPopup from '@/components/NewsletterPopup';
@@ -67,7 +65,7 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout
 
 // ─── Route order — determines slide direction ─────────────────────────────
 const ROUTE_ORDER = ['/', '/Home', '/LocationWeather', '/News', '/Lightning', '/TCMOutlooks', '/WeatherPatterns',
-  '/TCMArchive', '/MyWeatherArchive', '/WeatherCriteria', '/ForecastVerification', '/WeatherScenarios', '/Settings', '/AdminSettings'];
+  '/TCMArchive', '/MyWeatherArchive', '/ForecastVerification', '/WeatherScenarios', '/Settings', '/AdminSettings'];
 function routeIndex(pathname) {
   const idx = ROUTE_ORDER.findIndex(r => pathname === r || pathname.startsWith(r + '/'));
   return idx === -1 ? 0 : idx;
@@ -78,7 +76,7 @@ const PAGE_LABELS = {
   '/TCMOutlooks': 'TCM Outlooks', '/TCMNova': 'TCM NOVA', '/TCMV5': 'TCM NOVA', '/WeatherPatterns': 'Weather Patterns', '/GraphicStudio': 'Graphic Studio',
   '/Settings': 'Settings', '/AdminSettings': 'Admin',
   '/TCMArchive': 'Archive', '/MyWeatherArchive': 'Archive',
-  '/LocationWeather': 'Location', '/WeatherCriteria': 'Criteria', '/ForecastVerification': 'Verification', '/WeatherScenarios': 'Scenarios',
+  '/LocationWeather': 'Location', '/ForecastVerification': 'Verification', '/WeatherScenarios': 'Scenarios',
 };
 function getPageLabel(pathname) {
   if (PAGE_LABELS[pathname]) return PAGE_LABELS[pathname];
@@ -521,7 +519,7 @@ const AuthenticatedApp = () => {
                   paths. They redirect rather than 404. */}
               <Route path="/TCMLightning" element={<Navigate to="/Lightning" replace />} />
               <Route path="/TCM" element={<Navigate to="/Lightning" replace />} />
-              <Route path="/WeatherCriteria" element={<LayoutWrapper currentPageName="WeatherCriteria"><WeatherCriteria /></LayoutWrapper>} />
+              <Route path="/WeatherCriteria" element={<Navigate to="/" replace />} />
               <Route path="/News" element={<LayoutWrapper currentPageName="News"><News /></LayoutWrapper>} />
               <Route path="/ModelData" element={<LayoutWrapper currentPageName="ModelData"><ModelData /></LayoutWrapper>} />
               {/* /TCMV5 is the V5 engine's own address. /TCMOutlooks still
@@ -544,7 +542,7 @@ const AuthenticatedApp = () => {
               <Route path="/GraphicStudio" element={<LayoutWrapper currentPageName="GraphicStudio"><GraphicStudio /></LayoutWrapper>} />
               {/* the public studio was the Thunderstorm Studio until 22 Oct 2026 */}
               <Route path="/ThunderstormStudio" element={<Navigate to="/GraphicStudio" replace />} />
-              <Route path="/ModelFeedback" element={<LayoutWrapper currentPageName="ModelFeedback"><ModelFeedback /></LayoutWrapper>} />
+              <Route path="/ModelFeedback" element={<Navigate to="/ForecastVerification" replace />} />
               <Route path="/TCMVerification" element={<LayoutWrapper currentPageName="TCMVerification"><TCMVerification /></LayoutWrapper>} />
               <Route path="/NewsletterSignup" element={<LayoutWrapper currentPageName="NewsletterSignup"><NewsletterSignup /></LayoutWrapper>} />
               <Route path="/login" element={<Login />} />

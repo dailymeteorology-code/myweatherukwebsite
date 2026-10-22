@@ -1,0 +1,50 @@
+{
+  "name": "GraphicVerification",
+  "type": "object",
+  "description": "A forecast graphic on the Forecast Verification page, lined up with the map so the lightning of its valid period can be drawn over it. Read by everyone; written by admins (the entity API's default).",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Shown above the graphic"
+    },
+    "image_url": {
+      "type": "string",
+      "description": "The uploaded graphic (/uploads/…)"
+    },
+    "image_w": {
+      "type": "number",
+      "description": "The image's width in pixels"
+    },
+    "image_h": {
+      "type": "number",
+      "description": "The image's height in pixels"
+    },
+    "valid_from": {
+      "type": "string",
+      "description": "Start of the period the graphic forecast (ISO time)"
+    },
+    "valid_to": {
+      "type": "string",
+      "description": "End of that period (ISO time); at most eight days after the start"
+    },
+    "bounds": {
+      "type": "object",
+      "description": "Where the map in the image lies: the longitudes of its left and right edges and the latitudes of its top and bottom edges, in Web Mercator (the Graphic Studio's projection)",
+      "properties": {
+        "west": { "type": "number" },
+        "east": { "type": "number" },
+        "north": { "type": "number" },
+        "south": { "type": "number" }
+      }
+    },
+    "strike_count": {
+      "type": "number",
+      "description": "Strikes inside the graphic's map during the period, counted when it was saved or the period ended"
+    },
+    "notes": {
+      "type": "string",
+      "description": "A note on how it went"
+    }
+  },
+  "required": ["image_url", "valid_from", "valid_to", "bounds"]
+}

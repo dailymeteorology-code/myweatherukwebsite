@@ -1,969 +1,315 @@
-/**
- * TCMVerification — past thunderstorm event verification page.
- * Shows archived lightning events with TCM probability outlooks
- * overlaid on actual strike data, with strike-count context.
- */
-import React, { useState, useEffect, useMemo } from 'react';
-import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+/* TCM Verification: each finished day, the TCM NOVA Main Run's lightning risk for the whole day
+   (its frames combined: the highest probability each place reached) with the lightning the Met
+   Office recorded that day on top.
+
+   The forecast is the run made the evening before (the first run of the day where there is none);
+   any other Main Run that covered the day can be picked instead. server/tcmArchive/verify.js works
+   out, per risk level, the area it covered, the strikes that fell inside it and how much of it saw
+   lightning within 10 km. Like TCM NOVA, admin-only until NOVA is public. */
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Target, Zap, ChevronLeft, ChevronRight, Loader2, CloudLightning, Info } from 'lucide-react';
+import { useTheme } from '@/components/ThemeContext';
+import VfPage, { NovaLocked, Stat } from '@/components/verification/VfPage';
+import VfMap, { strikeColour } from '@/components/verification/VfMap';
+import { loadLand, mercator, traceRings } from '@/components/verification/landOutline';
 import {
-  ChevronLeft, Zap, ZapOff, X, CloudLightning,
-  Maximize2, Info, AlertCircle, Search, MapPin
-} from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
-import TCMLeafletBase from '@/components/tcm/TCMLeafletBase';
-import { smoothBlobPath } from '@/components/tcm/smoothBlobPath';
-import { RISK_PALETTES, LEVEL_OPACITY, scoreToLevel, MIN_SCORE_PER_LEVEL, RISK_META, RISK_INDEX } from '@/components/tcm/riskConfig';
-import { runArchiveOutlook } from '@/lib/tcmArchiveOutlook';
-import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
+  archiveJson, fetchField, renderField, valueAt, FIELDS, LEVELS, levelOf, levelColour, fetchStrikes,
+  london, hhmm, dayShort, dayLong, MAP_BOUNDS,
+} from '@/components/verification/novaMaps';
 
-// ── Region bboxes ─────────────────────────────────────────────────────────────
-const UK_BBOX  = { lonMin: -10.5, lonMax: 2.5,  latMin: 49.5, latMax: 61.5 };
-const EU_BBOX  = { lonMin: -12.0, lonMax: 32.0, latMin: 35.0, latMax: 62.0 };
+const F = FIELDS.p_lightning;
+const BOX = { west: MAP_BOUNDS[0][1], east: MAP_BOUNDS[1][1], north: MAP_BOUNDS[1][0], south: MAP_BOUNDS[0][0] };
+const TW = 228, TH = 300;
 
-function chooseBbox(strikes) {
-  if (!strikes?.length) return EU_BBOX;
-  const ukHits = strikes.filter(s =>
-    s.lat >= UK_BBOX.latMin && s.lat <= UK_BBOX.latMax &&
-    s.lon >= UK_BBOX.lonMin && s.lon <= UK_BBOX.lonMax
-  ).length;
-  return ukHits >= strikes.length * 0.3 ? UK_BBOX : EU_BBOX;
+const CSS = `
+.tv-detail { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr); gap: 16px; padding: 14px; }
+.tv-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.tv-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.tv-table th { text-align: left; font-size: 10.5px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; color: var(--ad-text-dim); padding: 0 8px 8px; }
+.tv-table td { padding: 8px; border-top: 1px solid var(--ad-border); white-space: nowrap; }
+.tv-table td:first-child { padding-left: 0; } .tv-table th:first-child { padding-left: 0; }
+.tv-table td small { color: var(--ad-text-dim); margin-left: 4px; }
+.tv-bar { position: relative; height: 6px; border-radius: 4px; background: var(--ad-surface3); overflow: hidden; margin-top: 4px; min-width: 70px; }
+.tv-bar i { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--k); }
+.tv-sum { padding: 13px 15px; border-radius: 16px; background: var(--ad-surface3); border: 1px solid var(--ad-border); font-size: 13.5px; line-height: 1.55; }
+.tv-sum b { color: var(--ad-text); }
+.tv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; padding: 14px; }
+.tv-card { display: flex; flex-direction: column; padding: 0; border-radius: 18px; overflow: hidden; cursor: pointer; font: inherit; text-align: left; color: var(--ad-text);
+  background: var(--ad-surface3); border: 1px solid var(--ad-border); transition: border-color .15s, transform .15s, box-shadow .15s; }
+.tv-card:hover { transform: translateY(-1px); border-color: var(--ad-border3); }
+.tv-card.on { border-color: var(--c); box-shadow: 0 0 0 1px var(--c); }
+.tv-card canvas { display: block; width: 100%; height: auto; aspect-ratio: ${TW} / ${TH}; background: var(--ad-surface3); }
+.tv-card > div { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.tv-card b { font-size: 14px; }
+.tv-card small { font-size: 12px; color: var(--ad-text-dim); }
+.tv-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tv-split { display: flex; height: 6px; border-radius: 4px; overflow: hidden; background: var(--ad-surface2); }
+.tv-split i { display: block; height: 100%; }
+@media (max-width: 1050px) { .tv-detail { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) { .tv-detail, .tv-grid { padding: 8px; } .tv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } .tv-card > div { padding: 8px 9px 10px; } }
+`;
+
+const pct = (x) => (x == null ? '—' : `${Math.round(x * 100)}%`);
+const km2 = (a) => (a >= 1e4 ? `${Math.round(a / 1000).toLocaleString()}k km²` : `${a.toLocaleString()} km²`);
+const runName = (c) => `${london(c.init_utc, { weekday: 'short', day: 'numeric', month: 'short' })} ${hhmm(c.init_utc)}`;
+
+/** What the day's numbers say, in a sentence or two. */
+function summary(v) {
+  const n = v.strikes.on_grid, ts = v.levels[0], mr = v.levels[1];
+  if (!v.strikes.data) return <>There is no lightning record for this day, so it cannot be checked.</>;
+  if (!n) {
+    return ts.area_km2
+      ? <>No lightning was recorded on the map. The outlook had <b>{km2(ts.area_km2)}</b> at General thunder or above{mr.area_km2 ? <>, <b>{km2(mr.area_km2)}</b> of it Marginal or higher</> : null}: a false alarm.</>
+      : <>No lightning was recorded and the outlook had no risk area: a quiet day called right.</>;
+  }
+  return (
+    <>
+      <b>{mr.strikes.toLocaleString()}</b> of the <b>{n.toLocaleString()}</b> strikes ({pct(mr.strikes_frac)}) fell inside the Marginal-or-higher area,
+      and <b>{ts.strikes.toLocaleString()}</b> ({pct(ts.strikes_frac)}) inside any risk area.
+      {mr.area_km2 ? <> Lightning came within {v.near_km} km of <b>{pct(mr.lit_frac)}</b> of the Marginal area.</> : <> The outlook had no Marginal area.</>}
+    </>
+  );
 }
 
-// ── Safe date formatter (fixes Invalid Date bug) ──────────────────────────────
-function safeDate(dateStr, opts, fallback = '—') {
-  if (!dateStr || typeof dateStr !== 'string') return fallback;
-  // Ensure it's parsed as UTC noon to avoid timezone day-shift issues
-  const d = new Date(dateStr.length === 10 ? `${dateStr}T12:00:00Z` : dateStr);
-  if (isNaN(d.getTime())) return fallback;
-  return d.toLocaleDateString('en-GB', opts);
-}
-
-// ── Risk contour levels ───────────────────────────────────────────────────────
-const CONTOUR_LEVELS = ['Very Low', 'Low', 'Marginal', 'Slight', 'Moderate', 'High'];
-
-const PAD_BY_LEVEL = {
-  'Very Low': 3.2, 'Low': 2.8, 'Marginal': 2.2, 'Slight': 1.8,
-  'Moderate': 1.4, 'High': 1.0, 'Severe': 0.7,
-};
-
-// ── Helper: get score from a grid point ─────────────────────────────────────
-function getScore(pt, riskType = 'thunderstorm', dayIdx = 0) {
-  return pt?.perDay?.[dayIdx]?.scores?.[riskType]
-      ?? pt?.scores?.[riskType]
-      ?? pt?.[riskType]
-      ?? 0;
-}
-
-// ── Cluster grid points into blobs ───────────────────────────────────────────
-function clusterPoints(pts, gridStep, minSize = 4) {
-  if (!pts.length) return [];
-  const visited = new Set();
-  const key = (p) => `${Math.round(p.lat * 1000)},${Math.round(p.lon * 1000)}`;
-  const clusters = [];
-  const R = gridStep * 4.5;
-  for (const p of pts) {
-    const k = key(p);
-    if (visited.has(k)) continue;
-    const cluster = [], queue = [p];
-    visited.add(k);
-    while (queue.length) {
-      const cur = queue.shift();
-      cluster.push(cur);
-      for (const pt of pts) {
-        const ck = key(pt);
-        if (visited.has(ck)) continue;
-        if (Math.hypot(pt.lat - cur.lat, pt.lon - cur.lon) <= R) {
-          visited.add(ck); queue.push(pt);
-        }
+/* a day's small map: land, the combined risk in levels, the strikes */
+function Thumb({ v, dark }) {
+  const ref = useRef(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) { setSeen(true); io.disconnect(); } }, { rootMargin: '300px' });
+    io.observe(ref.current);
+    return () => io.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!seen || !v.run) return undefined;
+    let alive = true;
+    Promise.all([
+      loadLand(),
+      fetchField(`/api/tcm-archive/main/runs/${v.run.run_id}/day/${v.date}/p_lightning`),
+      v.strikes.on_grid ? fetchStrikes(v.date) : Promise.resolve({ strikes: [] }),
+    ]).then(([land, data, s]) => {
+      if (!alive || !ref.current) return;
+      const cv = ref.current, ctx = cv.getContext('2d');
+      const P = mercator(BOX, TW, TH);
+      ctx.fillStyle = dark ? '#0c1524' : '#dde7f2';
+      ctx.fillRect(0, 0, TW, TH);
+      ctx.fillStyle = dark ? '#1b2637' : '#ffffff';
+      traceRings(ctx, land.context, P, 0.8); ctx.fill();
+      traceRings(ctx, land.counties, P, 0.8); ctx.fill();
+      ctx.drawImage(renderField(data, v.run.grid, F, { w: TW, h: TH, levels: true }), 0, 0);
+      ctx.strokeStyle = dark ? 'rgba(226,232,240,.35)' : 'rgba(15,23,42,.3)';
+      ctx.lineWidth = 0.5;
+      traceRings(ctx, land.counties, P, 0.8); ctx.stroke();
+      const st = s.strikes, t0 = st[0]?.[0], span = Math.max((st.at(-1)?.[0] ?? 0) - t0, 1);
+      for (const [t, la, lo] of st) {
+        const [x, y] = P(lo, la);
+        ctx.fillStyle = strikeColour((t - t0) / span);
+        ctx.fillRect(x - 1, y - 1, 2, 2);
       }
-    }
-    if (cluster.length >= minSize) clusters.push(cluster);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [seen, v, dark]);
+  return <canvas ref={ref} width={TW} height={TH} aria-hidden="true" />;
+}
+
+function DayCard({ v, on, onPick, dark }) {
+  if (v.pending) {
+    return <div className="tv-card"><div className="vf-skel" style={{ aspectRatio: `${TW} / ${TH}`, borderRadius: 0 }} /><div><b>{dayShort(v.date)}</b><small>Being worked out…</small></div></div>;
   }
-  return clusters;
-}
-
-// ── Build outlook layers from a grid ─────────────────────────────────────────
-function buildOutlookLayers(grid, riskType = 'thunderstorm', dayIdx = 0, bbox = EU_BBOX) {
-  if (!grid?.length) return [];
-  const gridStep = 0.3;
-  const filtered = grid.filter(p =>
-    p.lat >= bbox.latMin - 0.5 && p.lat <= bbox.latMax + 0.5 &&
-    p.lon >= bbox.lonMin - 0.5 && p.lon <= bbox.lonMax + 0.5
-  );
-  const layers = [];
-  for (const lvl of CONTOUR_LEVELS) {
-    const min = MIN_SCORE_PER_LEVEL[lvl] ?? 0;
-    const pts = filtered.filter(p => getScore(p, riskType, dayIdx) >= min);
-    const clusters = clusterPoints(pts, gridStep, 3);
-    if (clusters.length) layers.push({ level: lvl, clusters });
-  }
-  return layers.sort((a, b) => (RISK_INDEX[a.level] ?? 0) - (RISK_INDEX[b.level] ?? 0));
-}
-
-// ── Risk badge ────────────────────────────────────────────────────────────────
-function RiskBadge({ level }) {
-  if (!level || level === 'No Risk') return null;
-  const pal = RISK_PALETTES.thunderstorm[level] || {};
+  const L = levelOf(v.peak.p), n = v.strikes.on_grid;
+  const mr = v.levels[1].strikes, ts = v.levels[0].strikes;
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      padding: '2px 8px', borderRadius: 99,
-      fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.05em',
-      background: pal.fill || 'rgba(255,255,255,0.1)',
-      border: `1px solid ${pal.border || 'rgba(255,255,255,0.2)'}`,
-      color: pal.border === 'transparent' ? '#94a3b8' : (pal.border || '#94a3b8'),
-      flexShrink: 0,
-    }}>
-      {level}
-    </span>
-  );
-}
-
-// ── Strike density badge (NEW) ────────────────────────────────────────────────
-function StrikeDensityBadge({ count, regionLabel }) {
-  if (!count) return null;
-  let label, color, bg;
-  if (count >= 5000) { label = 'Extreme'; color = '#f87171'; bg = 'rgba(239,68,68,0.12)'; }
-  else if (count >= 1000) { label = 'Severe'; color = '#fb923c'; bg = 'rgba(249,115,22,0.12)'; }
-  else if (count >= 200) { label = 'High'; color = '#fbbf24'; bg = 'rgba(251,191,36,0.12)'; }
-  else if (count >= 50) { label = 'Moderate'; color = '#a3e635'; bg = 'rgba(163,230,53,0.10)'; }
-  else { label = 'Low'; color = '#38bdf8'; bg = 'rgba(56,189,248,0.10)'; }
-
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 5,
-      padding: '3px 8px', borderRadius: 8,
-      background: bg, border: `1px solid ${color}33`,
-    }}>
-      <Zap style={{ width: 10, height: 10, color }} />
-      <span style={{ fontSize: '0.6rem', fontWeight: 800, color, fontFamily: "'DM Mono',monospace" }}>
-        {count >= 1000 ? `${(count / 1000).toFixed(1)}k` : count} strikes
-      </span>
-      <span style={{ fontSize: '0.56rem', color: '#64748b' }}>· {label}</span>
-      {regionLabel && <span style={{ fontSize: '0.56rem', color: '#475569' }}>· {regionLabel}</span>}
-    </div>
-  );
-}
-
-// ── Map legend ────────────────────────────────────────────────────────────────
-function MapLegend({ layers, hasStrikes }) {
-  const shownLevels = CONTOUR_LEVELS.filter(l => layers.some(lay => lay.level === l));
-  if (!shownLevels.length && !hasStrikes) return null;
-  return (
-    <div style={{
-      position: 'absolute', bottom: 8, right: 8, zIndex: 500,
-      display: 'flex', flexDirection: 'column', gap: 3,
-    }}>
-      {shownLevels.map(lvl => {
-        const pal = RISK_PALETTES.thunderstorm[lvl] || {};
-        const meta = RISK_META.find(r => r.level === lvl);
-        return (
-          <div key={lvl} style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            padding: '2px 7px', borderRadius: 5,
-            background: 'rgba(10,16,34,0.88)', backdropFilter: 'blur(8px)',
-            border: `1px solid ${(pal.border || '#64748b')}44`,
-          }}>
-            <span style={{
-              width: 10, height: 10, borderRadius: 3, flexShrink: 0,
-              background: pal.fill, border: `1.5px solid ${pal.border || '#64748b'}`,
-            }} />
-            <span style={{ fontSize: '0.58rem', fontWeight: 700, color: pal.border || '#94a3b8', fontFamily: "'DM Mono',monospace" }}>
-              {lvl}
-            </span>
-            <span style={{ fontSize: '0.52rem', color: '#64748b', fontFamily: "'DM Mono',monospace" }}>{meta?.min}+</span>
+    <button type="button" className={`tv-card${on ? ' on' : ''}`} onClick={onPick}>
+      <Thumb v={v} dark={dark} />
+      <div>
+        <div className="tv-row"><b>{dayShort(v.date)}</b><span style={{ flex: 1 }} /><span className="vf-chip" style={{ '--k': L ? levelColour(L) : undefined }}>{L ? L.key : 'No risk'}</span></div>
+        <small><Zap style={{ width: 12, height: 12, verticalAlign: -2, color: '#facc15' }} /> {v.strikes.data ? `${n.toLocaleString()} strike${n === 1 ? '' : 's'}` : 'no lightning record'}{n ? ` · ${pct(v.levels[1].strikes_frac)} inside Marginal+` : ''}</small>
+        {n > 0 && (
+          <div className="tv-split" title="Strikes inside Marginal or higher · inside General thunder only · outside the outlook">
+            <i style={{ width: `${(mr / n) * 100}%`, background: levelColour(LEVELS[1]) }} />
+            <i style={{ width: `${((ts - mr) / n) * 100}%`, background: levelColour(LEVELS[0]) }} />
           </div>
-        );
-      })}
-      {hasStrikes && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '2px 7px', borderRadius: 5,
-          background: 'rgba(10,16,34,0.88)', backdropFilter: 'blur(8px)',
-          border: '1px solid rgba(250,204,21,0.35)',
-        }}>
-          <Zap style={{ width: 8, height: 8, color: '#facc15' }} />
-          <span style={{ fontSize: '0.58rem', fontWeight: 700, color: '#facc15', fontFamily: "'DM Mono',monospace" }}>Strikes</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Outlook probability bar (NEW — shown in card footer) ─────────────────────
-function OutlookProbabilityBar({ layers }) {
-  if (!layers?.length) return null;
-  // Find the highest level present
-  const topLayer = layers[layers.length - 1];
-  if (!topLayer) return null;
-  const pal = RISK_PALETTES.thunderstorm[topLayer.level] || {};
-  const totalClusters = layers.reduce((s, l) => s + l.clusters.length, 0);
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-    }}>
-      <span style={{ fontSize: '0.56rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', flexShrink: 0 }}>Outlook:</span>
-      <div style={{ display: 'flex', gap: 3 }}>
-        {CONTOUR_LEVELS.map(lvl => {
-          const present = layers.some(l => l.level === lvl);
-          const p = RISK_PALETTES.thunderstorm[lvl] || {};
-          return (
-            <div key={lvl} title={lvl} style={{
-              width: 12, height: 12, borderRadius: 3,
-              background: present ? (p.fill || 'transparent') : 'rgba(255,255,255,0.05)',
-              border: `1.5px solid ${present ? (p.border || '#64748b') : 'rgba(255,255,255,0.08)'}`,
-              opacity: present ? 1 : 0.4,
-              transition: 'opacity 0.15s',
-            }} />
-          );
-        })}
+        )}
       </div>
-      <span style={{ fontSize: '0.58rem', fontWeight: 800, color: pal.border || '#64748b', fontFamily: "'DM Mono',monospace" }}>
-        Peak: {topLayer.level}
-      </span>
-      {totalClusters > 1 && (
-        <span style={{ fontSize: '0.55rem', color: '#475569' }}>· {totalClusters} zones</span>
-      )}
-    </div>
+    </button>
   );
 }
 
-// ── Verification map component ────────────────────────────────────────────────
-function VerificationMap({ grid, strikes, showLightning, height = 280, lightMode = false, bbox: bboxProp, interactive = false }) {
-  const bbox = bboxProp || (strikes?.length ? chooseBbox(strikes) : EU_BBOX);
-  const layers = useMemo(() => buildOutlookLayers(grid || [], 'thunderstorm', 0, bbox), [grid, bbox]);
-  const hasStrikes = strikes?.length > 0;
-
-  return (
-    <div style={{ position: 'relative' }}>
-      <TCMLeafletBase
-        bbox={bbox}
-        height={height}
-        lightMode={lightMode}
-        showStyleSwitcher={interactive}
-        showOpacitySlider={interactive}
-      >
-        {({ projector }) => {
-          if (!projector) return null;
-          const { x: w, y: h } = projector.size;
-          return (
-            <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}
-              style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 400 }}>
-              <defs>
-                <filter id="ver-glow" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="3" />
-                </filter>
-                <pattern id="ver-severe-hatch" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
-                  <line x1="0" y1="0" x2="0" y2="8" stroke="rgba(0,0,0,0.85)" strokeWidth="3" />
-                </pattern>
-              </defs>
-
-              {/* Glow pass */}
-              {layers.map(layer =>
-                layer.clusters.map((cluster, ci) => {
-                  const pad = PAD_BY_LEVEL[layer.level] ?? 2;
-                  const d = smoothBlobPath(cluster, projector, 0.3, pad);
-                  if (!d) return null;
-                  const pal = RISK_PALETTES.thunderstorm[layer.level] || {};
-                  return (
-                    <path key={`glow-${layer.level}-${ci}`}
-                      d={d} fill={pal.border} stroke="none"
-                      opacity={0.15} filter="url(#ver-glow)" pointerEvents="none" />
-                  );
-                })
-              )}
-
-              {/* Fill pass */}
-              {layers.map(layer =>
-                layer.clusters.map((cluster, ci) => {
-                  const pad = PAD_BY_LEVEL[layer.level] ?? 2;
-                  const d = smoothBlobPath(cluster, projector, 0.3, pad);
-                  if (!d) return null;
-                  const pal = RISK_PALETTES.thunderstorm[layer.level] || {};
-                  const isSevere = layer.level === 'Severe';
-                  return (
-                    <path key={`fill-${layer.level}-${ci}`}
-                      d={d}
-                      fill={isSevere ? 'url(#ver-severe-hatch)' : pal.fill}
-                      stroke={pal.border}
-                      strokeWidth={isSevere ? 2.2 : 1.6}
-                      strokeLinejoin="round" strokeLinecap="round"
-                      opacity={LEVEL_OPACITY[layer.level] ?? 0.7}
-                      pointerEvents="none" />
-                  );
-                })
-              )}
-
-              {/* Risk level labels for Moderate+ */}
-              {layers.filter(l => (RISK_INDEX[l.level] ?? 0) >= (RISK_INDEX['Moderate'] ?? 0)).map(layer =>
-                layer.clusters.map((cluster, ci) => {
-                  if (cluster.length < 3) return null;
-                  const projected = cluster.map(p => projector.project(p.lat, p.lon));
-                  const cx = projected.reduce((s, p) => s + p[0], 0) / projected.length;
-                  const cy = projected.reduce((s, p) => s + p[1], 0) / projected.length;
-                  const lbl = RISK_META.find(r => r.level === layer.level)?.short;
-                  if (!lbl) return null;
-                  return (
-                    <g key={`lbl-${layer.level}-${ci}`}>
-                      <text x={cx + 0.7} y={cy + 1.5} textAnchor="middle" dominantBaseline="middle" fontSize={9} fontWeight={900} fontFamily="DM Mono,monospace" fill="rgba(0,0,0,0.65)" letterSpacing="0.1em">{lbl}</text>
-                      <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={9} fontWeight={900} fontFamily="DM Mono,monospace" fill="rgba(255,255,255,0.96)" letterSpacing="0.1em">{lbl}</text>
-                    </g>
-                  );
-                })
-              )}
-
-              {/* Lightning strikes */}
-              {showLightning && hasStrikes && (strikes || []).map((s, i) => {
-                const [x, y] = projector.project(s.lat, s.lon);
-                if (x < -5 || y < -5 || x > w + 5 || y > h + 5) return null;
-                const isIntense = s.amp && Math.abs(s.amp) > 50;
-                return (
-                  <g key={`strike-${i}`} transform={`translate(${x.toFixed(1)},${y.toFixed(1)})`} pointerEvents="none">
-                    <circle r={isIntense ? 3.5 : 2.2} fill={isIntense ? '#ffffff' : '#facc15'} opacity={0.9} />
-                    {isIntense && <circle r={5.5} fill="none" stroke="#ffffff" strokeWidth={0.8} opacity={0.3} />}
-                  </g>
-                );
-              })}
-
-              {/* Empty state */}
-              {layers.length === 0 && !showLightning && (
-                <text x={w / 2} y={h / 2} textAnchor="middle" dominantBaseline="middle"
-                  fontSize={12} fontFamily="DM Sans,system-ui" fill="rgba(148,163,184,0.5)">
-                  No outlook data archived for this day
-                </text>
-              )}
-            </svg>
-          );
-        }}
-      </TCMLeafletBase>
-      <MapLegend layers={layers} hasStrikes={hasStrikes && showLightning} />
-    </div>
-  );
-}
-
-// ── Full-screen event modal ───────────────────────────────────────────────────
-function EventFullscreenModal({ event, onClose }) {
-  const [showLightning, setShowLightning] = useState(true);
-  const grid = event?.grid_data || [];
-  const strikes = event?.strikes || [];
-  const hasStrikes = (event?.total_count ?? strikes.length) > 0;
-  const eventBbox = event?.bbox || (strikes.length ? chooseBbox(strikes) : EU_BBOX);
-
-  const layers = useMemo(() => buildOutlookLayers(grid, 'thunderstorm', 0, eventBbox), [grid, eventBbox]);
-
-  const peakLevel = useMemo(() => {
-    if (!grid.length) return null;
-    let best = 0;
-    for (const pt of grid) { const s = getScore(pt); if (s > best) best = s; }
-    return scoreToLevel(best);
-  }, [grid]);
+function DayDetail({ date, run, setRun, dark, prev, next, go }) {
+  const [v, setV] = useState(null);
+  const [err, setErr] = useState(null);
+  const [data, setData] = useState(null);
+  const [strikes, setStrikes] = useState(null);
+  const [show, setShow] = useState(true);
+  const [levels, setLevels] = useState(true);
+  const [hover, setHover] = useState(null);
 
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    let alive = true;
+    setV(null); setErr(null); setData(null);
+    archiveJson(`/api/tcm-archive/verification/${date}${run ? `?run=${run}` : ''}`).then((x) => { if (alive) setV(x); }).catch(() => { if (alive) setErr('This day could not be loaded.'); });
+    return () => { alive = false; };
+  }, [date, run]);
+  useEffect(() => {
+    if (!v) return undefined;
+    let alive = true;
+    fetchField(`/api/tcm-archive/main/runs/${v.run.run_id}/day/${date}/p_lightning`)
+      .then((d) => { if (alive) setData(d); }).catch(() => { if (alive) setErr('The forecast map could not be loaded.'); });
+    return () => { alive = false; };
+  }, [v, date]);
+  useEffect(() => {
+    let alive = true;
+    setStrikes(null);
+    fetchStrikes(date).then((s) => { if (alive) setStrikes(s.strikes); }).catch(() => { if (alive) setStrikes([]); });
+    return () => { alive = false; };
+  }, [date]);
 
-  const dateLabel = safeDate(event.date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const grid = v?.run.grid;
+  const canvas = useMemo(() => (data && grid ? renderField(data, grid, F, { levels }) : null), [data, grid, levels]);
+  const read = hover && data && grid ? valueAt(data, grid, hover[0], hover[1]) : null;
+  const L = v ? levelOf(v.peak.p) : null;
 
-  // Compute strike region breakdown
-  const ukStrikes = useMemo(() => strikes.filter(s =>
-    s.lat >= UK_BBOX.latMin && s.lat <= UK_BBOX.latMax &&
-    s.lon >= UK_BBOX.lonMin && s.lon <= UK_BBOX.lonMax
-  ).length, [strikes]);
-  const euStrikes = strikes.length - ukStrikes;
-
-  return createPortal(
-    <AnimatePresence>
-      <motion.div
-        key="ver-fullscreen"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        style={{
-          position: 'fixed', inset: 0, zIndex: 9999,
-          background: 'rgba(6,11,24,0.97)',
-          display: 'flex', flexDirection: 'column',
-        }}
-      >
-        {/* Header */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 12,
-          padding: '12px 16px',
-          borderBottom: '1px solid rgba(56,189,248,0.15)',
-          background: 'rgba(10,16,34,0.95)',
-          backdropFilter: 'blur(12px)',
-          flexShrink: 0, flexWrap: 'wrap',
-        }}>
-          <button onClick={onClose} style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '7px 13px', borderRadius: 9, cursor: 'pointer',
-            background: 'rgba(255,255,255,0.06)',
-            border: '1px solid rgba(255,255,255,0.10)',
-            color: '#94a3b8', fontSize: '0.78rem', fontWeight: 700,
-          }}>
-            <ChevronLeft style={{ width: 14, height: 14 }} /> Back
-          </button>
-
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: '1rem', fontWeight: 900, color: '#f1f5f9', lineHeight: 1.2 }}>
-              {event.title || event.date || 'Event'}
-            </div>
-            <div style={{ fontSize: '0.68rem', color: '#64748b', fontFamily: "'DM Mono',monospace", marginTop: 2 }}>
-              {dateLabel}
-              {hasStrikes && ` · ${(event.total_count || strikes.length).toLocaleString()} strikes`}
-            </div>
+  return (
+    <section className="vf-glass vf-card">
+      <div className="vf-head"><CloudLightning />
+        <h2>{dayLong(date)}</h2>
+        {L && <span className="vf-chip" style={{ '--k': levelColour(L) }}>Peak {L.key} · {pct(v.peak.p)}</span>}
+        <span className="vf-sp" />
+        <button type="button" className="vf-btn is-icon" disabled={!prev} onClick={() => go(prev)} aria-label="Day before"><ChevronLeft /></button>
+        <button type="button" className="vf-btn is-icon" disabled={!next} onClick={() => go(next)} aria-label="Day after"><ChevronRight /></button>
+      </div>
+      {err && <div className="vf-body"><div className="vf-error">{err}</div></div>}
+      {!err && (
+        <div className="tv-detail">
+          <div style={{ position: 'relative', minWidth: 0 }}>
+            <VfMap dark={dark} overlay={canvas} strikes={show ? strikes : null} onHover={(la, lo) => setHover(la == null ? null : [la, lo])} height="min(70vh, 660px)" />
+            {hover && read != null && <div className="vf-read">Lightning chance: <b>{pct(read)}</b>{levelOf(read) ? ` · ${levelOf(read).key}` : ''}</div>}
+            {(!canvas || strikes === null) && <div className="vf-busy"><Loader2 className="vf-spin" />Loading</div>}
           </div>
-
-          {/* Outlook info strip */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-end' }}>
-            {peakLevel && <RiskBadge level={peakLevel} />}
-            {layers.length > 0 && (
-              <div style={{ display: 'flex', gap: 2 }}>
-                {CONTOUR_LEVELS.map(lvl => {
-                  const present = layers.some(l => l.level === lvl);
-                  const p = RISK_PALETTES.thunderstorm[lvl] || {};
-                  return (
-                    <div key={lvl} title={lvl} style={{
-                      width: 10, height: 10, borderRadius: 2,
-                      background: present ? (p.fill || 'transparent') : 'rgba(255,255,255,0.04)',
-                      border: `1px solid ${present ? (p.border || '#64748b') : 'rgba(255,255,255,0.08)'}`,
-                      opacity: present ? 1 : 0.3,
-                    }} />
-                  );
-                })}
+          <div className="tv-side">
+            <div>
+              <label className="vf-label" htmlFor="tv-run">Forecast from the Main Run made</label>
+              <select id="tv-run" className="vf-input" value={v?.run.run_id || ''} onChange={(e) => setRun(e.target.value === v?.default_run ? null : e.target.value)} disabled={!v}>
+                {(v?.choices || []).map((c) => (
+                  <option key={c.run_id} value={c.run_id}>{runName(c)}{c.run_id === v.default_run ? ' · the day before (default)' : ''}{c.complete ? '' : ' · part of the day'}</option>
+                ))}
+              </select>
+            </div>
+            <div className="tv-row">
+              <div className="vf-seg">
+                <button type="button" className={levels ? 'on' : ''} onClick={() => setLevels(true)}>Risk levels</button>
+                <button type="button" className={!levels ? 'on' : ''} onClick={() => setLevels(false)}>Shades</button>
               </div>
+              <button type="button" className={`vf-btn${show ? ' is-on' : ''}`} style={{ '--c': '#facc15' }} onClick={() => setShow((s) => !s)} aria-pressed={show}><Zap />Strikes{strikes ? ` · ${strikes.length.toLocaleString()}` : ''}</button>
+            </div>
+            {!v && <div className="vf-skel" style={{ height: 240 }} />}
+            {v && (
+              <>
+                <div className="vf-stats" style={{ marginTop: 0, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+                  <Stat label="In the forecast area" value={v.strikes.data ? v.strikes.on_grid.toLocaleString() : '—'} note={v.strikes.total !== v.strikes.on_grid ? `strikes; ${v.strikes.total.toLocaleString()} recorded in all` : `strikes · ${v.strikes.source}`} />
+                  <Stat label="Inside Marginal+" value={pct(v.levels[1].strikes_frac)} note={`${v.levels[1].strikes.toLocaleString()} strikes`} />
+                </div>
+                <div className="tv-sum">{summary(v)}</div>
+                <table className="tv-table">
+                  <thead><tr><th>Level</th><th>Area</th><th>Strikes inside</th><th>Saw lightning</th></tr></thead>
+                  <tbody>
+                    {v.levels.map((x) => {
+                      const Lx = LEVELS.find((y) => y.key === x.key);
+                      return (
+                        <tr key={x.key}>
+                          <td><span className="vf-chip" style={{ '--k': levelColour(Lx) }}>{x.key}</span></td>
+                          <td>{x.area_km2 ? km2(x.area_km2) : '—'}</td>
+                          <td>{x.strikes.toLocaleString()}<small>{pct(x.strikes_frac)}</small><div className="tv-bar" style={{ '--k': levelColour(Lx) }}><i style={{ width: `${(x.strikes_frac || 0) * 100}%` }} /></div></td>
+                          <td>{x.area_km2 ? pct(x.lit_frac) : '—'}<div className="tv-bar" style={{ '--k': levelColour(Lx) }}><i style={{ width: `${(x.lit_frac || 0) * 100}%` }} /></div></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <p className="vf-note" style={{ margin: 0 }}>
+                  <Info style={{ width: 13, height: 13, verticalAlign: -2 }} /> The map is the lightning chance from the run made {runName(v.run)}, {v.same_day ? 'on the day itself' : `${v.run.lead_h} hours before the day began`},
+                  with the day’s 3-hourly frames combined: each place shows the highest chance it reached. <b>Strikes inside</b> is how much of the day’s lightning each level caught;
+                  <b> saw lightning</b> is how much of the level had a strike within {v.near_km} km. {v.final ? '' : 'The day’s lightning is still settling, so these can change for a few hours.'}
+                </p>
+              </>
             )}
           </div>
-
-          {/* Strike breakdown */}
-          {strikes.length > 0 && (
-            <div style={{
-              display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end',
-              padding: '4px 10px', borderRadius: 8,
-              background: 'rgba(250,204,21,0.06)',
-              border: '1px solid rgba(250,204,21,0.15)',
-            }}>
-              <div style={{ fontSize: '0.6rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Strike split</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <span style={{ fontSize: '0.66rem', color: '#facc15', fontWeight: 800, fontFamily: "'DM Mono',monospace" }}>
-                  <MapPin style={{ width: 8, height: 8, display: 'inline', marginRight: 2 }} />
-                  UK: {ukStrikes.toLocaleString()}
-                </span>
-                {euStrikes > 0 && (
-                  <span style={{ fontSize: '0.66rem', color: '#fbbf24', fontWeight: 700, fontFamily: "'DM Mono',monospace", opacity: 0.75 }}>
-                    EU: {euStrikes.toLocaleString()}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Lightning toggle */}
-          <button onClick={() => setShowLightning(s => !s)} style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '7px 13px', borderRadius: 9, cursor: 'pointer',
-            background: showLightning ? 'rgba(250,204,21,0.15)' : 'rgba(255,255,255,0.06)',
-            border: `1px solid ${showLightning ? '#facc15' : 'rgba(255,255,255,0.10)'}`,
-            color: '#facc15', fontSize: '0.78rem', fontWeight: 700,
-          }}>
-            {showLightning ? <Zap style={{ width: 13, height: 13 }} /> : <ZapOff style={{ width: 13, height: 13 }} />}
-            <span style={{ display: 'none' }}>{showLightning ? 'Hide' : 'Show'}</span>
-            {hasStrikes && <span style={{ fontSize: '0.66rem', opacity: 0.8 }}>· {(event.total_count || strikes.length).toLocaleString()}</span>}
-          </button>
-
-          <button onClick={onClose} style={{
-            width: 34, height: 34, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', background: 'rgba(255,255,255,0.06)',
-            border: '1px solid rgba(255,255,255,0.10)', color: '#64748b',
-          }}>
-            <X style={{ width: 16, height: 16 }} />
-          </button>
         </div>
-
-        {/* Map — interactive so scroll wheel works */}
-        <div style={{ flex: 1, minHeight: 0 }}>
-          <VerificationMap
-            grid={grid}
-            strikes={strikes}
-            showLightning={showLightning}
-            height={typeof window !== 'undefined' ? window.innerHeight - 80 : 600}
-            lightMode={false}
-            bbox={eventBbox}
-            interactive={true}
-          />
-        </div>
-
-        {event.description && (
-          <div style={{
-            padding: '10px 18px',
-            borderTop: '1px solid rgba(56,189,248,0.12)',
-            background: 'rgba(10,16,34,0.90)',
-            fontSize: '0.75rem', color: '#94a3b8', lineHeight: 1.5, flexShrink: 0,
-          }}>
-            {event.description}
-          </div>
-        )}
-      </motion.div>
-    </AnimatePresence>,
-    document.body
+      )}
+    </section>
   );
 }
 
-// ── Skeleton card (loading state) ─────────────────────────────────────────────
-function SkeletonCard() {
-  return (
-    <div style={{
-      borderRadius: 14, overflow: 'hidden',
-      background: 'rgba(10,16,34,0.92)',
-      border: '1px solid rgba(56,189,248,0.08)',
-    }}>
-      <div style={{
-        height: 180, background: 'linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(56,189,248,0.06) 50%, rgba(255,255,255,0.03) 100%)',
-        backgroundSize: '200% 100%',
-        animation: 'ver-shimmer 1.6s ease-in-out infinite',
-      }} />
-      <div style={{ padding: '10px 13px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ height: 10, borderRadius: 5, width: '70%', background: 'rgba(255,255,255,0.06)', animation: 'ver-shimmer 1.6s ease-in-out infinite 0.1s' }} />
-        <div style={{ height: 8, borderRadius: 5, width: '45%', background: 'rgba(255,255,255,0.04)', animation: 'ver-shimmer 1.6s ease-in-out infinite 0.2s' }} />
-        <div style={{ height: 8, borderRadius: 5, width: '55%', background: 'rgba(255,255,255,0.04)', animation: 'ver-shimmer 1.6s ease-in-out infinite 0.3s' }} />
-      </div>
-    </div>
-  );
-}
-
-// ── Event card ────────────────────────────────────────────────────────────────
-function EventCard({ event, onClick }) {
-  const grid = event?.grid_data || [];
-  const strikes = event?.strikes || [];
-  const hasStrikes = event.total_count > 0;
-  const hasGrid = grid.length > 0;
-  const [hovered, setHovered] = useState(false);
-  const eventBbox = event.bbox || EU_BBOX;
-
-  const peakLevel = useMemo(() => {
-    if (!grid.length) return null;
-    let best = 0;
-    for (const pt of grid) { const s = getScore(pt); if (s > best) best = s; }
-    return scoreToLevel(best);
-  }, [grid]);
-
-  const layers = useMemo(() => buildOutlookLayers(grid, 'thunderstorm', 0, eventBbox), [grid, eventBbox]);
-
-  const dateShort = safeDate(event.date, { day: 'numeric', month: 'short', year: 'numeric' });
-  const weekday = safeDate(event.date, { weekday: 'long' });
-
-
-  const regionLabel = event.uk_count >= 5 ? 'UK' : (event.eu_count > 0 ? 'EU' : null);
-
-  return (
-    <motion.div
-      whileHover={{ scale: 1.012 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-      onHoverStart={() => setHovered(true)}
-      onHoverEnd={() => setHovered(false)}
-      onClick={onClick}
-      style={{
-        borderRadius: 14, overflow: 'hidden', cursor: 'pointer',
-        background: 'rgba(10,16,34,0.92)',
-        border: `1px solid ${hovered ? 'rgba(56,189,248,0.4)' : 'rgba(56,189,248,0.15)'}`,
-        boxShadow: hovered
-          ? '0 8px 32px rgba(56,189,248,0.12), 0 2px 8px rgba(0,0,0,0.4)'
-          : '0 2px 8px rgba(0,0,0,0.3)',
-        transition: 'border-color 0.18s, box-shadow 0.18s',
-        position: 'relative',
-      }}
-    >
-      {/* Top aurora rail */}
-      <div style={{
-        position: 'absolute', top: 0, left: 0, right: 0, height: 1,
-        background: 'linear-gradient(90deg, transparent, rgba(56,189,248,0.5), transparent)',
-        zIndex: 2,
-      }} />
-
-      {/* Map preview — pointer-events none to keep scroll passthrough on card grid */}
-      <div style={{ position: 'relative', pointerEvents: 'none' }}>
-        <VerificationMap
-          grid={grid}
-          strikes={strikes}
-          showLightning={true}
-          height={190}
-          lightMode={false}
-          bbox={eventBbox}
-          interactive={false}
-        />
-        {/* Expand hint */}
-        <div style={{
-          position: 'absolute', top: 8, right: 8, zIndex: 10,
-          background: 'rgba(6,11,24,0.75)', borderRadius: 7,
-          padding: '4px 8px', border: '1px solid rgba(56,189,248,0.3)',
-          display: 'flex', alignItems: 'center', gap: 4,
-          opacity: hovered ? 1 : 0.6, transition: 'opacity 0.15s',
-        }}>
-          <Maximize2 style={{ width: 10, height: 10, color: '#38bdf8' }} />
-          <span style={{ fontSize: '0.55rem', color: '#38bdf8', fontWeight: 700, fontFamily: "'DM Mono',monospace" }}>EXPAND</span>
-        </div>
-      </div>
-
-      {/* Card footer */}
-      <div style={{ padding: '10px 13px', display: 'flex', flexDirection: 'column', gap: 7 }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#f1f5f9', lineHeight: 1.3 }}>
-              {event.title || `Thunderstorm Event — ${dateShort}`}
-            </div>
-            <div style={{ fontSize: '0.6rem', color: '#64748b', fontFamily: "'DM Mono',monospace", marginTop: 1 }}>
-              {weekday !== '—' ? `${weekday}, ` : ''}{dateShort}
-            </div>
-          </div>
-          {peakLevel && <RiskBadge level={peakLevel} />}
-        </div>
-
-        {/* Strike density badge */}
-        {hasStrikes && (
-          <StrikeDensityBadge count={event.total_count} regionLabel={regionLabel} />
-        )}
-
-        {/* Outlook probability bar */}
-        {hasGrid && <OutlookProbabilityBar layers={layers} />}
-
-        {/* No grid warning */}
-        {!hasGrid && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Info style={{ width: 10, height: 10, color: '#475569' }} />
-            <span style={{ fontSize: '0.58rem', color: '#475569' }}>No outlook grid archived for this day</span>
-          </div>
-        )}
-
-        {/* Peak hour */}
-        {event.peak_hour && (
-          <div style={{ fontSize: '0.58rem', color: '#475569' }}>
-            Peak activity: <span style={{ color: '#64748b', fontWeight: 700 }}>{event.peak_hour} UTC</span>
-          </div>
-        )}
-      </div>
-    </motion.div>
-  );
-}
-
-// ── Derive events from LightningArchive ───────────────────────────────────────
-function buildEventsFromArchive(archives) {
-  return archives
-    .filter(a => {
-      const total = Math.max(
-        a.uk_count ?? 0, a.eu_count ?? 0,
-        a.strike_count ?? 0, a.strikes?.length ?? 0
-      );
-      return total >= 3 && a.date; // guard against missing date
-    })
-    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-    .map(a => {
-      const totalCount = Math.max(
-        a.uk_count ?? 0, a.eu_count ?? 0,
-        a.strike_count ?? 0, a.strikes?.length ?? 0
-      );
-      const ukCount = a.uk_count ?? 0;
-      const region = ukCount >= 5 ? 'UK' : 'Europe';
-      const dateLabel = safeDate(a.date, { day: 'numeric', month: 'long', year: 'numeric' });
-      return {
-        id: a.id,
-        date: a.date,
-        title: `${region} Thunderstorm — ${dateLabel}`,
-        description: a.peak_hour ? `Peak at ${a.peak_hour} UTC` : undefined,
-        strikes: a.strikes || [],
-        grid_data: a.grid_data || [],
-        uk_count: ukCount,
-        eu_count: a.eu_count ?? 0,
-        total_count: totalCount,
-        peak_hour: a.peak_hour,
-        bbox: ukCount >= 5 ? UK_BBOX : EU_BBOX,
-      };
-    });
-}
-
-// ── Main page ─────────────────────────────────────────────────────────────────
 export default function TCMVerification() {
-  const [archives, setArchives] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [selectedEvent, setSelectedEvent] = useState(null);
-  const [search, setSearch] = useState('');
-  const [minStrikes, setMinStrikes] = useState(0);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [runState, setRunState] = useState(null);
-
-  useEffect(() => { isCurrentUserAdmin().then(setIsAdmin).catch(() => {}); }, []);
+  const { isDark } = useTheme();
+  const [params, setParams] = useSearchParams();
+  const [days, setDays] = useState(null);
+  const [locked, setLocked] = useState(false);
+  const [err, setErr] = useState(null);
+  const top = useRef(null);
+  const date = params.get('date');
+  const run = params.get('run');
 
   useEffect(() => {
-    base44.entities.LightningArchive.list('-date', 200)
-      .then(data => { setArchives(data); setLoading(false); })
-      .catch(err => {
-        console.error('[TCMVerification] failed:', err);
-        setError('Could not load lightning archive data.');
-        setLoading(false);
-      });
+    let alive = true, timer = null;
+    const load = () => archiveJson('/api/tcm-archive/verification').then((r) => {
+      if (!alive) return;
+      setDays(r.days);
+      if (r.days.some((d) => d.pending)) timer = setTimeout(load, 8000);
+    }).catch((e) => { if (alive) (e.locked ? setLocked(true) : setErr('Verification could not be loaded.')); });
+    load();
+    return () => { alive = false; clearTimeout(timer); };
   }, []);
 
-  const events = useMemo(() => buildEventsFromArchive(archives), [archives]);
-
-  // Admin: run the TCM engine on historical (ERA5) weather for every archived
-  // event that has no outlook yet, and save the grid so it overlays the strikes.
-  const runBackfill = async () => {
-    setRunState({ running: true, i: 0, n: 0, date: 'loading events…', done: 0, total: 0 });
-    // Use the already-loaded events; if the heavy archive list hasn't populated
-    // them (huge strike arrays can stall it), load a fresh copy right here.
-    let evs = events;
-    if (!evs.length) {
-      try { evs = buildEventsFromArchive(await base44.entities.LightningArchive.list('-date', 200)); }
-      catch (e) { setRunState({ error: 'Could not load archived events: ' + String(e?.message || e) }); return; }
-    }
-    const targets = evs.filter((e) => !(e.grid_data && e.grid_data.length));
-    if (!targets.length) {
-      setRunState({ msg: evs.length ? 'All archived events already have an outlook.' : 'No archived lightning events found to run on.' });
-      return;
-    }
-    const ctrl = new AbortController();
-    setRunState({ running: true, ctrl, i: 0, n: targets.length, date: '', done: 0, total: 0 });
-    try {
-      for (let i = 0; i < targets.length; i++) {
-        const ev = targets[i];
-        const grid_data = await runArchiveOutlook(ev, {
-          signal: ctrl.signal,
-          onProgress: ({ done, total }) => setRunState((s) => ({ ...(s || {}), running: true, ctrl, i, n: targets.length, date: ev.date, done, total })),
-        });
-        const built = Date.now();
-        await base44.entities.LightningArchive.update(ev.id, { grid_data, outlook_built_at: built, outlook_source: 'era5-archive' });
-        setArchives((prev) => prev.map((a) => (a.id === ev.id ? { ...a, grid_data, outlook_built_at: built, outlook_source: 'era5-archive' } : a)));
-      }
-      setRunState({ msg: `Done — generated ${targets.length} outlook${targets.length > 1 ? 's' : ''} from the ERA5 archive.` });
-    } catch (e) {
-      setRunState({ error: String(e?.message || e) });
-    }
+  const ready = useMemo(() => (days || []).filter((d) => !d.pending), [days]);
+  const current = date && days?.some((d) => d.date === date) ? date : ready[0]?.date || null;
+  const i = days ? days.findIndex((d) => d.date === current) : -1;
+  const go = (d, scroll = false) => {
+    setParams((p) => { const n = new URLSearchParams(p); n.set('date', d); n.delete('run'); return n; }, { replace: true });
+    if (scroll) top.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+  const setRun = (r) => setParams((p) => { const n = new URLSearchParams(p); if (r) n.set('run', r); else n.delete('run'); return n; }, { replace: true });
 
-  const filtered = useMemo(() => {
-    let out = events;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      out = out.filter(e =>
-        (e.date || '').includes(q) ||
-        (e.title || '').toLowerCase().includes(q)
-      );
-    }
-    if (minStrikes > 0) out = out.filter(e => e.total_count >= minStrikes);
-    return out;
-  }, [events, search, minStrikes]);
+  const totals = useMemo(() => {
+    const withData = ready.filter((d) => d.strikes.data);
+    const n = withData.reduce((s, d) => s + d.strikes.on_grid, 0);
+    const mr = withData.reduce((s, d) => s + d.levels[1].strikes, 0), ts = withData.reduce((s, d) => s + d.levels[0].strikes, 0);
+    return { days: ready.length, lit: withData.filter((d) => d.strikes.on_grid > 0).length, n, mr: n ? mr / n : null, ts: n ? ts / n : null };
+  }, [ready]);
 
-  const totalStrikes = useMemo(() => events.reduce((s, e) => s + (e.total_count || 0), 0), [events]);
-  const biggestEvent = useMemo(() => {
-    if (!events.length) return null;
-    return events.reduce((best, e) => (e.total_count > (best?.total_count ?? 0) ? e : best), null);
-  }, [events]);
+  const hero = days && ready.length > 0 && (
+    <div className="vf-stats">
+      <Stat label="Days checked" value={totals.days} note={`${totals.lit} with lightning`} />
+      <Stat label="Strikes" value={totals.n.toLocaleString()} note="in the forecast area" />
+      <Stat label="Inside Marginal+" value={pct(totals.mr)} note="of all the strikes" />
+      <Stat label="Inside any risk" value={pct(totals.ts)} note="General thunder or above" />
+    </div>
+  );
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(160deg, #060b18 0%, #0b1226 50%, #0a1020 100%)',
-      fontFamily: "'DM Sans', system-ui, sans-serif",
-      paddingBottom: 'calc(80px + env(safe-area-inset-bottom, 0px))',
-    }}>
-      {/* Header */}
-      <div style={{ padding: '16px 16px 0', maxWidth: 1200, margin: '0 auto' }}>
-        <Link to="/TCMOutlooks" style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6,
-          textDecoration: 'none', color: '#64748b', fontSize: '0.76rem', fontWeight: 700,
-          padding: '6px 12px', borderRadius: 8, marginBottom: 16,
-          background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-        }}>
-          <ChevronLeft style={{ width: 13, height: 13 }} /> TCM Outlooks
-        </Link>
-
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{
-              width: 42, height: 42, borderRadius: 12,
-              background: 'linear-gradient(135deg, rgba(56,189,248,0.18), rgba(129,140,248,0.12))',
-              border: '1px solid rgba(56,189,248,0.28)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: '0 0 20px rgba(56,189,248,0.12)',
-            }}>
-              <CloudLightning style={{ width: 20, height: 20, color: '#38bdf8' }} />
-            </div>
-            <div>
-              <h1 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 900, color: '#f1f5f9', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
-                TCM Verification
-              </h1>
-              <p style={{ margin: '3px 0 0', fontSize: '0.76rem', color: '#64748b', lineHeight: 1.3 }}>
-                Past thunderstorm events — probability outlook vs actual strikes
-              </p>
-            </div>
-          </div>
-
-          {/* Admin: run the model on archived events to generate the outlook overlay */}
-          {isAdmin && (() => {
-            const missing = events.filter((e) => !(e.grid_data && e.grid_data.length)).length;
-            const rs = runState;
-            return (
-              <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 12, background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.3)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#c4b5fd' }}>Admin · Run model on archive</span>
-                  <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>{missing} event{missing !== 1 ? 's' : ''} without an outlook</span>
-                  <div style={{ flex: 1 }} />
-                  {rs?.running ? (
-                    <button onClick={() => rs.ctrl?.abort()} style={{ padding: '7px 13px', borderRadius: 9, background: 'rgba(239,68,68,0.14)', border: '1px solid rgba(239,68,68,0.45)', color: '#f87171', fontSize: '0.72rem', fontWeight: 800, cursor: 'pointer' }}>Cancel</button>
-                  ) : (
-                    <button onClick={runBackfill} style={{ padding: '7px 13px', borderRadius: 9, background: 'rgba(167,139,250,0.16)', border: '1px solid rgba(167,139,250,0.5)', color: '#c4b5fd', fontSize: '0.72rem', fontWeight: 800, cursor: 'pointer' }}>
-                      Generate outlooks
-                    </button>
-                  )}
-                </div>
-                {rs?.running && (
-                  <div style={{ marginTop: 9 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.64rem', color: '#94a3b8', marginBottom: 4 }}>
-                      <span>Event {(rs.i ?? 0) + 1}/{rs.n} · {rs.date}</span>
-                      <span>{rs.done}/{rs.total} cells</span>
-                    </div>
-                    <div style={{ height: 5, borderRadius: 99, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${rs.total ? Math.round((rs.done / rs.total) * 100) : 0}%`, background: 'linear-gradient(90deg,#38bdf8,#a78bfa)', borderRadius: 99, transition: 'width .2s' }} />
-                    </div>
-                  </div>
-                )}
-                {rs?.msg && <div style={{ marginTop: 8, fontSize: '0.68rem', color: '#86efac' }}>{rs.msg}</div>}
-                {rs?.error && <div style={{ marginTop: 8, fontSize: '0.68rem', color: '#fca5a5' }}>{rs.error}</div>}
-              </div>
-            );
-          })()}
-          {/* Stats strip */}
-          {!loading && events.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
-              {[
-                { label: 'Events archived', value: events.length },
-                { label: 'Total strikes', value: totalStrikes.toLocaleString() },
-                { label: 'Busiest event', value: biggestEvent ? `${(biggestEvent.total_count || 0).toLocaleString()}` : '—' },
-              ].map(stat => (
-                <div key={stat.label} style={{
-                  padding: '8px 14px', borderRadius: 10,
-                  background: 'rgba(56,189,248,0.06)', border: '1px solid rgba(56,189,248,0.14)',
-                }}>
-                  <div style={{ fontSize: '0.58rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{stat.label}</div>
-                  <div style={{ fontSize: '1rem', fontWeight: 900, color: '#38bdf8', fontFamily: "'DM Mono',monospace", marginTop: 2 }}>{stat.value}</div>
-                </div>
-              ))}
-            </div>
-          )}
+    <VfPage title="TCM Verification" accent="#facc15" accent2="#f97316" css={CSS} hero={hero}
+      lede="Each finished day: the lightning risk TCM NOVA gave for the whole day, with the lightning the Met Office recorded drawn over it. How much of the lightning fell inside the risk areas, and how much of the risk areas saw any.">
+      {locked && <NovaLocked what="TCM Verification" />}
+      {err && <div className="vf-error">{err}</div>}
+      {!locked && !err && days === null && <div className="vf-skel" style={{ height: 420, borderRadius: 24 }} />}
+      {!locked && !err && days?.length === 0 && (
+        <section className="vf-glass vf-card"><div className="vf-empty"><Target /><b>No finished days yet</b><p>Each day is checked once it is over and the Main Run that forecast it is in the TCM Archive.</p></div></section>
+      )}
+      {!locked && current && (
+        <div ref={top} style={{ scrollMarginTop: 80 }}>
+          <DayDetail key={current} date={current} run={run} setRun={setRun} dark={isDark}
+            prev={days[i + 1]?.date} next={i > 0 ? days[i - 1].date : null} go={(d) => go(d)} />
         </div>
-
-        {/* Filters */}
-        {!loading && events.length > 0 && (
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-            <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 160 }}>
-              <Search style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', width: 13, height: 13, color: '#64748b', pointerEvents: 'none' }} />
-              <input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Search events, dates…"
-                style={{
-                  width: '100%', padding: '9px 12px 9px 32px', borderRadius: 9,
-                  background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)',
-                  color: '#e2e8f0', fontSize: '0.8rem', outline: 'none',
-                  fontFamily: "'DM Sans',system-ui", boxSizing: 'border-box',
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 700, whiteSpace: 'nowrap' }}>Min strikes:</span>
-              {[0, 50, 200, 500, 1000].map(n => (
-                <button key={n} onClick={() => setMinStrikes(n)} style={{
-                  padding: '6px 12px', borderRadius: 8, cursor: 'pointer', fontSize: '0.7rem', fontWeight: 800,
-                  background: minStrikes === n ? 'rgba(250,204,21,0.18)' : 'rgba(255,255,255,0.05)',
-                  border: `1px solid ${minStrikes === n ? '#facc15' : 'rgba(255,255,255,0.10)'}`,
-                  color: minStrikes === n ? '#facc15' : '#64748b',
-                }}>
-                  {n === 0 ? 'All' : `${n >= 1000 ? n / 1000 + 'k' : n}+`}
-                </button>
-              ))}
-            </div>
+      )}
+      {!locked && days?.length > 0 && (
+        <section className="vf-glass vf-card">
+          <div className="vf-head"><Target /><h2>Every day</h2><small>{days.length} day{days.length === 1 ? '' : 's'}, newest first</small></div>
+          <div className="tv-grid">
+            {days.map((d) => <DayCard key={d.date} v={d} on={d.date === current} dark={isDark} onPick={() => go(d.date, true)} />)}
           </div>
-        )}
-      </div>
-
-      {/* Content */}
-      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 16px' }}>
-
-        {/* Skeleton loading grid */}
-        {loading && (
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))',
-            gap: 16,
-          }}>
-            {Array.from({ length: 6 }).map((_, i) => <SkeletonCard key={i} />)}
-          </div>
-        )}
-
-        {!loading && error && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '60px 0', color: '#f87171' }}>
-            <AlertCircle style={{ width: 28, height: 28 }} />
-            <p style={{ margin: 0, fontSize: '0.85rem' }}>{error}</p>
-          </div>
-        )}
-
-        {!loading && !error && events.length === 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '60px 20px', textAlign: 'center' }}>
-            <CloudLightning style={{ width: 36, height: 36, color: '#334155' }} />
-            <p style={{ color: '#94a3b8', fontSize: '0.9rem', margin: 0, fontWeight: 700 }}>No archived thunderstorm events yet</p>
-            <p style={{ color: '#64748b', fontSize: '0.76rem', margin: 0, lineHeight: 1.5, maxWidth: 380 }}>
-              Events appear here once lightning data is archived. Days with 3+ strikes are shown automatically.
-            </p>
-          </div>
-        )}
-
-        {!loading && !error && filtered.length === 0 && events.length > 0 && (
-          <div style={{ textAlign: 'center', padding: '40px 0', color: '#64748b', fontSize: '0.82rem' }}>
-            No events match your current filter.
-          </div>
-        )}
-
-        {!loading && !error && filtered.length > 0 && (
-          <>
-            <div style={{ marginBottom: 10, fontSize: '0.68rem', color: '#64748b' }}>
-              Showing {filtered.length} of {events.length} events · click any card to expand
-            </div>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))',
-              gap: 16,
-            }}>
-              {filtered.map(event => (
-                <EventCard
-                  key={event.id || event.date}
-                  event={event}
-                  onClick={() => setSelectedEvent(event)}
-                />
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Full-screen modal */}
-      <AnimatePresence>
-        {selectedEvent && (
-          <EventFullscreenModal
-            event={selectedEvent}
-            onClose={() => setSelectedEvent(null)}
-          />
-        )}
-      </AnimatePresence>
-
-      <style>{`
-        @keyframes ver-shimmer {
-          0%   { background-position: -200% center; }
-          100% { background-position:  200% center; }
-        }
-      `}</style>
-    </div>
+        </section>
+      )}
+    </VfPage>
   );
 }
