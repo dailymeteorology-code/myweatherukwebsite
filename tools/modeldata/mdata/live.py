@@ -21,6 +21,7 @@ import gzip
 import io
 import json
 import logging
+import os
 import re
 import struct
 import sys
@@ -151,12 +152,19 @@ def make_sat(key, t):
         im = Image.fromarray(a, 'RGBA')
     else:
         im = Image.fromarray(a, 'RGB')
-    tmp = out.with_suffix('.tmp')
+    # its own temporary name: the analysis (mdata/now.py) can fetch the cloud map at the same
+    # moment as the satellite lane, and two writers to one .tmp collide on Windows
+    tmp = out.with_name(f'{out.stem}.{os.getpid()}.tmp')
     if P['kind'] == 'rgba':
         im.save(tmp, format='PNG', optimize=True)
     else:
         im.save(tmp, format='JPEG', quality=88, optimize=True)
-    tmp.replace(out)
+    try:
+        tmp.replace(out)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        if not out.exists():
+            raise
     return out
 
 
@@ -286,7 +294,9 @@ def catalog():
     write_json(LIVE / 'catalog.json', {'updated': datetime.now(timezone.utc).isoformat(), 'products': out})
 
 
-SATELLITES = [k for k in PRODUCTS if k != 'radar']
+# the cloud map first: "right now" takes its cloud from it (mdata/now.py), and after the PC has been
+# off it would otherwise wait behind eight other products' catch-up
+SATELLITES = ['sat_cth'] + [k for k in PRODUCTS if k not in ('radar', 'sat_cth')]
 
 
 def update(lane='all'):
