@@ -19,7 +19,7 @@ import { useLogo } from '@/components/MobileHeaderLogo';
  * its own menu on Home, TCMHamburger drew another on the TCM pages,
  * and Layout's own HamburgerMenu was dead code that never rendered. Worse, the
  * Home menu mixed *section jumps* (Active Warnings, Live Radar — anchors on the
- * current page) with *page links* (Model Data, Thunderstorm Studio), so every
+ * current page) with *page links* (Model Data, Graphic Studio), so every
  * new page crowded out the scroll anchors.
  *
  * The split is the point: this component moves you between pages, and
@@ -59,11 +59,11 @@ const GROUPS = [
     id: 'graphics',
     label: 'Graphics',
     /* The graphics in force are the first thing on the home page, so the menu has no shortcut to
-       them; the past ones and the studio are here. (The Graphics page is gone: graphics are
-       posted from the home page and made in the admin Graphic Studio.) */
+       them; the past ones and the public Graphic Studio are here. (The Graphics page is gone:
+       graphics are posted from the home page and made in the admin Graphic Studio.) */
     items: [
       { label: 'Archive', path: '/MyWeatherArchive', icon: Archive, blurb: 'Every graphic we have issued, to look back on once it has ended' },
-      { label: 'Thunderstorm Studio', path: '/ThunderstormStudio', icon: Zap, blurb: 'Make your own thunderstorm outlook graphic and save it to your account' },
+      { label: 'Graphic Studio', path: '/GraphicStudio', icon: Zap, blurb: 'Make your own thunderstorm, snow and wind outlook graphics' },
     ],
   },
   {

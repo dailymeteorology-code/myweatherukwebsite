@@ -88,6 +88,7 @@ textarea.sg-input { resize: vertical; line-height: 1.45; }
 .sg-panel { padding: 11px 12px; border-radius: 14px; background: var(--sg-field); border: 1px solid var(--sg-border); display: flex; flex-direction: column; gap: 9px; }
 .sg-note { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--sg-dim); }
 .sg-note b { color: var(--sg-mid); }
+.sg-link { padding: 0; border: 0; background: none; cursor: pointer; font: inherit; font-weight: 700; color: var(--sg-accent); text-decoration: underline; text-underline-offset: 2px; }
 .sg-swatch { width: 20px; height: 20px; border-radius: 50%; cursor: pointer; padding: 0; border: 2px solid var(--sg-border3); box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
 .sg-swatch[aria-pressed='true'] { border-color: var(--sg-text); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sg-accent) 40%, transparent); }
 .sg-color { width: 26px; height: 24px; padding: 0; border: 0; background: transparent; cursor: pointer; }

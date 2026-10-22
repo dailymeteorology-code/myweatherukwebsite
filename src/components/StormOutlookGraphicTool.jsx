@@ -26,6 +26,7 @@ import MapViewPicker from '@/components/studio/MapViewPicker';
 import ModelOverlay from '@/components/studio/ModelOverlay';
 import useHistory from '@/components/studio/useHistory';
 import NovaImportPanel from '@/components/studio/NovaImportPanel';
+import { useStudioUser, saveStudioGraphic, listStudioGraphics } from '@/components/studio/studioSaves';
 import { AreaTimingPanel, shadeColor, timedActive, shiftTiming, timingOrder, shadeByTiming, timingRings, isTimed } from '@/components/studio/areaTiming';
 
 // --- Conditional Severe -----------------------------------------------------
@@ -360,7 +361,12 @@ function waitForImages(root) {
 }
 
 // --- Main component ---
-export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
+/* `basic`: the public Graphic Studio's set (pages/GraphicStudio). Everything for drawing an outlook,
+   without the admin's data tools (the TCM NOVA import, the UKV rain under the drawing, the
+   lightning check, the live radar graphic, the WebM film) and without the version; saves go to
+   the visitor's own account (studio/studioSaves) and the footer says where it was made. */
+export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic = false }) {
+  const me = useStudioUser(basic);
   const [siteLogoUrl, setSiteLogoUrl] = useState(myWeatherLogoUrl || null);
   useEffect(() => {
     if (!myWeatherLogoUrl) {
@@ -493,14 +499,10 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   // Save current state to database
   const handleSaveToStudio = async () => {
     if (!saveName.trim()) return;
+    if (basic && !me) { base44.auth.redirectToLogin(); return; }
     setSaving(true);
     try {
-      await base44.entities.WeatherGraphic.create({
-        title: saveName.trim(),
-        graphic_tool_state: captureState(),
-        published: false,
-        is_forecast: false,
-      });
+      await saveStudioGraphic({ basic, me, title: saveName.trim(), state: captureState() });
       setSaveSuccess(true);
       setSaveName('');
       setTimeout(() => setSaveSuccess(false), 1500);
@@ -517,9 +519,9 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     setShowLoadPanel(true);
     setLoadingGraphics(true);
     try {
-      const list = await base44.entities.WeatherGraphic.filter({}, '-created_date', 50);
-      /* this tool's own: saved before graphics carried their tool (and not the scenario board's), or 'outlook' */
-      setSavedGraphics(list.filter((g) => { const s = g.graphic_tool_state; return s && !s._scenarioTool && (!s.tool || s.tool === 'outlook'); }));
+      /* this tool's own: saved before graphics carried their tool (and not the scenario board's), or
+         'outlook' (in the public studio only its own: the old Thunderstorm Studio drew another map) */
+      setSavedGraphics(await listStudioGraphics({ basic, me, keep: (st) => (basic ? st.tool === 'outlook' : !st._scenarioTool && (!st.tool || st.tool === 'outlook')) }));
     } finally {
       setLoadingGraphics(false);
     }
@@ -527,7 +529,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
 
   // Restore state from a saved graphic
   const loadState = (g) => {
-    const s = g.graphic_tool_state;
+    const s = g.state;
     if (!s) return;
     if (s.validDate !== undefined) setValidDate(s.validDate);
     if (s.validDate2 !== undefined) setValidDate2(s.validDate2);
@@ -1280,7 +1282,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     <>
       <Section id="storm-graphic" icon={Zap} color="#eab308" title="Graphic"
         sub={isRadar ? 'Live Met Office radar' : `${outlookTitle} · ${forecastLabel}`}>
-        <Seg value={graphicMode} onChange={switchMode} color="#eab308" options={[['outlook', 'Outlook', Zap], ['radar', 'Radar', Radar]]} />
+        {!basic && <Seg value={graphicMode} onChange={switchMode} color="#eab308" options={[['outlook', 'Outlook', Zap], ['radar', 'Radar', Radar]]} />}
         <div className="sg-grid2">
           <Field label="Outlook day"><input type="date" className="sg-input" value={validDate} onChange={(e) => changeDay(e.target.value)} /></Field>
           <Field label="Second day (optional)">
@@ -1331,7 +1333,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
         )}
         <div className="sg-grid2">
           <Field label="Handle"><input className="sg-input" value={handle} onChange={(e) => setHandle(e.target.value)} /></Field>
-          <Field label="Version"><input className="sg-input" value={version} onChange={(e) => setVersion(e.target.value)} /></Field>
+          {!basic && <Field label="Version"><input className="sg-input" value={version} onChange={(e) => setVersion(e.target.value)} /></Field>}
         </div>
       </Section>
 
@@ -1340,8 +1342,8 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
           onChange={({ region, areas }) => { setOutlookRegion(region); setMapAreas(areas); }} onContext={setMapContext} />
         <div className="sg-row">
           <Btn on={showCities} icon={MapPin} onClick={() => setShowCities((v) => !v)}>Towns</Btn>
-          {!isRadar && <Btn on={showModel} icon={CloudRain} onClick={() => setShowModel((v) => !v)}>UKV rain</Btn>}
-          {!isRadar && <Btn on={showLightning} color={lightningColor === '#ffffff' ? '#facc15' : lightningColor} icon={loadingStrikes ? Loader2 : Zap} onClick={toggleLightning}>{loadingStrikes ? 'Loading strikes…' : 'Lightning'}</Btn>}
+          {!isRadar && !basic && <Btn on={showModel} icon={CloudRain} onClick={() => setShowModel((v) => !v)}>UKV rain</Btn>}
+          {!isRadar && !basic && <Btn on={showLightning} color={lightningColor === '#ffffff' ? '#facc15' : lightningColor} icon={loadingStrikes ? Loader2 : Zap} onClick={toggleLightning}>{loadingStrikes ? 'Loading strikes…' : 'Lightning'}</Btn>}
         </div>
         {showModel && !isRadar && (
           <div className="sg-panel">
@@ -1475,8 +1477,8 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
               })}
             </div>
           )}
-          <Btn on={showNovaPanel} color="#818cf8" icon={DownloadCloud} onClick={() => setShowNovaPanel((v) => !v)}>Import from TCM NOVA</Btn>
-          {showNovaPanel && (
+          {!basic && <Btn on={showNovaPanel} color="#818cf8" icon={DownloadCloud} onClick={() => setShowNovaPanel((v) => !v)}>Import from TCM NOVA</Btn>}
+          {showNovaPanel && !basic && (
             <NovaImportPanel view={view} timeline={timeline} validDate={validDate} hazardFields={NOVA_HAZARD_FIELDS} onImport={applyNova}
               levels={GRAPHIC_LEVELS.filter((l) => !isSevereId(l.id) && !isCondSevereId(l.id)).map((l) => ({ id: l.id, keyMin: (LEVEL_RANGE[l.id]?.[0] ?? 0) / 100, novaMin: NOVA_WORD_MIN[l.id] ?? 0 }))} />
           )}
@@ -1557,8 +1559,11 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
       <Section id="storm-export" icon={Download} color="#0ea5e9" title="Save & export">
         <div className="sg-row">
           <Btn primary color="#0ea5e9" icon={isExporting ? Loader2 : Download} disabled={isExporting} onClick={handleDownload}>{isExporting ? 'Exporting…' : 'Download JPG'}</Btn>
-          {!isRadar && <Btn primary color="#7c3aed" icon={Download} disabled={isExporting} onClick={handleExportVideo} title="Render a WebM of the timeline sweep">Export WebM</Btn>}
+          {!isRadar && !basic && <Btn primary color="#7c3aed" icon={Download} disabled={isExporting} onClick={handleExportVideo} title="Render a WebM of the timeline sweep">Export WebM</Btn>}
         </div>
+        {basic && !me && (
+          <p className="sg-note">Log in to save your graphics to your account and open them again later. <button type="button" className="sg-link" onClick={() => base44.auth.redirectToLogin()}>Log in</button></p>
+        )}
         <div className="sg-row" style={{ flexWrap: 'nowrap' }}>
           <input className="sg-input" value={saveName} onChange={(e) => setSaveName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSaveToStudio()} placeholder="Name this graphic (e.g. Day 1 Slight Risk)" />
           <Btn on={saveSuccess} color="#22c55e" icon={saving ? Loader2 : saveSuccess ? Check : Save} disabled={saving || !saveName.trim()} onClick={handleSaveToStudio}>{saveSuccess ? 'Saved' : 'Save'}</Btn>
@@ -2217,7 +2222,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
           )}
 
           {/* -- FOOTER: the logo in the bottom-left corner, a glass card in the bottom-right -- */}
-          <GraphicFooter logoUrl={siteLogoUrl} FallbackIcon={CloudLightning} handle={handle} version={version} radar={isRadar}
+          <GraphicFooter logoUrl={siteLogoUrl} FallbackIcon={CloudLightning} handle={handle} version={basic ? null : version} madeWith={basic} radar={isRadar}
             caption={footerText} forecastLabel={forecastLabel} update={forecastType === 'update'} validDate={validDate} validUntil={validUntil}
             tzAbbr={tzAbbr} regionLabel={view?.label || 'UK & Ireland'} />
         </div>

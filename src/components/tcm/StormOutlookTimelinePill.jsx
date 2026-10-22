@@ -3,8 +3,8 @@
 // a thunderstorm outlook, FLRY … HIGH on snow chance, 40-50 … 90+ mph on wind).
 //
 // `levels` is the graphic's ladder ({ id, short, color }), lowest first; a band of a higher level
-// paints over a lower one. Without it the pill uses the thunderstorm ladder, which the public
-// Thunderstorm Studio relies on. Cells may carry `newDay` / `weekday` (studio/studioTimeline):
+// paints over a lower one. Without it the pill uses the thunderstorm ladder. Cells may carry
+// `newDay` / `weekday` (studio/studioTimeline):
 // a window that runs past midnight gets a divider and the new day's name.
 import React from 'react';
 import { Clock } from 'lucide-react';

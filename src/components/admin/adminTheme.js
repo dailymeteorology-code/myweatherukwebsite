@@ -27,8 +27,10 @@ export const ADMIN_FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Se
     for a hex colour and for the variables above alike, which a "#38bdf8" + "22" string never could. */
 export const tint = (c, hh) => `color-mix(in srgb, ${c} ${Math.round(parseInt(hh, 16) / 2.55)}%, transparent)`;
 
-export const ADMIN_CSS = `
-.ad-root {
+/** The colour variables on `dark` (the dark set) and `light` (the light set), for any page that
+    wants the admin glass: Admin Settings, and the public Graphic Studio, whose tools take these. */
+export const adTokens = (dark, light) => `
+${dark} {
   --ad-bg: #070c16; --ad-bg-alt: rgba(9,14,25,.72);
   --ad-surface: rgba(255,255,255,.055); --ad-surface2: rgba(255,255,255,.075); --ad-surface3: rgba(0,0,0,.24);
   --ad-border: rgba(255,255,255,.08); --ad-border2: rgba(255,255,255,.12); --ad-border3: rgba(255,255,255,.18);
@@ -38,7 +40,7 @@ export const ADMIN_CSS = `
   --ad-orb-a: rgba(14,165,233,.26); --ad-orb-b: rgba(129,140,248,.2); --ad-orb-c: rgba(236,72,153,.12);
   --ad-accent-ink: #04121f;
 }
-.ad-root.is-light {
+${light} {
   --ad-bg: #eef3fb; --ad-bg-alt: rgba(255,255,255,.72);
   --ad-surface: rgba(255,255,255,.7); --ad-surface2: rgba(255,255,255,.85); --ad-surface3: rgba(255,255,255,.95);
   --ad-border: rgba(15,23,42,.08); --ad-border2: rgba(15,23,42,.12); --ad-border3: rgba(15,23,42,.18);
@@ -48,11 +50,17 @@ export const ADMIN_CSS = `
   --ad-orb-a: rgba(14,165,233,.2); --ad-orb-b: rgba(129,140,248,.16); --ad-orb-c: rgba(236,72,153,.1);
   --ad-accent-ink: #ffffff;
 }
-.ad-root {
+${dark} {
   --ad-sky-low: color-mix(in srgb, var(--ad-sky) 8%, transparent); --ad-sky-med: color-mix(in srgb, var(--ad-sky) 14%, transparent);
   --ad-sky-border: color-mix(in srgb, var(--ad-sky) 28%, transparent);
   --ad-violet-low: color-mix(in srgb, var(--ad-violet) 10%, transparent); --ad-green-low: color-mix(in srgb, var(--ad-green) 10%, transparent);
   --ad-amber-low: color-mix(in srgb, var(--ad-amber) 10%, transparent); --ad-red-low: color-mix(in srgb, var(--ad-red) 10%, transparent);
+}
+`;
+
+export const ADMIN_CSS = `
+${adTokens('.ad-root', '.ad-root.is-light')}
+.ad-root {
   position: relative; min-height: 100vh; min-height: 100dvh; display: flex; background: var(--ad-bg); color: var(--ad-text);
   font-family: ${ADMIN_FONT}; -webkit-font-smoothing: antialiased; transition: background .4s ease;
 }

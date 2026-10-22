@@ -11,7 +11,7 @@
    the glass does, and hands it round through GlassBackdropContext. Each panel's GlassSheen then
    lays that picture in, lined up with where the panel sits on the graphic, and draws the tint and
    rims over it. The exported panels show the real map and storm photo through them, as on screen.
-   Without a backdrop (the WebM frames, the public Thunderstorm Studio) the panels fall back to a
+   Without a backdrop (the WebM frames) the panels fall back to a
    flat fill of the colour the glass comes to over the dark graphic.
 
    glass(extra, mode): mode false (on screen), 'backdrop' (export with the blurred picture) or
@@ -111,7 +111,7 @@ export async function captureBackdrop(node, { width, height, backgroundColor }) 
     valid / issued line and the notice (or, on the radar, the live status). */
 export function GraphicFooter({
   logoUrl, FallbackIcon, handle, version, radar = false, caption, forecastLabel, update = false,
-  validDate, validUntil, tzAbbr, regionLabel,
+  validDate, validUntil, tzAbbr, regionLabel, madeWith = false,
 }) {
   const seg ={ padding: '0 7px', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' };
   const bar = <span style={{ width: 1, alignSelf: 'stretch', margin: '2px 0', background: 'rgba(255,255,255,0.20)' }} />;
@@ -129,7 +129,10 @@ export function GraphicFooter({
             </div>}
         <div style={{ display: 'flex', flexDirection: 'column', textShadow: '0 1px 3px rgba(0,0,0,0.6)' }}>
           <span style={{ fontSize: 13, fontWeight: 800, color: '#fff', lineHeight: 1.1, letterSpacing: '-0.01em' }}>{handle}</span>
-          <span style={{ fontSize: 8, fontWeight: 700, color: 'rgba(148,163,184,0.9)', letterSpacing: '0.20em', textTransform: 'uppercase', marginTop: 1 }}>{version}</span>
+          {/* the public Graphic Studio's graphics say where they were made, in place of the version */}
+          {madeWith
+            ? <span style={{ fontSize: 7.5, fontWeight: 700, color: 'rgba(186,200,220,0.92)', letterSpacing: '0.12em', textTransform: 'uppercase', marginTop: 2 }}>Made with MyWeatherUK Graphic Studio</span>
+            : version ? <span style={{ fontSize: 8, fontWeight: 700, color: 'rgba(148,163,184,0.9)', letterSpacing: '0.20em', textTransform: 'uppercase', marginTop: 1 }}>{version}</span> : null}
         </div>
       </div>
 

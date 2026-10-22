@@ -22,7 +22,7 @@ import TCMArchive from '@/pages/TCMArchive';
 import MyWeatherArchive from '@/pages/MyWeatherArchive';
 import WeatherScenarios from '@/pages/WeatherScenarios';
 import ForecastVerification from '@/pages/ForecastVerification';
-import ThunderstormStudio from '@/pages/ThunderstormStudio';
+import GraphicStudio from '@/pages/GraphicStudio';
 import LiveStream from '@/pages/LiveStream';
 import ModelFeedback from '@/pages/ModelFeedback';
 import TCMVerification from '@/pages/TCMVerification';
@@ -75,7 +75,7 @@ function routeIndex(pathname) {
 
 const PAGE_LABELS = {
   '/': 'Home', '/Home': 'Home', '/News': 'News', '/Lightning': 'Lightning',
-  '/TCMOutlooks': 'TCM Outlooks', '/TCMNova': 'TCM NOVA', '/TCMV5': 'TCM NOVA', '/WeatherPatterns': 'Weather Patterns',
+  '/TCMOutlooks': 'TCM Outlooks', '/TCMNova': 'TCM NOVA', '/TCMV5': 'TCM NOVA', '/WeatherPatterns': 'Weather Patterns', '/GraphicStudio': 'Graphic Studio',
   '/Settings': 'Settings', '/AdminSettings': 'Admin',
   '/TCMArchive': 'Archive', '/MyWeatherArchive': 'Archive',
   '/LocationWeather': 'Location', '/WeatherCriteria': 'Criteria', '/ForecastVerification': 'Verification', '/WeatherScenarios': 'Scenarios',
@@ -541,7 +541,9 @@ const AuthenticatedApp = () => {
                   drew nothing; Graphics was removed on 22 Oct 2026), and old links land there */}
               <Route path="/MyWeatherGraphics" element={<Navigate to="/" replace />} />
               <Route path="/Graphics" element={<Navigate to="/" replace />} />
-              <Route path="/ThunderstormStudio" element={<LayoutWrapper currentPageName="ThunderstormStudio"><ThunderstormStudio /></LayoutWrapper>} />
+              <Route path="/GraphicStudio" element={<LayoutWrapper currentPageName="GraphicStudio"><GraphicStudio /></LayoutWrapper>} />
+              {/* the public studio was the Thunderstorm Studio until 22 Oct 2026 */}
+              <Route path="/ThunderstormStudio" element={<Navigate to="/GraphicStudio" replace />} />
               <Route path="/ModelFeedback" element={<LayoutWrapper currentPageName="ModelFeedback"><ModelFeedback /></LayoutWrapper>} />
               <Route path="/TCMVerification" element={<LayoutWrapper currentPageName="TCMVerification"><TCMVerification /></LayoutWrapper>} />
               <Route path="/NewsletterSignup" element={<LayoutWrapper currentPageName="NewsletterSignup"><NewsletterSignup /></LayoutWrapper>} />

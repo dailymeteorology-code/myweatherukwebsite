@@ -36,6 +36,7 @@ import MapViewPicker from '@/components/studio/MapViewPicker';
 import ModelOverlay from '@/components/studio/ModelOverlay';
 import useHistory from '@/components/studio/useHistory';
 import ModelGuidePanel from '@/components/studio/ModelGuidePanel';
+import { useStudioUser, saveStudioGraphic, listStudioGraphics } from '@/components/studio/studioSaves';
 import { AreaTimingPanel, shadeColor, timedActive, shiftTiming, timingOrder, shadeByTiming, timingRings, isTimed } from '@/components/studio/areaTiming';
 
 // --- Conditional Severe -----------------------------------------------------
@@ -309,7 +310,12 @@ function waitForImages(root) {
 }
 
 // --- Main component ---
-export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant = 'chance' }) {
+/* `basic`: the public Graphic Studio's set (pages/GraphicStudio). Everything for drawing an outlook,
+   without the admin's data tools (building areas from the models, the UKV field under the
+   drawing, the live radar graphic, the WebM film) and without the version; saves go to the
+   visitor's own account (studio/studioSaves) and the footer says where it was made. */
+export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant = 'chance', basic = false }) {
+  const me = useStudioUser(basic);
   const V = variantOf(variant);
   applyVariant(V);
   const [bgId, setBgId] = useState(() => (V.backgrounds === undefined || variant === 'wind' ? V.backgrounds[0].id : readSnowBgId()));
@@ -439,14 +445,10 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
   // Save current state to database
   const handleSaveToStudio = async () => {
     if (!saveName.trim()) return;
+    if (basic && !me) { base44.auth.redirectToLogin(); return; }
     setSaving(true);
     try {
-      await base44.entities.WeatherGraphic.create({
-        title: saveName.trim(),
-        graphic_tool_state: captureState(),
-        published: false,
-        is_forecast: false,
-      });
+      await saveStudioGraphic({ basic, me, title: saveName.trim(), state: captureState() });
       setSaveSuccess(true);
       setSaveName('');
       setTimeout(() => setSaveSuccess(false), 1500);
@@ -463,8 +465,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
     setShowLoadPanel(true);
     setLoadingGraphics(true);
     try {
-      const list = await base44.entities.WeatherGraphic.filter({}, '-created_date', 50);
-      setSavedGraphics(list.filter(g => g.graphic_tool_state?.tool === V.tool));
+      setSavedGraphics(await listStudioGraphics({ basic, me, keep: (st) => st.tool === V.tool }));
     } finally {
       setLoadingGraphics(false);
     }
@@ -472,7 +473,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
 
   // Restore state from a saved graphic
   const loadState = (g) => {
-    const s = g.graphic_tool_state;
+    const s = g.state;
     if (!s) return;
     if (s.validDate !== undefined) setValidDate(s.validDate);
     if (s.validDate2 !== undefined) setValidDate2(s.validDate2);
@@ -1165,7 +1166,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
     <>
       <Section id="snow-graphic" icon={V.Icon} color={V.levels[3].color} title="Graphic"
         sub={isRadar ? 'Live Met Office radar' : `${outlookTitle} · ${forecastLabel}`}>
-        {V.radar && <Seg value={graphicMode} onChange={switchMode} color={V.levels[3].color} options={[['outlook', 'Outlook', V.Icon], ['radar', 'Radar', Radar]]} />}
+        {V.radar && !basic && <Seg value={graphicMode} onChange={switchMode} color={V.levels[3].color} options={[['outlook', 'Outlook', V.Icon], ['radar', 'Radar', Radar]]} />}
         {!isRadar && V.backgrounds.length > 1 && <SnowBackgroundPicker value={bgId} onChange={setBgId} />}
         <div className="sg-grid2">
           <Field label="Outlook day"><input type="date" className="sg-input" value={validDate} onChange={(e) => changeDay(e.target.value)} /></Field>
@@ -1217,7 +1218,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
         )}
         <div className="sg-grid2">
           <Field label="Handle"><input className="sg-input" value={handle} onChange={(e) => setHandle(e.target.value)} /></Field>
-          <Field label="Version"><input className="sg-input" value={version} onChange={(e) => setVersion(e.target.value)} /></Field>
+          {!basic && <Field label="Version"><input className="sg-input" value={version} onChange={(e) => setVersion(e.target.value)} /></Field>}
         </div>
       </Section>
 
@@ -1226,9 +1227,9 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
           onChange={({ region, areas }) => { setOutlookRegion(region); setMapAreas(areas); }} onContext={setMapContext} />
         <div className="sg-row">
           <Btn on={showCities} icon={MapPin} onClick={() => setShowCities((v) => !v)}>Towns</Btn>
-          {!isRadar && MODEL_FIELD && <Btn on={showModel} icon={Layers} onClick={() => setShowModel((v) => !v)}>{V.overlay.label}</Btn>}
+          {!isRadar && MODEL_FIELD && !basic && <Btn on={showModel} icon={Layers} onClick={() => setShowModel((v) => !v)}>{V.overlay.label}</Btn>}
         </div>
-        {showModel && !isRadar && MODEL_FIELD && (
+        {showModel && !isRadar && MODEL_FIELD && !basic && (
           <div className="sg-panel">
             <div className="sg-row">
               <span className="sg-label" style={{ margin: 0 }}>Shows</span>
@@ -1359,8 +1360,8 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
               })}
             </div>
           )}
-          {V.guide && <Btn on={showGuidePanel} color="#38bdf8" icon={DownloadCloud} onClick={() => setShowGuidePanel((v) => !v)}>From the models</Btn>}
-          {showGuidePanel && V.guide && <ModelGuidePanel guide={V.guide} levels={V.levels} view={view} validDate={validDate} timeline={timeline} onImport={applyGuide} />}
+          {V.guide && !basic && <Btn on={showGuidePanel} color="#38bdf8" icon={DownloadCloud} onClick={() => setShowGuidePanel((v) => !v)}>From the models</Btn>}
+          {showGuidePanel && V.guide && !basic && <ModelGuidePanel guide={V.guide} levels={V.levels} view={view} validDate={validDate} timeline={timeline} onImport={applyGuide} />}
         </Section>
       )}
 
@@ -1437,8 +1438,11 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
       <Section id="snow-export" icon={Download} color="#0ea5e9" title="Save & export">
         <div className="sg-row">
           <Btn primary color="#0ea5e9" icon={isExporting ? Loader2 : Download} disabled={isExporting} onClick={handleDownload}>{isExporting ? 'Exporting…' : 'Download JPG'}</Btn>
-          {!isRadar && <Btn primary color="#7c3aed" icon={Download} disabled={isExporting} onClick={handleExportVideo} title="Render a WebM of the timeline sweep">Export WebM</Btn>}
+          {!isRadar && !basic && <Btn primary color="#7c3aed" icon={Download} disabled={isExporting} onClick={handleExportVideo} title="Render a WebM of the timeline sweep">Export WebM</Btn>}
         </div>
+        {basic && !me && (
+          <p className="sg-note">Log in to save your graphics to your account and open them again later. <button type="button" className="sg-link" onClick={() => base44.auth.redirectToLogin()}>Log in</button></p>
+        )}
         <div className="sg-row" style={{ flexWrap: 'nowrap' }}>
           <input className="sg-input" value={saveName} onChange={(e) => setSaveName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSaveToStudio()} placeholder="Name this graphic (e.g. Day 1 Slight Risk)" />
           <Btn on={saveSuccess} color="#22c55e" icon={saving ? Loader2 : saveSuccess ? Check : Save} disabled={saving || !saveName.trim()} onClick={handleSaveToStudio}>{saveSuccess ? 'Saved' : 'Save'}</Btn>
@@ -2046,7 +2050,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
           )}
 
           {/* -- FOOTER: the logo in the bottom-left corner, a glass card in the bottom-right -- */}
-          <GraphicFooter logoUrl={siteLogoUrl} FallbackIcon={CloudLightning} handle={handle} version={version} radar={isRadar}
+          <GraphicFooter logoUrl={siteLogoUrl} FallbackIcon={CloudLightning} handle={handle} version={basic ? null : version} madeWith={basic} radar={isRadar}
             caption={footerText} forecastLabel={forecastLabel} update={forecastType === 'update'} validDate={validDate} validUntil={validUntil}
             tzAbbr={tzAbbr} regionLabel={view?.label || 'UK & Ireland'} />
         </div>
