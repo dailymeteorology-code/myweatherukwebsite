@@ -375,35 +375,70 @@ export function minutelyText(mm, nowLabel) {
 }
 
 /* ── words ───────────────────────────────────────────────────────────────── */
-const at = (ms) => hhmm(ms);
-/** One or two sentences for the hourly card, about the next 24 hours. */
+/* When a time falls, as said from now: '' today, 'overnight', 'tomorrow morning', 'Sat'... */
+function partOf(ms) {
+  const label = dayLabel(ukDay(ms));
+  if (label === 'Today') return '';
+  if (label !== 'Tomorrow') return label;
+  const h = hourOf(ms);
+  return h < 6 ? 'overnight' : h < 12 ? 'tomorrow morning' : h < 18 ? 'tomorrow afternoon' : 'tomorrow evening';
+}
+const clock = (ms) => (hhmm(ms) === '00:00' ? 'midnight' : hhmm(ms));
+const whenSaid = (ms) => (clock(ms) === 'midnight' || !partOf(ms) ? clock(ms) : `${clock(ms)} ${partOf(ms)}`);
+/* "Drizzle from about 21:00, heaviest around midnight, clearing by 04:00 overnight": each time in
+   turn, its part of the day said once, after the last time that shares it */
+function sayTimes(bits) {
+  return bits.map(([words, ms], i) => {
+    const p = clock(ms) === 'midnight' ? '' : partOf(ms);
+    const next = bits[i + 1] && partOf(bits[i + 1][1]);
+    return `${words} ${clock(ms)}${p && p !== next ? ` ${p}` : ''}`;
+  }).join(', ');
+}
+const SUMMARY_H = 12;
+/** One or two short sentences for the hourly card about the next 12 hours: the rain as it comes
+    and goes (or the sky when it stays dry), then the one other thing most worth knowing in those
+    hours (thunderstorms, strong gusts or frost). It used to cover 24 hours and dropped the day:
+    "Drizzle likely from around 21:00, heaviest near 13:00. Gusts up to 47 mph." meant 13:00 and
+    the gusts tomorrow afternoon. Every time it names now says which day it is on. */
 export function nextHoursText(m) {
-  const end = Date.now() + 24 * 36e5;
-  const hs = m.full.filter((h) => h.t >= Date.now() - 30 * 60e3 && h.t <= end);
+  const nowMs = Date.now(), end = nowMs + SUMMARY_H * 36e5;
+  const hs = m.full.filter((h) => h.t > nowMs && h.t <= end);
   if (!hs.length) return '';
-  const wetNow = isWet(m.now.cond);
-  const firstWet = hs.find((h) => isWet(h.cond));
-  const parts = [];
-  if (wetNow) {
-    const dryAgain = hs.find((h) => h.t > Date.now() && !isWet(h.cond));
-    parts.push(dryAgain ? `${condLabel(m.now.cond, true)} easing around ${at(dryAgain.t)}.` : `${condLabel(m.now.cond, true)} on and off through the next 24 hours.`);
-  } else if (firstWet) {
-    const wettest = hs.filter((h) => isWet(h.cond)).reduce((a, b) => ((b.precip ?? 0) / Math.max(1, b.span || 1) > (a.precip ?? 0) / Math.max(1, a.span || 1) ? b : a));
-    parts.push(`${condLabel(firstWet.cond, firstWet.isDay)} likely from around ${at(firstWet.t)}${wettest !== firstWet ? `, heaviest near ${at(wettest.t)}` : ''}.`);
+  const wet = hs.map((h) => isWet(h.cond));
+  const rate = (h) => (h.span > 0 ? (h.precip ?? 0) / h.span : h.precipRate ?? 0);
+  /* dry again: two dry hours in a row (or the last hour) */
+  const dryFrom = (i) => { for (let k = i; k < hs.length; k++) if (!wet[k] && (k === hs.length - 1 || !wet[k + 1])) return k; return -1; };
+  let first;
+  if (isWet(m.now.cond)) {
+    const k = dryFrom(0);
+    first = k >= 0 ? `${sayTimes([[`${condLabel(m.now.cond, m.now.isDay)}, clearing by`, hs[k].t]])}.` : `${condLabel(m.now.cond, m.now.isDay)} for the next ${SUMMARY_H} hours.`;
   } else {
-    const c = hs.reduce((s, h) => s + (h.tcc ?? 50), 0) / hs.length;
-    parts.push(`Dry for the next 24 hours${c < 30 ? ' with plenty of clear sky' : c > 85 ? ', staying mostly cloudy' : ''}.`);
+    const i0 = wet.indexOf(true);
+    if (i0 >= 0) {
+      const k = dryFrom(i0);
+      const spell = hs.slice(i0, k < 0 ? hs.length : k);
+      const peak = spell.reduce((a, b) => (rate(b) > rate(a) ? b : a));
+      const start = spell[0];
+      const bits = [[`${condLabel(start.cond, start.isDay)} from about`, start.t]];
+      if (peak !== start && bandOf(rate(peak)) > bandOf(rate(start))) bits.push(['heaviest around', peak.t]);
+      if (k >= 0) bits.push(['clearing by', hs[k].t]);
+      first = `${sayTimes(bits)}.`;
+    } else {
+      const c = hs.reduce((s, h) => s + (h.tcc ?? 50), 0) / hs.length;
+      const night = hs.filter((h) => !h.isDay).length > hs.length / 2;
+      first = `Dry for the next ${SUMMARY_H} hours${c < 30 ? (night ? ' with clear skies' : ' with plenty of sunshine') : c > 85 ? ', staying cloudy' : c < 55 ? (night ? ' with clear spells' : ' with sunny spells') : ''}.`;
+    }
   }
-  const gust = Math.max(...hs.map((h) => h.gust ?? 0));
-  if (gust >= 35) parts.push(`Gusts up to ${Math.round(gust)} mph.`);
-  const thunder = hs.find((h) => h.cond === 'thunder');
-  const ts = (m.nova?.hours || []).filter((x) => x.t >= Date.now() - 30 * 60e3 && x.t <= end);
-  const peak = ts.length ? ts.reduce((a, b) => (b.p > a.p ? b : a)) : null;
-  if (peak && peak.p >= 15 && !parts[0].startsWith('Thunder')) parts.push(`A ${thunderRisk(peak.p).word.toLowerCase()} risk of thunderstorms around ${at(peak.t)}.`);
-  else if (thunder && !parts[0].startsWith('Thunder')) parts.push(`A chance of thunder around ${at(thunder.t)}.`);
+  /* one more thing, the most telling: thunderstorms (TCM NOVA), gusts, then frost */
+  const ts = (m.nova?.hours || []).filter((x) => x.t > nowMs && x.t <= end);
+  const storm = ts.length ? ts.reduce((a, b) => (b.p > a.p ? b : a)) : null;
+  const gusty = hs.reduce((a, b) => ((b.gust ?? 0) > (a.gust ?? 0) ? b : a));
   const frost = hs.find((h) => (h.ground ?? 9) <= 0 || (h.t2 ?? 9) <= 0);
-  if (frost) parts.push(`${(frost.t2 ?? 9) <= 0 ? 'Freezing' : 'A ground frost'} by ${at(frost.t)}.`);
-  return parts.join(' ');
+  let more = '';
+  if (storm && storm.p >= 15 && !first.startsWith('Thunder')) more = `A ${thunderRisk(storm.p).word.toLowerCase()} risk of thunderstorms around ${whenSaid(storm.t)}.`;
+  else if ((gusty.gust ?? 0) >= 35) more = `Gusts up to ${Math.round(gusty.gust)} mph around ${whenSaid(gusty.t)}.`;
+  else if (frost) more = `${(frost.t2 ?? 9) <= 0 ? 'Freezing' : 'A ground frost'} by ${whenSaid(frost.t)}.`;
+  return more ? `${first} ${more}` : first;
 }
 
 export function dayText(d) {
