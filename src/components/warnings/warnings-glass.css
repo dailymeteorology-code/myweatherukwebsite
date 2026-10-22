@@ -304,3 +304,7 @@
 .wg ::-webkit-scrollbar-track { background: transparent; }
 .wg ::-webkit-scrollbar-thumb { background: var(--wg-hair); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
 .wg ::-webkit-scrollbar-thumb:hover { background-color: var(--wg-ink3); }
+
+/* the map's "Save JPG", when the picture could not be made */
+.wg-save-err { margin: 0; padding: 8px 14px 12px; font-size: 0.8rem; color: #f87171; }
+.wg.is-light .wg-save-err { color: #b91c1c; }

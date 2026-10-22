@@ -34,8 +34,10 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useTheme } from '@/components/ThemeContext';
 import { createPortal } from 'react-dom';
-import { X, AlertTriangle, SlidersHorizontal, MapPin, Tag, ArrowRight, Check } from 'lucide-react';
+import { X, AlertTriangle, SlidersHorizontal, MapPin, Tag, ArrowRight, Check, Download, Loader2 } from 'lucide-react';
 import { WarningDetailPanel, warningTagHtml, insideGeometries } from '@/components/warnings/MetOfficeWarning';
+import { saveWarningImage } from '@/components/warnings/warningImage';
+import { useLogo } from '@/components/MobileHeaderLogo';
 import '@/components/warnings/warnings-glass.css';
 
 const SEV = {
@@ -83,6 +85,16 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
   const [typeFilter, setTypeFilter] = useState([]); // empty = all
   const [selected, setSelected] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
+  /* "Save JPG": the selected warning as a picture (components/warnings/warningImage.js) */
+  const logoUrl = useLogo();
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const saveImage = async () => {
+    if (!selected || saving) return;
+    setSaving(true); setSaveError('');
+    try { await saveWarningImage(selected, { dark: isDark, logoUrl }); } catch (e) { setSaveError(e?.message || 'The picture could not be made.'); }
+    setSaving(false);
+  };
   const [labelsOn, setLabelsOn] = useState(readPlaceLabelsOn);
   const labelsRef = useRef(null);
   useEffect(() => { writePlaceLabelsOn(labelsOn); labelsRef.current?.setVisible(labelsOn); }, [labelsOn]);
@@ -264,6 +276,7 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
   }, [isOpen]);
 
   useEffect(() => { setSelected(null); }, [dayIdx]);
+  useEffect(() => { setSaveError(''); }, [selected]);
 
   /* Escape closes the open warning first, then the map; the page behind does not scroll */
   useEffect(() => {
@@ -384,7 +397,15 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
         {/* the full warning, in the Met Office's order */}
         {selected && (
           <div key={selected.warningId || `${selected.type}${selected.validFrom}`} className="wg-side wg-glass is-strong">
-            <WarningDetailPanel warning={selected} onClose={() => setSelected(null)} style={{ flex: 1, minHeight: 0 }} />
+            <WarningDetailPanel warning={selected} onClose={() => setSelected(null)} style={{ flex: 1, minHeight: 0 }}
+              actions={(
+                <button type="button" className="wg-btn" onClick={saveImage} disabled={saving}
+                  title="Save this warning as a picture: its area on the map, when it starts and ends, the description and the impact matrix"
+                  aria-label="Save this warning as a JPG picture">
+                  {saving ? <Loader2 className="animate-spin" /> : <Download />}<span className="wg-txt">{saving ? 'Saving…' : 'Save JPG'}</span>
+                </button>
+              )} />
+            {saveError && <p className="wg-save-err" role="alert">{saveError}</p>}
           </div>
         )}
       </div>

@@ -170,7 +170,8 @@ export function WarningDetailBody({ warning: w, flat = false, children }) {
   );
 }
 
-export function WarningDetailPanel({ warning: w, onClose, style }) {
+/* `actions`: extra buttons for the head, before the close button (the map's "Save JPG") */
+export function WarningDetailPanel({ warning: w, onClose, style, actions = null }) {
   const hex = SEV_HEX[w.severity] || SEV_HEX.Yellow;
   const from = w.validFrom ? new Date(w.validFrom) : null;
   const to = w.validTo ? new Date(w.validTo) : null;
@@ -182,6 +183,7 @@ export function WarningDetailPanel({ warning: w, onClose, style }) {
           <AlertTriangle fill="currentColor" fillOpacity={0.18} strokeWidth={2.2} />
         </span>
         <div className="wg-d-title"><b>{w.severity} warning</b><span>{w.type}</span></div>
+        {actions}
         {onClose && (
           <button type="button" className="wg-btn wg-icon" onClick={onClose} aria-label="Close warning details"><X /></button>
         )}
