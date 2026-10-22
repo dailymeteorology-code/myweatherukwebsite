@@ -61,6 +61,8 @@ VARIABLES = {
     'wind10':       dict(label='Wind speed (10 m)', unit='mph', group='Wind & pressure', lo=0, hi=150),
     'gust10':       dict(label='Wind gusts', unit='mph', group='Wind & pressure', lo=0, hi=150),
     'gust_max':     dict(label='Max gust (past hour)', unit='mph', group='Wind & pressure', lo=0, hi=150),
+    # the strongest gust at each point from the start of the run to the step on screen (mdata/job.py)
+    'gust_peak':    dict(label='Max gust so far (this run)', unit='mph', group='Wind & pressure', lo=0, hi=150),
     'wind100':      dict(label='Wind speed (100 m)', unit='mph', group='Wind & pressure', lo=0, hi=150),
     'mslp':         dict(label='Mean sea-level pressure', unit='hPa', group='Wind & pressure', lo=930, hi=1060),
     # cloud & visibility
@@ -351,7 +353,7 @@ class UKV(MetOffice):
         'shf': 'sensible_heat_flux_at_surface',
     }
     pl_files = {'wbpt850': ('wet_bulb_potential_temperature_on_pressure_levels', 85000.0)}
-    variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'feels', 'wbpt850', 'windchill', 'wdir10', 'wx']
+    variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'feels', 'wbpt850', 'windchill', 'wdir10', 'wx', 'gust_peak']
 
 
 class MOGlobal(MetOffice):
@@ -372,7 +374,7 @@ class MOGlobal(MetOffice):
         'lw_down': 'radiation_flux_in_longwave_downward_at_surface', 'uv_down': 'radiation_flux_in_uv_downward_at_surface',
         'trop_p': 'pressure_at_tropopause',
     }
-    variables = list(files) + ['precip_1h', 'precip_total', 'feels', 'windchill', 'wdir10', 'wx']
+    variables = list(files) + ['precip_1h', 'precip_total', 'feels', 'windchill', 'wdir10', 'wx', 'gust_peak']
 
 
 # ── ECMWF (IFS, AIFS) ───────────────────────────────────────────────────────
@@ -400,7 +402,7 @@ class ECMWF:
     }
     WAVE = {'swh', 'mwp', 'pp1d', 'mwd'}
     variables = ['precip_rate', 'precip_total', 'snow_total', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10',
-                 'gust10', 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'cape_mu', 'pw', 't850', 't500', 'z500', 'rh700',
+                 'gust10', 'gust_peak', 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'cape_mu', 'pw', 't850', 't500', 'z500', 'rh700',
                  'wind850', 'wind500', 'wind250', 'sw_down', 'lw_down', 'wx', 'swh', 'mwp', 'pp1d', 'mwd']
 
     def __init__(self):
@@ -568,7 +570,7 @@ class GFS:
     }
     WAVE = {'swh', 'pp1d', 'mwd'}
     variables = ['precip_rate', 'precip_total', 'refc', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10', 'gust10',
-                 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'cape_sb', 'cin_sb', 'li', 'srh3', 'pw',
+                 'gust_peak', 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'cape_sb', 'cin_sb', 'li', 'srh3', 'pw',
                  'snow_depth', 'snow_swe', 'frz', 't850', 't500', 'z500', 'rh700', 'wind850', 'wind500', 'wind250',
                  'trop_p', 'sw_down', 'wx', 'swh', 'pp1d', 'mwd']
 

@@ -94,6 +94,7 @@ const SCALES = {
   wind10: { stops: WIND, floor: 5, ticks: [10, 20, 30, 40, 50, 60, 70, 85, 100] },
   gust10: { stops: WIND, floor: 5, ticks: [10, 20, 30, 40, 50, 60, 70, 85, 100] },
   gust_max: { stops: WIND, floor: 5, ticks: [10, 20, 30, 40, 50, 60, 70, 85, 100] },
+  gust_peak: { stops: WIND, floor: 5, ticks: [10, 20, 30, 40, 50, 60, 70, 85, 100] },
   wind100: { stops: WIND, floor: 5, ticks: [10, 20, 30, 40, 50, 60, 70, 85, 100] },
   wind850: { stops: JET.map(([v, c, a]) => [v * 0.6, c, a]), ticks: [36, 48, 60, 72, 84, 96, 108, 126] },
   wind500: { stops: JET.map(([v, c, a]) => [v * 0.8, c, a]), ticks: [48, 64, 80, 96, 112, 128, 144, 168] },

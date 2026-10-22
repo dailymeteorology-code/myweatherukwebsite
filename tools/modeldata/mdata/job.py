@@ -77,6 +77,46 @@ def derived(model, run_s, var, steps, d, status):
         write_json(d / 'status.json', status)
 
 
+def peak(model, run_s, var, steps, d, status):
+    """The strongest gust at each point from the start of the run to each step: a running maximum
+    of the model's own gusts, so played through, the map fills in with the worst the run brings up
+    to the moment on screen. From the past hour's maximum gust where the model gives it (UKV, Met
+    Office Global: it catches the peaks between steps), the gust otherwise (ECMWF's is the maximum
+    since the previous post-processing step, GFS's the gust at the step).
+
+    The source is made first if it is not complete. Every frame is recomputed from the source's
+    frames in order (a run still arriving gains steps), and only those not yet on disk are written.
+    A step the source lacks is left out rather than drawn without it."""
+    import json
+    from .common import read_frame
+    M = MODELS[model]
+    run = _utc(run_s)
+    src = 'gust_max' if 'gust_max' in M.variables else 'gust10'
+    try:
+        done = json.loads((run_dir(model, run, src) / 'status.json').read_text()).get('state') == 'complete'
+    except Exception:
+        done = False
+    if not done:
+        main(model, run_s, src)
+    status['source'] = src
+    best = None
+    for h in sorted(steps):
+        p = run_dir(model, run, src) / f'{h}.bin'
+        if not p.exists():
+            status['missing'].append(h)
+            continue
+        g = read_frame(p)[0]
+        best = g if best is None else np.fmax(best, g)
+        if (d / f'{h}.bin').exists():
+            status['done'].append(h)
+            continue
+        vt = run + timedelta(hours=h)
+        write_frame(d / f'{h}.bin', best, VARIABLES[var],
+                    {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat(), 'source': src})
+        status['done'].append(h)
+        write_json(d / 'status.json', status)
+
+
 def main(model, run_s, var, first=None):
     logging.disable(logging.WARNING)
     warnings.filterwarnings('ignore')
@@ -89,8 +129,8 @@ def main(model, run_s, var, first=None):
     status = {'model': model, 'run': run.isoformat(), 'var': var, 'steps': steps, 'done': [], 'missing': [],
               'state': 'running', 'started': time.time()}
     write_json(d / 'status.json', status)
-    if var == 'wx':
-        derived(model, run_s, var, steps, d, status)
+    if var in ('wx', 'gust_peak'):
+        (derived if var == 'wx' else peak)(model, run_s, var, steps, d, status)
         status['state'] = 'complete'
         status['seconds'] = round(time.time() - status['started'], 1)
         write_json(d / 'status.json', status)

@@ -198,6 +198,12 @@ const ANNOTATION_SIZE_PX = Object.fromEntries(ANNOTATION_SIZES.map(s => [s.id, s
    evaluating. That is fragile and it hid the dependency, so they lead now. */
 const VIEW_W = 302, VIEW_H = 458;
 const GRAPHIC_W = 640, GRAPHIC_H = 760;
+/* The drawing layers: the map box (450 x 666, 2 px from the top, centred 130 px left of the
+   middle) grown by DRAW_PAD on every side, in the box's own 0..1000 units. Areas, arrows and labels
+   are stored in the box's 0..1 space; this lets them lie outside the box, anywhere on the graphic. */
+const DRAW_PAD = 700;
+const DRAW_BOX = { position: 'absolute', top: 2 - DRAW_PAD, left: `calc(50% - ${130 + DRAW_PAD}px)`, width: 450 + 2 * DRAW_PAD, height: 666 + 2 * DRAW_PAD };
+const DRAW_VB = `${(-DRAW_PAD / 450) * 1000} ${(-DRAW_PAD / 666) * 1000} ${((450 + 2 * DRAW_PAD) / 450) * 1000} ${((666 + 2 * DRAW_PAD) / 666) * 1000}`;
 /* The graphic's own base colour, used behind the export so a JPEG's opaque
    corners match the frame rather than going black. */
 const GRAPHIC_BG = '#07101f';
@@ -1279,8 +1285,11 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
     if (!wrap) return null;
     const rect = wrap.getBoundingClientRect();
     const src = e.touches?.[0] || e;
-    let x = (src.clientX - rect.left) / rect.width;
-    let y = (src.clientY - rect.top) / rect.height;
+    /* Anywhere on the graphic, not only over the map's box: the point is in the box's 0..1 space
+       and may lie outside it, out to the graphic's edges. */
+    const g = graphicRef.current?.getBoundingClientRect() || rect;
+    let x = (Math.max(g.left, Math.min(g.right, src.clientX)) - rect.left) / rect.width;
+    let y = (Math.max(g.top, Math.min(g.bottom, src.clientY)) - rect.top) / rect.height;
     // When zoomed into a region the map layer is CSS-transformed (translate +
     // scale about origin 0,0). The drawn shapes render INSIDE that zoomed layer,
     // so we must invert the zoom here or the shape lands double-transformed.
@@ -1290,7 +1299,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
       x = z.cx + (x - 0.5) / z.k;
       y = z.cy + (y - 0.5) / z.k;
     }
-    return [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))];
+    return [x, y];
   };
 
   // Whether the map surface should currently capture pointer drawing. Text-drop
@@ -1686,6 +1695,10 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
   // compile; it is always false now.)
   const drawLocked = false;
   outlookZoomRef.current = outlookZoom;   // ref declared above eventToNormPoint
+  /* the same region zoom, for the graphic-wide drawing layers (in DRAW_VB's units) */
+  const drawZoom = outlookZoom.zoomed
+    ? `translate(${(1000 * (0.5 - outlookZoom.cx * outlookZoom.k)).toFixed(1)} ${(1000 * (0.5 - outlookZoom.cy * outlookZoom.k)).toFixed(1)}) scale(${outlookZoom.k.toFixed(3)})`
+    : undefined;
   // The active region's geographic bbox (null = UK-wide) — used to filter the
   // counties + town labels to the selected region.
   const activeRegionBox = (!isRadar && outlookRegion !== 'uk')
@@ -2673,7 +2686,13 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
         width: '100%', height: GRAPHIC_H * scale, overflow: 'hidden',
         display: 'flex', justifyContent: 'center',
       }}>
-        <div ref={graphicRef} style={{
+        <div ref={graphicRef}
+          onMouseDown={handleDown} onMouseMove={handleMove} onMouseUp={handleUp} onMouseLeave={handleUp}
+          onTouchStart={handleDown} onTouchMove={handleMove} onTouchEnd={handleUp}
+          style={{
+          cursor: mapTool === 'text' ? 'text' : mapTool === 'arrow' ? 'crosshair' : mapTool === 'cond' ? 'pointer' : (drawMode ? 'crosshair' : 'default'),
+          userSelect: 'none',
+          touchAction: (surfaceActive && (drawMode || mapTool === 'arrow')) ? 'none' : 'auto',
           width: GRAPHIC_W, height: GRAPHIC_H, position: 'relative', overflow: 'hidden',
           borderRadius: 24, fontFamily: "'Archivo','DM Sans',system-ui,sans-serif",
           background: '#06040f', flexShrink: 0,
@@ -2952,79 +2971,56 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
 
             {/* Hazards card — hidden while the lightning overlay is active, since
                 lightning mode is a verification view, not a hazard forecast. */}
-            {!showLightning && visibleHazards.length > 0 && (() => {
-              // When 4+ hazard overlays are selected the rows in the box shrink
-              // so they all fit without the panel growing tall / cramped.
-              const compact = visibleHazards.length >= 4;
-              const rowGap   = compact ? 3 : 5;
-              const rowPad   = compact ? '5px 8px' : '6px 9px';
-              const rowGapIn = compact ? 8 : 10;
-              const iconBox  = compact ? 22 : 26;
-              const iconSize = compact ? 13 : 14;
-              const customSz = compact ? 13 : 15;
-              const labelSz  = compact ? 9.5 : 10;
-              return (
-              <div style={{ ...glass({ padding: compact ? '10px 11px' : '8px 10px', borderRadius: 14, alignSelf: 'flex-start', width: 170 }, exportMode) }}>
+            {!showLightning && visibleHazards.length > 0 && (
+              /* Compact: a slim row for each hazard, its chance (when set) at the end of the same
+                 row, so setting percentages never widens the card into the map. It used to grow
+                 from 170 to 200 px the moment one was set, over the map's west coast. */
+              <div style={{ ...glass({ padding: '8px 9px 9px', borderRadius: 13, alignSelf: 'flex-start', width: 160 }, exportMode) }}>
                 <GlassSheen />
                 <span style={{
-                  position: 'relative', zIndex: 1, display: 'block', marginBottom: compact ? 7 : 9, paddingBottom: 7,
+                  position: 'relative', zIndex: 1, display: 'block', marginBottom: 6, paddingBottom: 5,
                   borderBottom: '1px solid rgba(255,255,255,0.10)',
-                  fontSize: 9, fontWeight: 800, letterSpacing: '0.22em',
+                  fontSize: 8.5, fontWeight: 800, letterSpacing: '0.2em',
                   color: 'rgba(148,163,184,0.95)', textTransform: 'uppercase',
                 }}>{isRadar ? 'Conditions' : 'Hazards'}</span>
-                <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: rowGap }}>
+                <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
                   {visibleHazards.map(h => {
                     const HIcon = h.Icon;
+                    const pct = hazardPct[h.id];
                     return (
                       <div key={h.id} style={{
-                        display: 'flex', alignItems: 'center', gap: rowGapIn,
-                        padding: rowPad, borderRadius: 10,
+                        display: 'flex', alignItems: 'center', gap: 5,
+                        padding: '3px 6px 3px 3px', borderRadius: 8,
                         background: h.hatched
-                          ? 'repeating-linear-gradient(45deg, rgba(0,0,0,0.5) 0 6px, rgba(49,46,129,0.4) 6px 12px)'
-                          : `linear-gradient(90deg, ${h.color}28 0%, ${h.color}12 100%)`,
-                        border: `1px solid ${h.color}55`,
-                        borderLeft: `4px solid ${h.color}`,
+                          ? 'repeating-linear-gradient(45deg, rgba(0,0,0,0.45) 0 5px, rgba(49,46,129,0.38) 5px 10px)'
+                          : `linear-gradient(90deg, ${h.color}30 0%, ${h.color}0e 100%)`,
+                        boxShadow: `inset 3px 0 0 ${h.color}`,
                       }}>
                         <div style={{
-                          width: iconBox, height: iconBox, borderRadius: compact ? 7 : 9, flexShrink: 0,
+                          width: 19, height: 19, borderRadius: 6, flexShrink: 0, marginLeft: 3,
                           background: `linear-gradient(135deg, ${h.color}, ${h.color}cc)`,
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          boxShadow: `0 2px 8px ${h.color}55`,
                         }}>
-                          {h.customIcon === 'hail' ? <HailIcon size={customSz} color="#fff" /> :
-                           h.customIcon === 'flood' ? <FloodHouseIcon size={customSz} color="#fff" /> :
-                           HIcon ? <HIcon style={{ width: iconSize, height: iconSize, color: '#fff' }} strokeWidth={2.4} /> : null}
+                          {h.customIcon === 'hail' ? <HailIcon size={12} color="#fff" /> :
+                           h.customIcon === 'flood' ? <FloodHouseIcon size={12} color="#fff" /> :
+                           HIcon ? <HIcon style={{ width: 11, height: 11, color: '#fff' }} strokeWidth={2.5} /> : null}
                         </div>
                         <span style={{
-                          fontSize: labelSz, fontWeight: 800, color: '#fff', lineHeight: 1.15,
-                          letterSpacing: '0.04em', textTransform: 'uppercase',
+                          flex: 1, minWidth: 0, fontSize: 9.5, fontWeight: 750, color: '#fff',
+                          lineHeight: 1.12, letterSpacing: '-0.005em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                         }}>{h.label}</span>
-                        {/* Percentage chance of this hazard occurring. Only
-                            rendered when the forecaster has set one. */}
-                        {hazardPct[h.id] != null && (
+                        {pct != null && (
                           <span style={{
-                            marginLeft: 'auto', flexShrink: 0,
-                            display: 'inline-flex', alignItems: 'baseline', gap: 1,
-                            padding: compact ? '1px 6px' : '2px 7px', borderRadius: 999,
-                            background: `${h.color}26`, border: `1px solid ${h.color}80`,
-                          }}>
-                            <span style={{
-                              fontSize: compact ? 11 : 12.5, fontWeight: 800, color: '#fff',
-                              lineHeight: 1, letterSpacing: '-0.01em', fontVariantNumeric: 'tabular-nums',
-                            }}>{hazardPct[h.id]}</span>
-                            <span style={{
-                              fontSize: compact ? 7.5 : 8.5, fontWeight: 800,
-                              color: 'rgba(255,255,255,0.75)',
-                            }}>%</span>
-                          </span>
+                            flexShrink: 0, fontSize: 11, fontWeight: 800, color: '#fff', lineHeight: 1,
+                            letterSpacing: '-0.01em', fontVariantNumeric: 'tabular-nums',
+                          }}>{pct}<span style={{ fontSize: 8, fontWeight: 800, color: 'rgba(255,255,255,0.72)', marginLeft: 1 }}>%</span></span>
                         )}
                       </div>
                     );
                   })}
                 </div>
               </div>
-              );
-            })()}
+            )}
 
             {/* Lightning verification stats card — shown on the graphic itself
                 (and in exports) only while the lightning overlay is active.
@@ -3088,18 +3084,16 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
           </div>{/* /header auto-fit scaler */}
           </div>{/* /header bottom-anchored wrapper */}
 
-          {/* -- MAP + VECTOR DRAWING -- */}
-          <div
-            ref={mapWrapRef}
-            onMouseDown={handleDown} onMouseMove={handleMove} onMouseUp={handleUp} onMouseLeave={handleUp}
-            onTouchStart={handleDown} onTouchMove={handleMove} onTouchEnd={handleUp}
-            style={{
+          {/* -- MAP + VECTOR DRAWING --
+              The map sits in its box; what is drawn can go anywhere on the graphic. The box's two map
+              layers (the ground, then rain, cities and lightning) clip to it as before. The drawings
+              between and above them keep the box's 0..1 coordinates, so they stay registered with the
+              map, but are drawn on layers that reach far past the box on every side (DRAW_BOX /
+              DRAW_VB): an area can run out over the sea, under the cards or into the corners. The
+              pointer is taken on the whole graphic (its root's handlers), not only over the box. */}
+          <div ref={mapWrapRef} style={{
               position: 'absolute', top: 2, left: '50%', marginLeft: -130, width: 450, height: 666,
-              zIndex: 3,
-              cursor: mapTool === 'text' ? 'text' : mapTool === 'arrow' ? 'crosshair' : mapTool === 'cond' ? 'pointer' : (drawMode ? 'crosshair' : 'default'),
-              userSelect: 'none',
-              touchAction: (surfaceActive && (drawMode || mapTool === 'arrow')) ? 'none' : 'auto',
-              borderRadius: 12, overflow: 'hidden',
+              zIndex: 3, borderRadius: 12, overflow: 'hidden',
             }}
           >
            <div style={{
@@ -3111,9 +3105,12 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
             <CountyLinesLayer opacity={0.5} region={activeRegionBox} />
             {isRadar && <UKRadarLayer opacity={0.88} projectPt={projectPt} viewW={VIEW_W} viewH={VIEW_H} bbox={(UK_REGIONS.find(r => r.id === radarRegion) || UK_REGIONS[0]).bbox} />}
             {isRadar && <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 2, backgroundImage: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.07) 0px, rgba(0,0,0,0.07) 1px, transparent 1px, transparent 3px)' }} />}
-            {showShapes && (
-              <svg viewBox="0 0 1000 1000" preserveAspectRatio="none"
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 3 }}>
+           </div>
+          </div>
+          {showShapes && (
+              <svg viewBox={DRAW_VB} preserveAspectRatio="none"
+                style={{ ...DRAW_BOX, pointerEvents: 'none', zIndex: 3 }}>
+                <g transform={drawZoom}>
                 <defs>
                   {/* Severe hatch — diagonal lines only, transparent background so
                       underlying shapes/map are NOT obscured. */}
@@ -3148,26 +3145,41 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
                     strokeLinejoin="round" strokeLinecap="round" opacity={0.85}
                   />
                 )}
+              </g>
               </svg>
             )}
+          <div style={{
+              position: 'absolute', top: 2, left: '50%', marginLeft: -130, width: 450, height: 666,
+              zIndex: 3, borderRadius: 12, overflow: 'hidden', pointerEvents: 'none',
+            }}
+          >
+           <div style={{
+             position: 'absolute', inset: 0,
+             transform: outlookZoom.transform, transformOrigin: '0 0',
+             transition: 'transform 0.25s ease',
+           }}>
             {!isRadar && <UKVRainLayer enabled={showUKVRain} validDate={validDate} timelineGran={timelineGran} playhead={playhead} region={activeRegionBox} />}
             {showCities && <CityMarkersLayer region={activeRegionBox} k={outlookZoom.k} />}
             {showLightning && strikes && <LightningLayer strikes={strikes} color={lightningColor} outline={lightningOutline} outlineColor={lightningOutlineColor} />}
             {/* County outlines drawn ON TOP of the lightning dots so the borders stay visible over the strike overlay. */}
             {showLightning && <CountyLinesLayer opacity={0.8} region={activeRegionBox} zIndex={5.5} strokeWidth={1.1} />}
-            {showShapes && showLightning && shapes.length > 0 && (
-              <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 6 }}>
+           </div>
+          </div>
+          {showShapes && showLightning && shapes.length > 0 && (
+              <svg viewBox={DRAW_VB} preserveAspectRatio="none" style={{ ...DRAW_BOX, pointerEvents: 'none', zIndex: 3 }}>
+                <g transform={drawZoom}>
                 {shapes.map((s, i) => {
                   const m = LEVEL_LOOKUP[s.riskLevel] || activeMeta, severe = isSevereId(s.riskLevel), condSevere = isCondSevereId(s.riskLevel), areaCond = !!s.cond && !severe && !condSevere;
                   return <path key={i} d={pointsToPath(s.points)} fill="none" stroke={areaCond ? darkenColor(m.border, 0.3) : darkenColor(m.border, 0.2)} strokeWidth={severe ? 9 : condSevere ? 8 : areaCond ? 7.5 : 6} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={condSevere ? '14 10' : areaCond ? '15 9' : 'none'} opacity={Math.min(1, drawOpacity + 0.15)} />;
                 })}
+              </g>
               </svg>
             )}
-
-            {/* -- STORM-MOTION ARROWS -- */}
+          {/* -- STORM-MOTION ARROWS -- */}
             {(arrows.length > 0 || arrowDraft) && (
-              <svg viewBox="0 0 1000 1000" preserveAspectRatio="none"
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 7, overflow: 'visible' }}>
+              <svg viewBox={DRAW_VB} preserveAspectRatio="none"
+                style={{ ...DRAW_BOX, pointerEvents: 'none', zIndex: 3 }}>
+                <g transform={drawZoom}>
                 <defs>
                   {[...arrows, ...(arrowDraft ? [{ id: 'draft', color: arrowColor }] : [])].map(a => (
                     <marker key={`mk-${a.id}`} id={`arrowhead-${a.id}`} markerWidth="9" markerHeight="9"
@@ -3197,17 +3209,15 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
                   return <path d={d} fill="none" stroke={arrowColor} strokeWidth={5} strokeLinecap="round"
                     strokeDasharray="10 8" opacity={0.85} markerEnd="url(#arrowhead-draft)" />;
                 })()}
+              </g>
               </svg>
             )}
 
-            {/* -- ON-MAP TEXT ANNOTATIONS -- */}
-            {annotations.length > 0 && (
-              <div style={{ position: 'absolute', inset: 0, zIndex: 8, pointerEvents: 'none' }}>
-                {/* leader lines first, under the labels */}
-                {annotations.some(a => a.leader) && (
-                  <svg viewBox="0 0 1000 1000" preserveAspectRatio="none"
-                    style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', overflow: 'visible' }}>
-                    {annotations.filter(a => a.leader).map(a => (
+          {/* -- ON-MAP TEXT ANNOTATIONS -- leader lines on a drawing layer, labels over the box */}
+          {annotations.some(a => a.leader) && (
+            <svg viewBox={DRAW_VB} preserveAspectRatio="none" style={{ ...DRAW_BOX, pointerEvents: 'none', zIndex: 3 }}>
+              <g transform={drawZoom}>
+                {annotations.filter(a => a.leader).map(a => (
                       <g key={`ld-${a.id}`}>
                         <line x1={a.x * 1000} y1={a.y * 1000} x2={a.lx * 1000} y2={a.ly * 1000}
                           stroke="rgba(0,0,0,0.55)" strokeWidth={4} strokeLinecap="round" />
@@ -3216,8 +3226,16 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
                         <circle cx={a.lx * 1000} cy={a.ly * 1000} r={5} fill={a.color} stroke="rgba(0,0,0,0.5)" strokeWidth={1.5} />
                       </g>
                     ))}
-                  </svg>
-                )}
+              </g>
+            </svg>
+          )}
+          {annotations.length > 0 && (
+            <div style={{ position: 'absolute', top: 2, left: '50%', marginLeft: -130, width: 450, height: 666, zIndex: 3, pointerEvents: 'none' }}>
+           <div style={{
+             position: 'absolute', inset: 0,
+             transform: outlookZoom.transform, transformOrigin: '0 0',
+             transition: 'transform 0.25s ease',
+           }}>
                 {annotations.map(a => {
                   const px = ANNOTATION_SIZE_PX[a.size] || 17;
                   const dark = a.color === '#111827' || a.color === '#ffffff';
@@ -3229,9 +3247,10 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
                         const wrap = mapWrapRef.current; if (!wrap) return;
                         const rect = wrap.getBoundingClientRect();
                         setEditingAnnId(a.id);
+                        const g = graphicRef.current?.getBoundingClientRect() || rect;
                         const onMove = (ev) => {
-                          const nx = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-                          const ny = Math.max(0, Math.min(1, (ev.clientY - rect.top) / rect.height));
+                          const nx = (Math.max(g.left, Math.min(g.right, ev.clientX)) - rect.left) / rect.width;
+                          const ny = (Math.max(g.top, Math.min(g.bottom, ev.clientY)) - rect.top) / rect.height;
                           updateAnnotation(a.id, { x: nx, y: ny });
                         };
                         const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
@@ -3263,10 +3282,9 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
                     </div>
                   );
                 })}
-              </div>
-            )}
-           </div>{/* /zoom wrapper */}
-          </div>
+           </div>
+            </div>
+          )}
 
           {/* -- FOOTER -- */}
           <div style={{
