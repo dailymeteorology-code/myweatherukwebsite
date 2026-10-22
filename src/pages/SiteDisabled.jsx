@@ -48,7 +48,6 @@ function buildEmail({ type, name = '', email = '', code = '', accessCode = '' })
   if (type === 'requestReceived') return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Access request received</title><style>${baseStyles}</style></head><body><div class="wrapper"><div class="container">${logo}<div class="card"><div class="card-header"><div class="status-badge-pending">Pending Review</div><h1>Request received${name ? `, ${name.split(' ')[0]}` : ''}</h1><p>Thanks for applying. Your request is now in the queue.</p></div><div class="card-body"><div class="steps"><div class="step"><div class="step-num">1</div><div class="step-text"><strong>Review</strong> — We'll look over your application within 24–48 hours.</div></div><div class="step"><div class="step-num">2</div><div class="step-text"><strong>Decision</strong> — You'll receive an email with the outcome.</div></div><div class="step"><div class="step-num">3</div><div class="step-text"><strong>Access granted</strong> — Your personal access code will be included.</div></div></div></div>${footer}</div></div></div></body></html>`;
   if (type === 'accessApproved') return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>You've been approved</title><style>${baseStyles}</style></head><body><div class="wrapper"><div class="container">${logo}<div class="card"><div class="card-header"><div class="status-badge-approved">Approved</div><h1>You're in${name ? `, ${name.split(' ')[0]}` : ''}!</h1><p>Your access request has been approved.</p></div><div class="card-body"><div class="access-box"><div class="code">${accessCode}</div><div class="code-label">Your personal access code</div></div><div class="note success">🔒 Keep this code private.</div></div>${footer}</div></div></div></body></html>`;
   if (type === 'forgotVerify') return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Verify your identity</title><style>${baseStyles}</style></head><body><div class="wrapper"><div class="container">${logo}<div class="card"><div class="card-header"><h1>Identity verification</h1><p>Enter the code below to confirm it's you.</p></div><div class="card-body"><div class="code-box"><div class="code">${code}</div><div class="code-label">Identity verification code</div></div><div class="note warning">⏱ Expires in <strong style="color:rgba(255,255,255,0.65)">10 minutes</strong>.</div></div>${footer}</div></div></div></body></html>`;
-  if (type === 'forgotCode') return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Your access code</title><style>${baseStyles}</style></head><body><div class="wrapper"><div class="container">${logo}<div class="card"><div class="card-header"><h1>Here's your access code</h1><p>Use the code below to sign in to MyWeatherUK.</p></div><div class="card-body"><div class="access-box"><div class="code">${accessCode}</div><div class="code-label">Your personal access code</div></div><div class="note success">🔒 Keep this code safe.</div></div>${footer}</div></div></div></body></html>`;
   return '';
 }
 
@@ -484,9 +483,9 @@ function RequestAccessForm({ onDone }) {
     setLoading(true);
     try {
       const savedEmail = localStorage.getItem('pending_verify_email');
-      const accessCode = Math.random().toString(36).substring(2, 10).toUpperCase();
       try { await base44.entities.AccessRequest.create({ full_name: form.full_name, email: savedEmail, social_media_handle: form.reason, status: 'pending' }); } catch { }
-      try { await base44.entities.SiteAccessCode.create({ email: savedEmail, code: accessCode, is_active: false }); } catch { }
+      /* the code itself is made, inactive, by the server (server/entityAccess.js) */
+      try { await base44.entities.SiteAccessCode.create({ email: savedEmail }); } catch { }
       try {
         await base44.integrations.Core.SendEmail({
           to: savedEmail,
@@ -568,7 +567,7 @@ function RequestAccessForm({ onDone }) {
 
 /* ─── Sign In Form ────────────────────────────────────────────── */
 // Accepts the universal access key (from settings) in addition to per-user codes.
-function SignInForm({ onGrantAccess, universalKey }) {
+function SignInForm({ onGrantAccess }) {
   const [view, setView] = useState('main');
   const [code, setCode] = useState('');
   const [email, setEmail] = useState('');
@@ -591,24 +590,21 @@ function SignInForm({ onGrantAccess, universalKey }) {
     if (!code.trim()) return setError('Please enter your access code.');
     setLoading(true);
 
-    const entered = code.trim().toUpperCase();
-
-    // Check universal key first (no DB query needed)
-    if (universalKey && entered === universalKey.toUpperCase()) {
-      localStorage.setItem('site_access_granted', 'true');
-      localStorage.setItem('site_access_email', 'universal');
+    /* the server checks the code against the universal key and the active codes
+       (server/publicFlows.js): neither is readable from the browser any more */
+    let res = null;
+    try {
+      const r = await fetch('/api/access/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code.trim() }) });
+      res = await r.json().catch(() => null);
+      if (!r.ok) { setLoading(false); return setError(res?.error || 'Could not check the code. Please try again.'); }
+    } catch {
       setLoading(false);
-      onGrantAccess();
-      return;
+      return setError('Could not check the code. Please try again.');
     }
-
-    // Fall back to per-user codes
-    const records = await base44.entities.SiteAccessCode.list();
-    const match = records.find(r => r.code === entered && r.is_active);
     setLoading(false);
-    if (match) {
+    if (res?.ok) {
       localStorage.setItem('site_access_granted', 'true');
-      localStorage.setItem('site_access_email', match.email);
+      localStorage.setItem('site_access_email', res.email || '');
       onGrantAccess();
     } else {
       setError('Invalid or inactive code. Please check and try again.');
@@ -635,15 +631,10 @@ function SignInForm({ onGrantAccess, universalKey }) {
     const storedEmail = localStorage.getItem('forgot_verify_email');
     if (verifyCode.trim() !== stored) return setError('Incorrect code.');
     setLoading(true);
-    const records = await base44.entities.SiteAccessCode.filter({ email: storedEmail });
-    const active = records.find(r => r.is_active);
-    if (active) {
-      await base44.integrations.Core.SendEmail({
-        to: storedEmail,
-        subject: 'Your MyWeatherUK access code',
-        body: buildEmail({ type: 'forgotCode', email: storedEmail, accessCode: active.code }),
-      });
-    }
+    /* the server emails the address its own active code, if it has one (server/publicFlows.js) */
+    try {
+      await fetch('/api/access/send-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: storedEmail }) });
+    } catch { /* the page says the same either way */ }
     localStorage.removeItem('forgot_verify_code'); localStorage.removeItem('forgot_verify_email');
     setLoading(false); navigate('forgotDone');
   };
@@ -898,7 +889,6 @@ export default function SiteDisabled({ settings, onAccessGranted }) {
 
   const stormText = settings?.storm_text ? JSON.parse(settings.storm_text) : null;
   const sunnyText = settings?.sunny_text ? JSON.parse(settings.sunny_text) : null;
-  const universalKey = (settings?.universal_access_key || '').trim() || null;
 
   const panelTitle = (settings?.disabled_title || '').trim() || 'Request Access';
   const panelSubtitle = (settings?.disabled_message || '').trim() || 'Apply for an access code';
@@ -975,7 +965,7 @@ export default function SiteDisabled({ settings, onAccessGranted }) {
             subtitle="Already have an access code?"
             expanded={panel === 'signin'}
             onToggle={() => togglePanel('signin')}>
-            <SignInForm onGrantAccess={onAccessGranted} universalKey={universalKey} />
+            <SignInForm onGrantAccess={onAccessGranted} />
           </Panel>
         </div>
 

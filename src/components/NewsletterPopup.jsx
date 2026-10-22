@@ -2,15 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, X, ArrowRight, Zap, Bell, BarChart3, CheckCircle, Loader2, CloudLightning, Shield, Sparkles } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
 import { Link } from 'react-router-dom';
 
 const POPUP_DISMISSED_KEY = 'mwuk_newsletter_popup_dismissed';
 const POPUP_SUBSCRIBED_KEY = 'mwuk_newsletter_subscribed';
-
-function genToken() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
 
 const BENEFITS = [
   { icon: Zap,       text: 'Weekly storm outlook summaries', color: '#facc15', bg: 'rgba(250,204,21,0.12)', bd: 'rgba(250,204,21,0.3)' },
@@ -139,30 +134,13 @@ export default function NewsletterPopup() {
     setStep('sending');
     setError('');
     try {
-      const existing = await base44.entities.NewsletterSubscriber.filter({ email: email.trim().toLowerCase() });
-      if (existing?.length && existing[0].verified && !existing[0].unsubscribed) {
-        localStorage.setItem(POPUP_SUBSCRIBED_KEY, 'true');
-        setStep('done');
-        return;
-      }
-      const token = genToken();
-      const now = new Date().toISOString();
-      if (existing?.length) {
-        await base44.entities.NewsletterSubscriber.update(existing[0].id, { verification_token: token, verified: false, subscribed_at: now, unsubscribed: false });
-      } else {
-        await base44.entities.NewsletterSubscriber.create({
-          email: email.trim().toLowerCase(), verified: false, verification_token: token,
-          subscribed_at: now, weekly_summary: true, storm_alerts: true, unsubscribed: false,
-        });
-      }
-      try {
-        const verifyUrl = `${window.location.origin}/NewsletterSignup?verify=${token}`;
-        await base44.integrations.Core.SendEmail({
-          to: email.trim().toLowerCase(),
-          subject: 'Verify your MyWeatherUK newsletter subscription',
-          body: `Thank you for subscribing!\n\nClick here to verify: ${verifyUrl}\n\n— MyWeatherUK`,
-        });
-      } catch { /* SendEmail only for registered users; subscription still recorded */ }
+      /* the server records it and emails the code and a link (server/publicFlows.js): the
+         subscriber list is the admin's to read */
+      const r = await fetch('/api/newsletter/subscribe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim().toLowerCase() }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'failed');
       localStorage.setItem(POPUP_SUBSCRIBED_KEY, 'true');
       setStep('done');
       setTimeout(() => setVisible(false), 3400);

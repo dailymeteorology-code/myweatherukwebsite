@@ -1,5 +1,4 @@
-import React, { useState, useRef } from 'react';
-import { base44 } from '@/api/base44Client';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, CheckCircle, Zap, Bell, BarChart3, ArrowRight, Loader2, RefreshCw } from 'lucide-react';
 
@@ -9,8 +8,13 @@ const BENEFITS = [
   { icon: Bell,     label: 'High-risk weather alerts',        color: '#f87171' },
 ];
 
-function genCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+/* sign-up and verification are the server's (server/publicFlows.js): the subscriber list is the
+   admin's to read, so the page no longer looks people up or checks codes itself */
+async function post(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Something went wrong. Please try again.');
+  return j;
 }
 
 // 6-box OTP input
@@ -71,38 +75,19 @@ export default function NewsletterSignup() {
     outline: 'none', boxSizing: 'border-box',
   };
 
-  const sendCode = async (emailAddr, nameVal, existingSub) => {
-    const otp = genCode();
-    const now = new Date().toISOString();
-    let id;
+  /* the server records the sign-up and emails a 6-digit code and a link: { id } or { already } */
+  const sendCode = (emailAddr, nameVal) => post('/api/newsletter/subscribe', { email: emailAddr, name: nameVal });
 
-    if (existingSub) {
-      await base44.entities.NewsletterSubscriber.update(existingSub.id, {
-        verification_token: otp, verified: false, subscribed_at: now,
-        ...(nameVal ? { name: nameVal } : {}),
-      });
-      id = existingSub.id;
-    } else {
-      const created = await base44.entities.NewsletterSubscriber.create({
-        email: emailAddr, name: nameVal || null,
-        verified: false, verification_token: otp,
-        subscribed_at: now, weekly_summary: true, storm_alerts: true, unsubscribed: false,
-      });
-      id = created.id;
-    }
-
-    try {
-      await base44.integrations.Core.SendEmail({
-        to: emailAddr,
-        subject: 'Your MyWeatherUK verification code',
-        body: `Hi ${nameVal || 'there'},\n\nYour 6-digit verification code for the MyWeatherUK newsletter is:\n\n${otp}\n\nEnter this code on the page to confirm your subscription. It expires in 15 minutes.\n\nIf you didn't request this, you can safely ignore this email.\n\n— MyWeatherUK`,
-      });
-    } catch {
-      // SendEmail only works for registered app users; store code to allow manual entry
-    }
-
-    return { id, otp };
-  };
+  /* the emailed link: /NewsletterSignup?verify=123456&sub=<id> confirms straight away */
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const c = q.get('verify');
+    if (!c) return;
+    setStep('verifying');
+    post('/api/newsletter/verify', { code: c, id: q.get('sub') || undefined })
+      .then(() => setStep('done'))
+      .catch((err) => { setStep('error'); setError(err.message); });
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -112,15 +97,12 @@ export default function NewsletterSignup() {
     const emailAddr = email.trim().toLowerCase();
 
     try {
-      const existing = await base44.entities.NewsletterSubscriber.filter({ email: emailAddr });
-      const sub = existing?.[0];
-
-      if (sub?.verified && !sub?.unsubscribed) {
+      const res = await sendCode(emailAddr, name.trim());
+      if (res.already) {
         setStep('already');
         return;
       }
-
-      const { id } = await sendCode(emailAddr, name.trim(), sub || null);
+      const { id } = res;
       setSubId(id);
       setCode('');
       setStep('verify');
@@ -134,21 +116,11 @@ export default function NewsletterSignup() {
     if (code.length !== 6) return;
     setStep('verifying');
     try {
-      // Fetch fresh record to check token
-      const results = await base44.entities.NewsletterSubscriber.filter({ verification_token: code });
-      const sub = results?.find(s => s.id === subId);
-      if (!sub) {
-        setStep('verify');
-        setError('Incorrect code. Please try again.');
-        return;
-      }
-      await base44.entities.NewsletterSubscriber.update(sub.id, {
-        verified: true, verified_at: new Date().toISOString(), verification_token: null,
-      });
+      await post('/api/newsletter/verify', { id: subId, code });
       setStep('done');
-    } catch {
+    } catch (err) {
       setStep('verify');
-      setError('Verification failed. Please try again.');
+      setError(err.message || 'Incorrect code. Please try again.');
     }
   };
 
@@ -156,9 +128,9 @@ export default function NewsletterSignup() {
     setResending(true);
     setError('');
     try {
-      await sendCode(email.trim().toLowerCase(), name.trim(), { id: subId });
+      await sendCode(email.trim().toLowerCase(), name.trim());
       setCode('');
-    } catch {}
+    } catch (err) { setError(err.message); }
     setResending(false);
   };
 

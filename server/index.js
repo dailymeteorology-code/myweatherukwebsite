@@ -22,7 +22,11 @@ import { fileURLToPath } from 'node:url';
 
 import db, { isValidEntityName } from './db.js';
 import { setFunctionInvoker } from './base44Server.js';
-import { authRouter, ensureAdminAccount, userFromRequest } from './auth.js';
+import { authRouter, ensureAdminAccount, userFromRequest, requireAdmin } from './auth.js';
+import {
+  canRead, canWrite, isOwner, visibleRows, redactRows, prepareCreate, prepareUpdate, broadcastable, readLevel, limited, clientIp,
+} from './entityAccess.js';
+import { mountPublicFlows } from './publicFlows.js';
 import { invokeLLM, sendEmail } from './integrations.js';
 import { loadEdgeFunctions, runEdgeFunction } from './denoAdapter.js';
 import { createBackup, listBackups, formatBytes } from './backup.js';
@@ -67,8 +71,11 @@ app.use(express.json({ limit: '25mb' }));
 
 const clients = new Set();
 
-/** Push an entity change to every open SSE connection. */
-function broadcast(entity, type, data) {
+/** Push an entity change to every open SSE connection: only changes everyone may read, with any
+    admin-only fields taken out (entityAccess.js). The stream has no idea who is listening. */
+function broadcast(entity, type, raw) {
+  const data = type === 'delete' ? raw : broadcastable(entity, raw);
+  if (data == null || (type === 'delete' && readLevel(entity) !== 'public')) return;
   const frame = `data: ${JSON.stringify({ entity, type, data })}\n\n`;
   for (const res of clients) {
     try {
@@ -113,6 +120,22 @@ app.param('entity', (req, res, next, entity) => {
   next();
 });
 
+/* Every entity route asks entityAccess.js who may do what (reading is public and writing is
+   admin-only unless an entity says otherwise). A read someone may not make gives an empty list,
+   or 404 for one record; a write gives 401 signed out, 403 signed in. */
+const denied = (res, user) => res.status(user ? 403 : 401).json({ error: user ? 'Not allowed' : 'Not authenticated' });
+
+/* A closed site opens itself when its countdown ends. Visitors' browsers used to write that
+   back to the settings; the server does it now, the first time the settings are read after. */
+function reopenIfCountdownEnded(rows) {
+  for (const s of rows) {
+    if (s.site_disabled && s.countdown_enabled && s.countdown_target && Date.parse(s.countdown_target) <= Date.now()) {
+      const row = db.update('SiteSettings', s.id, { site_disabled: false });
+      if (row) { Object.assign(s, row); broadcast('SiteSettings', 'update', row); }
+    }
+  }
+}
+
 app.get('/api/entities/:entity', (req, res) => {
   let query;
   if (req.query.q) {
@@ -122,41 +145,67 @@ app.get('/api/entities/:entity', (req, res) => {
       return res.status(400).json({ error: 'q must be JSON' });
     }
   }
-  res.json(db.list(req.params.entity, { query, sort: req.query.sort, limit: req.query.limit }));
+  const { entity } = req.params;
+  const user = userFromRequest(req);
+  const can = canRead(entity, user);
+  if (!can) return res.json([]);
+  let rows = db.list(entity, { query, sort: req.query.sort });
+  if (entity === 'SiteSettings') reopenIfCountdownEnded(rows);
+  rows = visibleRows(entity, rows, user);
+  if (req.query.limit != null) rows = rows.slice(0, Number(req.query.limit));
+  res.json(rows);
 });
 
-app.post('/api/entities/:entity/bulk', (req, res) => {
-  const rows = Array.isArray(req.body) ? req.body : [req.body];
+/* the lightning importers' batch insert: the admin's only */
+app.post('/api/entities/:entity/bulk', requireAdmin, (req, res) => {
+  const rows = (Array.isArray(req.body) ? req.body : [req.body]).map((r) => prepareCreate(req.params.entity, r, req.user));
   const created = db.bulkCreate(req.params.entity, rows);
   broadcast(req.params.entity, 'create', created);
   res.status(201).json(created);
 });
 
 app.get('/api/entities/:entity/:id', (req, res) => {
-  const row = db.get(req.params.entity, req.params.id);
-  if (!row) return res.status(404).json({ error: 'Not found' });
-  res.json(row);
+  const { entity } = req.params;
+  const user = userFromRequest(req);
+  const row = db.get(entity, req.params.id);
+  const can = canRead(entity, user);
+  if (!row || !can || (can === 'own' && !isOwner(row, user))) return res.status(404).json({ error: 'Not found' });
+  res.json(redactRows(entity, [row], user)[0]);
 });
 
 app.post('/api/entities/:entity', (req, res) => {
-  const row = db.create(req.params.entity, req.body || {});
-  broadcast(req.params.entity, 'create', row);
-  res.status(201).json(row);
+  const { entity } = req.params;
+  const user = userFromRequest(req);
+  if (!canWrite(entity, 'create', user)) return denied(res, user);
+  const row = db.create(entity, prepareCreate(entity, req.body || {}, user));
+  broadcast(entity, 'create', row);
+  res.status(201).json(redactRows(entity, [row], user)[0]);
 });
 
 app.put('/api/entities/:entity/:id', (req, res) => {
-  const row = db.update(req.params.entity, req.params.id, req.body || {});
-  if (!row) return res.status(404).json({ error: 'Not found' });
-  broadcast(req.params.entity, 'update', row);
-  res.json(row);
+  const { entity, id } = req.params;
+  const user = userFromRequest(req);
+  const existing = db.get(entity, id);
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+  if (!canWrite(entity, 'update', user, existing)) return denied(res, user);
+  const row = db.update(entity, id, prepareUpdate(req.body, user));
+  broadcast(entity, 'update', row);
+  res.json(redactRows(entity, [row], user)[0]);
 });
 
 app.delete('/api/entities/:entity/:id', (req, res) => {
-  const ok = db.remove(req.params.entity, req.params.id);
-  if (!ok) return res.status(404).json({ error: 'Not found' });
-  broadcast(req.params.entity, 'delete', { id: req.params.id });
+  const { entity, id } = req.params;
+  const user = userFromRequest(req);
+  const existing = db.get(entity, id);
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+  if (!canWrite(entity, 'delete', user, existing)) return denied(res, user);
+  db.remove(entity, id);
+  broadcast(entity, 'delete', { id });
   res.status(204).end();
 });
+
+/* the newsletter sign-up and the closed site's access codes (publicFlows.js) */
+mountPublicFlows(app);
 
 /* ── auth ───────────────────────────────────────────────────────────────── */
 
@@ -175,14 +224,34 @@ function jsonRoute(handler) {
   };
 }
 
+/* The AI is the admin's (it spends the site's key; no public page uses it). */
 app.post(
   '/api/integrations/invoke-llm',
+  requireAdmin,
   jsonRoute((req) => invokeLLM(req.body || {}))
 );
-app.post(
-  '/api/integrations/send-email',
-  jsonRoute((req) => sendEmail(req.body || {}))
-);
+/* Email: anything for an admin. For anyone else only the closed site's own emails (the codes it
+   sends to the address being checked), one recipient at a time, from the site's own address, and
+   rate-limited by sender and recipient, so it cannot be used to send mail to the world. The
+   newsletter's emails come from the server itself (publicFlows.js). */
+const PUBLIC_SUBJECTS = new Set([
+  'Verify your email — MyWeatherUK', 'Access request received — MyWeatherUK', 'Verify your identity — MyWeatherUK',
+  'Access Request Received – MyWeather',
+]);
+const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+app.post('/api/integrations/send-email', (req, res, next) => {
+  const user = userFromRequest(req);
+  if (user?.role === 'admin') return next();
+  const { to, subject, body } = req.body || {};
+  if (typeof to !== 'string' || !EMAIL_RE.test(to.trim()) || !PUBLIC_SUBJECTS.has(subject) || String(body || '').length > 20000) {
+    return res.status(403).json({ error: 'Not allowed' });
+  }
+  if (limited('mail-ip', clientIp(req), 6, 3600e3) || limited('mail-to', to.trim().toLowerCase(), 4, 3600e3)) {
+    return res.status(429).json({ error: 'Too many emails. Please wait a few minutes and try again.' });
+  }
+  req.body = { to: to.trim(), subject, body };
+  next();
+}, jsonRoute((req) => sendEmail(req.body || {})));
 
 /* ── page-view log ──────────────────────────────────────────────────────── */
 
@@ -456,7 +525,8 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-app.post('/api/upload', upload.single('file'), (req, res) => {
+/* uploads are the admin's (graphics, logos, banners): checked before the file is taken */
+app.post('/api/upload', requireAdmin, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
   warmImageSizes(UPLOAD_DIR, req.file.filename);           // web-sized copies, ready before anyone looks
   res.json({ file_url: `/uploads/${req.file.filename}` });
