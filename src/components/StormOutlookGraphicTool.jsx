@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 // (html2canvas is still used for the .webm frame grabs, where per-frame speed
 // matters more than exactness and the panels are not the subject.)
 import { toCanvas } from 'html-to-image';
+import { glass, GlassSheen, GlassBackdropContext, captureBackdrop, GraphicFooter } from '@/components/studio/graphicGlass';
 import { base44 } from '@/api/base44Client';
 import { RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConfig';
 import TimelinePill from '@/components/tcm/StormOutlookTimelinePill';
@@ -201,68 +202,7 @@ const HAZARDS = [
   { id: 'severe',    label: 'Severe',         Icon: AlertTriangle,  color: '#a5b4fc', hatched: true  },
 ];
 
-// --- Liquid-glass panel helper ----------------------------------------------
-// A layered translucent tint, a strong backdrop blur with a saturation and
-// brightness lift, a crisp top hairline and a soft inner glow. The multi-stop
-// gradient gives the panel a subtle vertical sheen that reads as curved glass
-// rather than a flat card.
-//
-// EXPORT MODE CHANGES EXACTLY ONE THING, and only because it has to.
-// `backdrop-filter` blurs what is BEHIND an element, and the exporter renders
-// the graphic inside an SVG <foreignObject> where there is no "behind" — the
-// page is not in there. No DOM-to-image technique can reproduce it. So the
-// export swaps the translucent tint for the colour that tint RESOLVES TO once
-// it is flattened onto the backdrop, computed rather than eyeballed:
-//
-//     alpha x tint + (1 - alpha) x backdrop, backdrop = the #0b0a18 base
-//       0.40 x (70,86,124) + 0.60 x (11,10,24) = (34,40,64)
-//       0.34 x (40,54,86)  + 0.66 x (11,10,24) = (21,25,45)
-//       0.46 x (16,24,44)  + 0.54 x (11,10,24) = (13,16,33)
-//
-// A little transparency is kept so what is genuinely behind a panel still
-// shows through, the way the blur lets it.
-//
-// Everything else — the sheen, the shadows, the inner glow, the hairlines —
-// is now identical in both, because the browser draws the export and it draws
-// them correctly. Earlier versions carried export-only substitutes for all of
-// those to work around a JavaScript CSS re-implementation; they are gone.
-const glass = (extra = {}, exportMode = false) => ({
-  background: exportMode
-    ? 'linear-gradient(155deg, rgba(34,40,64,0.90) 0%, rgba(21,25,45,0.92) 45%, rgba(13,16,33,0.94) 100%)'
-    : 'linear-gradient(155deg, rgba(70,86,124,0.40) 0%, rgba(40,54,86,0.34) 45%, rgba(16,24,44,0.46) 100%)',
-  border: '1px solid rgba(255,255,255,0.26)',
-  boxShadow: '0 12px 40px rgba(0,0,0,0.46), 0 2px 10px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.40), inset 0 0 22px rgba(120,150,210,0.12), inset 0 -1px 0 rgba(0,0,0,0.24)',
-  ...(exportMode ? {} : { backdropFilter: 'blur(22px) saturate(180%) brightness(1.08)', WebkitBackdropFilter: 'blur(22px) saturate(180%) brightness(1.08)' }),
-  // `extra` is spread LAST and therefore wins every collision, including
-  // `position`. Pass a panel's layout in here rather than spreading glass()
-  // into a style object that already set position/top/right — those would be
-  // overwritten by the relative default below and the panel would fall into
-  // normal flow at full width. position:'relative' is a DEFAULT, present so the
-  // sheen and the overflow clip have something to resolve against.
-  borderRadius: 14, position: 'relative', overflow: 'hidden', ...extra,
-});
-
-// Specular highlights that sell the glass: a broad diagonal sheen across the
-// top plus a thin bright edge line just inside the top border. Drawn in the
-// export too — it sits at z-index 0 behind content at z-index 1, and the
-// browser honours that ordering in the foreignObject exactly as it does on
-// screen.
-function GlassSheen() {
-  return (
-    <>
-      <div style={{
-        position: 'absolute', top: 0, left: 0, right: 0, height: '58%',
-        background: 'linear-gradient(158deg, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.07) 38%, transparent 72%)',
-        pointerEvents: 'none', zIndex: 0,
-      }} />
-      <div style={{
-        position: 'absolute', top: 1, left: '8%', right: '8%', height: 1,
-        background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%)',
-        pointerEvents: 'none', zIndex: 0,
-      }} />
-    </>
-  );
-}
+// The panels' liquid glass, its export backdrop and the footer: studio/graphicGlass.
 
 // --- Real thunderstorm photo background ---
 const STORM_BG_URL = 'https://media.base44.com/images/public/69945c97e07811f2b5427aa6/fd5fe1cb8_generated_image.png';
@@ -464,7 +404,9 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   const [showShapes, setShowShapes]     = useState(true);
   const [showCities, setShowCities]     = useState(true);
   const [isExporting, setIsExporting]   = useState(false);
-  const [exportMode, setExportMode]     = useState(false); // solid-frosted glass for the JPG export
+  const [exportMode, setExportMode]     = useState(false); // the JPG / WebM export is rendering
+  const [backdrop, setBackdrop]         = useState(null);  // the blurred picture behind the glass, during a JPG export
+  const glassMode = exportMode ? (backdrop ? 'backdrop' : true) : false;
   const [graphicMode, setGraphicMode]   = useState('outlook'); // 'outlook' | 'radar'
   const [lightningColor, setLightningColor]   = useState('#ffffff');
   const [lightningOutline, setLightningOutline] = useState(false);
@@ -1132,6 +1074,14 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
       // logo have decoded — a half-loaded image serialises as a blank box.
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       await waitForImages(node);
+      /* the glass: the graphic without it, blurred, laid in behind each panel (studio/graphicGlass) */
+      try {
+        setBackdrop(await captureBackdrop(node, { width: GRAPHIC_W, height: GRAPHIC_H, backgroundColor: GRAPHIC_BG }));
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        await waitForImages(node);
+      } catch (err) {
+        console.warn('[graphic export] no glass backdrop, flat panels instead:', err?.message || err);
+      }
 
       let canvas = null;
       for (const pixelRatio of EXPORT_SCALES) {
@@ -1178,6 +1128,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
       console.error('[graphic export]', err);
       toast.error('The graphic could not be exported — see the console for why.');
     } finally {
+      setBackdrop(null);
       setExportMode(false);
       setIsExporting(false);
     }
@@ -1253,7 +1204,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   // they'd overflow the space above the footer, so every overlay stays visible.
   const headerScaleRef = useRef(null);
   const [headerScale, setHeaderScale] = useState(1);
-  const HEADER_AVAIL_H = GRAPHIC_H - 14 - 74; // top inset + footer reserve
+  const HEADER_AVAIL_H = GRAPHIC_H - 14 - 54; // top inset + room for the logo in the corner
   /* The preview fills its column (up to 1.7x), re-measured whenever the column changes size,
      not only when the window does. */
   useEffect(() => {
@@ -1665,7 +1616,8 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
         width: '100%', height: GRAPHIC_H * scale, overflow: 'hidden',
         display: 'flex', justifyContent: 'center',
       }}>
-        <div ref={graphicRef}
+        <GlassBackdropContext.Provider value={backdrop}>
+        <div ref={graphicRef} data-graphic-root=""
           onMouseDown={handleDown} onMouseMove={handleMove} onMouseUp={handleUp} onMouseLeave={handleUp}
           onTouchStart={handleDown} onTouchMove={handleMove} onTouchEnd={handleUp}
           style={{
@@ -1718,7 +1670,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
               otherwise run past the footer, so every overlay on the left stays
               fully visible (and is captured intact in the JPG export). */}
           <div style={{
-            position: 'absolute', top: 14, left: 18, right: 18, bottom: 74,
+            position: 'absolute', top: 14, left: 18, right: 18, bottom: 54,
             zIndex: 5, pointerEvents: 'none',
           }}>
           <div ref={headerScaleRef} style={{
@@ -1812,7 +1764,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 ...glass({
                   padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 11,
                   borderRadius: 12, alignSelf: 'flex-start',
-                }, exportMode),
+                }, glassMode),
                 border: '1px solid rgba(167,139,250,0.45)',
               }}>
                 <GlassSheen />
@@ -1839,7 +1791,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
               </div>
             )}
 
-            <div style={{ ...glass({ padding: '8px 10px', borderRadius: 14, alignSelf: 'flex-start', width: 170 }, exportMode) }}>
+            <div style={{ ...glass({ padding: '8px 10px', borderRadius: 14, alignSelf: 'flex-start', width: 170 }, glassMode) }}>
               <GlassSheen />
               <span style={{
                 position: 'relative', zIndex: 1, display: 'block', marginBottom: 6, paddingBottom: 6,
@@ -1955,7 +1907,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
               /* Compact: a slim row for each hazard, its chance (when set) at the end of the same
                  row, so setting percentages never widens the card into the map. It used to grow
                  from 170 to 200 px the moment one was set, over the map's west coast. */
-              <div style={{ ...glass({ padding: '8px 9px 9px', borderRadius: 13, alignSelf: 'flex-start', width: 160 }, exportMode) }}>
+              <div style={{ ...glass({ padding: '8px 9px 9px', borderRadius: 13, alignSelf: 'flex-start', width: 160 }, glassMode) }}>
                 <GlassSheen />
                 <span style={{
                   position: 'relative', zIndex: 1, display: 'block', marginBottom: 6, paddingBottom: 5,
@@ -2006,7 +1958,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 (and in exports) only while the lightning overlay is active.
                 Mirrors the count + peak-hour readout from the control panel. */}
             {showLightning && (
-              <div style={{ ...glass({ padding: '8px 10px', borderRadius: 12, alignSelf: 'flex-start', width: 150 }, exportMode) }}>
+              <div style={{ ...glass({ padding: '8px 10px', borderRadius: 12, alignSelf: 'flex-start', width: 150 }, glassMode) }}>
                 <GlassSheen />
                 <span style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6, paddingBottom: 5, borderBottom: '1px solid rgba(255,255,255,0.10)', fontSize: 8.5, fontWeight: 800, letterSpacing: '0.18em', color: 'rgba(148,163,184,0.95)', textTransform: 'uppercase' }}>
                   <Zap style={{ width: 10, height: 10, color: '#facc15' }} fill="#facc15" strokeWidth={2.2} /> Lightning
@@ -2042,7 +1994,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 body is line-clamped so a long discussion can't run under the
                 footer or off the bottom of the graphic. */}
             {!isRadar && discussionEnabled && discussionText.trim() && (
-              <div style={{ ...glass({ padding: '11px 13px', borderRadius: 14, alignSelf: 'flex-start', width: 220 }, exportMode) }}>
+              <div style={{ ...glass({ padding: '11px 13px', borderRadius: 14, alignSelf: 'flex-start', width: 220 }, glassMode) }}>
                 <GlassSheen />
                 <span style={{
                   position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, paddingBottom: 7,
@@ -2073,8 +2025,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
               pointer is taken on the whole graphic (its root's handlers), not only over the box. */}
           <div ref={mapWrapRef} style={{
               position: 'absolute', top: 20, left: '50%', marginLeft: -130, width: 450, height: 666,
-              clipPath: regional ? 'inset(0 0 36px 0 round 12px)' : undefined,
-              zIndex: 3, borderRadius: 12, overflow: 'hidden',
+                            zIndex: 3, borderRadius: 12, overflow: 'hidden',
             }}
           >
            <div style={{
@@ -2135,8 +2086,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
             )}
           <div style={{
               position: 'absolute', top: 20, left: '50%', marginLeft: -130, width: 450, height: 666,
-              clipPath: regional ? 'inset(0 0 36px 0 round 12px)' : undefined,
-              zIndex: 3, borderRadius: 12, overflow: 'hidden', pointerEvents: 'none',
+                            zIndex: 3, borderRadius: 12, overflow: 'hidden', pointerEvents: 'none',
             }}
           >
            <div style={{
@@ -2266,111 +2216,12 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
             </div>
           )}
 
-          {/* -- FOOTER -- */}
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 5,
-            padding: '13px 18px 17px',
-            borderTop: '1px solid rgba(255,255,255,0.08)',
-            background: 'linear-gradient(0deg, rgba(8,12,24,0.96) 0%, rgba(8,12,24,0.80) 65%, rgba(8,12,24,0.30) 100%)',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {siteLogoUrl
-                ? <img src={siteLogoUrl} alt="MyWeatherUK"
-                    style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', border: '1px solid rgba(255,255,255,0.18)' }} />
-                : <div style={{
-                    width: 32, height: 32, borderRadius: '50%',
-                    background: isRadar ? '#0ea5e9' : '#5b6ee8',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    border: '1px solid rgba(255,255,255,0.18)',
-                  }}><CloudLightning style={{ width: 16, height: 16, color: '#fff' }} /></div>}
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: 13, fontWeight: 800, color: '#fff', lineHeight: 1.1, letterSpacing: '-0.01em' }}>{handle}</span>
-                <span style={{
-                  fontSize: 8, fontWeight: 700, color: 'rgba(148,163,184,0.85)',
-                  letterSpacing: '0.20em', textTransform: 'uppercase', marginTop: 1,
-                }}>{version}</span>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, marginRight: 8 }}>
-              {/* Footer caption is an OUTLOOK-only line. Radar gets its own
-                  purpose-built status block below instead. */}
-              {!isRadar && (
-                <span style={{
-                  fontSize: 10, fontWeight: 600, color: 'rgba(203,213,225,0.85)',
-                  letterSpacing: '0.04em', lineHeight: 1.45, textAlign: 'right',
-                }}>{footerText}</span>
-              )}
-              {!isRadar && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 8, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase',
-                    background: forecastType === 'update' ? 'rgba(56,189,248,0.18)' : 'rgba(74,222,128,0.16)',
-                    color: forecastType === 'update' ? 'rgba(186,230,253,0.95)' : 'rgba(187,247,208,0.95)',
-                    border: `1px solid ${forecastType === 'update' ? 'rgba(56,189,248,0.40)' : 'rgba(74,222,128,0.38)'}` }}>{forecastLabel}</span>
-                  <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 8, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
-                    background: 'rgba(148,163,184,0.14)', color: 'rgba(226,232,240,0.92)', border: '1px solid rgba(148,163,184,0.30)' }}>
-                    Valid {new Date(validDate + 'T12:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
-                  <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 8, fontWeight: 700, letterSpacing: '0.10em', textTransform: 'uppercase',
-                    background: 'rgba(91,110,232,0.18)', color: 'rgba(199,210,254,0.95)', border: '1px solid rgba(91,110,232,0.40)' }}>
-                    Issued {new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London', hour12: false })} {tzAbbr}</span>
-                  {validUntil && (() => {
-                    const vu = new Date(validUntil);
-                    if (isNaN(vu.getTime())) return null;
-                    const expired = vu.getTime() < Date.now();
-                    return (
-                      <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 8, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase',
-                        background: expired ? 'rgba(248,113,113,0.18)' : 'rgba(250,204,21,0.16)',
-                        color: expired ? 'rgba(254,202,202,0.95)' : 'rgba(254,240,138,0.95)',
-                        border: `1px solid ${expired ? 'rgba(248,113,113,0.45)' : 'rgba(250,204,21,0.4)'}` }}>
-                        {expired ? 'Expired ' : 'Valid until '}
-                        {vu.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })} {tzAbbr}
-                      </span>
-                    );
-                  })()}
-                </div>
-              )}
-              {!isRadar && (
-                <span style={{ fontSize: 7.5, fontWeight: 800, color: 'rgba(252,211,77,0.9)', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'right', lineHeight: 1.4, marginTop: 2 }}>
-                  Not Official · Use for Guidance Only · Refer to Met Office Warnings
-                </span>
-              )}
-            </div>
-
-            {/* Radar status block — replaces the outlook's free-text caption
-                with live, self-describing metadata: feed status, the region the
-                imagery covers, capture time and per-feed attribution. */}
-            {isRadar && (() => {
-              const regionLabel = view?.label || 'UK & Ireland';
-              const chip = (bg, bd, fg) => ({
-                padding: '2px 8px', borderRadius: 4, fontSize: 8, fontWeight: 800,
-                background: bg, border: `1px solid ${bd}`, color: fg,
-                letterSpacing: '0.10em', textTransform: 'uppercase', whiteSpace: 'nowrap',
-              });
-              return (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, marginRight: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    <span style={{
-                      ...chip('rgba(239,68,68,0.20)', 'rgba(248,113,113,0.55)', '#fecaca'),
-                      display: 'inline-flex', alignItems: 'center', gap: 4,
-                    }}>
-                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#f87171', boxShadow: '0 0 6px #f87171' }} />
-                      Live
-                    </span>
-                    <span style={chip('rgba(14,165,233,0.18)', 'rgba(14,165,233,0.45)', 'rgba(186,230,253,0.95)')}>{regionLabel}</span>
-                    <span style={chip('rgba(148,163,184,0.14)', 'rgba(148,163,184,0.30)', 'rgba(226,232,240,0.92)')}>
-                      Updated {new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' })} {tzAbbr}
-                    </span>
-                  </div>
-                  <span style={{
-                    fontSize: 7.5, fontWeight: 700, color: 'rgba(255,255,255,0.40)',
-                    letterSpacing: '0.10em', textTransform: 'uppercase', textAlign: 'right', lineHeight: 1.5,
-                  }}>Radar & lightning: Met Office</span>
-                </div>
-              );
-            })()}
-          </div>
+          {/* -- FOOTER: the logo in the bottom-left corner, a glass card in the bottom-right -- */}
+          <GraphicFooter logoUrl={siteLogoUrl} FallbackIcon={CloudLightning} handle={handle} version={version} radar={isRadar}
+            caption={footerText} forecastLabel={forecastLabel} update={forecastType === 'update'} validDate={validDate} validUntil={validUntil}
+            tzAbbr={tzAbbr} regionLabel={view?.label || 'UK & Ireland'} />
         </div>
+        </GlassBackdropContext.Provider>
       </div>
     )} />
   );

@@ -9,28 +9,9 @@
 import React from 'react';
 import { Clock } from 'lucide-react';
 import { GRAPHIC_RISK_LEVELS, inkOn } from '@/components/graphics/GraphicMeta';
+import { glass, GlassSheen, useGlassMode } from '@/components/studio/graphicGlass';
 
-// --- glass styling ------------------------------------------------------------------------
-// Keep in step with glass() in StormOutlookGraphicTool.jsx, which carries the reasoning: export
-// mode differs only in swapping the translucent tint for the colour it resolves to, because
-// `backdrop-filter` has nothing to filter inside the SVG the exporter draws into.
-const glass = (extra = {}, exportMode = false) => ({
-  background: exportMode
-    ? 'linear-gradient(155deg, rgba(34,40,64,0.90) 0%, rgba(21,25,45,0.92) 45%, rgba(13,16,33,0.94) 100%)'
-    : 'linear-gradient(155deg, rgba(70,86,124,0.40) 0%, rgba(40,54,86,0.34) 45%, rgba(16,24,44,0.46) 100%)',
-  border: '1px solid rgba(255,255,255,0.26)',
-  boxShadow: '0 12px 40px rgba(0,0,0,0.46), 0 2px 10px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.40), inset 0 0 22px rgba(120,150,210,0.12), inset 0 -1px 0 rgba(0,0,0,0.24)',
-  ...(exportMode ? {} : { backdropFilter: 'blur(22px) saturate(180%) brightness(1.08)', WebkitBackdropFilter: 'blur(22px) saturate(180%) brightness(1.08)' }),
-  borderRadius: 14, position: 'relative', overflow: 'hidden', ...extra,
-});
-function GlassSheen() {
-  return (
-    <>
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '58%', background: 'linear-gradient(158deg, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.07) 38%, transparent 72%)', pointerEvents: 'none', zIndex: 0 }} />
-      <div style={{ position: 'absolute', top: 1, left: '8%', right: '8%', height: 1, background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%)', pointerEvents: 'none', zIndex: 0 }} />
-    </>
-  );
-}
+// The glass (and its export backdrop) is the graphics' own: studio/graphicGlass.
 
 const THUNDER_LEVELS = GRAPHIC_RISK_LEVELS.map((l) => ({ id: l.level, short: l.short, color: l.color }));
 const SEVERE_ID = 'Severe', COND_ID = 'Conditional Severe';
@@ -120,6 +101,7 @@ export default function TimelinePill({
   rings = [],
 }) {
   const N = stamps.length;
+  const mode = useGlassMode(exportMode);
   const byId = Object.fromEntries(levels.map((l) => [l.id, l]));
   const sev = Object.fromEntries(levels.map((l, i) => [l.id, i]));
   const runs = timelineRuns(stampRisks, sev);
@@ -159,7 +141,7 @@ export default function TimelinePill({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-start' }}>
       <div style={{
-        ...glass({ padding: nameRow ? '6px 12px 4px' : '6px 12px', display: 'flex', alignItems: 'center', gap: 9, borderRadius: nameRow ? 20 : 999, alignSelf: 'flex-start' }, exportMode),
+        ...glass({ padding: nameRow ? '6px 12px 4px' : '6px 12px', display: 'flex', alignItems: 'center', gap: 9, borderRadius: nameRow ? 20 : 999, alignSelf: 'flex-start' }, mode),
         border: '1px solid rgba(255,255,255,0.18)', pointerEvents: 'auto',
       }}>
         <GlassSheen />
@@ -245,7 +227,7 @@ export default function TimelinePill({
       </div>
       {validLabel && (
         <div style={{
-          ...glass({ padding: '3px 11px', borderRadius: 999, alignSelf: 'flex-start' }, exportMode),
+          ...glass({ padding: '3px 11px', borderRadius: 999, alignSelf: 'flex-start' }, mode),
           border: '1px solid rgba(255,255,255,0.16)', pointerEvents: 'none', display: 'inline-flex', alignItems: 'center', gap: 6,
         }}>
           <GlassSheen />
