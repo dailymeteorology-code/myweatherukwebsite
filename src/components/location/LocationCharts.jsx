@@ -376,14 +376,23 @@ export default function LocationCharts({ model, unit, dayIdx, onDay }) {
     const bars = fs.filter((h, i) => i > 0).map((h, i) => [fs[i].t, h.t, h.cape ?? 0, '#ffb547']);
     const left = domain(bars.map((b) => b[2]), { min: 0, span: 200 });
     left.fmt = (x) => `${x}`;
-    const right = { lo: 0, hi: 100, ticks: [0, 50, 100], fmt: (x) => `${x}%` };
+    /* the thunderstorm risk is TCM NOVA's, every hour (the UKV's lightning chance where NOVA has none) */
+    const nova = (model.nova?.hours || []).filter(near).map((x) => [x.t, x.p]);
+    const pts = nova.length ? nova : fs.map((h) => [h.t, h.pThunder]);
+    const hi = Math.max(20, ...pts.map((p) => (p[1] ?? 0) * 1.2));
+    const right = { lo: 0, hi, ticks: [0, Math.round(hi / 2), Math.round(hi)], fmt: (x) => `${x}%` };
     plot = {
       left, right,
-      items: [{ type: 'bars', bars }, { type: 'line', axis: 'right', pts: fs.map((h) => [h.t, h.pThunder]), colour: '#ffe066', width: 2 }],
-      tip: (t) => { const p = v('pThunder', t); return <>{tipHead(t)}<div>CAPE <b>{rnd(v('cape', t))} J/kg</b></div><div>{p != null ? `Lightning within 16 km ${Math.round(Math.max(0, p))}%` : 'Lightning chance: not forecast this far ahead'}</div></>; },
+      items: [{ type: 'bars', bars }, { type: 'line', axis: 'right', pts, colour: '#ffe066', width: 2.2 }],
+      tip: (t) => {
+        const p = seriesAt(pts, t);
+        return <>{tipHead(t)}<div>CAPE <b>{rnd(v('cape', t))} J/kg</b></div>
+          <div>{p == null ? 'Thunderstorm risk: not forecast this far ahead' : nova.length ? `Thunderstorm risk ${Math.round(Math.max(0, p))}% (TCM NOVA)` : `Lightning within 16 km ${Math.round(Math.max(0, p))}%`}</div></>;
+      },
     };
-    legend = [['CAPE (storm fuel, J/kg)', '#ffb547'], ['Chance of lightning (right)', '#ffe066']];
-    note = 'UKV forecasts lightning to T+54; beyond that only the storm fuel (CAPE) is shown.';
+    legend = [['CAPE (storm fuel, J/kg)', '#ffb547'], [nova.length ? 'Thunderstorm risk, TCM NOVA (right)' : 'Chance of lightning (right)', '#ffe066']];
+    note = nova.length ? 'Thunderstorm risk from MyWeatherUK’s TCM NOVA model, to the end of its Main Run (4 days); storm fuel from the UKV.'
+      : 'UKV forecasts lightning to T+54; beyond that only the storm fuel (CAPE) is shown.';
   } else if (metric === 'snow') {
     const left = domain(fs.map((h) => h.frz), { min: 0, span: 500 });
     left.fmt = (x) => `${x}`;

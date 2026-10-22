@@ -21,6 +21,7 @@ import zlib from 'node:zlib';
 import { MODELDATA_DIR, POINT_DIR, builtCubes } from './modelData.js';
 import { geocode, reverseName } from './functions/getMetOfficeLocationWeather.js';
 import { searchPlaces } from './placeSearch.js';
+import { novaThunderAt } from './novaPoint.js';
 
 const LIVE = path.join(MODELDATA_DIR, 'live');
 const OBS = path.join(MODELDATA_DIR, 'observed');
@@ -120,6 +121,10 @@ const disc = (R) => {
 };
 /* the neighbourhoods behind the chances: rain within 10 km, lightning within 16 km of the place */
 const NB_RAIN = disc(5), NB_THUNDER = disc(8);
+/* Cloud is the sky over the place, not one 2 km cell: cloud at 1-2 km is seen tens of km away,
+   and the UKV's single cell flicks between 0 and 100 % from hour to hour (Dunstable, 22 Oct
+   2026: 54, 21, 48, 0, 100 % from 14:00). So cloud is the mean within 8 km. */
+const NB_SKY = disc(4), SKY_VARS = new Set(['tcc', 'lcc', 'mcc', 'hcc']);
 
 function forecastAt(lat, lon) {
   const list = cubes();
@@ -148,7 +153,13 @@ function forecastAt(lat, lon) {
     if (!inCube(m, row, col)) continue;
     const cell = (dy, dx) => (inCube(m, row + dy, col + dx) ? (row + dy - m.r0) * m.nc + (col + dx - m.c0) : -1);
     const centre = cell(0, 0);
-    const rows = Object.fromEntries(vars.filter((v) => m.vars[v]).map((v) => [v, readRows(c, v, [centre])[0]]));
+    const rows = Object.fromEntries(vars.filter((v) => m.vars[v] && !SKY_VARS.has(v)).map((v) => [v, readRows(c, v, [centre])[0]]));
+    const sky = Object.fromEntries(vars.filter((v) => m.vars[v] && SKY_VARS.has(v)).map((v) => [v, readRows(c, v, NB_SKY.map(([a, b]) => cell(a, b)))]));
+    const skyMean = (v, i) => {
+      let s = 0, n = 0;
+      for (const b of sky[v]) { const x = c.dec[v](b[i]); if (x != null) { s += x; n++; } }
+      return n ? s / n : null;
+    };
     const rainNb = m.vars.precip_step ? readRows(c, 'precip_step', NB_RAIN.map(([a, b]) => cell(a, b))) : [];
     const boltNb = m.vars.lightning ? readRows(c, 'lightning', NB_THUNDER.map(([a, b]) => cell(a, b))) : [];
     const rainSteps = m.vars.precip_step?.steps || [];
@@ -166,7 +177,7 @@ function forecastAt(lat, lon) {
       out.src.push(ri);
       const k = rainSteps.indexOf(h);
       out.span.push(k > 0 ? h - rainSteps[k - 1] : k === 0 ? 0 : null);  // hours the step's rain amount covers
-      for (const v of vars) out.v[v].push(rows[v] ? r2(c.dec[v](rows[v][i])) : null);
+      for (const v of vars) out.v[v].push(rows[v] ? r2(c.dec[v](rows[v][i])) : sky[v] ? r2(skyMean(v, i)) : null);
       out.p_rain.push(rainNb.length ? chance(rainNb, c.dec.precip_step, 0.1, i) : null);
       out.p_thunder.push(boltNb.length ? chance(boltNb, c.dec.lightning, 0.01, i) : null);
     });
@@ -351,6 +362,60 @@ function nowAt(lat, lon, nc = tryNowcast(lat, lon)) {
   if (valid) return { valid, ...out };
   return out.radar != null ? out : null;
 }
+/* ── the forecast held to what is observed now ─────────────────────────────────
+   A model run starts the hours ahead with its own error at the start of them. At 18:00 on 22 Oct
+   2026 the UKV had Dunstable cloudless an hour before its front's cloud arrived, while that cloud
+   was already overhead. So the analysis' difference from the forecast at the analysis time is
+   carried into the hours after it, fading with the lead: cloud (a timing error) within about two
+   hours, wind three, temperature five, dew point six, pressure twelve. [e-folding hours, the
+   largest difference believed]. The past hours are left as forecast. */
+const ANCHOR = { tcc: [2, 100], wind10: [3, 15], gust10: [3, 20], t2: [5, 5], td2: [6, 5], mslp: [12, 6] };
+const rhOf = (t, td) => Math.min(100, 100 * Math.exp((17.625 * td) / (243.04 + td) - (17.625 * t) / (243.04 + t)));
+function anchorToNow(fc, now) {
+  const t0 = now?.valid ? Date.parse(now.valid) : NaN;
+  const T = fc.times;
+  const k = T.findIndex((t) => t >= t0);
+  if (!Number.isFinite(t0) || k < 0 || (k === 0 && T[0] !== t0)) return null;
+  const at0 = (arr) => {
+    if (T[k] === t0) return arr[k];
+    const a = arr[k - 1], b = arr[k];
+    return a == null || b == null ? null : a + (b - a) * ((t0 - T[k - 1]) / (T[k] - T[k - 1]));
+  };
+  const deltas = {};
+  const before = { tcc: fc.v.tcc?.slice() };
+  for (const [v, [tau, lim]] of Object.entries(ANCHOR)) {
+    const arr = fc.v[v], ob = now[v];
+    if (!arr || ob == null) continue;
+    const f0 = at0(arr);
+    if (f0 == null) continue;
+    const d = Math.max(-lim, Math.min(lim, ob - f0));
+    deltas[v] = r2(d);
+    for (let i = k; i < T.length; i++) {
+      if (T[i] > t0 && arr[i] != null) arr[i] = r2(arr[i] + d * Math.exp(-(T[i] - t0) / (tau * 3600e3)));
+    }
+  }
+  /* keep the hours consistent: cloud 0-100 with its layers following it (cloud added has no known
+     height, so it counts as middle cloud; cloud taken away comes off every layer alike), winds
+     and gusts, dew point under the temperature, and the humidity from the two */
+  const V = fc.v;
+  for (let i = k; i < T.length; i++) {
+    if (T[i] <= t0) continue;
+    if (V.tcc?.[i] != null) {
+      const was = before.tcc[i], c = Math.max(0, Math.min(100, V.tcc[i]));
+      V.tcc[i] = r2(c);
+      if (was != null && c > was && V.mcc) V.mcc[i] = r2(Math.min(100, (V.mcc[i] ?? 0) + (c - was)));
+      else if (was > 0 && c < was) for (const L of ['lcc', 'mcc', 'hcc']) if (V[L]?.[i] != null) V[L][i] = r2(V[L][i] * (c / was));
+    }
+    if (V.wind10?.[i] != null) V.wind10[i] = Math.max(0, V.wind10[i]);
+    if (V.gust10?.[i] != null) V.gust10[i] = Math.max(V.gust10[i], V.wind10?.[i] ?? 0);
+    if (V.td2?.[i] != null && V.t2?.[i] != null) {
+      V.td2[i] = Math.min(V.td2[i], V.t2[i]);
+      if (V.rh2) V.rh2[i] = r2(rhOf(V.t2[i], V.td2[i]));
+    }
+  }
+  return { valid: now.valid, deltas, efold_h: Object.fromEntries(Object.entries(ANCHOR).map(([v, [tau]]) => [v, tau])) };
+}
+
 const OBS_FIELDS = ['t2_max', 't2_min', 'precip_total', 'gust10_max', 'wind10_max', 'rain_rate_max', 'feels_min', 'feels_max', 'rh2_min', 'td2_max'];
 const londonDay = (d = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
 function observedAt(lat, lon) {
@@ -421,6 +486,11 @@ function crop(file, lat, lon, halfKm = HALF_KM, step = 1) {
 }
 
 export function mountLocationWeather(app) {
+  /* inflate each new NOVA run's frames before anyone asks (the first place after a run costs ~1 s) */
+  const warm = () => { try { novaThunderAt(52.5, -1.5); } catch { /* no NOVA yet */ } };
+  setTimeout(warm, 20e3).unref?.();
+  setInterval(warm, 5 * 60e3).unref?.();
+
   app.get('/api/location/forecast', async (req, res) => {
     let lat = Number(req.query.lat), lon = Number(req.query.lon);
     let name = String(req.query.name || '').trim().slice(0, 80);
@@ -453,8 +523,12 @@ export function mountLocationWeather(app) {
     if (fc.error === 'outside') return res.json({ code: 'OUTSIDE_UK', resolvedName: name });
     if (fc.error) return res.status(503).json({ error: 'The Met Office UKV forecast is being prepared. Try again in a few minutes.' });
     const nc = tryNowcast(lat, lon);                                         // null: the newest scan and the hourly forecast
+    const now = nowAt(lat, lon, nc);
+    try { fc.anchor = anchorToNow(fc, now); } catch { fc.anchor = null; }
+    let nova = null;
+    try { nova = novaThunderAt(lat, lon); } catch { nova = null; }           // never costs the page its forecast
     res.set('Cache-Control', 'no-cache');
-    res.json({ location: { name, lat, lon, country }, forecast: fc, now: nowAt(lat, lon, nc), nowcast: nc, observed: observedAt(lat, lon), generated: new Date().toISOString() });
+    res.json({ location: { name, lat, lon, country }, forecast: fc, now, nowcast: nc, nova, observed: observedAt(lat, lon), generated: new Date().toISOString() });
   });
 
   app.get('/api/location/search', async (req, res) => {

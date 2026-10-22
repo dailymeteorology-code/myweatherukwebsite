@@ -5,7 +5,7 @@ import React from 'react';
 import {
   Thermometer, Wind, Sun, Sunset, Droplets, Droplet, Eye, Gauge, Cloud, CloudLightning, Snowflake, Moon, SunMedium, History,
 } from 'lucide-react';
-import { beaufort, compass, condLabel, hhmm, moonPhase, sunTimes, ukDay, uvWord, visWord } from '@/lib/ukvLocation';
+import { beaufort, compass, condLabel, hhmm, moonPhase, sunTimes, thunderRisk, ukDay, uvWord, visWord } from '@/lib/ukvLocation';
 
 const Tile = ({ icon: Icon, label, children }) => (
   <div className="lw-glass lw-tile">
@@ -117,6 +117,10 @@ export default function LocationTiles({ model, unit }) {
   const fogSoon = n12.find((h) => h.cond === 'fog');
   const thunder = n24.reduce((m, h) => Math.max(m, h.pThunder ?? 0), 0);
   const cape = n24.reduce((m, h) => Math.max(m, h.cape ?? 0), 0);
+  /* the riskiest hour of the next 24 by TCM NOVA, MyWeatherUK's thunderstorm model */
+  const novaNext = (model.nova?.hours || []).filter((x) => x.t > nowMs - 30 * 60e3 && x.t <= nowMs + 24 * 36e5);
+  const novaPeak = novaNext.length ? novaNext.reduce((a, b) => (b.p > a.p ? b : a)) : null;
+  const novaLv = novaPeak && thunderRisk(novaPeak.p);
   const frost = next(18).reduce((a, h) => (h.ground != null && (a == null || h.ground < a.ground) ? h : a), null);
   const lying = model.hours[model.nowIdx]?.snowLying ?? 0;
   const moon = moonPhase(nowMs);
@@ -197,11 +201,21 @@ export default function LocationTiles({ model, unit }) {
         <div className="lw-foot">{cur.cloudBase != null && (cur.tcc ?? 0) > 20 ? `Cloud base about ${Math.round(cur.cloudBase / 50) * 50} m.` : 'Little or no low cloud.'}</div>
       </Tile>
 
-      <Tile icon={CloudLightning} label="Thunder">
-        <div className="lw-big">{thunder}<small>%</small></div>
-        <div className="lw-mini">chance of lightning within 16 km, next 24 h</div>
-        <div className="lw-foot">{thunder >= 30 ? 'Thunderstorms are possible.' : cape >= 300 ? 'Some storm fuel in the air, but storms are unlikely.' : 'No thunderstorms expected.'} Storm fuel (CAPE) up to {Math.round(cape)} J/kg.</div>
-      </Tile>
+      {novaPeak ? (
+        <Tile icon={CloudLightning} label="Thunder">
+          <div className="lw-big" style={novaLv ? { color: novaLv.colour } : undefined}>{Math.round(novaPeak.p)}<small>%</small></div>
+          <div className="lw-mini">highest thunderstorm risk, next 24 h · TCM NOVA</div>
+          <div className="lw-foot">
+            {novaLv ? `${novaLv.word} risk, highest around ${hhmm(novaPeak.t)}.` : 'No thunderstorms expected.'} Storm fuel (CAPE) up to {Math.round(cape)} J/kg.
+          </div>
+        </Tile>
+      ) : (
+        <Tile icon={CloudLightning} label="Thunder">
+          <div className="lw-big">{thunder}<small>%</small></div>
+          <div className="lw-mini">chance of lightning within 16 km, next 24 h</div>
+          <div className="lw-foot">{thunder >= 30 ? 'Thunderstorms are possible.' : cape >= 300 ? 'Some storm fuel in the air, but storms are unlikely.' : 'No thunderstorms expected.'} Storm fuel (CAPE) up to {Math.round(cape)} J/kg.</div>
+        </Tile>
+      )}
 
       <Tile icon={Snowflake} label="Snow & ice">
         <div className="lw-big">{cur.frz == null ? '—' : Math.round(cur.frz / 10) * 10}<small>m</small></div>

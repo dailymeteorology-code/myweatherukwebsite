@@ -138,10 +138,14 @@ CLEAR_CODES = {'CLR', 'SKC', 'NCD', 'NSC', 'CAVOK'}
 
 def metar_sees(r):
     """How high a station's cloud report reaches: 'low' for CAVOK and NSC (they only say there is
-    no cloud below 5,000 ft), 'all' otherwise (the layers it reports, or none detected by a
-    ceilometer that reaches well above the low and middle cloud)."""
+    no cloud below 5,000 ft) and for an automatic station's NCD, 'all' otherwise (the layers it
+    reports).
+
+    NCD counts as low only. The ceilometer looks straight up and misses thin middle cloud: at 17:00
+    on 22 Oct 2026 Luton and Stansted said NCD under the sheet of cloud ahead of a front, which
+    Meteosat had over all of them with tops of 2-6 km, and Dunstable, cloudy, read "Mostly clear"."""
     covers = [str(c.get('cover') or '').upper() for c in (r.get('clouds') or []) if isinstance(c, dict)] + [str(r.get('cover') or '').upper()]
-    return 'low' if any(c in ('CAVOK', 'NSC') for c in covers) else 'all'
+    return 'low' if any(c in ('CAVOK', 'NSC', 'NCD') for c in covers) else 'all'
 
 
 def metar_cloud(r):
@@ -425,11 +429,19 @@ def analyse(t, reports):
     # the satellite and the stations 23.7, the UKV alone 26.2, the satellite alone 28.7. Each
     # source is wrong in its own way (the UKV puts cloud in clear skies, the satellite fills in
     # cumulus), so the average of the two is a better start than either.
+    #
+    # Half each holds for low cloud. Cloud topped above 6 km is a sheet the satellite sees whole,
+    # where the UKV's error is one of timing (22 Oct 2026, 17:00: the front's cloud over Dunstable,
+    # 100 % to Meteosat and 82 % of it topped above 6 km, still an hour away in the UKV), so the
+    # satellite's share rises to 0.7 as more of the cloud is high-topped. Not further: thin cirrus
+    # is high-topped too, and the sun shines through it.
     ukv_cc = B.get('tcc', np.full((NY, NX), np.nan, np.float32))
     sat = sat_cloud(t)
     if sat is not None:
-        base = np.where(np.isfinite(ukv_cc), 0.5 * sat[0] + 0.5 * ukv_cc, sat[0]).astype(np.float32)
-        above = sat[1]
+        cov, above = sat
+        high = np.where(cov > 0.5, np.clip(above['all'] / np.maximum(cov, 0.5), 0, 1), 0)
+        w = 0.5 + 0.2 * high
+        base = np.where(np.isfinite(ukv_cc), w * cov + (1 - w) * ukv_cc, cov).astype(np.float32)
     else:
         base, above = ukv_cc, None
     # no view and no model (outside the domain) stays unknown

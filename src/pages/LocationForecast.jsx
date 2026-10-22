@@ -18,8 +18,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Clock3, CalendarDays, Radar, AlertTriangle, CloudRain, ChevronLeft, ChevronRight, Loader2, Palette, LocateFixed, MoreHorizontal, Link2, Thermometer, Check,
-  Umbrella, Sunrise, Sunset,
+  Umbrella, Sunrise, Sunset, Zap,
 } from 'lucide-react';
+import LocationThunder from '@/components/location/LocationThunder';
 import LocationSearchBox from '@/components/location/LocationSearchBox';
 import LocationLanding from '@/components/location/LocationLanding';
 import LocationWarnings, { warningIcon, warningName, warningSpan, severityFill, severityInk } from '@/components/location/LocationWarnings';
@@ -35,7 +36,7 @@ import { currentUser, loadRecent, rememberSearch, forgetSearch, clearRecent } fr
 import { fetchAllWarningsForPoint } from '@/lib/locationWarnings';
 import {
   fetchLocation, shape, condLabel, isWet, nextHoursText, dayText, hhmm, hourOf, sunElevation, compass,
-  minutelyText, wetMinute, bandOf, ukDay,
+  minutelyText, wetMinute, bandOf, ukDay, thunderRisk,
 } from '@/lib/ukvLocation';
 
 const REFRESH_MS = 5 * 60e3;                       // a new radar scan every 15 minutes: the next hour follows each one
@@ -79,6 +80,7 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
     return out;
   }, [items, warnings]);
   const scroll = (dir) => stripRef.current?.scrollBy({ left: dir * stripRef.current.clientWidth * 0.8, behavior: 'smooth' });
+  const anyThunder = items.some((it) => thunderRisk(it.h?.nova?.p));
   let lastDay = null;
   return (
     <div className="lw-glass lw-card">
@@ -142,6 +144,7 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
           }
           const h = it.h;
           const pop = h.pRain != null && h.pRain >= 20 && isWet(h.cond) ? `${h.pRain}%` : h.pRain >= 40 ? `${h.pRain}%` : '';
+          const ts = thunderRisk(h.nova?.p);
           return (
             <div key={h.t} className={`lw-hour${k === 0 ? ' is-now' : ''}${dayStart ? ' is-day-start' : ''}`} data-day={h.day}>
               <span className="lw-h-day">{dayStart ? day : ''}</span>
@@ -154,11 +157,20 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
                 <svg width="9" height="9" viewBox="-5 -5 10 10" style={{ transform: `rotate(${(h.wdir ?? 0) + 180}deg)` }}><path d="M0 -5 L3.5 3 L0 1.4 L-3.5 3Z" fill="currentColor" /></svg>
                 {Math.round(h.wind)}
               </span>
+              {anyThunder && (
+                <span className="lw-h-ts" style={ts ? { color: ts.colour } : undefined}
+                  title={ts ? `${ts.word} thunderstorm risk: ${Math.round(h.nova.p)}% (TCM NOVA)` : undefined}>
+                  {ts ? <><Zap size={10} strokeWidth={2.6} fill="currentColor" />{Math.round(h.nova.p)}%</> : ''}
+                </span>
+              )}
             </div>
           );
         })}
         </div>
       </div>
+      {anyThunder && (
+        <p className="lw-hours-note"><Zap size={11} strokeWidth={2.6} fill="currentColor" />Thunderstorm risk each hour from <b>MyWeatherUK&rsquo;s TCM NOVA</b></p>
+      )}
     </div>
   );
 }
@@ -335,6 +347,11 @@ function DaysCard({ model, T, dayIdx, onDay: pick, warnings, onWarning }) {
                     );
                   })}
                   {d.pRain != null && d.pRain >= 20 && <span className="lw-day-fact"><Umbrella size={13} />{d.pRain}% chance of rain</span>}
+                  {thunderRisk(d.thunderPeak?.p) && (
+                    <span className="lw-day-fact" title="TCM NOVA, MyWeatherUK's thunderstorm model" style={{ boxShadow: `inset 0 0 0 1.5px ${thunderRisk(d.thunderPeak.p).colour}` }}>
+                      <Zap size={13} />{thunderRisk(d.thunderPeak.p).word} thunderstorm risk · {Math.round(d.thunderPeak.p)}% around {hhmm(d.thunderPeak.t)} · TCM NOVA
+                    </span>
+                  )}
                   {d.sun.rise && <span className="lw-day-fact"><Sunrise size={13} />{hhmm(d.sun.rise)}</span>}
                   {d.sun.set && <span className="lw-day-fact"><Sunset size={13} />{hhmm(d.sun.set)}</span>}
                   {d.partial && <span className="lw-day-fact">Part day: the end of the UKV run</span>}
@@ -638,6 +655,7 @@ export default function LocationForecast() {
               <div className="lw-col">
                 <HourlyCard model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} />
                 <PrecipCard model={model} />
+                <LocationThunder model={model} />
                 <DaysCard model={model} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />
                 <div className="lw-glass lw-card">
                   <div className="lw-title"><Radar />Rain radar<span className="lw-title-aside">Met Office 1 km · then UKV</span></div>
@@ -659,7 +677,9 @@ export default function LocationForecast() {
               {model.cell ? ` The nearest model grid point is ${model.cell.offset_km} km away.` : ''}
               <br />Now: the UKV analysed every 15 minutes with station reports, cloud from Meteosat and the airports, and the radar&rsquo;s rain. Radar: Met Office 1 km composite.
               The next hour: the newest radar scan carried forward by the way the rain has moved over the last half hour.
-              Chance of rain counts model rain within 10 km; chance of lightning within 16 km.
+              {model.anchor ? ' The first hours are held to what is observed now, fading back to the model over the following hours.' : ''}
+              {' '}Cloud is the sky within 8 km. Chance of rain counts model rain within 10 km.
+              {model.nova ? <><br />Thunderstorm risk: <b>MyWeatherUK&rsquo;s own TCM NOVA model</b> (Hyper-Short nowcast, then Main Run), not the Met Office.</> : ''}
             </p>
           </>
         )}

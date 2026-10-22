@@ -158,7 +158,9 @@ export function classify(h) {
   /* six steps of cloud, the way the sky reads from the ground: sunny, mostly sunny, partly cloudy,
      mostly cloudy (breaks of sun), cloudy, overcast (a closed grey sheet) */
   if (c < 12) return 'clear';
-  if (c < 35 || ((h.lcc ?? 0) + (h.mcc ?? 0) < 20 && c < 65)) return 'mostlyClear';
+  /* only high cloud (thin cirrus, the sun shining through) reads as mostly sunny, where the
+     layers are known: the observed "now" has the total alone */
+  if (c < 35 || (h.lcc != null && h.mcc != null && h.lcc + h.mcc < 20 && c < 65)) return 'mostlyClear';
   if (c < 62) return 'partly';
   if (c < 85) return 'mostlyCloudy';
   if (c < 96) return 'cloudy';
@@ -180,12 +182,27 @@ export async function fetchLocation(params, signal) {
   return body;
 }
 
+/* ── TCM NOVA thunderstorm risk ─────────────────────────────────────────────
+   MyWeatherUK's own thunderstorm model (server/novaPoint.js): the chance of a thunderstorm near
+   the place each hour, in the bands the TCM NOVA page uses. */
+export const THUNDER_LEVELS = [
+  { min: 60, key: 'HIGH', word: 'High', colour: '#c084fc' },
+  { min: 45, key: 'MDT', word: 'Moderate', colour: '#f87171' },
+  { min: 30, key: 'ENH', word: 'Enhanced', colour: '#fb923c' },
+  { min: 15, key: 'SLGT', word: 'Slight', colour: '#facc15' },
+  { min: 5, key: 'MRGL', word: 'Marginal', colour: '#4ade80' },
+  { min: 2, key: 'TSTM', word: 'Low', colour: '#7dd3fc' },
+];
+/** The band for a chance (%): { key, word, colour }, or null under 2 %. */
+export const thunderRisk = (p) => (p == null ? null : THUNDER_LEVELS.find((l) => p >= l.min) || null);
+
 export function shape(resp) {
-  const { location: loc, forecast: fc, now: an, observed } = resp;
+  const { location: loc, forecast: fc, now: an, observed, nova } = resp;
   const { lat, lon } = loc;
   const V = fc.v;
   if (!fc.times.length) throw new Error('This forecast has no hours yet. Try again in a few minutes.');
   const at = (k, i) => (V[k] ? V[k][i] : null);
+  const novaAt = new Map((nova?.times || []).map((t, k) => [t, { p: nova.p[k], src: nova.src[k], nb: nova.nb_km[k] }]));
   const hours = fc.times.map((t, i) => {
     const h = {
       t, i, day: ukDay(t), run: fc.src[i], span: fc.span[i],
@@ -195,7 +212,7 @@ export function shape(resp) {
       hailRate: at('hail_rate', i), tcc: at('tcc', i), lcc: at('lcc', i), mcc: at('mcc', i), hcc: at('hcc', i),
       cloudBase: at('cloud_base', i), vis: at('vis', i), fog: at('fog', i), cape: at('cape_mu', i), lightning: at('lightning', i),
       frz: at('frz', i), snowLying: at('snow_swe', i), sw: at('sw_down', i), uvi: uvIndex(at('uv_down', i)),
-      pRain: fc.p_rain[i], pThunder: fc.p_thunder[i],
+      pRain: fc.p_rain[i], pThunder: fc.p_thunder[i], nova: novaAt.get(t) ?? null,
     };
     h.full = h.tcc != null && h.wind != null;
     h.feels = feelsLike(h.t2, h.td, h.wind);
@@ -226,6 +243,9 @@ export function shape(resp) {
     ...cur,
     t2: an?.t2 ?? cur.t2, td: an?.td2 ?? cur.td, rh: an?.rh2 ?? cur.rh, wind: an?.wind10 ?? cur.wind,
     gust: an?.gust10 ?? cur.gust, wdir: an?.wdir10 ?? cur.wdir, mslp: an?.mslp ?? cur.mslp, tcc: an?.tcc ?? cur.tcc,
+    /* the observed cloud has no layers: the forecast hour's would contradict it (an hour the UKV
+       had cloudless read "Mostly clear" under the analysis' 64 %) */
+    ...(an?.tcc != null ? { lcc: null, mcc: null, hcc: null } : {}),
     precipRate: radarRate ?? cur.precipRate, span: radarRate != null ? 0 : cur.span, precip: radarRate != null ? null : cur.precip,
     sun: sunElevation(nowMs, lat, lon), analysed: !!an,
   };
@@ -278,10 +298,14 @@ export function shape(resp) {
     }
     const max = (k) => { const v = fullHs.map((h) => h[k]).filter((x) => x != null); return v.length ? Math.max(...v) : null; };
     const strongest = fullHs.reduce((a, b) => ((b.wind ?? 0) > (a?.wind ?? -1) ? b : a), null);
+    /* the day's thunderstorm risk: its riskiest NOVA hour still to come (every hour of the day,
+       the 3-hourly UKV hours too) */
+    const dayNova = (nova?.times || []).map((t, k) => ({ t, p: nova.p[k] })).filter((x) => ukDay(x.t) === day && x.t >= nowMs - 60 * 60e3);
+    const thunderPeak = dayNova.length ? dayNova.reduce((a, b) => (b.p > a.p ? b : a)) : null;
     const windyHours = pool.filter((h) => h.windy).length;
     return {
       day, label: dayLabel(day, today), isToday, hi, lo, cond, rain, rainSoFar, rainAhead, snow, windy: windyHours >= 2,
-      pRain: max('pRain'), pThunder: max('pThunder'), gust: max('gust'), wind: max('wind'), wdir: strongest?.wdir ?? null,
+      pRain: max('pRain'), pThunder: max('pThunder'), thunderPeak, gust: max('gust'), wind: max('wind'), wdir: strongest?.wdir ?? null,
       uvi: max('uvi'), cape: max('cape'), sun: sunTimes(day, lat, lon), hours: hs,
       partial: hs.length && (hs[hs.length - 1].t - hs[0].t) < 18 * 36e5 && !isToday,
     };
@@ -289,7 +313,9 @@ export function shape(resp) {
 
   return {
     location: loc, hours, full, days, now: nowHour, nowIdx, observed, analysis: an, minutely,
-    runs: fc.runs, cell: fc.cell, lat, lon,
+    runs: fc.runs, cell: fc.cell, lat, lon, anchor: fc.anchor || null,
+    /* every NOVA hour (not only the UKV's: hourly to the end of the Main Run) */
+    nova: nova ? { ...nova, hours: nova.times.map((t, k) => ({ t, p: nova.p[k], src: nova.src[k], nb: nova.nb_km[k] })) } : null,
   };
 }
 
@@ -371,7 +397,10 @@ export function nextHoursText(m) {
   const gust = Math.max(...hs.map((h) => h.gust ?? 0));
   if (gust >= 35) parts.push(`Gusts up to ${Math.round(gust)} mph.`);
   const thunder = hs.find((h) => h.cond === 'thunder');
-  if (thunder && !parts[0].startsWith('Thunder')) parts.push(`A chance of thunder around ${at(thunder.t)}.`);
+  const ts = (m.nova?.hours || []).filter((x) => x.t >= Date.now() - 30 * 60e3 && x.t <= end);
+  const peak = ts.length ? ts.reduce((a, b) => (b.p > a.p ? b : a)) : null;
+  if (peak && peak.p >= 15 && !parts[0].startsWith('Thunder')) parts.push(`A ${thunderRisk(peak.p).word.toLowerCase()} risk of thunderstorms around ${at(peak.t)}.`);
+  else if (thunder && !parts[0].startsWith('Thunder')) parts.push(`A chance of thunder around ${at(thunder.t)}.`);
   const frost = hs.find((h) => (h.ground ?? 9) <= 0 || (h.t2 ?? 9) <= 0);
   if (frost) parts.push(`${(frost.t2 ?? 9) <= 0 ? 'Freezing' : 'A ground frost'} by ${at(frost.t)}.`);
   return parts.join(' ');

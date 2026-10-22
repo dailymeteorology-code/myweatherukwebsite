@@ -406,3 +406,24 @@
   .lw-warn-type { font-size: 15.5px; }
 }
 @media (prefers-reduced-motion: reduce) { .lw-warn-status.is-live i, .lw-day-detail { animation: none; } }
+
+/* ── thunderstorm risk (TCM NOVA): LocationThunder.jsx, and its row on the hourly strip ── */
+.lw-nova-badge { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px 3px 7px; border-radius: 99px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; color: #231800; background: linear-gradient(135deg, #ffe58a, #ffb547); box-shadow: 0 2px 10px rgba(255, 180, 60, 0.35); }
+.lw-tbars { gap: 2px; }
+.lw-tbars i { border-radius: 3px 3px 1px 1px; }
+.lw-tbars i.is-day { box-shadow: -1.5px 0 0 rgba(255, 255, 255, 0.45); }
+.lw-taxis { position: relative; display: block; height: 15px; }
+.lw-taxis span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.lw-tdays { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.lw-tdays .lw-day-fact { font-size: 12px; padding: 4px 10px; }
+.lw-tdays .lw-day-fact b { font-weight: 700; margin-right: 3px; }
+.lw-tdays .lw-day-fact i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.lw-tlegend { display: flex; flex-wrap: wrap; gap: 4px 11px; margin-top: 10px; font-size: 11px; color: var(--ink3); }
+.lw-tlegend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; margin-right: 4px; vertical-align: -1px; }
+.lw-nova-note { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 0; padding: 9px 11px; border-radius: 12px; background: rgba(255, 209, 102, 0.12); border: 1px solid rgba(255, 209, 102, 0.3); font-size: 12px; line-height: 1.45; color: var(--ink2); }
+.lw-nova-note svg { flex: 0 0 auto; margin-top: 2px; color: #ffd166; }
+.lw-nova-note b { color: var(--ink); font-weight: 650; }
+.lw-hour .lw-h-ts { display: inline-flex; align-items: center; gap: 1px; min-height: 14px; font-size: 11px; font-weight: 750; }
+.lw-hours-note { display: flex; align-items: center; gap: 5px; margin: 6px 0 0; font-size: 11.5px; color: var(--ink3); }
+.lw-hours-note svg { color: #ffd166; }
+.lw-hours-note b { color: var(--ink2); font-weight: 650; }
