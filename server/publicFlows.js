@@ -7,7 +7,7 @@
  *                                                         key) good for the closed site?
  *   POST /api/access/send-code      { email }             email a person their own active code
  *
- * The newsletter popup and sign-up page, and the closed site's sign-in, used to do these in the
+ * The newsletter sign-up page and the closed site's sign-in used to do these in the
  * browser by reading the subscriber list and every access code (entityAccess.js now keeps those
  * to admins). Every route is rate-limited by address, and the access routes answer the same
  * whether or not an address is known, so nothing can be fished out of them.

@@ -25,7 +25,6 @@ import GraphicStudio from '@/pages/GraphicStudio';
 import LiveStream from '@/pages/LiveStream';
 import TCMVerification from '@/pages/TCMVerification';
 import NewsletterSignup from '@/pages/NewsletterSignup';
-import NewsletterPopup from '@/components/NewsletterPopup';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
 import ForgotPassword from '@/pages/ForgotPassword';
@@ -496,7 +495,6 @@ const AuthenticatedApp = () => {
           {versionLabel}
         </div>
       )}
-      <NewsletterPopup />
       <Routes>
         {/* Live streaming surface renders OUTSIDE PageWrapper. PageWrapper wraps
             pages in an animated motion.div that applies transform/filter, which
