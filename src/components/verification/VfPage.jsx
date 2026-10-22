@@ -1,9 +1,9 @@
 /* The Verification section's page: liquid glass in the site's light and dark themes (the admin
    glass colours from adminTheme), a header with the section's three pages as tabs, and the
-   building blocks the pages share (cards, buttons, chips, stats, the locked notice). */
+   building blocks the pages share (cards, buttons, chips, stats). */
 import React, { useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
-import { BarChart3, Target, Archive, Lock } from 'lucide-react';
+import { BarChart3, Target, Archive } from 'lucide-react';
 import { useTheme } from '@/components/ThemeContext';
 import { adTokens, ADMIN_FONT } from '@/components/admin/adminTheme';
 
@@ -136,19 +136,6 @@ export default function VfPage({ title, lede, accent, accent2, hero = null, css 
         {children}
       </main>
     </div>
-  );
-}
-
-/** For visitors while TCM NOVA is not public. */
-export function NovaLocked({ what }) {
-  return (
-    <section className="vf-glass vf-card">
-      <div className="vf-empty">
-        <Lock />
-        <b>Coming with TCM NOVA</b>
-        <p>{what} is built from TCM NOVA, MyWeatherUK’s own thunderstorm model, which is still being tested. It opens here when TCM NOVA goes public.</p>
-      </div>
-    </section>
   );
 }
 

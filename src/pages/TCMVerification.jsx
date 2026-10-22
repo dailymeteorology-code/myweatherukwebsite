@@ -5,12 +5,12 @@
    The forecast is the run made the evening before (the first run of the day where there is none);
    any other Main Run that covered the day can be picked instead. server/tcmArchive/verify.js works
    out, per risk level, the area it covered, the strikes that fell inside it and how much of it saw
-   lightning within 10 km. Like TCM NOVA, admin-only until NOVA is public. */
+   lightning within 10 km. Open to everyone, while the TCM NOVA page itself stays admin-only. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Target, Zap, ChevronLeft, ChevronRight, Loader2, CloudLightning, Info } from 'lucide-react';
 import { useTheme } from '@/components/ThemeContext';
-import VfPage, { NovaLocked, Stat } from '@/components/verification/VfPage';
+import VfPage, { Stat } from '@/components/verification/VfPage';
 import VfMap, { strikeColour } from '@/components/verification/VfMap';
 import { loadLand, mercator, traceRings } from '@/components/verification/landOutline';
 import {
@@ -245,7 +245,6 @@ export default function TCMVerification() {
   const { isDark } = useTheme();
   const [params, setParams] = useSearchParams();
   const [days, setDays] = useState(null);
-  const [locked, setLocked] = useState(false);
   const [err, setErr] = useState(null);
   const top = useRef(null);
   const date = params.get('date');
@@ -257,7 +256,7 @@ export default function TCMVerification() {
       if (!alive) return;
       setDays(r.days);
       if (r.days.some((d) => d.pending)) timer = setTimeout(load, 8000);
-    }).catch((e) => { if (alive) (e.locked ? setLocked(true) : setErr('Verification could not be loaded.')); });
+    }).catch(() => { if (alive) setErr('Verification could not be loaded.'); });
     load();
     return () => { alive = false; clearTimeout(timer); };
   }, []);
@@ -290,19 +289,18 @@ export default function TCMVerification() {
   return (
     <VfPage title="TCM Verification" accent="#facc15" accent2="#f97316" css={CSS} hero={hero}
       lede="Each finished day: the lightning risk TCM NOVA gave for the whole day, with the lightning the Met Office recorded drawn over it. How much of the lightning fell inside the risk areas, and how much of the risk areas saw any.">
-      {locked && <NovaLocked what="TCM Verification" />}
       {err && <div className="vf-error">{err}</div>}
-      {!locked && !err && days === null && <div className="vf-skel" style={{ height: 420, borderRadius: 24 }} />}
-      {!locked && !err && days?.length === 0 && (
+      {!err && days === null && <div className="vf-skel" style={{ height: 420, borderRadius: 24 }} />}
+      {!err && days?.length === 0 && (
         <section className="vf-glass vf-card"><div className="vf-empty"><Target /><b>No finished days yet</b><p>Each day is checked once it is over and the Main Run that forecast it is in the TCM Archive.</p></div></section>
       )}
-      {!locked && current && (
+      {current && (
         <div ref={top} style={{ scrollMarginTop: 80 }}>
           <DayDetail key={current} date={current} run={run} setRun={setRun} dark={isDark}
             prev={days[i + 1]?.date} next={i > 0 ? days[i - 1].date : null} go={(d) => go(d)} />
         </div>
       )}
-      {!locked && days?.length > 0 && (
+      {days?.length > 0 && (
         <section className="vf-glass vf-card">
           <div className="vf-head"><Target /><h2>Every day</h2><small>{days.length} day{days.length === 1 ? '' : 's'}, newest first</small></div>
           <div className="tv-grid">

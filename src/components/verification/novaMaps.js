@@ -3,13 +3,12 @@
    sits on), and the value at a point. A field is float16, zlib-compressed, on the British National
    Grid, row 0 = south. */
 
-/* the archive (like TCM NOVA) is admin-only for now: send the session with every request */
+/* the session goes with every archive request: an admin also gets runs under a day old */
 export const authHeaders = () => {
   try { const t = localStorage.getItem('base44_access_token'); return t ? { Authorization: `Bearer ${t}` } : {}; } catch { return {}; }
 };
 export async function archiveJson(url) {
   const r = await fetch(url, { headers: authHeaders() });
-  if (r.status === 401 || r.status === 403) { const e = new Error('locked'); e.locked = true; throw e; }
   if (!r.ok) throw new Error(`${r.status}`);
   return r.json();
 }

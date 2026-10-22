@@ -18,12 +18,14 @@
  * also verifies each finished day: the Main Run's whole-day lightning risk against the strikes
  * the Met Office recorded that day (verify.js).
  *
- * Like TCM NOVA itself, the archive is admin-only until NOVA is public.
+ * The archive is open to everyone while TCM NOVA's own page stays admin-only, so a visitor only
+ * ever gets what is no longer a forecast: runs a day old or more (the ones the TCM page has let
+ * go), and of a younger run only its summary of a day that has already ended. Admins get all of it.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { requireAdmin } from '../auth.js';
+import { userFromRequest } from '../auth.js';
 import { createVerifier } from './verify.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -233,11 +235,13 @@ function sendBin(res, file, dtype) {
   return fs.createReadStream(file).pipe(res);
 }
 
-export function mountTcmArchive(app, { lightning, adminOnly = true, schedule = true } = {}) {
+export function mountTcmArchive(app, { lightning, schedule = true } = {}) {
   fs.mkdirSync(ROOT, { recursive: true });
   loadIndex();
   const verifier = createVerifier({ root: ROOT, lightning, dayAheadRun, archivedRuns, archivedManifest, londonDayBounds });
-  if (adminOnly) app.use('/api/tcm-archive', requireAdmin);
+  const isAdmin = (req) => userFromRequest(req)?.role === 'admin';
+  /* a run a visitor may open: a day old, or anything for an admin */
+  const openTo = (req, m) => !!m && (isOld(m) || isAdmin(req));
 
   const prod = (req, res) => {
     if (PRODUCTS.includes(req.params.product)) return req.params.product;
@@ -285,14 +289,14 @@ export function mountTcmArchive(app, { lightning, adminOnly = true, schedule = t
   app.get('/api/tcm-archive/:product/runs/:id', (req, res) => {
     const p = prod(req, res); if (!p) return;
     const m = archivedManifest(p, req.params.id);
-    return m ? res.json(m) : res.status(404).json({ error: 'no such run in the archive' });
+    return openTo(req, m) ? res.json(m) : res.status(404).json({ error: 'no such run in the archive' });
   });
 
   app.get('/api/tcm-archive/:product/runs/:id/frame/:lead/:field', (req, res) => {
     const p = prod(req, res); if (!p) return;
     const { id, lead, field } = req.params;
     const m = archivedManifest(p, id);
-    if (!m) return res.status(404).json({ error: 'no such run in the archive' });
+    if (!openTo(req, m)) return res.status(404).json({ error: 'no such run in the archive' });
     if (!SAFE_FIELD.test(field) || !m.fields[field] || !m.frames.some((f) => String(f.lead_min) === lead)) return res.status(404).json({ error: 'no such field or frame' });
     return sendBin(res, path.join(ROOT, p, id, 'frames', lead, `${field}.bin`), m.fields[field]);
   });
@@ -303,6 +307,8 @@ export function mountTcmArchive(app, { lightning, adminOnly = true, schedule = t
     const m = archivedManifest(p, id);
     const d = m?.days?.find((x) => x.date === date);
     if (!d || !SAFE_DAY.test(date) || !SAFE_FIELD.test(field) || !d.fields.includes(field)) return res.status(404).json({ error: 'no such day or field' });
+    /* a younger run's day only once that day is over: what it said, not what is still to come */
+    if (!openTo(req, m) && londonDayBounds(date)[1] > Date.now()) return res.status(404).json({ error: 'no such day or field' });
     return sendBin(res, path.join(ROOT, p, id, 'days', date, `${field}.bin`), 'float16');
   });
 
@@ -313,6 +319,7 @@ export function mountTcmArchive(app, { lightning, adminOnly = true, schedule = t
   });
   app.get('/api/tcm-archive/verification/:date', (req, res) => {
     if (!SAFE_DAY.test(req.params.date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    if (londonDayBounds(req.params.date)[1] > Date.now()) return res.status(404).json({ error: 'that day has not finished' });
     const run = SAFE_ID.test(req.query.run || '') ? req.query.run : null;
     const v = verifier.day(req.params.date, run);
     return v ? res.json(v) : res.status(404).json({ error: 'no Main Run in the archive forecast that day' });

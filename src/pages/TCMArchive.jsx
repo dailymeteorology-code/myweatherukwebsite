@@ -5,12 +5,12 @@
    colour is how the day-ahead Main Run saw it), then a run, then play it through, a frame at a time
    or a whole day at once, with the lightning that was recorded at the time on top.
 
-   Like TCM NOVA, admin-only until NOVA is public: visitors see that it is coming. */
+   Open to everyone, while the TCM NOVA page itself stays admin-only. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Archive, CalendarDays, ChevronLeft, ChevronRight, Play, Pause, Zap, Layers, Loader2, Clock, CloudLightning } from 'lucide-react';
 import { useTheme } from '@/components/ThemeContext';
-import VfPage, { NovaLocked, Stat } from '@/components/verification/VfPage';
+import VfPage, { Stat } from '@/components/verification/VfPage';
 import VfMap from '@/components/verification/VfMap';
 import {
   archiveJson, fetchField, renderField, valueAt, FIELDS, LEVELS, levelOf, levelColour, valueText, fetchStrikes,
@@ -280,7 +280,6 @@ export default function TCMArchive() {
   const set = (patch) => setParams((p) => { const n = new URLSearchParams(p); for (const [k, v] of Object.entries(patch)) { if (v == null) n.delete(k); else n.set(k, v); } return n; }, { replace: true });
 
   const [status, setStatus] = useState(null);
-  const [locked, setLocked] = useState(false);
   const [month, setMonth] = useState(date ? date.slice(0, 7) : null);
   const [cal, setCal] = useState(null);
   const [runs, setRuns] = useState(null);
@@ -289,12 +288,11 @@ export default function TCMArchive() {
   const first = useRef(true);
 
   useEffect(() => {
-    archiveJson('/api/tcm-archive/status').then(setStatus).catch((e) => (e.locked ? setLocked(true) : setErr('The archive could not be reached.')));
+    archiveJson('/api/tcm-archive/status').then(setStatus).catch(() => setErr('The archive could not be reached.'));
   }, []);
 
   /* the month on show; with nothing chosen, the newest month in the archive */
   useEffect(() => {
-    if (locked) return;
     let alive = true;
     archiveJson(`/api/tcm-archive/calendar${month ? `?month=${month}` : ''}`).then((c) => {
       if (!alive) return;
@@ -303,13 +301,13 @@ export default function TCMArchive() {
       if (!month) setMonth(c.month);
       /* open on the newest day the first time */
       if (first.current && !date && c.days.length) { first.current = false; set({ date: c.days[c.days.length - 1].date }); }
-    }).catch((e) => { if (alive && e.locked) setLocked(true); });
+    }).catch(() => {});
     return () => { alive = false; };
-  }, [month, locked]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [month]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* the day's runs; the newest opens unless one is named */
   useEffect(() => {
-    if (!date || locked) { setRuns(null); return undefined; }
+    if (!date) { setRuns(null); return undefined; }
     let alive = true;
     setRuns(null);
     archiveJson(`/api/tcm-archive/${product}/runs?date=${date}`).then((r) => {
@@ -318,14 +316,14 @@ export default function TCMArchive() {
       if (!r.runs.some((x) => x.run_id === runId)) set({ run: r.runs[0]?.run_id || null });
     }).catch(() => { if (alive) setRuns([]); });
     return () => { alive = false; };
-  }, [date, product, locked]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [date, product]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!runId || !runId.startsWith(`${product}-`) || locked) { setManifest(null); return undefined; }
+    if (!runId || !runId.startsWith(`${product}-`)) { setManifest(null); return undefined; }
     let alive = true;
     archiveJson(`/api/tcm-archive/${product}/runs/${runId}`).then((m) => { if (alive) setManifest(m); }).catch(() => { if (alive) setManifest(null); });
     return () => { alive = false; };
-  }, [runId, product, locked]);
+  }, [runId, product]);
 
   const hero = status && (
     <div className="vf-stats">
@@ -338,12 +336,11 @@ export default function TCMArchive() {
   return (
     <VfPage title="TCM Archive" accent="#38bdf8" accent2="#a78bfa" css={CSS} hero={hero}
       lede="Every TCM NOVA run once it is a day old: the Main Run and the Hyper-Short, kept for good. Pick a day, pick a run, and play it through with the lightning that was recorded at the time.">
-      {locked && <NovaLocked what="The TCM Archive" />}
       {err && <div className="vf-error">{err}</div>}
-      {!locked && !err && status && status.main.runs + status.hyper.runs === 0 && (
+      {!err && status && status.main.runs + status.hyper.runs === 0 && (
         <section className="vf-glass vf-card"><div className="vf-empty"><Archive /><b>The archive is filling up</b><p>Runs arrive here once they are a day old. Check back tomorrow.</p></div></section>
       )}
-      {!locked && !err && month && (cal?.days.length > 0) && (
+      {!err && month && (cal?.days.length > 0) && (
         <div className="ar-grid">
           <aside className="ar-side">
             <Calendar cal={cal} month={month} setMonth={(m) => setMonth(m)} date={date} setDate={(d) => set({ date: d, run: null })} />
