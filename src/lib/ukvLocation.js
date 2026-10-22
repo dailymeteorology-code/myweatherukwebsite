@@ -111,13 +111,13 @@ export function beaufort(mph) {
 const RANK = {
   thunder: 9, thunderShowers: 9, blizzard: 8.5, hail: 8, heavySnow: 8, freezingRain: 7.5, torrentialRain: 7, snow: 7, sleet: 7, snowShowers: 7,
   heavyRain: 6, heavyShowers: 6, rain: 5, showers: 4, lightRain: 3, drizzle: 2,
-  fog: 1.5, mist: 1, windy: 0.9, overcast: 0.8, cloudy: 0.6, partly: 0.4, mostlyClear: 0.2, hot: 0.1, clear: 0,
+  fog: 1.5, mist: 1, windy: 0.9, overcast: 0.8, cloudy: 0.6, mostlyCloudy: 0.5, partly: 0.4, mostlyClear: 0.2, hot: 0.1, clear: 0,
 };
 const LABEL = {
   thunder: 'Thunderstorms', thunderShowers: 'Thundery showers', blizzard: 'Blizzard', hail: 'Hail', heavySnow: 'Heavy snow', snow: 'Snow',
   snowShowers: 'Snow showers', sleet: 'Sleet', freezingRain: 'Freezing rain', torrentialRain: 'Torrential rain',
   heavyRain: 'Heavy rain', heavyShowers: 'Heavy showers', rain: 'Rain', showers: 'Showers', lightRain: 'Light rain', drizzle: 'Drizzle',
-  fog: 'Fog', mist: 'Mist', windy: 'Windy', overcast: 'Overcast', cloudy: 'Cloudy', partly: 'Partly cloudy', hot: 'Hot and sunny',
+  fog: 'Fog', mist: 'Mist', windy: 'Windy', overcast: 'Overcast', cloudy: 'Cloudy', mostlyCloudy: 'Mostly cloudy', partly: 'Partly cloudy', hot: 'Hot and sunny',
   sunrise: 'Sunrise', sunset: 'Sunset',
 };
 /* windy: a mean wind of 25 mph or gusts of 40 (Beaufort 6, near-gale gusts); a gale on a dry
@@ -155,10 +155,13 @@ export function classify(h) {
   if (galeOf(h)) return 'windy';
   const c = h.tcc ?? 50;
   if (c < 40 && (h.t2 ?? 0) >= 27 && (h.isDay ?? (h.sun ?? 0) > 0)) return 'hot';
+  /* six steps of cloud, the way the sky reads from the ground: sunny, mostly sunny, partly cloudy,
+     mostly cloudy (breaks of sun), cloudy, overcast (a closed grey sheet) */
   if (c < 12) return 'clear';
-  if (c < 40 || ((h.lcc ?? 0) + (h.mcc ?? 0) < 20 && c < 70)) return 'mostlyClear';
-  if (c < 75) return 'partly';
-  if (c < 95) return 'cloudy';
+  if (c < 35 || ((h.lcc ?? 0) + (h.mcc ?? 0) < 20 && c < 65)) return 'mostlyClear';
+  if (c < 62) return 'partly';
+  if (c < 85) return 'mostlyCloudy';
+  if (c < 96) return 'cloudy';
   return 'overcast';
 }
 export const isWet = (k) => RANK[k] >= 2 && !['fog', 'mist'].includes(k);
@@ -249,8 +252,14 @@ export function shape(resp) {
       if (observed.t2_min != null) lo = Math.min(lo ?? 99, observed.t2_min);
     }
     const fullHs = hs.filter((h) => h.full);
-    const rain = fullHs.reduce((s, h) => s + (h.span > 0 ? h.precip ?? 0 : 0), 0);
-    const snow = fullHs.reduce((s, h) => s + (h.span > 0 ? h.snow ?? 0 : 0), 0);
+    const sum = (list, k) => list.reduce((s, h) => s + (h.span > 0 ? h[k] ?? 0 : 0), 0);
+    /* today: the radar's rain since midnight and the forecast for the hours still to come. The
+       forecast's own total for the whole day counted the hours already gone as forecast, so a
+       wet night under a dry morning still read as a rainy day. */
+    const rainSoFar = isToday && observed?.precip_total != null ? observed.precip_total : null;
+    const rainAhead = rainSoFar != null ? sum(fullHs.filter((h) => h.t > nowMs), 'precip') : null;
+    const rain = rainSoFar != null ? rainSoFar + rainAhead : sum(fullHs, 'precip');
+    const snow = sum(fullHs, 'snow');
     const daylight = fullHs.filter((h) => h.isDay);
     const pool = (isToday ? ahead.filter((h) => h.full) : daylight.length ? daylight : fullHs);
     /* the day's weather: the most telling daytime hour once rain is worth a mention, else the cloud */
@@ -262,7 +271,7 @@ export function shape(resp) {
         const dry = pool.filter((h) => !isWet(h.cond));
         const fogs = dry.filter((h) => h.cond === 'fog').length;
         const c = dry.reduce((s, h) => s + (h.tcc ?? 50), 0) / Math.max(1, dry.length);
-        cond = fogs >= Math.max(2, dry.length / 2) ? 'fog' : c < 15 ? 'clear' : c < 40 ? 'mostlyClear' : c < 75 ? 'partly' : c < 93 ? 'cloudy' : 'overcast';
+        cond = fogs >= Math.max(2, dry.length / 2) ? 'fog' : c < 15 ? 'clear' : c < 38 ? 'mostlyClear' : c < 62 ? 'partly' : c < 82 ? 'mostlyCloudy' : c < 94 ? 'cloudy' : 'overcast';
         if (dry.filter((h) => h.cond === 'windy').length >= 2) cond = 'windy';
         else if (dry.filter((h) => h.cond === 'hot').length >= 2) cond = 'hot';
       }
@@ -271,7 +280,7 @@ export function shape(resp) {
     const strongest = fullHs.reduce((a, b) => ((b.wind ?? 0) > (a?.wind ?? -1) ? b : a), null);
     const windyHours = pool.filter((h) => h.windy).length;
     return {
-      day, label: dayLabel(day, today), isToday, hi, lo, cond, rain, snow, windy: windyHours >= 2,
+      day, label: dayLabel(day, today), isToday, hi, lo, cond, rain, rainSoFar, rainAhead, snow, windy: windyHours >= 2,
       pRain: max('pRain'), pThunder: max('pThunder'), gust: max('gust'), wind: max('wind'), wdir: strongest?.wdir ?? null,
       uvi: max('uvi'), cape: max('cape'), sun: sunTimes(day, lat, lon), hours: hs,
       partial: hs.length && (hs[hs.length - 1].t - hs[0].t) < 18 * 36e5 && !isToday,
@@ -287,7 +296,7 @@ export function shape(resp) {
 /* ── the next hour, minute by minute (the radar nowcast) ────────────────────
    The server sends 90 minutes from when it was asked; the page re-derives every minute, so
    the hour shown always starts at this minute. Rain or snow from the hour's model snow share. */
-export const RAIN_BANDS = [['Light', 0.1], ['Moderate', 1], ['Heavy', 4]];      // mm/h, as classify() words them
+/* rain bands, mm/h: light from 0.1, moderate from 1, heavy from 4 (as classify() words them) */
 export const bandOf = (r) => (r == null || r < 0.1 ? 0 : r < 1 ? 1 : r < 4 ? 2 : 3);
 function nextHour(nc, cur, nowMs) {
   if (!nc?.rate?.length) return null;
@@ -370,7 +379,11 @@ export function nextHoursText(m) {
 
 export function dayText(d) {
   const bits = [condLabel(d.cond, true, d.windy)];
-  if (d.rain >= 0.2) bits.push(`${d.rain >= 10 ? Math.round(d.rain) : d.rain.toFixed(1)} mm of ${d.snow > d.rain / 2 ? 'snow (water equivalent)' : 'rain'}`);
+  const mm = (v) => (v >= 10 ? Math.round(v) : v.toFixed(1));
+  if (d.rainSoFar != null) {
+    if (d.rainSoFar >= 0.2) bits.push(`${mm(d.rainSoFar)} mm of rain so far`);
+    if (d.rainAhead >= 0.2) bits.push(`${mm(d.rainAhead)} mm more to come`);
+  } else if (d.rain >= 0.2) bits.push(`${mm(d.rain)} mm of ${d.snow > d.rain / 2 ? 'snow (water equivalent)' : 'rain'}`);
   if ((d.gust ?? 0) >= 35) bits.push(`gusts ${Math.round(d.gust)} mph`);
   return bits.join(' · ');
 }

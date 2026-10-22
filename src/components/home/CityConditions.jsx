@@ -86,7 +86,7 @@ function moCond(code) {
   }
 }
 /* the sky's cloud cover for a condition (DataHub's site-specific series has no cloud amount) */
-const CLOUD = { clear: 5, mostlyClear: 25, partly: 50, cloudy: 82, overcast: 100, mist: 90, fog: 95, drizzle: 92, showers: 70, heavyShowers: 75, thunder: 85 };
+const CLOUD = { clear: 5, mostlyClear: 25, partly: 50, mostlyCloudy: 72, cloudy: 88, overcast: 100, mist: 90, fog: 95, drizzle: 92, showers: 70, heavyShowers: 75, thunder: 85 };
 
 const clock = (tz) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const CLOCKS = Object.fromEntries(ALL_CITIES.map((c) => [c.id, clock(c.tz)]));

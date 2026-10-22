@@ -260,6 +260,15 @@ export default function WxIcon({ cond = 'cloudy', day = true, windy = false, siz
     case 'partly':
       body = <PeekBehind day={day} uid={uid} peek={{ cx: 23, cy: 22, r: 11 }} cloud={{ x: 12, y: 25, s: 0.95 }} />;
       break;
+    case 'mostlyCloudy':
+      /* a big cloud, the sun (or moon) only peeking over its shoulder: more cloud than 'partly' */
+      body = (
+        <>
+          <Behind uid={uid} x={5} y={21} s={1.08}>{day ? <Sun cx={43} cy={21} r={8.5} uid={uid} /> : <Moon cx={43} cy={21} r={10} uid={uid} />}</Behind>
+          <Cloud x={5} y={21} s={1.08} uid={uid} />
+        </>
+      );
+      break;
     case 'cloudy':
       body = <Cloud x={6} y={17} s={1.08} uid={uid} />;
       break;

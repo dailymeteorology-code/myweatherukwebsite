@@ -168,26 +168,3 @@ export function mergeLocationWarnings(met = [], manual = []) {
   merged.sort((a, b) => (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0));
   return merged;
 }
-
-/** The warnings overlapping a given UK calendar day. `ukDate` maps ms -> day. */
-export function warningsOnDay(warnings, dateStr, ukDate) {
-  if (!dateStr) return [];
-  return warnings.filter(w => {
-    if (!w.startMs || !w.endMs) return false;
-    // Walk the warning in hourly steps: cheap, and correct across a warning
-    // that starts one evening and ends two days later.
-    for (let t = w.startMs; t <= w.endMs; t += 3600000) {
-      if (ukDate(t) === dateStr) return true;
-    }
-    return ukDate(w.endMs) === dateStr;
-  });
-}
-
-/** Highest severity among a list, or null. */
-export function topSeverity(warnings = []) {
-  let best = null;
-  for (const w of warnings) {
-    if (!best || (SEVERITY_RANK[w.severity] || 0) > (SEVERITY_RANK[best] || 0)) best = w.severity;
-  }
-  return best;
-}

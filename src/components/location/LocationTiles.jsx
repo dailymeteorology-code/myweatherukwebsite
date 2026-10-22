@@ -5,7 +5,7 @@ import React from 'react';
 import {
   Thermometer, Wind, Sun, Sunset, Droplets, Droplet, Eye, Gauge, Cloud, CloudLightning, Snowflake, Moon, SunMedium, History,
 } from 'lucide-react';
-import { beaufort, compass, hhmm, moonPhase, sunTimes, ukDay, uvWord, visWord } from '@/lib/ukvLocation';
+import { beaufort, compass, condLabel, hhmm, moonPhase, sunTimes, ukDay, uvWord, visWord } from '@/lib/ukvLocation';
 
 const Tile = ({ icon: Icon, label, children }) => (
   <div className="lw-glass lw-tile">
@@ -179,9 +179,13 @@ export default function LocationTiles({ model, unit }) {
         <div className="lw-foot" style={{ textAlign: 'center' }}>{trend > 0 ? 'Rising' : trend < 0 ? 'Falling' : 'Steady'} over the next three hours</div>
       </Tile>
 
+      {/* The total is now's (satellite and airports, in the analysis); the layers are the UKV's hour,
+          labelled so: they used to sit under the total unexplained, and could disagree with it. */}
       <Tile icon={Cloud} label="Cloud cover">
         <div className="lw-big">{now.tcc == null ? '—' : `${Math.round(now.tcc)}%`}</div>
-        <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
+        <div className="lw-word">{now.tcc == null ? '' : condLabel(now.tcc < 12 ? 'clear' : now.tcc < 35 ? 'mostlyClear' : now.tcc < 62 ? 'partly' : now.tcc < 85 ? 'mostlyCloudy' : now.tcc < 96 ? 'cloudy' : 'overcast', now.isDay)}</div>
+        <div className="lw-mini" style={{ marginTop: 6 }}>{model.analysis?.tcc != null ? 'Now, by satellite and airport reports. Layers, UKV forecast:' : 'Layers, UKV forecast:'}</div>
+        <div style={{ display: 'grid', gap: 4, marginTop: 4 }}>
           {[['High', cur.hcc], ['Middle', cur.mcc], ['Low', cur.lcc]].map(([l, v]) => (
             <div key={l} style={{ display: 'grid', gridTemplateColumns: '48px 1fr 34px', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--ink2)' }}>
               <span>{l}</span>

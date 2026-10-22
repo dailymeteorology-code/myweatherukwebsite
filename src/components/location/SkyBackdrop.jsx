@@ -54,7 +54,7 @@ export function skyGroup(cond) {
   if (['rain', 'heavyRain', 'showers', 'heavyShowers', 'lightRain', 'drizzle'].includes(cond)) return 'rain';
   if (cond === 'fog' || cond === 'mist') return 'fog';
   if (cond === 'cloudy' || cond === 'overcast') return 'cloudy';
-  if (cond === 'partly' || cond === 'mostlyClear') return 'partly';
+  if (cond === 'partly' || cond === 'mostlyClear' || cond === 'mostlyCloudy') return 'partly';
   return 'clear';
 }
 export function skyPhase(sun, morning) {

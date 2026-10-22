@@ -14,8 +14,9 @@ Analysis, at each radar time t:
   3. Rain is the Met Office 1 km radar composite at t (observed). The weather type adds LEELA
      lightning (strikes within 15 km in the past 20 minutes), the wet bulb for snow and sleet,
      and the UKV visibility.
-  4. Cloud is what Meteosat saw (sat_cloud below), within half an hour of t; the UKV's cloud
-     only where there is no satellite view.
+  4. Cloud is half what Meteosat saw (sat_cloud below, within half an hour of t) and half the
+     UKV's, corrected by the airports' own cloud reports (station_cloud); the UKV alone where
+     there is no satellite view.
   Products: live/now_<var>/<YYYYmmddTHHMM>.bin (display grid, k = 1).
 
 Observed days (Europe/London): observed/<YYYY-MM-DD>/ holds the day's highest and lowest of
@@ -41,7 +42,11 @@ CACHE = LIVE / '_ukv'
 LONDON = ZoneInfo('Europe/London')
 KEEP_H = 12
 PER_CYCLE = 6                                    # analyses per 2-minute cycle (backfill catches up)
-METAR_URL = 'https://aviationweather.gov/api/data/metar?bbox=49,-11.5,61.5,2.5&format=json&hours={h}'
+# By country, two hours at a time. The bounding-box query this used thinned a large box to 64
+# stations (Luton, Gatwick, Oxford and Newcastle among those left out), and every answer stops
+# at 400 reports, which three hours of the UK's 88 stations overrun.
+METAR_URL = 'https://aviationweather.gov/api/data/metar?ids={ids}&format=json&hours=2&date={end}'
+METAR_GROUPS = ('~gb', '~ie,~im,~je,~gg')
 KT = 1.150779                                    # knots -> mph
 
 # product: label, unit, encoding, the day statistics kept for it
@@ -131,6 +136,14 @@ OKTA_SHARE = {'FEW': 0.19, 'SCT': 0.44, 'BKN': 0.75, 'OVC': 1.0, 'OVX': 1.0, 'VV
 CLEAR_CODES = {'CLR', 'SKC', 'NCD', 'NSC', 'CAVOK'}
 
 
+def metar_sees(r):
+    """How high a station's cloud report reaches: 'low' for CAVOK and NSC (they only say there is
+    no cloud below 5,000 ft), 'all' otherwise (the layers it reports, or none detected by a
+    ceilometer that reaches well above the low and middle cloud)."""
+    covers = [str(c.get('cover') or '').upper() for c in (r.get('clouds') or []) if isinstance(c, dict)] + [str(r.get('cover') or '').upper()]
+    return 'low' if any(c in ('CAVOK', 'NSC') for c in covers) else 'all'
+
+
 def metar_cloud(r):
     """The cloud a METAR reports, as % of the sky (layers overlapping at random), or None if it
     says nothing about cloud. An automatic station's ceilometer sees nothing above about
@@ -149,7 +162,16 @@ def metar_cloud(r):
 
 def metars(hours=3):
     from nova.io_aws import get
-    rows = json.loads(get(METAR_URL.format(h=hours), tries=3, timeout=60))
+    rows, seen = [], set()
+    end = datetime.now(timezone.utc)
+    for k in range(max(1, int(np.ceil(hours / 2)))):
+        stamp = (end - timedelta(hours=2 * k)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        for ids in METAR_GROUPS:
+            for r in json.loads(get(METAR_URL.format(ids=ids, end=stamp), tries=3, timeout=60)):
+                key = (r.get('icaoId'), r.get('obsTime'))
+                if key not in seen:
+                    seen.add(key)
+                    rows.append(r)
     out = []
     for r in rows:
         try:
@@ -163,7 +185,7 @@ def metars(hours=3):
                     'wspd': num('wspd') * KT if num('wspd') is not None else None,
                     'wgst': num('wgst') * KT if num('wgst') is not None else None,
                     'wdir': num('wdir'), 'pres': num('altim'), 'vis': vis_km, 'wx': r.get('wxString') or '',
-                    'cloud': metar_cloud(r)})
+                    'cloud': metar_cloud(r), 'sees': metar_sees(r)})
     if out:
         gx, gy = to_grid([o['lon'] for o in out], [o['lat'] for o in out])
         for o, x, y in zip(out, gx, gy):
@@ -233,15 +255,40 @@ SAT_LAG_MIN = 30                                 # the newest satellite view thi
 SAT_FETCH_H = 2                                  # analyses this recent fetch a missing view themselves
 
 
-def sat_cloud(t):
-    """Cloud cover (%) at t as Meteosat sees it, on the display grid; None without a view.
+# Cloud-top height (m) along the colour key of EUMETView's msg_fes:cth layer, every 8 px of the key
+# (h, r, g, b): black and brown low, blue ~4 km, green ~8 km, red ~12 km, grey and white highest.
+CTH_KEY = np.array([
+    (150, 0, 0, 0), (420, 26, 11, 0), (690, 53, 23, 0), (970, 79, 35, 0), (1240, 105, 45, 5),
+    (1510, 122, 36, 42), (1790, 140, 27, 79), (2060, 157, 18, 117), (2330, 175, 9, 156), (2600, 192, 0, 192),
+    (2880, 148, 0, 206), (3150, 109, 0, 219), (3420, 71, 0, 232), (3690, 27, 0, 248), (3970, 0, 19, 255),
+    (4240, 0, 45, 255), (4510, 0, 69, 255), (4790, 0, 92, 255), (5060, 0, 121, 255), (5330, 0, 146, 255),
+    (5600, 0, 169, 255), (5880, 0, 194, 255), (6150, 0, 220, 255), (6420, 0, 244, 255), (6690, 0, 248, 226),
+    (6970, 0, 235, 177), (7240, 0, 224, 128), (7510, 0, 211, 77), (7790, 0, 198, 27), (8060, 10, 194, 0),
+    (8330, 34, 200, 0), (8600, 60, 206, 0), (8880, 90, 214, 0), (9150, 115, 220, 0), (9420, 147, 228, 0),
+    (9690, 174, 234, 0), (9970, 198, 241, 0), (10240, 230, 248, 0), (10510, 254, 251, 0), (10780, 254, 226, 0),
+    (11060, 254, 201, 0), (11330, 254, 177, 0), (11600, 254, 152, 0), (11880, 254, 128, 0), (12150, 254, 102, 0),
+    (12420, 254, 77, 0), (12690, 254, 53, 0), (12970, 254, 28, 0), (13240, 254, 3, 0), (13510, 238, 26, 26),
+    (13780, 218, 58, 58), (14060, 201, 88, 88), (14330, 183, 120, 120), (14600, 166, 155, 155), (14880, 169, 169, 169),
+    (15150, 186, 186, 186), (15420, 199, 199, 199), (15690, 212, 212, 212), (15970, 230, 230, 230), (16240, 239, 239, 239),
+    (16510, 255, 255, 255),
+], np.float32)
+SEE_TOP_M = {'all': 6000, 'low': 1500}           # cloud a station's report covers: tops below this
 
-    The UKV's cloud is a forecast, and the analysis used to take it as it was: on the morning of
-    22 Oct 2026 it held 60–80 % cumulus over Dunstable for hours while the sky was cloudless (the
-    satellite clear, Luton reporting no cloud), so the site said "cloudy" in the sunshine. This is
-    the cloud-top-height map (Meteosat 0° SEVIRI, kept by mdata/live.py), which is transparent
-    wherever the satellite found no cloud, day and night. Each 2 km cell gets the share of cloudy
-    1 km pixels within about 5 km of it — roughly the sky you see above you.
+
+def sat_cloud(t):
+    """(cover, above) at t as Meteosat sees it, on the display grid; None without a view.
+
+    cover: the share (%) of cloudy satellite pixels within about 5 km of each cell. above: for each
+    of SEE_TOP_M's heights, the share of pixels whose cloud tops are above it: cloud a station's
+    report cannot speak for (see station_cloud).
+
+    The map is the cloud-top-height product (Meteosat 0 deg SEVIRI, kept by mdata/live.py),
+    transparent wherever the satellite found no cloud, day and night. It came in because the UKV's
+    own cloud, a forecast, held 60-80 % cumulus over Dunstable under a clear sky on the morning of
+    22 Oct 2026. On its own it errs the other way in broken cumulus: a pixel 4-5 km across is
+    "cloudy" if any cloud is in it, and that afternoon it read 94 % round Dunstable with Luton
+    reporting scattered cloud. So the analysis takes half of each, and the stations correct that
+    (analyse, station_cloud).
 
     The view at t, or the newest up to SAT_LAG_MIN before it. If none is on disk yet (the satellite
     lane lags the analysis, and after the PC has been off it is hours behind) a recent analysis
@@ -263,26 +310,67 @@ def sat_cloud(t):
     from scipy import ndimage
     # a file still being written by the other lane reads as broken; treat it as no view
     try:
-        a = np.asarray(Image.open(path).convert('RGBA'))[..., 3].astype(np.float32) / 255   # 1 = cloud
+        im = np.asarray(Image.open(path).convert('RGBA'))
     except Exception:
         return None
-    if a.shape != (NY * 2, NX * 2):                  # the 1 km grid, two pixels to a display cell
+    if im.shape[:2] != (NY * 2, NX * 2):              # the 1 km grid, two pixels to a display cell
         return None
-    cells = a.reshape(NY, 2, NX, 2).mean(axis=(1, 3))
-    return (ndimage.uniform_filter(cells, size=5, mode='nearest') * 100).astype(np.float32)
+    a = im[..., 3].astype(np.float32) / 255          # 1 = cloud
+    # each distinct colour's height, by the nearest colour on the key (one lookup per colour)
+    packed = (im[..., 0].astype(np.int32) << 16) | (im[..., 1].astype(np.int32) << 8) | im[..., 2].astype(np.int32)
+    on = a > 0
+    uniq, inv = np.unique(packed[on], return_inverse=True)
+    rgb = np.stack([(uniq >> 16) & 255, (uniq >> 8) & 255, uniq & 255], -1).astype(np.float32)
+    tops = CTH_KEY[((rgb[:, None, :] - CTH_KEY[None, :, 1:]) ** 2).sum(-1).argmin(1), 0]
+    top = np.zeros(a.shape, np.float32)
+    top[on] = tops[inv]
+
+    def share(f):
+        return (ndimage.uniform_filter(f.reshape(NY, 2, NX, 2).mean(axis=(1, 3)), size=5, mode='nearest') * 100).astype(np.float32)
+    return share(a), {k: share(a * (top >= m)) for k, m in SEE_TOP_M.items()}
 
 
-CLOUD_L_KM = 20
+CLOUD_L_KM = 35                                  # how far a station's cloud report is felt
+
+
+def station_cloud(base, above, near):
+    """The cloud cover, corrected by what the airports report (%).
+
+    Each station's report says how much of its sky is covered, as far up as it can see. Its
+    estimate of the whole sky adds the satellite's cloud above that (random overlap), and the
+    difference from the field at the station is spread the way the temperature's is: the
+    station's own cell moves 80 % of the way, fading over about 35 km. So a clear or scattered
+    report thins a satellite field that has filled in a field of cumulus, without touching cirrus
+    the station cannot see; and a report of low cloud the satellite missed adds it.
+
+    Then a floor: within about 20 km a station reporting cloud keeps at least that much. The
+    satellite misses some low stratus: that morning it saw a clear sky over Belfast Aldergrove
+    while the airport reported overcast at 500 ft.
+    """
+    st = []
+    for o in near.values():
+        c = o.get('cloud')
+        if c is None:
+            continue
+        bg = at_station(base, o)
+        if not np.isfinite(bg):
+            continue
+        hidden = at_station(above[o.get('sees', 'all')], o) if above is not None else 0.0
+        hidden = hidden if np.isfinite(hidden) else 0.0
+        est = 100 * (1 - (1 - c / 100) * (1 - hidden / 100))
+        st.append((o['gx'], o['gy'], est - bg))
+    out = spread(st, base, CLOUD_L_KM) if st else base
+    return np.clip(np.fmax(out, cloud_floor(near)), 0, 100).astype(np.float32)
+
+
+FLOOR_L_KM = 20
 
 
 def cloud_floor(near):
-    """The least cloud the airports' reports allow round them (%). The satellite can miss low
-    stratus — on 22 Oct 2026 it saw a clear sky over Belfast Aldergrove while the airport reported
-    overcast at 500 ft — so where a station reports cloud, the analysis keeps at least that much at
-    the station, fading out over about 20 km. Stations reporting a clear sky change nothing: their
-    ceilometers cannot see high cloud."""
+    """The least cloud the airports' reports allow round them (%): at each station that reports
+    cloud, that much, fading out over about 20 km."""
     F = np.zeros((NY, NX), np.float32)
-    Lc = CLOUD_L_KM / (DX / 1000.0)
+    Lc = FLOOR_L_KM / (DX / 1000.0)
     for o in near.values():
         c = o.get('cloud')
         if not c:
@@ -331,11 +419,21 @@ def analyse(t, reports):
     A['windchill'] = _windchill(t2, A['wind10'])
     A['feels'] = _feels(t2, td2, A['wind10'])
     A['wdir10'] = B.get('wdir', np.full((NY, NX), np.nan, np.float32))
+    # Cloud: the satellite and the UKV, half each, then the airports (station_cloud). Scored on
+    # 22 Oct 2026 against 93 airports left out of the correction in turn, at five times from a
+    # clear morning to an afternoon of broken cumulus, the mean error was 19.8 points (of 100);
+    # the satellite and the stations 23.7, the UKV alone 26.2, the satellite alone 28.7. Each
+    # source is wrong in its own way (the UKV puts cloud in clear skies, the satellite fills in
+    # cumulus), so the average of the two is a better start than either.
+    ukv_cc = B.get('tcc', np.full((NY, NX), np.nan, np.float32))
     sat = sat_cloud(t)
-    base = sat if sat is not None else B.get('tcc', np.full((NY, NX), np.nan, np.float32))
-    floor = cloud_floor(near)
-    # no view and no model (outside the domain) stays unknown unless a station says otherwise
-    A['tcc'] = np.where(np.isnan(base) & (floor == 0), np.nan, np.fmax(base, floor)).astype(np.float32)
+    if sat is not None:
+        base = np.where(np.isfinite(ukv_cc), 0.5 * sat[0] + 0.5 * ukv_cc, sat[0]).astype(np.float32)
+        above = sat[1]
+    else:
+        base, above = ukv_cc, None
+    # no view and no model (outside the domain) stays unknown
+    A['tcc'] = np.where(np.isnan(base), np.nan, station_cloud(base, above, near)).astype(np.float32)
     r2 = radar_2km(t)
     pr = np.where(np.isfinite(r2), r2, B.get('precip_rate', 0)) if r2 is not None else B.get('precip_rate', np.zeros((NY, NX)))
     wx = weather_type({'precip_rate': pr, 'tcc': A['tcc'], 't2': t2, 'td2': td2, 'vis': B.get('vis', np.full((NY, NX), 99.0))})

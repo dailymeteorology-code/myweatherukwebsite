@@ -657,7 +657,7 @@ export default function LocationForecast() {
               Forecast: Met Office UKV 2 km model from the Met Office&rsquo;s open data on AWS
               {runs.length ? ` — ${runs.map((r) => `${runName(r.run)} run to T+${r.top}`).join(', then ')}` : ''}.
               {model.cell ? ` The nearest model grid point is ${model.cell.offset_km} km away.` : ''}
-              <br />Now: the UKV analysed every 15 minutes with station reports, the cloud Meteosat sees and the radar&rsquo;s rain. Radar: Met Office 1 km composite.
+              <br />Now: the UKV analysed every 15 minutes with station reports, cloud from Meteosat and the airports, and the radar&rsquo;s rain. Radar: Met Office 1 km composite.
               The next hour: the newest radar scan carried forward by the way the rain has moved over the last half hour.
               Chance of rain counts model rain within 10 km; chance of lightning within 16 km.
             </p>

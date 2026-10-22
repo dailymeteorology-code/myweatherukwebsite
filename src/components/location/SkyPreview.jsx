@@ -6,12 +6,12 @@ import { Palette, X, Eye, EyeOff, Play, Pause } from 'lucide-react';
 import WxIcon from './WxIcon';
 import { condLabel } from '@/lib/ukvLocation';
 
-const CONDS = ['clear', 'mostlyClear', 'partly', 'cloudy', 'overcast', 'hot', 'windy', 'fog', 'mist', 'drizzle', 'lightRain', 'rain', 'heavyRain',
+const CONDS = ['clear', 'mostlyClear', 'partly', 'mostlyCloudy', 'cloudy', 'overcast', 'hot', 'windy', 'fog', 'mist', 'drizzle', 'lightRain', 'rain', 'heavyRain',
   'torrentialRain', 'showers', 'heavyShowers', 'thunder', 'thunderShowers', 'freezingRain', 'sleet', 'snow', 'heavySnow', 'snowShowers', 'blizzard', 'hail'];
 /* [key, label, sun elevation (degrees), morning] */
 const TIMES = [['day', 'Day', 40, true], ['sunrise', 'Sunrise', 2, true], ['sunset', 'Sunset', 2, false], ['night', 'Night', -20, false]];
 const RATE = { drizzle: 0.3, lightRain: 0.6, rain: 2, heavyRain: 8, torrentialRain: 24, showers: 2, heavyShowers: 6, thunder: 6, thunderShowers: 4, freezingRain: 1.5, sleet: 1, snow: 1, heavySnow: 3, snowShowers: 1, blizzard: 2.5, hail: 3 };
-const CLOUD = { clear: 5, mostlyClear: 25, partly: 55, cloudy: 85, overcast: 100, fog: 100, mist: 70, hot: 5, windy: 45 };
+const CLOUD = { clear: 5, mostlyClear: 25, partly: 55, mostlyCloudy: 75, cloudy: 90, overcast: 100, fog: 100, mist: 70, hot: 5, windy: 45 };
 /* the types that are wind themselves start windy; any other can be made windy with the slider */
 const WIND = { windy: 44, blizzard: 38 };
 
