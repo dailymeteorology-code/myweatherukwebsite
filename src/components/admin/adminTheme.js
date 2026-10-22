@@ -72,6 +72,8 @@ export const ADMIN_CSS = `
   -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%); box-shadow: var(--ad-shadow), inset 0 1px 0 var(--ad-highlight); }
 .ad-card { overflow: hidden; }
 .ad-studio { background: #0a1220; color: #f1f5f9; color-scheme: dark; }
+.ad-studio-glass { padding: 16px 14px; }
+@media (max-width: 720px) { .ad-studio-glass { padding: 10px 6px; } }
 .ad-legacy-card { background: var(--ad-surface) !important; border: 1px solid var(--ad-border) !important; border-radius: 20px !important;
   -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%); box-shadow: var(--ad-shadow), inset 0 1px 0 var(--ad-highlight) !important; color: var(--ad-text); }
 .ad-legacy-card.cursor-pointer:hover { background: var(--ad-surface2) !important; }

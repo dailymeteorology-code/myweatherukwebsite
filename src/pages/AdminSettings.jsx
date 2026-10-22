@@ -1727,14 +1727,15 @@ function ToolPicker({ eyebrow, title, desc, color, tools, value, onPick }) {
     </div>
   );
 }
-/* `studio`: the graphic tools are dark by design (their controls and the graphics they make), so
-   they keep a dark panel in the light theme too, rather than a half-dark mix */
+/* `studio`: most graphic tools are dark by design (their controls and the graphics they make), so
+   they keep a dark panel in the light theme too, rather than a half-dark mix. 'glass' is for the
+   outlook graphics, whose controls are liquid glass that follows the theme (studio/StudioUI). */
 function ToolPanel({ tool, studio, children }) {
   const TIcon = tool.icon;
   return (
     <div className="ad-glass ad-tool" style={{ '--c': tool.color }}>
       <div className="ad-tool-head"><TIcon /><b>{tool.label}</b><small>{tool.desc}</small></div>
-      <div className={`ad-tool-body${studio ? ' ad-studio' : ''}`}>{children}</div>
+      <div className={`ad-tool-body${studio === 'glass' ? ' ad-studio-glass' : studio ? ' ad-studio' : ''}`}>{children}</div>
     </div>
   );
 }
@@ -1810,6 +1811,8 @@ const STUDIO_TOOLS = [
   { id: 'eclipse',  label: 'Solar Eclipse',        icon: Sun,            color: '#d946ef', desc: 'Coverage map with per-location times & weather symbols' },
 ];
 const STUDIO_KEY = 'mwuk_admin_studio_tool';
+/* the outlook graphics, whose controls follow the theme */
+const GLASS_TOOLS = new Set(['outlook', 'snow', 'snowacc', 'snowrisk', 'wind']);
 
 function StormGraphicTab({ logoUrl }) {
   /* the tool last used is the one that opens */
@@ -1820,7 +1823,7 @@ function StormGraphicTab({ logoUrl }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <ToolPicker eyebrow="Graphic Studio" title="Make a graphic" color="#ec4899" tools={STUDIO_TOOLS} value={sub} onPick={setSub}
         desc="Broadcast-quality graphics for social media: thunderstorm and snow outlooks, wind and temperature maps, hand-drawn charts and more. Draw, then export." />
-      <ToolPanel tool={cur} studio>
+      <ToolPanel tool={cur} studio={GLASS_TOOLS.has(sub) ? 'glass' : true}>
         {sub === 'outlook'  && <StormOutlookGraphicTool myWeatherLogoUrl={logoUrl} />}
         {sub === 'snow'     && <SnowOutlookGraphicTool key="chance" variant="chance" myWeatherLogoUrl={logoUrl} />}
         {sub === 'snowacc'  && <SnowOutlookGraphicTool key="accumulation" variant="accumulation" myWeatherLogoUrl={logoUrl} />}

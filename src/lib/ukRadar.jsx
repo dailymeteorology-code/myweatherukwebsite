@@ -53,7 +53,7 @@ export const RADAR_BANDS = [
   ['ExtremeRain', 'TORRENTIAL', 16, 30, '#DEA1A1'],
   ['HailCore', 'EXTREME', 30, null, '#9B7EB9'],
 ].map(([id, short, lo, hi, color]) => ({
-  id, short, color, range: hi ? `${lo}-${hi} mm/h` : `${lo}+ mm/h`, dbz: hi ? `${dbz(lo)}-${dbz(hi)} dBZ` : `${dbz(lo)}+ dBZ`,
+  id, short, color, lo, range: hi ? `${lo}-${hi} mm/h` : `${lo}+ mm/h`, dbz: hi ? `${dbz(lo)}-${dbz(hi)} dBZ` : `${dbz(lo)}+ dBZ`,
   fill: `${color}66`, border: color,
 }));
 

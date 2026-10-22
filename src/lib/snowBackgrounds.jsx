@@ -19,21 +19,22 @@ const BG_KEY = 'mwuk_snow_bg';
 export function readSnowBgId() { try { return localStorage.getItem(BG_KEY) || 'storm'; } catch { return 'storm'; } }
 export function writeSnowBgId(id) { try { localStorage.setItem(BG_KEY, id); } catch { /* storage blocked */ } }
 
-/** Thumbnail picker shared by the three snow tools. */
-export function SnowBackgroundPicker({ value, onChange, labelStyle }) {
+/** Thumbnail picker shared by the snow graphics; it sits in the studio's glass controls
+    (studio/StudioUI), so it takes their light or dark colours. */
+export function SnowBackgroundPicker({ value, onChange }) {
   return (
     <div>
-      <p style={{ ...labelStyle, margin: '0 0 8px' }}>Background</p>
-      <div style={{ display: 'flex', gap: 8 }}>
+      <span className="sg-label">Background</span>
+      <div className="sg-row" style={{ gap: 8 }}>
         {SNOW_BACKGROUNDS.map((b) => {
           const on = value === b.id;
           return (
-            <button key={b.id} type="button" title={b.label} onClick={() => { writeSnowBgId(b.id); onChange(b.id); }} style={{
-              width: 62, padding: 0, borderRadius: 9, overflow: 'hidden', cursor: 'pointer', fontFamily: 'inherit',
-              border: `2px solid ${on ? '#38bdf8' : 'rgba(148,163,184,0.2)'}`, background: '#0b1220',
+            <button key={b.id} type="button" title={b.label} aria-pressed={on} onClick={() => { writeSnowBgId(b.id); onChange(b.id); }} style={{
+              width: 66, padding: 0, borderRadius: 11, overflow: 'hidden', cursor: 'pointer', font: 'inherit',
+              border: `2px solid ${on ? 'var(--sg-accent)' : 'var(--sg-border2)'}`, background: 'var(--sg-field)',
             }}>
-              <img src={b.url} alt="" style={{ display: 'block', width: '100%', height: 70, objectFit: 'cover' }} />
-              <span style={{ display: 'block', fontSize: 9.5, fontWeight: 700, padding: '3px 0', color: on ? '#38bdf8' : '#94a3b8' }}>{b.label}</span>
+              <img src={b.url} alt="" style={{ display: 'block', width: '100%', height: 64, objectFit: 'cover' }} />
+              <span style={{ display: 'block', fontSize: 10, fontWeight: 700, padding: '3px 0', color: on ? 'var(--sg-text)' : 'var(--sg-mid)' }}>{b.label}</span>
             </button>
           );
         })}

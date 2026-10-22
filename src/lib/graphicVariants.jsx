@@ -41,6 +41,18 @@ export const WIND_BACKGROUNDS = [
   { id: 'coast', label: 'Coastal gale', url: '/uploads/wind-bg-coast.webp', credit: '' },
 ];
 
+/* What each graphic takes from the models. `overlay`: the UKV field drawn under the drawing
+   (studio/ModelOverlay), in the key's colours from each `mins`. `guide`: how "From the models"
+   builds areas (studio/ModelGuidePanel), contoured at `mins` (one per level, lowest first). */
+const pct = (v) => `${Math.round(v * 100)}%`;
+const cm = (v) => (v < 1 ? `${Math.round(v * 10) / 10} cm` : `${Math.round(v)} cm`);
+const mph = (v) => `${Math.round(v)} mph`;
+const SNOWFALL_OVERLAY = { v: 'snow_rate', scale: 1, mins: [0.1, 0.3, 0.6, 1, 2, 4], label: 'UKV snowfall', note: 'Met Office UKV 2 km snowfall rate (cm an hour at 10:1) from the AWS open data.' };
+const CHANCE_GUIDE = (threshold, title) => ({
+  kind: 'chance', threshold, title, fmt: pct, mins: [0.05, 0.12, 0.22, 0.35, 0.5, 0.65],
+  note: `The share of the 100 ECMWF ENS and AIFS ENS members giving ${threshold} cm or more of snow in the day, the highest within about 15 miles.`,
+});
+
 export const GRAPHIC_VARIANTS = {
   chance: {
     title: 'Snow Chance', Icon: Snowflake, tool: 'snow', file: 'snow-chance', auto: true,
@@ -52,6 +64,9 @@ export const GRAPHIC_VARIANTS = {
       ['Moderate', 'MDT', '50-64%', '#818cf8', 0.48], ['High', 'HIGH', '65-100%', '#e879f9', 0.50],
     ]),
     severe: { short: 'SVRE', range: 'SVR SNOW' },
+    radar: true,
+    overlay: SNOWFALL_OVERLAY,
+    guide: CHANCE_GUIDE(1, 'Chance of settling snow.'),
   },
   accumulation: {
     title: 'Snow Accumulation', Icon: Layers, tool: 'snowacc', file: 'snow-accumulation', auto: false,
@@ -63,6 +78,13 @@ export const GRAPHIC_VARIANTS = {
       ['Moderate', '10-20', '10-20 cm', '#9333ea', 0.48], ['High', '20+', '20+ cm', '#d946ef', 0.50],
     ]),
     severe: { short: 'SVRE', range: '30+ CM' },
+    radar: true,
+    overlay: { v: 'snow_swe', scale: 1, mins: [0.3, 1, 2, 5, 10, 20], label: 'UKV lying snow', note: 'Met Office UKV 2 km lying snow (its water content, shown as depth at 10:1) from the AWS open data.' },
+    guide: {
+      kind: 'amount', title: 'Snowfall in the day.', fmt: cm, mins: [0.3, 1, 2, 5, 10, 20],
+      note: 'The ECMWF ENS median (50 members, 16 km), or the UKV 2 km for the next two to five days.',
+      sources: [['ens', 'ECMWF ENS median'], ['ukv', 'UKV 2 km']],
+    },
   },
   risk: {
     title: 'Snow Risk', Icon: AlertTriangle, tool: 'snowrisk', file: 'snow-risk', auto: false,
@@ -74,6 +96,9 @@ export const GRAPHIC_VARIANTS = {
       ['Moderate', 'MOD', 'Disruptive', '#818cf8', 0.48], ['High', 'HIGH', 'Significant', '#e879f9', 0.50],
     ]),
     severe: { short: 'SVRE', range: 'SEVERE' },
+    radar: true,
+    overlay: SNOWFALL_OVERLAY,
+    guide: CHANCE_GUIDE(5, 'Chance of disruptive snow.'),
   },
   wind: {
     title: 'Wind', Icon: Wind, tool: 'wind', file: 'wind', auto: false,
@@ -85,6 +110,13 @@ export const GRAPHIC_VARIANTS = {
       ['Moderate', '80-90', '80-90 mph', '#be123c', 0.48], ['High', '90+', '90+ mph', '#a21caf', 0.50],
     ]),
     severe: { short: 'SVRE', range: 'SVR WIND' },
+    radar: false,
+    overlay: { v: 'gust_max', scale: 1, mins: [40, 50, 60, 70, 80, 90], label: 'UKV gusts', note: 'Met Office UKV 2 km strongest gust in the hour (mph) from the AWS open data.' },
+    guide: {
+      kind: 'gust', title: 'Peak gusts in the day.', fmt: mph, mins: [40, 50, 60, 70, 80, 90],
+      note: 'The UKV 2 km hourly maximum, or the ECMWF ENS median of each 6-hour maximum.',
+      sources: [['ukv', 'UKV 2 km'], ['ens', 'ECMWF ENS median']],
+    },
   },
 };
 
