@@ -10,6 +10,10 @@
       "type": "string",
       "description": "Description or caption"
     },
+    "auto_colour": {
+      "type": "boolean",
+      "description": "Colour the description's key words by what they mean (src/lib/keywordColours.js); missing means on"
+    },
     "image_url": {
       "type": "string",
       "description": "URL to the graphic image"

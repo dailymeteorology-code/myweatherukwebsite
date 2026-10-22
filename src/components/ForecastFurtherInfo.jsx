@@ -20,6 +20,7 @@ import { toZonedTime } from 'date-fns-tz';
 import { useTheme } from '@/components/ThemeContext';
 import { GraphicLevelPill, normLevel, readThunderstorm, graphicLevel, GRAPHIC_LEVEL_NAMES } from '@/components/graphics/GraphicMeta';
 import { cleanHtml, richTextCss } from '@/lib/cleanHtml';
+import { autoColour } from '@/lib/keywordColours';
 import { sized } from '@/lib/sizedImage';
 
 const BST_TZ = 'Europe/London';
@@ -205,7 +206,7 @@ export default function ForecastFurtherInfo({ forecast: g, onClose, onView }) {
           {g.description && (
             <>
               <p className="fi-label">The forecast</p>
-              <div className="fi-desc" dangerouslySetInnerHTML={{ __html: cleanHtml(g.description) }} />
+              <div className="fi-desc" dangerouslySetInnerHTML={{ __html: g.auto_colour !== false ? autoColour(cleanHtml(g.description)) : cleanHtml(g.description) }} />
             </>
           )}
 

@@ -19,6 +19,7 @@ import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GraphicLevelChoice, GraphicLeve
 import { useTheme } from '@/components/ThemeContext';
 import { sized, sizedSet } from '@/lib/sizedImage';
 import { cleanHtml, plainText, TEXT_COLOURS, richTextCss } from '@/lib/cleanHtml';
+import { autoColour, keywordsIn } from '@/lib/keywordColours';
 import GraphicViewer from '@/components/graphics/GraphicViewer';
 
 
@@ -212,15 +213,45 @@ function RichTextEditor({ value, onChange, placeholder }) {
 }
 
 /* ─────────────────────────────────────────────
-   RICH TEXT RENDERER: the description cleaned of whatever page it was pasted from (lib/cleanHtml)
+   RICH TEXT RENDERER: the description cleaned of whatever page it was pasted from (lib/cleanHtml),
+   its key words coloured by what they mean unless the graphic turned that off (lib/keywordColours)
 ───────────────────────────────────────────── */
-function RichText({ html, style = {} }) {
+function RichText({ html, auto = false, style = {} }) {
   if (!html) return null;
+  const clean = cleanHtml(html);
   return (
     <div
-      dangerouslySetInnerHTML={{ __html: cleanHtml(html) }}
+      dangerouslySetInnerHTML={{ __html: auto ? autoColour(clean) : clean }}
       style={{ lineHeight: 1.7, display: 'inline', ...style }}
     />
+  );
+}
+
+/* The key words as they will be coloured, under the description in the add / update sheet, and
+   the switch that turns the colouring off for this graphic. */
+function KeywordPanel({ html, on, onToggle }) {
+  const text = plainText(html);
+  const found = on && text ? keywordsIn(text) : [];
+  return (
+    <div className="gm-kw">
+      <div className="gm-kw-head">
+        <Switch on={on} onToggle={onToggle} colour="#a855f7" label="Colour key words automatically" />
+        <div>
+          <b>Colour key words automatically</b>
+          <span>Warnings, risk levels, named storms, amounts and the weather each take their own colour. A word you colour yourself keeps your colour (White leaves it plain).</span>
+        </div>
+      </div>
+      {on && text && (found.length ? (
+        <>
+          <div className="gm-kw-chips" aria-label="Key words found">
+            {found.map((k) => <span key={k.text.toLowerCase()} style={{ '--c': k.colour }} title={k.kind}><i />{k.text}</span>)}
+          </div>
+          <div className="gm-kw-preview gm-desc-preview"><RichText html={html} auto /></div>
+        </>
+      ) : (
+        <p className="gm-hint">No key words yet. Warnings (yellow warning), risk levels (SLGT, moderate risk), named storms, the weather (thunderstorms, heavy rain, snow, gales…) and amounts (60 mph, 20 mm, 5 cm, -3°C) are coloured as you write them.</p>
+      ))}
+    </div>
   );
 }
 
@@ -353,7 +384,7 @@ function FeaturedGraphic({ forecast, isOwner, onEdit, onArchive, onFurtherInfo, 
 
         {forecast.description && (
           <>
-            <div className={`fg-desc${more || !longText ? ' is-open' : ''}`}><RichText html={forecast.description} /></div>
+            <div className={`fg-desc${more || !longText ? ' is-open' : ''}`}><RichText html={forecast.description} auto={forecast.auto_colour !== false} /></div>
             {longText && <button type="button" className="fg-more" onClick={() => setMore((m) => !m)}>{more ? 'Show less' : 'Read more'}</button>}
           </>
         )}
@@ -597,6 +628,21 @@ button.gm-pill:hover { background: rgba(10,16,28,.78); }
   .gm-foot .gm-btn { flex: 1; }
 }
 @media (prefers-reduced-motion: reduce) { .gm-toggle, .gm-toggle::after, .gm-drop, .gm-swatches button { transition: none; } }
+/* key words coloured automatically (KeywordPanel) */
+.gm-kw { display: grid; gap: 10px; margin-top: 12px; }
+.gm-kw-head { display: flex; align-items: flex-start; gap: 11px; }
+.gm-kw-head .gm-toggle { flex: 0 0 auto; margin-top: 1px; }
+.gm-kw-head b { display: block; font-size: .86rem; font-weight: 650; color: var(--ink-1); }
+.gm-kw-head span { display: block; margin-top: 2px; font-size: .76rem; line-height: 1.45; color: var(--ink-3); }
+.gm-kw-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gm-kw-chips span { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 99px; font-size: .76rem; font-weight: 650; color: var(--ink-1);
+  background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 48%, transparent); }
+.gm-kw-chips i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.gm-kw-preview { padding: 10px 13px; border-radius: 14px; background: var(--gm-field); border: 1px solid var(--glass-hairline); font-size: 14px !important; color: var(--ink-1) !important; }
+.gm-kw-preview::before { content: 'How it will look'; display: block; margin-bottom: 4px; font-size: .66rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.gm-desc-preview { margin-top: 6px; font-size: .8rem; line-height: 1.5; color: var(--ink-2); }
+.gm-desc-preview.is-clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+${richTextCss('.gm-desc-preview', '.gm.is-light', '.gm:not(.is-light)')}
 `;
 
 /* ─────────────────────────────────────────────
@@ -612,7 +658,7 @@ button.gm-pill:hover { background: rgba(10,16,28,.78); }
    opened it) and follows the site's theme.
 ───────────────────────────────────────────── */
 const EMPTY_GRAPHIC = {
-  title: '', image_url: '', description: '',
+  title: '', image_url: '', description: '', auto_colour: true,
   weather_condition: '', weather_conditions: [],
   condition_subtypes: [], condition_ranges: {},
   expires_at: '', in_force_from: '',
@@ -698,6 +744,7 @@ function ForecastModal({ mode = 'add', initial = null, onClose, onSave, uploadin
         title:              initial.title || '',
         image_url:          initial.image_url || '',
         description:        initial.description || '',
+        auto_colour:        initial.auto_colour !== false,
         weather_condition:  initial.weather_condition || '',
         weather_conditions: initial.weather_conditions?.length ? initial.weather_conditions : initial.weather_condition ? [initial.weather_condition] : [],
         condition_subtypes: initial.condition_subtypes || [],
@@ -909,6 +956,9 @@ function ForecastModal({ mode = 'add', initial = null, onClose, onSave, uploadin
               </div>
               <h5>{form.title.trim() || 'Untitled graphic'}</h5>
               {(tIn || tEx) && <small>{tIn ? `In force ${whenWords(tIn)}` : 'In force now'}{tEx ? ` → ${whenWords(tEx)}` : ''}</small>}
+              {plainText(form.description) && (
+                <div className="gm-desc-preview is-clamped"><RichText html={form.description} auto={form.auto_colour !== false} /></div>
+              )}
             </div>
           </aside>
 
@@ -1022,6 +1072,7 @@ function ForecastModal({ mode = 'add', initial = null, onClose, onSave, uploadin
             <section className="gm-card">
               <h4><AlignLeft />Description</h4>
               <RichTextEditor key={editorKey} value={form.description} onChange={(v) => set('description', v)} placeholder="What to expect, where and when…" />
+              <KeywordPanel html={form.description} on={form.auto_colour !== false} onToggle={() => set('auto_colour', form.auto_colour === false)} />
             </section>
 
             <section className="gm-card">
@@ -1180,6 +1231,7 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
       title: form.title.trim() || 'Forecast',
       image_url: form.image_url,
       description: form.description,
+      auto_colour: form.auto_colour !== false,
       weather_condition:  form.weather_conditions[0] ?? undefined,
       weather_conditions: form.weather_conditions.length  ? form.weather_conditions  : undefined,
       condition_subtypes: form.condition_subtypes.length ? form.condition_subtypes : undefined,
@@ -1221,6 +1273,7 @@ export default function ForecastSection({ forecasts = [], isOwner }) {
       title: form.title || editingForecast.title || 'Forecast',
       image_url: form.image_url || editingForecast.image_url,
       description: form.description,
+      auto_colour: form.auto_colour !== false,
       weather_condition:  form.weather_conditions[0] ?? form.weather_condition ?? undefined,
       weather_conditions: form.weather_conditions.length ? form.weather_conditions : undefined,
       condition_subtypes: form.condition_subtypes.length ? form.condition_subtypes : undefined,

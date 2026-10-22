@@ -45,7 +45,8 @@ function paletteColour(el) {
 const luminance = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
   .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
   .reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i], 0);
-function paint(el, c) {
+/** Colours an element the way the page shows description colours (see richTextCss). */
+export function paint(el, c) {
   el.setAttribute('data-c', '');
   el.style.color = c;
   el.style.setProperty('--c', c);
@@ -58,6 +59,7 @@ function paint(el, c) {
     white or black becomes the page's own ink.
     `light` and `dark` are the selectors that mean each theme on that page. */
 export const richTextCss = (scope, light, dark) => `
+${scope} [data-kw] { font-weight: 650; }
 ${light} ${scope} [data-c] { color: color-mix(in srgb, var(--c) 78%, #0b1220) !important; }
 ${dark} ${scope} [data-deep] { color: color-mix(in srgb, var(--c) 62%, #ffffff) !important; }
 ${light} ${scope} [data-ink='light'], ${dark} ${scope} [data-ink='dark'] { color: inherit !important; }

@@ -13,6 +13,7 @@ import { ThunderstormRisks, GRAPHIC_LEVEL_NAMES, GraphicLevelPill, GraphicLevelC
 import GraphicViewer from '@/components/graphics/GraphicViewer';
 import { sized, sizedSet } from '@/lib/sizedImage';
 import { cleanHtml, plainText, TEXT_COLOURS, richTextCss } from '@/lib/cleanHtml';
+import { autoColour } from '@/lib/keywordColours';
 import { format, isValid } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 
@@ -26,12 +27,13 @@ function formatBST(iso, fmt = 'dd MMM yyyy, HH:mm') {
   return format(zoned, fmt);
 }
 
-/* a description, cleaned of whatever page it was pasted from (lib/cleanHtml) */
-function RichText({ html, className = '' }) {
+/* a description, cleaned of whatever page it was pasted from (lib/cleanHtml), its key words
+   coloured unless the graphic turned that off (lib/keywordColours) */
+function RichText({ html, auto = false, className = '' }) {
   if (!html) return null;
   return (
     <div
-      dangerouslySetInnerHTML={{ __html: cleanHtml(html) }}
+      dangerouslySetInnerHTML={{ __html: auto ? autoColour(cleanHtml(html)) : cleanHtml(html) }}
       className={className}
       style={{ lineHeight: 1.7 }}
     />
@@ -779,7 +781,7 @@ function ArchiveDetail({ g, onClose, onPrev, onNext, onView, isOwner, onEdit, on
 
           {subs.length > 0 && <div className="ga-tags">{subs.map((s) => <Tag key={s}>{s}</Tag>)}</div>}
 
-          {g.description && <div className="ga-desc"><RichText html={g.description} /></div>}
+          {g.description && <div className="ga-desc"><RichText html={g.description} auto={g.auto_colour !== false} /></div>}
 
           {locs.length > 0 && (
             <>
