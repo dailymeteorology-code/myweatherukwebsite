@@ -23,7 +23,8 @@
    ════════════════════════════════════════════════════════════════════════════ */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import html2canvas from 'html2canvas';
-import { Download, Loader2, Undo2, Trash2, Check, X } from 'lucide-react';
+import { Download, Loader2, Undo2, Trash2, Check, X, Wind, PenLine } from 'lucide-react';
+import { StudioStyles, Section, Btn, Field } from '@/components/studio/StudioUI';
 import { loadSynopticGeo, EXTENT_LIST } from '@/lib/synopticGeo';
 import { weatherIcons } from '@/components/WeatherIcons';
 import {
@@ -51,9 +52,6 @@ const PATH_TOOLS = {
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
-const lbl = { display: 'block', fontSize: 10, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#64748b', marginBottom: 8 };
-const btn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', background: 'rgba(148,163,184,0.06)', border: '1.5px solid rgba(148,163,184,0.18)', color: '#94a3b8' };
-const sel = { padding: '8px 10px', borderRadius: 9, background: '#101c2e', border: '1px solid rgba(148,163,184,0.18)', color: '#f1f5f9', fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', outline: 'none' };
 
 export default function SynopticChartTool({ siteLogoUrl = '' }) {
   const [extent, setExtent] = useState('uk-france');
@@ -166,167 +164,108 @@ export default function SynopticChartTool({ siteLogoUrl = '' }) {
   const selEl = els.find(e => e.id === selected) || null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, color: '#f1f5f9' }}>
+    <div className="sg" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <StudioStyles />
 
       {/* ══ Controls ══ */}
-      <div style={{ background: '#0c1422', border: '1px solid rgba(148,163,184,0.10)', borderRadius: 16, padding: 20, display: 'flex', flexDirection: 'column', gap: 15 }}>
-
-        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div>
-            <span style={lbl}>Map extent</span>
-            <select value={extent} onChange={e => setExtent(e.target.value)} style={sel}>
+      <div className="sg-controls">
+        <Section id="syn-chart" icon={Wind} color="#5b6ee8" title="Chart" sub={title}>
+          <Field label="Map extent">
+            <select className="sg-input" value={extent} onChange={e => setExtent(e.target.value)}>
               {EXTENT_LIST.map(x => <option key={x.id} value={x.id}>{x.label}</option>)}
             </select>
+          </Field>
+          <div className="sg-grid2">
+            <Field label="Title"><input className="sg-input" value={title} onChange={e => setTitle(e.target.value)} /></Field>
+            <Field label="Subtitle"><input className="sg-input" value={subtitle} onChange={e => setSubtitle(e.target.value)} placeholder="e.g. Valid 12:00 Tuesday" /></Field>
           </div>
-          <div style={{ flex: 1, minWidth: 160 }}>
-            <span style={lbl}>Title</span>
-            <input value={title} onChange={e => setTitle(e.target.value)} style={{ ...sel, width: '100%' }} />
-          </div>
-          <div style={{ flex: 1, minWidth: 160 }}>
-            <span style={lbl}>Subtitle</span>
-            <input value={subtitle} onChange={e => setSubtitle(e.target.value)} placeholder="e.g. Valid 12:00 Tuesday"
-                   style={{ ...sel, width: '100%' }} />
-          </div>
-        </div>
+          <Field label="Handle"><input className="sg-input" value={handle} onChange={e => setHandle(e.target.value)} /></Field>
+        </Section>
 
-        {/* Tool palette */}
-        <div>
-          <span style={lbl}>Tool</span>
-          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-            {Object.entries(PATH_TOOLS).map(([id, d]) => {
-              const on = tool === id;
-              const colour = d.kind === 'front' ? FRONT_TYPES[d.frontType].color
-                : d.kind === 'jet' ? '#22d3ee' : '#94a3b8';
-              return (
-                <button key={id} type="button" onClick={() => { setTool(id); setDraft([]); }} style={{
-                  ...btn, fontWeight: 800,
-                  background: on ? `${colour}22` : btn.background,
-                  borderColor: on ? colour : btn.border,
-                  color: on ? colour : '#94a3b8',
-                }}>{d.label}</button>
-              );
-            })}
+        <Section id="syn-draw" icon={PenLine} color="#a78bfa" title="Draw" sub={(PATH_TOOLS[tool]?.label) || ({ low: 'Low (L)', high: 'High (H)', symbol: 'Weather symbol' })[tool]}>
+          <div className="sg-row">
+            {Object.entries(PATH_TOOLS).map(([id, d]) => (
+              <Btn key={id} sm on={tool === id} color={d.kind === 'front' ? FRONT_TYPES[d.frontType].color : d.kind === 'jet' ? '#22d3ee' : '#94a3b8'}
+                onClick={() => { setTool(id); setDraft([]); }}>{d.label}</Btn>
+            ))}
             {[['low', 'Low (L)', '#ef4444'], ['high', 'High (H)', '#2563eb'], ['symbol', 'Weather symbol', '#facc15']].map(([id, label, colour]) => (
-              <button key={id} type="button" onClick={() => { setTool(id); setDraft([]); }} style={{
-                ...btn, fontWeight: 800,
-                background: tool === id ? `${colour}22` : btn.background,
-                borderColor: tool === id ? colour : btn.border,
-                color: tool === id ? colour : '#94a3b8',
-              }}>{label}</button>
+              <Btn key={id} sm on={tool === id} color={colour} onClick={() => { setTool(id); setDraft([]); }}>{label}</Btn>
             ))}
           </div>
-        </div>
-
-        {/* Tool-specific options */}
-        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          {tool === 'isobar' && (
-            <div>
-              <span style={lbl}>Isobar value (mb)</span>
-              <input value={isobarValue} onChange={e => setIsobarValue(e.target.value)} style={{ ...sel, width: 90 }} />
-            </div>
-          )}
+          {tool === 'isobar' && <Field label="Isobar value (mb)"><input className="sg-input" style={{ width: 110 }} value={isobarValue} onChange={e => setIsobarValue(e.target.value)} /></Field>}
           {tool === 'jet' && (
-            <div>
-              <span style={lbl}>Jet width — {jetWidth}px</span>
-              <input type="range" min="10" max="46" value={jetWidth} onChange={e => setJetWidth(Number(e.target.value))}
-                     style={{ width: 160, accentColor: '#22d3ee' }} />
-            </div>
+            <Field label={`Jet width — ${jetWidth}px`}>
+              <input type="range" className="sg-range" min="10" max="46" value={jetWidth} onChange={e => setJetWidth(Number(e.target.value))} style={{ width: 180 }} />
+            </Field>
           )}
           {tool === 'symbol' && (
-            <div>
-              <span style={lbl}>Symbol</span>
-              <select value={symbolName} onChange={e => setSymbolName(e.target.value)} style={sel}>
+            <Field label="Symbol">
+              <select className="sg-input" value={symbolName} onChange={e => setSymbolName(e.target.value)}>
                 {SYMBOL_CHOICES.filter(n => weatherIcons[n]).map(n => <option key={n} value={n}>{n}</option>)}
               </select>
-            </div>
+            </Field>
           )}
-
           {isPathTool && draft.length > 0 && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button type="button" onClick={finishPath} disabled={draft.length < 2}
-                      style={{ ...btn, color: '#86efac', borderColor: 'rgba(74,222,128,0.4)', opacity: draft.length < 2 ? 0.5 : 1 }}>
-                <Check style={{ width: 12, height: 12 }} /> Finish ({draft.length} pts)
-              </button>
-              <button type="button" onClick={() => setDraft(d => d.slice(0, -1))} style={btn}>
-                <Undo2 style={{ width: 12, height: 12 }} /> Undo point
-              </button>
-              <button type="button" onClick={() => setDraft([])} style={{ ...btn, color: '#f87171' }}>
-                <X style={{ width: 12, height: 12 }} /> Cancel
-              </button>
+            <div className="sg-row">
+              <Btn sm on color="#22c55e" icon={Check} disabled={draft.length < 2} onClick={finishPath}>Finish ({draft.length} pts)</Btn>
+              <Btn sm icon={Undo2} onClick={() => setDraft(d => d.slice(0, -1))}>Undo point</Btn>
+              <Btn sm danger icon={X} onClick={() => setDraft([])}>Cancel</Btn>
             </div>
           )}
 
-          <button type="button" onClick={() => { setEls([]); setDraft([]); setSelected(null); }}
-                  style={{ ...btn, color: '#f87171', borderColor: 'rgba(248,113,113,0.35)', marginLeft: 'auto' }}>
-            <Trash2 style={{ width: 12, height: 12 }} /> Clear chart
-          </button>
-          <input value={handle} onChange={e => setHandle(e.target.value)} style={{ ...sel, width: 150 }} />
-          <button type="button" onClick={download} disabled={exporting} style={{
-            ...btn, fontWeight: 800, background: 'linear-gradient(135deg,#0ea5e9,#0284c7)', borderColor: 'transparent', color: '#fff',
-          }}>
-            {exporting ? <Loader2 style={{ width: 13, height: 13, animation: 'spin 1s linear infinite' }} /> : <Download style={{ width: 13, height: 13 }} />}
-            {exporting ? 'Exporting…' : 'Download PNG'}
-          </button>
-        </div>
+          {/* Selected-element editor */}
+          {selEl && (
+            <div className="sg-panel" style={{ borderColor: 'color-mix(in srgb, var(--sg-accent) 45%, transparent)' }}>
+              <div className="sg-row" style={{ justifyContent: 'space-between' }}>
+                <span className="sg-note" style={{ textTransform: 'capitalize' }}><b>Selected</b> · {selEl.kind}</span>
+                <Btn sm onClick={() => setSelected(null)}>Done</Btn>
+              </div>
+              <div className="sg-row">
+                {selEl.kind === 'front' && (
+                  <>
+                    <select className="sg-input" style={{ width: 'auto' }} value={selEl.frontType} onChange={e => update(selEl.id, { frontType: e.target.value })}>
+                      {Object.values(FRONT_TYPES).map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+                    </select>
+                    <Btn sm onClick={() => update(selEl.id, { side: -selEl.side })}>Flip symbols</Btn>
+                  </>
+                )}
+                {selEl.kind === 'isobar' && (
+                  <>
+                    <input className="sg-input" style={{ width: 90 }} value={selEl.value ?? ''} onChange={e => update(selEl.id, { value: e.target.value })} placeholder="mb" />
+                    <Btn sm on={!!selEl.dashed} onClick={() => update(selEl.id, { dashed: !selEl.dashed })}>Dashed</Btn>
+                  </>
+                )}
+                {selEl.kind === 'jet' && (
+                  <input type="range" className="sg-range" min="10" max="46" value={selEl.width} onChange={e => update(selEl.id, { width: Number(e.target.value) })} style={{ width: 150 }} />
+                )}
+                {selEl.kind === 'arrow' && <input type="color" className="sg-color" value={selEl.color} onChange={e => update(selEl.id, { color: e.target.value })} />}
+                {selEl.kind === 'pressure' && (
+                  <>
+                    <Btn sm onClick={() => update(selEl.id, { ctr: selEl.ctr === 'L' ? 'H' : 'L' })}>Switch to {selEl.ctr === 'L' ? 'H' : 'L'}</Btn>
+                    <input className="sg-input" style={{ width: 90 }} value={selEl.value ?? ''} onChange={e => update(selEl.id, { value: e.target.value })} placeholder="mb" />
+                  </>
+                )}
+                {selEl.kind === 'symbol' && (
+                  <input type="range" className="sg-range" min="28" max="120" value={selEl.size} onChange={e => update(selEl.id, { size: Number(e.target.value) })} style={{ width: 150 }} />
+                )}
+                <Btn sm danger icon={Trash2} onClick={() => remove(selEl.id)}>Delete</Btn>
+              </div>
+            </div>
+          )}
 
-        {/* Selected-element editor */}
-        {selEl && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 11px', borderRadius: 10, background: 'rgba(56,189,248,0.07)', border: '1px solid rgba(56,189,248,0.3)' }}>
-            <span style={{ fontSize: 11.5, fontWeight: 800, color: '#7dd3fc', textTransform: 'capitalize' }}>{selEl.kind}</span>
-
-            {selEl.kind === 'front' && (
-              <>
-                <select value={selEl.frontType} onChange={e => update(selEl.id, { frontType: e.target.value })} style={{ ...sel, padding: '5px 8px' }}>
-                  {Object.values(FRONT_TYPES).map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-                </select>
-                <button type="button" onClick={() => update(selEl.id, { side: -selEl.side })} style={btn}>
-                  Flip symbols
-                </button>
-              </>
-            )}
-            {selEl.kind === 'isobar' && (
-              <>
-                <input value={selEl.value ?? ''} onChange={e => update(selEl.id, { value: e.target.value })}
-                       placeholder="mb" style={{ ...sel, width: 80, padding: '5px 8px' }} />
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: '#94a3b8' }}>
-                  <input type="checkbox" checked={!!selEl.dashed} onChange={e => update(selEl.id, { dashed: e.target.checked })} /> Dashed
-                </label>
-              </>
-            )}
-            {selEl.kind === 'jet' && (
-              <input type="range" min="10" max="46" value={selEl.width}
-                     onChange={e => update(selEl.id, { width: Number(e.target.value) })} style={{ width: 140, accentColor: '#22d3ee' }} />
-            )}
-            {selEl.kind === 'arrow' && (
-              <input type="color" value={selEl.color} onChange={e => update(selEl.id, { color: e.target.value })}
-                     style={{ width: 40, height: 30, borderRadius: 7, background: 'transparent', border: '1px solid rgba(148,163,184,0.25)', cursor: 'pointer' }} />
-            )}
-            {selEl.kind === 'pressure' && (
-              <>
-                <button type="button" onClick={() => update(selEl.id, { ctr: selEl.ctr === 'L' ? 'H' : 'L' })} style={btn}>
-                  Switch to {selEl.ctr === 'L' ? 'H' : 'L'}
-                </button>
-                <input value={selEl.value ?? ''} onChange={e => update(selEl.id, { value: e.target.value })}
-                       placeholder="mb" style={{ ...sel, width: 80, padding: '5px 8px' }} />
-              </>
-            )}
-            {selEl.kind === 'symbol' && (
-              <input type="range" min="28" max="120" value={selEl.size}
-                     onChange={e => update(selEl.id, { size: Number(e.target.value) })} style={{ width: 140, accentColor: '#facc15' }} />
-            )}
-
-            <button type="button" onClick={() => remove(selEl.id)} style={{ ...btn, color: '#f87171', borderColor: 'rgba(248,113,113,0.35)' }}>
-              <Trash2 style={{ width: 12, height: 12 }} /> Delete
-            </button>
-            <button type="button" onClick={() => setSelected(null)} style={{ ...btn, marginLeft: 'auto' }}>Done</button>
+          <div className="sg-row">
+            <Btn sm danger icon={Trash2} onClick={() => { setEls([]); setDraft([]); setSelected(null); }}>Clear chart</Btn>
           </div>
-        )}
+          <p className="sg-note">
+            Pick a tool, click along the map to lay control points, then <b>Finish</b>.
+            Click any finished element to edit it — its handles appear and can be dragged to reshape.
+            {busy && <b style={{ color: 'var(--sg-amber)' }}> Loading coastline…</b>}
+          </p>
+        </Section>
 
-        <p style={{ margin: 0, fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
-          Pick a tool, click along the map to lay control points, then <b style={{ color: '#94a3b8' }}>Finish</b>.
-          Click any finished element to edit it — its handles appear and can be dragged to reshape.
-          {busy && <b style={{ color: '#fbbf24' }}> Loading coastline…</b>}
-        </p>
+        <Section id="syn-export" icon={Download} color="#0ea5e9" title="Export">
+          <Btn primary color="#0ea5e9" icon={exporting ? Loader2 : Download} disabled={exporting} onClick={download}>{exporting ? 'Exporting…' : 'Download PNG'}</Btn>
+        </Section>
       </div>
 
       {/* ══ Graphic ══ */}

@@ -18,6 +18,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, Loader2, Wand2 } from 'lucide-react';
+import { Btn } from '@/components/studio/StudioUI';
 import { loadImage, downloadCanvas } from '@/lib/canvasGraphic';
 import { describeLwt } from './ensembleLayer';
 
@@ -283,8 +284,6 @@ export function wordingFor(cluster, info) {
 }
 
 /* ── one card's preview + controls ── */
-const inputCss = { width: '100%', padding: '8px 11px', borderRadius: 9, background: '#101c2e', border: '1px solid rgba(148,163,184,0.18)', color: '#f1f5f9', fontSize: 12.5, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' };
-const smallBtn = (on, c = '#38bdf8') => ({ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 9px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', background: on ? `${c}24` : 'rgba(148,163,184,0.06)', border: `1px solid ${on ? `${c}88` : 'rgba(148,163,184,0.18)'}`, color: on ? c : '#94a3b8' });
 
 export function StoryCard({ idx, card, setCard, pct, setPct, cluster, info, logoUrl, showLogo, fileStem }) {
   const ref = useRef(null);
@@ -340,30 +339,31 @@ export function StoryCard({ idx, card, setCard, pct, setPct, cluster, info, logo
   const words = wordingFor(cluster, info);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderRadius: 12, background: 'rgba(148,163,184,0.05)', border: '1px solid rgba(148,163,184,0.15)', minWidth: 0 }}>
+    <div className="sg-panel" style={{ minWidth: 0 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: 13, fontWeight: 800 }}>Card {idx + 1}</span>
+        <b style={{ fontSize: 13 }}>Card {idx + 1}</b>
         <div style={{ display: 'flex', gap: 5 }}>
           {Object.entries(SCHEMES).map(([id, s]) => (
-            <button key={id} type="button" title={s.label} onClick={() => setCard({ ...card, scheme: id })} style={{ width: 22, height: 22, borderRadius: 6, cursor: 'pointer', background: `linear-gradient(135deg, ${s.soft} 55%, ${s.strong} 55%)`, border: card.scheme === id ? '2px solid #fff' : '1px solid rgba(148,163,184,0.35)' }} />
+            <button key={id} type="button" title={s.label} onClick={() => setCard({ ...card, scheme: id })} style={{ width: 22, height: 22, borderRadius: 6, cursor: 'pointer', background: `linear-gradient(135deg, ${s.soft} 55%, ${s.strong} 55%)`, border: card.scheme === id ? '2px solid var(--sg-text)' : '1px solid var(--sg-border3)' }} />
           ))}
         </div>
       </div>
       <canvas ref={ref} width={CARD_W} height={CARD_H} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}
         style={{ width: '100%', aspectRatio: '9 / 16', borderRadius: 10, background: '#fff', touchAction: 'none', cursor: 'grab' }} />
       <div style={{ display: 'flex', gap: 6 }}>
-        <input value={card.title} onChange={(e) => setCard({ ...card, title: e.target.value })} placeholder="Title (optional)" style={{ ...inputCss, flex: 1 }} />
-        <input type="number" min={0} max={100} value={pct} onChange={(e) => setPct(e.target.value)} placeholder="%" title="Probability % (shared with the board); leave empty to hide" style={{ ...inputCss, width: 64, textAlign: 'center' }} />
+        <input className="sg-input" value={card.title} onChange={(e) => setCard({ ...card, title: e.target.value })} placeholder="Title (optional)" style={{ flex: 1 }} />
+        <input className="sg-input" type="number" min={0} max={100} value={pct} onChange={(e) => setPct(e.target.value)} placeholder="%" title="Probability % (shared with the board); leave empty to hide" style={{ width: 64, textAlign: 'center' }} />
       </div>
-      <textarea value={card.desc} onChange={(e) => setCard({ ...card, desc: e.target.value })} placeholder="Description (optional)" rows={4} style={{ ...inputCss, resize: 'vertical' }} />
-      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-        <button type="button" disabled={!ens} onClick={() => ens && setCard({ ...card, track: ens })} style={{ ...smallBtn(card.track?.src === 'ecmwf', '#34d399'), opacity: ens ? 1 : 0.45 }}>ECMWF track</button>
-        {Object.entries(TRACK_PRESETS).map(([id, p]) => <button key={id} type="button" onClick={() => setCard({ ...card, track: presetTrack(id) })} style={smallBtn(card.track?.src === id)}>{p.label}</button>)}
-        {card.track?.src === 'custom' && <span style={{ ...smallBtn(true, '#fbbf24'), cursor: 'default' }}>Custom</span>}
+      <textarea className="sg-input" value={card.desc} onChange={(e) => setCard({ ...card, desc: e.target.value })} placeholder="Description (optional)" rows={4} />
+      <div className="sg-row" style={{ gap: 5 }}>
+        <Btn sm on={card.track?.src === 'ecmwf'} color="#34d399" disabled={!ens} onClick={() => ens && setCard({ ...card, track: ens })}>ECMWF track</Btn>
+        {Object.entries(TRACK_PRESETS).map(([id, p]) => <Btn key={id} sm on={card.track?.src === id} onClick={() => setCard({ ...card, track: presetTrack(id) })}>{p.label}</Btn>)}
+        {card.track?.src === 'custom' && <Btn sm on color="#fbbf24" style={{ cursor: 'default' }}>Custom</Btn>}
       </div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <button type="button" disabled={!words} onClick={() => words && setCard({ ...card, title: words.title, desc: words.desc })} style={{ ...smallBtn(false), opacity: words ? 1 : 0.45 }}><Wand2 style={{ width: 12, height: 12 }} /> Words from ECMWF</button>
-        <button type="button" onClick={download} style={{ ...smallBtn(true, '#0ea5e9'), marginLeft: 'auto' }}><Download style={{ width: 12, height: 12 }} /> JPG</button>
+      <div className="sg-row">
+        <Btn sm icon={Wand2} disabled={!words} onClick={() => words && setCard({ ...card, title: words.title, desc: words.desc })}>Words from ECMWF</Btn>
+        <span className="sg-grow" />
+        <Btn sm primary color="#0ea5e9" icon={Download} onClick={download}>JPG</Btn>
       </div>
     </div>
   );
@@ -385,14 +385,12 @@ export function StoryCardsPanel({ cards, setCards, pcts, setPcts, defs, ensClust
     } finally { setBusy(false); }
   };
   return (
-    <div style={{ background: '#0c1422', border: '1px solid rgba(148,163,184,0.12)', borderRadius: 16, padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 800 }}>Story cards · 1080×1920</span>
-        <span style={{ fontSize: 11, color: '#64748b' }}>One card per scenario. Empty fields are left off the card. Drag the track's points, or slide the L along it, on the preview.</span>
-        <button type="button" onClick={() => setShowLogo((v) => !v)} style={{ ...smallBtn(showLogo), marginLeft: 'auto' }}>Logo</button>
-        <button type="button" onClick={downloadAll} disabled={busy} style={smallBtn(true, '#0ea5e9')}>
-          {busy ? <Loader2 style={{ width: 12, height: 12 }} className="animate-spin" /> : <Download style={{ width: 12, height: 12 }} />} All three JPGs
-        </button>
+    <div className="sg-sec" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="sg-row" style={{ gap: 10 }}>
+        <b style={{ fontSize: 13.5 }}>Story cards · 1080×1920</b>
+        <span className="sg-note" style={{ flex: '1 1 260px' }}>One card per scenario. Empty fields are left off the card. Drag the track's points, or slide the L along it, on the preview.</span>
+        <Btn sm on={showLogo} onClick={() => setShowLogo((v) => !v)}>Logo</Btn>
+        <Btn sm primary color="#0ea5e9" icon={busy ? Loader2 : Download} disabled={busy} onClick={downloadAll}>All three JPGs</Btn>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
         {defs.map((d, i) => (

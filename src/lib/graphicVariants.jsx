@@ -50,7 +50,7 @@ const mph = (v) => `${Math.round(v)} mph`;
 const SNOWFALL_OVERLAY = { v: 'snow_rate', scale: 1, mins: [0.1, 0.3, 0.6, 1, 2, 4], label: 'UKV snowfall', note: 'Met Office UKV 2 km snowfall rate (cm an hour at 10:1) from the AWS open data.' };
 const CHANCE_GUIDE = (threshold, title) => ({
   kind: 'chance', threshold, title, fmt: pct, mins: [0.05, 0.12, 0.22, 0.35, 0.5, 0.65],
-  note: `The share of the 100 ECMWF ENS and AIFS ENS members giving ${threshold} cm or more of snow in the day, the highest within about 15 miles.`,
+  note: `The share of the 100 ECMWF ENS and AIFS ENS members giving ${threshold} cm or more of snow in 24 hours, the highest within about 15 miles.`,
 });
 
 export const GRAPHIC_VARIANTS = {
@@ -81,7 +81,7 @@ export const GRAPHIC_VARIANTS = {
     radar: true,
     overlay: { v: 'snow_swe', scale: 1, mins: [0.3, 1, 2, 5, 10, 20], label: 'UKV lying snow', note: 'Met Office UKV 2 km lying snow (its water content, shown as depth at 10:1) from the AWS open data.' },
     guide: {
-      kind: 'amount', title: 'Snowfall in the day.', fmt: cm, mins: [0.3, 1, 2, 5, 10, 20],
+      kind: 'amount', title: 'Snowfall.', fmt: cm, mins: [0.3, 1, 2, 5, 10, 20],
       note: 'The ECMWF ENS median (50 members, 16 km), or the UKV 2 km for the next two to five days.',
       sources: [['ens', 'ECMWF ENS median'], ['ukv', 'UKV 2 km']],
     },
@@ -113,8 +113,8 @@ export const GRAPHIC_VARIANTS = {
     radar: false,
     overlay: { v: 'gust_max', scale: 1, mins: [40, 50, 60, 70, 80, 90], label: 'UKV gusts', note: 'Met Office UKV 2 km strongest gust in the hour (mph) from the AWS open data.' },
     guide: {
-      kind: 'gust', title: 'Peak gusts in the day.', fmt: mph, mins: [40, 50, 60, 70, 80, 90],
-      note: 'The UKV 2 km hourly maximum, or the ECMWF ENS median of each 6-hour maximum.',
+      kind: 'gust', title: 'Gusts.', fmt: mph, mins: [40, 50, 60, 70, 80, 90],
+      note: 'The UKV 2 km strongest gust in each hour, or the ECMWF ENS median of each 6-hour maximum.',
       sources: [['ukv', 'UKV 2 km'], ['ens', 'ECMWF ENS median']],
     },
   },

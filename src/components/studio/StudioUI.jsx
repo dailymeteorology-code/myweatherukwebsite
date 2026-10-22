@@ -26,6 +26,13 @@ const CSS = `
 .sg-preview { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .sg-preview > .sg-toolbar { position: sticky; top: 10px; z-index: 6; }
 .ad-root .sg-preview > .sg-toolbar { top: 84px; }   /* clear of Admin Settings' sticky top bar */
+/* the tools that draw a fixed-size picture: the sections beside it, the picture held in view */
+.sg-split { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+.sg-split > .sg-side { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.sg-split > .sg-shot { flex: 0 1 auto; min-width: 0; max-width: 100%; position: sticky; top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.ad-root .sg-split > .sg-shot { top: 86px; }
+@media (max-width: 760px) { .sg-split > .sg-shot { position: static; } }
+.sg-canvas { display: block; max-width: 100%; height: auto; border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.35); }
 .sg-sec { position: relative; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: 20px;
   -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%); box-shadow: var(--sg-shadow), inset 0 1px 0 var(--sg-hl); }
 .sg-sec-bar { display: flex; align-items: center; gap: 8px; padding-right: 14px; }
@@ -103,6 +110,7 @@ textarea.sg-input { resize: vertical; line-height: 1.45; }
 .sg-grow { flex: 1; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .sg-spin { animation: spin 1s linear infinite; }
+.sg-btn svg[class*="lucide-loader"] { animation: spin 1s linear infinite; }   /* a busy button spins its loader */
 `;
 export function StudioStyles() { return <style>{CSS}</style>; }
 
@@ -161,6 +169,19 @@ export function Swatches({ colors, value, onChange, custom = false }) {
       {colors.map((c) => <button key={c} type="button" className="sg-swatch" aria-pressed={value === c} aria-label={c} style={{ background: c }} onClick={() => onChange(c)} />)}
       {custom && <input type="color" className="sg-color" value={value} onChange={(e) => onChange(e.target.value)} aria-label="Custom colour" />}
     </span>
+  );
+}
+
+/** The other tools' frame: the sections on the left, the picture (kept at its size) on the right. */
+export function StudioSplit({ controls, preview }) {
+  return (
+    <div className="sg">
+      <StudioStyles />
+      <div className="sg-split">
+        <div className="sg-side">{controls}</div>
+        <div className="sg-shot">{preview}</div>
+      </div>
+    </div>
   );
 }
 

@@ -25,6 +25,7 @@ import { Download, Loader2, RefreshCw, Thermometer, CloudRain, Sun, Snowflake, D
 import { base44 } from '@/api/base44Client';
 import { loadUKCoastline, makeProjector, makeInverseProjector } from '@/lib/ukCoastline';
 import { FONT, roundRect, fitFont, loadImage, downloadCanvas } from '@/lib/canvasGraphic';
+import { StudioSplit, Section, Btn, Seg, Field } from '@/components/studio/StudioUI';
 
 const W = 1080, H = 1920;
 const BBOX = { lonMin: -10.7, lonMax: 2.2, latMin: 49.8, latMax: 60.95 };
@@ -276,64 +277,50 @@ export default function ClimateAnomalyGraphicTool({ siteLogoUrl = '' }) {
   useEffect(() => { draw(); }, [draw]);
 
   const years = useMemo(() => (data ? Object.keys(data.regions.UK).map(Number).sort((a, b) => b - a) : []), [data]);
-  const label = { fontSize: 10.5, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#94a3b8', margin: '0 0 8px' };
-  const input = { padding: '7px 10px', borderRadius: 8, border: '1px solid rgba(148,163,184,0.2)', background: 'rgba(15,23,42,0.7)', color: '#e2e8f0', fontSize: 13, fontFamily: 'inherit' };
-  const chip = (on, col = '#38bdf8') => ({
-    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 11px', borderRadius: 9, fontSize: 12, fontWeight: on ? 800 : 600, cursor: 'pointer', fontFamily: 'inherit',
-    background: on ? `${col}2e` : 'rgba(148,163,184,0.06)', border: `1px solid ${on ? `${col}80` : 'rgba(148,163,184,0.15)'}`, color: on ? col : '#94a3b8',
-  });
   const MonthPick = ({ value, onChange, title }) => (
-    <div><p style={label}>{title}</p>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <select value={value?.m ?? ''} onChange={(e) => onChange({ ...value, m: +e.target.value })} style={input}>{MONTHS.map((mm, i) => <option key={mm} value={i}>{mm}</option>)}</select>
-        <select value={value?.y ?? ''} onChange={(e) => onChange({ ...value, y: +e.target.value })} style={input}>{years.map((yy) => <option key={yy} value={yy}>{yy}</option>)}</select>
+    <Field label={title}>
+      <div className="sg-row" style={{ flexWrap: 'nowrap' }}>
+        <select className="sg-input" value={value?.m ?? ''} onChange={(e) => onChange({ ...value, m: +e.target.value })}>{MONTHS.map((mm, i) => <option key={mm} value={i}>{mm}</option>)}</select>
+        <select className="sg-input" style={{ width: 96 }} value={value?.y ?? ''} onChange={(e) => onChange({ ...value, y: +e.target.value })}>{years.map((yy) => <option key={yy} value={yy}>{yy}</option>)}</select>
       </div>
-    </div>
+    </Field>
   );
 
-  return (
-    <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-      <div style={{ flex: '1 1 340px', display: 'flex', flexDirection: 'column', gap: 18, padding: 20, borderRadius: 16, background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(148,163,184,0.12)' }}>
-        <div>
-          <p style={label}>Variable</p>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {Object.entries(VARS).map(([id, v]) => {
-              const I = v.icon;
-              return <button key={id} type="button" style={chip(variable === id, v.accent)} onClick={() => setVariable(id)}><I style={{ width: 13, height: 13 }} />{v.short}</button>;
-            })}
-          </div>
+  const controls = (
+    <>
+      <Section id="climate-what" icon={meta.icon} color={meta.accent} title="What" sub={`${meta.label} · ${start ? periodLabel(start.y, start.m, Math.max(1, n)) : '…'}`}>
+        <div className="sg-row">
+          {Object.entries(VARS).map(([id, v]) => <Btn key={id} sm on={variable === id} color={v.accent} icon={v.icon} onClick={() => setVariable(id)}>{v.short}</Btn>)}
         </div>
-        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <div className="sg-grid2">
           <MonthPick title="From" value={start} onChange={setStart} />
           <MonthPick title="To" value={end} onChange={setEnd} />
-          <button type="button" onClick={() => setEnd(start)} style={chip(false)}>Single month</button>
         </div>
-        {!nValid && start && <p style={{ margin: 0, color: '#fcd34d', fontSize: 12.5 }}>"To" must be the same month as "From" or up to 11 months after it.</p>}
-        {stats?.empty && <p style={{ margin: 0, color: '#fcd34d', fontSize: 12.5 }}>The Met Office hasn't published every month of that period yet. Figures appear early the following month.</p>}
-        {error && <p style={{ margin: 0, color: '#fca5a5', fontSize: 12.5 }}>{error}</p>}
-        <div>
-          <p style={label}>Theme</p>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button type="button" style={chip(theme === 'light')} onClick={() => setTheme('light')}><Sun style={{ width: 13, height: 13 }} />Light</button>
-            <button type="button" style={chip(theme === 'dark')} onClick={() => setTheme('dark')}><Moon style={{ width: 13, height: 13 }} />Dark</button>
-          </div>
+        <div className="sg-row">
+          <Btn sm onClick={() => setEnd(start)}>Single month</Btn>
+          <Btn sm icon={loading ? Loader2 : RefreshCw} disabled={loading} onClick={() => load(variable)}>Refresh</Btn>
         </div>
-        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div><p style={label}>Handle</p><input value={handle} onChange={(e) => setHandle(e.target.value)} style={input} /></div>
-          <button type="button" onClick={() => load(variable)} disabled={loading} style={chip(false)}>
-            {loading ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : <RefreshCw style={{ width: 13, height: 13 }} />} Refresh
-          </button>
+        {!nValid && start && <p className="sg-note" style={{ color: 'var(--sg-amber)' }}>"To" must be the same month as "From" or up to 11 months after it.</p>}
+        {stats?.empty && <p className="sg-note" style={{ color: 'var(--sg-amber)' }}>The Met Office hasn't published every month of that period yet. Figures appear early the following month.</p>}
+        {error && <p className="sg-note" style={{ color: 'var(--sg-red)' }}>{error}</p>}
+      </Section>
+      <Section id="climate-look" icon={Sun} color="#f59e0b" title="Look" sub={`${theme === 'light' ? 'Light' : 'Dark'} · ${handle}`}>
+        <div className="sg-row">
+          <Seg value={theme} onChange={setTheme} options={[['light', 'Light', Sun], ['dark', 'Dark', Moon]]} />
         </div>
-        <button type="button" disabled={!stats || stats.empty}
-          onClick={() => downloadCanvas(canvasRef.current, `uk-climate-${variable.toLowerCase()}-${start.y}-${String(start.m + 1).padStart(2, '0')}${n > 1 ? `-${n}m` : ''}-${theme}.jpg`)}
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '11px 16px', borderRadius: 10, background: '#0284c7', color: '#fff', border: 'none', fontWeight: 800, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>
-          <Download style={{ width: 16, height: 16 }} /> Download JPG (1080×1920)
-        </button>
-        <p style={{ margin: 0, fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
+        <Field label="Handle"><input className="sg-input" value={handle} onChange={(e) => setHandle(e.target.value)} /></Field>
+      </Section>
+      <Section id="climate-export" icon={Download} color="#0284c7" title="Export">
+        <Btn primary color="#0284c7" icon={Download} disabled={!stats || stats.empty}
+          onClick={() => downloadCanvas(canvasRef.current, `uk-climate-${variable.toLowerCase()}-${start.y}-${String(start.m + 1).padStart(2, '0')}${n > 1 ? `-${n}m` : ''}-${theme}.jpg`)}>
+          Download JPG (1080×1920)
+        </Btn>
+        <p className="sg-note">
           Met Office HadUK-Grid monthly series (10 climate districts) and the 37 historic stations, back to the 1800s. The map blends their differences from the 1991–2020 average into one smooth field across the UK.
         </p>
-      </div>
-      <canvas ref={canvasRef} width={W} height={H} style={{ width: 405, height: 720, borderRadius: 14, boxShadow: '0 20px 50px rgba(0,0,0,0.45)', flex: '0 0 auto' }} />
-    </div>
+      </Section>
+    </>
   );
+
+  return <StudioSplit controls={controls} preview={<canvas ref={canvasRef} width={W} height={H} className="sg-canvas" style={{ width: 405, height: 720 }} />} />;
 }

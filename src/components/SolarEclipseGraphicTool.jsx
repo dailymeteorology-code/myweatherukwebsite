@@ -19,13 +19,14 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import html2canvas from 'html2canvas';
 import {
-  Download, Plus, Trash2, MapPin, Loader2, Upload, Check, CloudDownload, AlertTriangle,
+  Download, Plus, Trash2, MapPin, Loader2, Upload, Check, CloudDownload, AlertTriangle, Sun,
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { weatherIcons } from '@/components/WeatherIcons';
 import { loadSynopticGeo } from '@/lib/synopticGeo';
 import { codeInfo } from '@/lib/metOfficeWeatherCodes';
 import { hourNearest } from '@/lib/eclipseForecast';
+import { StudioStyles, Section, Btn, Seg, Field } from '@/components/studio/StudioUI';
 
 const GRAPHIC_W = 1240;
 const GRAPHIC_H = 1550;
@@ -57,22 +58,6 @@ const START_LOCATIONS = [
   { id: 8, name: 'Plymouth',   lat: 50.376, lon: -4.143, pct: 94.66, time: '19:16', icon: 'Overcast',        dx: -70, dy: 22 },
 ];
 
-function Field({ label, children }) {
-  return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#64748b' }}>
-        {label}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-const input = {
-  background: '#0b1220', border: '1px solid rgba(148,163,184,0.22)', borderRadius: 8,
-  color: '#e2e8f0', fontSize: 13, padding: '7px 9px', width: '100%', fontFamily: 'inherit', outline: 'none',
-};
-
 /** Upload an image and store its URL on SiteSettings under `field`. */
 function LogoUpload({ label, field, url, onDone }) {
   const [busy, setBusy] = useState(false);
@@ -97,18 +82,14 @@ function LogoUpload({ label, field, url, onDone }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-      <label style={{
-        display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 9,
-        cursor: busy ? 'default' : 'pointer', fontSize: 12, fontWeight: 700,
-        background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(148,163,184,0.25)', color: '#cbd5e1',
-      }}>
+      <label className="sg-btn is-sm" style={{ cursor: busy ? 'default' : 'pointer' }}>
         {busy ? <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
           : url ? <Check style={{ width: 13, height: 13, color: '#34d399' }} />
             : <Upload style={{ width: 13, height: 13 }} />}
         {busy ? 'Uploading…' : url ? `${label} set — replace` : `Upload ${label}`}
         <input type="file" accept="image/*" onChange={pick} disabled={busy} style={{ display: 'none' }} />
       </label>
-      {err && <span style={{ fontSize: 10.5, color: '#fca5a5' }}>{err}</span>}
+      {err && <span className="sg-note" style={{ color: 'var(--sg-red)' }}>{err}</span>}
     </div>
   );
 }
@@ -255,111 +236,62 @@ export default function SolarEclipseGraphicTool() {
   }, [locations]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, color: '#e2e8f0' }}>
+    <div className="sg" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <StudioStyles />
 
       {/* ══ Controls ══ */}
-      <div style={{ background: '#0c1422', border: '1px solid rgba(148,163,184,0.10)', borderRadius: 16, padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-          <Field label="Eyebrow"><input style={input} value={meta.eyebrow} onChange={e => setField('eyebrow', e.target.value)} /></Field>
-          <Field label="Title"><input style={input} value={meta.title} onChange={e => setField('title', e.target.value)} /></Field>
-          <Field label="Date line"><input style={input} value={meta.date} onChange={e => setField('date', e.target.value)} /></Field>
-          <Field label="Forecast date">
-            <input style={input} type="date" value={meta.isoDate} onChange={e => setField('isoDate', e.target.value)} />
-          </Field>
-        </div>
+      <div className="sg-controls">
+        <Section id="eclipse-graphic" icon={Sun} color="#d946ef" title="Graphic" sub={meta.title}>
+          <div className="sg-grid2">
+            <Field label="Eyebrow"><input className="sg-input" value={meta.eyebrow} onChange={e => setField('eyebrow', e.target.value)} /></Field>
+            <Field label="Title"><input className="sg-input" value={meta.title} onChange={e => setField('title', e.target.value)} /></Field>
+            <Field label="Date line"><input className="sg-input" value={meta.date} onChange={e => setField('date', e.target.value)} /></Field>
+            <Field label="Forecast date"><input className="sg-input" type="date" value={meta.isoDate} onChange={e => setField('isoDate', e.target.value)} /></Field>
+          </div>
+          <div className="sg-row">
+            <Btn on={fetching} color="#2dd4bf" icon={fetching ? Loader2 : CloudDownload} disabled={fetching} onClick={fetchForecasts}>{fetching ? 'Fetching…' : 'Fetch Met Office symbols'}</Btn>
+          </div>
+          {fetchNote && (
+            <p className="sg-note" style={{ display: 'flex', gap: 7, color: fetchNote.startsWith('All') ? 'var(--sg-green)' : 'var(--sg-amber)' }}>
+              {!fetchNote.startsWith('All') && <AlertTriangle style={{ width: 13, height: 13, flexShrink: 0, marginTop: 1 }} />}
+              {fetchNote}
+            </p>
+          )}
+          <div className="sg-row">
+            <LogoUpload label="MyWeatherUK logo" field="logo_url" url={logos.site} onDone={(u) => setLogos(l => ({ ...l, site: u }))} />
+            <LogoUpload label="TCM Space logo" field="tcm_logo_url" url={logos.tcm} onDone={(u) => setLogos(l => ({ ...l, tcm: u }))} />
+          </div>
+        </Section>
 
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button
-            type="button" onClick={fetchForecasts} disabled={fetching}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 15px', borderRadius: 10,
-              cursor: fetching ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 800,
-              background: 'rgba(45,212,191,0.16)', border: '1px solid rgba(94,234,212,0.5)', color: '#5eead4',
-            }}>
-            {fetching ? <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} /> : <CloudDownload style={{ width: 14, height: 14 }} />}
-            {fetching ? 'Fetching…' : 'Fetch Met Office symbols'}
-          </button>
+        <Section id="eclipse-places" icon={MapPin} color="#818cf8" title="Locations" sub={`${locations.length} on the map`}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {locations.map(l => (
+              <div key={l.id} className="sg-panel" style={{ display: 'grid', gap: 8, alignItems: 'end', gridTemplateColumns: 'repeat(auto-fit, minmax(92px, 1fr)) 34px', padding: 9 }}>
+                <Field label="Name"><input className="sg-input" value={l.name} onChange={e => setLoc(l.id, { name: e.target.value })} /></Field>
+                <Field label="%"><input className="sg-input" type="number" step="0.01" value={l.pct} onChange={e => setLoc(l.id, { pct: Number(e.target.value) })} /></Field>
+                <Field label="Time"><input className="sg-input" value={l.time} onChange={e => setLoc(l.id, { time: e.target.value })} /></Field>
+                <Field label="Weather symbol">
+                  <select className="sg-input" value={l.icon} onChange={e => setLoc(l.id, { icon: e.target.value })}>
+                    {ICON_KEYS.map(k => <option key={k} value={k}>{k}</option>)}
+                  </select>
+                </Field>
+                <Field label="Nudge X"><input className="sg-input" type="number" value={l.dx} onChange={e => setLoc(l.id, { dx: Number(e.target.value) })} /></Field>
+                <Field label="Nudge Y"><input className="sg-input" type="number" value={l.dy} onChange={e => setLoc(l.id, { dy: Number(e.target.value) })} /></Field>
+                <Btn danger icon={Trash2} onClick={() => removeLoc(l.id)} aria-label={`Remove ${l.name}`} />
+              </div>
+            ))}
+          </div>
+          <div className="sg-row">
+            <Btn on={placing} color="#818cf8" icon={placing ? MapPin : Plus} onClick={() => setPlacing(p => !p)}>{placing ? 'Click the map…' : 'Add location'}</Btn>
+          </div>
+        </Section>
 
-          <LogoUpload label="MyWeatherUK logo" field="logo_url" url={logos.site}
-                      onDone={(u) => setLogos(l => ({ ...l, site: u }))} />
-          <LogoUpload label="TCM Space logo" field="tcm_logo_url" url={logos.tcm}
-                      onDone={(u) => setLogos(l => ({ ...l, tcm: u }))} />
-
-          <button
-            type="button" onClick={() => setPlacing(p => !p)}
-            style={{
-              marginLeft: 'auto', padding: '8px 14px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
-              fontSize: 13, fontWeight: 700,
-              background: placing ? 'rgba(129,140,248,0.25)' : 'rgba(255,255,255,0.06)',
-              border: `1px solid ${placing ? '#818cf8' : 'rgba(148,163,184,0.25)'}`,
-              color: placing ? '#c7d2fe' : '#cbd5e1',
-              display: 'inline-flex', alignItems: 'center', gap: 7,
-            }}>
-            <MapPin style={{ width: 14, height: 14 }} />
-            {placing ? 'Click the map…' : 'Add location'}
-          </button>
-        </div>
-
-        {fetchNote && (
-          <p style={{ margin: 0, display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 11.5, lineHeight: 1.5, color: fetchNote.startsWith('All') ? '#5eead4' : '#fbbf24' }}>
-            {!fetchNote.startsWith('All') && <AlertTriangle style={{ width: 13, height: 13, flexShrink: 0, marginTop: 1 }} />}
-            {fetchNote}
-          </p>
-        )}
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {locations.map(l => (
-            <div key={l.id} style={{
-              display: 'grid', gap: 8, alignItems: 'end',
-              gridTemplateColumns: 'minmax(105px,1.3fr) 78px 72px minmax(115px,1.1fr) 62px 62px 32px',
-              background: '#0b1220', border: '1px solid rgba(148,163,184,0.14)', borderRadius: 10, padding: 8,
-            }}>
-              <Field label="Name"><input style={input} value={l.name} onChange={e => setLoc(l.id, { name: e.target.value })} /></Field>
-              <Field label="%"><input style={input} type="number" step="0.01" value={l.pct} onChange={e => setLoc(l.id, { pct: Number(e.target.value) })} /></Field>
-              <Field label="Time"><input style={input} value={l.time} onChange={e => setLoc(l.id, { time: e.target.value })} /></Field>
-              <Field label="Weather symbol">
-                <select style={input} value={l.icon} onChange={e => setLoc(l.id, { icon: e.target.value })}>
-                  {ICON_KEYS.map(k => <option key={k} value={k}>{k}</option>)}
-                </select>
-              </Field>
-              <Field label="Nudge X"><input style={input} type="number" value={l.dx} onChange={e => setLoc(l.id, { dx: Number(e.target.value) })} /></Field>
-              <Field label="Nudge Y"><input style={input} type="number" value={l.dy} onChange={e => setLoc(l.id, { dy: Number(e.target.value) })} /></Field>
-              <button type="button" onClick={() => removeLoc(l.id)} aria-label={`Remove ${l.name}`}
-                      style={{ height: 32, borderRadius: 8, cursor: 'pointer', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)', color: '#fca5a5' }}>
-                <Trash2 style={{ width: 13, height: 13, margin: '0 auto' }} />
-              </button>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button type="button" onClick={() => setPlacing(true)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '9px 16px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 700, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(148,163,184,0.25)', color: '#cbd5e1' }}>
-            <Plus style={{ width: 14, height: 14 }} /> Add location
-          </button>
-          <button type="button" onClick={download} disabled={exporting || !geo}
-                  style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 18px', borderRadius: 10, cursor: exporting ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 800, background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(129,140,248,0.55)', color: '#c7d2fe' }}>
-            {exporting ? <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} /> : <Download style={{ width: 14, height: 14 }} />}
-            {exporting ? 'Exporting…' : 'Download PNG'}
-          </button>
-        </div>
-      </div>
-
-      {/* ══ Preview scale ══ */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#64748b' }}>
-          Preview · {Math.round(scale * 100)}%
-        </span>
-        <button type="button" onClick={() => setActualSize(v => !v)}
-          style={{
-            marginLeft: 'auto', padding: '5px 12px', borderRadius: 99, cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 12, fontWeight: 700,
-            background: actualSize ? 'rgba(129,140,248,0.22)' : 'rgba(255,255,255,0.06)',
-            border: `1px solid ${actualSize ? '#818cf8' : 'rgba(148,163,184,0.25)'}`,
-            color: actualSize ? '#c7d2fe' : '#cbd5e1',
-          }}>
-          {actualSize ? 'Fit to screen' : 'Actual size (1240×1550)'}
-        </button>
+        <Section id="eclipse-export" icon={Download} color="#6366f1" title="Export" sub={`Preview ${Math.round(scale * 100)}%`}>
+          <div className="sg-row">
+            <Btn primary color="#6366f1" icon={exporting ? Loader2 : Download} disabled={exporting || !geo} onClick={download}>{exporting ? 'Exporting…' : 'Download PNG'}</Btn>
+            <Seg value={actualSize ? 'actual' : 'fit'} onChange={(v) => setActualSize(v === 'actual')} options={[['fit', 'Fit to screen'], ['actual', 'Actual size (1240×1550)']]} />
+          </div>
+        </Section>
       </div>
 
       {/* ══ The card ══ */}

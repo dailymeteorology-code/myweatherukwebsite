@@ -19,8 +19,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import html2canvas from 'html2canvas';
 import {
-  Download, Loader2, Undo2, Trash2, Check, X, Plus, Pipette, Save,
+  Download, Loader2, Undo2, Trash2, Check, X, Plus, Pipette, Save, Map as MapIcon, Palette, PenLine,
 } from 'lucide-react';
+import { StudioStyles, Section, Btn, Seg, Field } from '@/components/studio/StudioUI';
 import { loadSynopticGeo, MAP_EXTENTS } from '@/lib/synopticGeo';
 import { smoothPath, PressureCentre, FlowArrow, StripePattern } from './synopticDraw';
 
@@ -47,9 +48,6 @@ const DEFAULT_TYPES = [
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
-const lbl = { display: 'block', fontSize: 10, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#64748b', marginBottom: 8 };
-const btn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', background: 'rgba(148,163,184,0.06)', border: '1.5px solid rgba(148,163,184,0.18)', color: '#94a3b8' };
-const sel = { padding: '8px 10px', borderRadius: 9, background: '#101c2e', border: '1px solid rgba(148,163,184,0.18)', color: '#f1f5f9', fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', outline: 'none' };
 
 export default function WeatherTypeMapTool({ siteLogoUrl = '' }) {
   const [extent, setExtent]   = useState('uk');
@@ -235,239 +233,160 @@ export default function WeatherTypeMapTool({ siteLogoUrl = '' }) {
   const usedTypes = types.filter(t => areas.some(a => a.typeId === t.id));
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, color: '#f1f5f9' }}>
+    <div className="sg" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <StudioStyles />
 
       {/* ══ Controls ══ */}
-      <div style={{ background: '#0c1422', border: '1px solid rgba(148,163,184,0.10)', borderRadius: 16, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div>
-            <span style={lbl}>Map</span>
-            <select value={extent} onChange={e => setExtent(e.target.value)} style={sel}>
-              <option value="uk">{MAP_EXTENTS.uk.label}</option>
-              <option value="uk-france">{MAP_EXTENTS['uk-france'].label}</option>
-            </select>
+      <div className="sg-controls">
+        <Section id="wxt-graphic" icon={MapIcon} color="#a3c614" title="Graphic" sub={`${likeLabel}${percent ? ` · ${percent}%` : ''}`}>
+          <div className="sg-grid2">
+            <Field label="Map">
+              <select className="sg-input" value={extent} onChange={e => setExtent(e.target.value)}>
+                <option value="uk">{MAP_EXTENTS.uk.label}</option>
+                <option value="uk-france">{MAP_EXTENTS['uk-france'].label}</option>
+              </select>
+            </Field>
+            <Field label="Likelihood">
+              <select className="sg-input" value={likelihood} onChange={e => setLikelihood(e.target.value)}>
+                {LIKELIHOODS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Chance %"><input className="sg-input" value={percent} onChange={e => setPercent(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" /></Field>
+            <Field label="Pill colour">
+              <div className="sg-row" style={{ flexWrap: 'nowrap' }}>
+                <input type="color" className="sg-color" value={likeColor} onChange={e => setLikeColor(e.target.value)} />
+                <Btn sm on={picking?.kind === 'like'} icon={Pipette} onClick={() => setPicking({ kind: 'like' })} title="Reuse a colour already on the graphic" />
+              </div>
+            </Field>
           </div>
-          <div>
-            <span style={lbl}>Likelihood</span>
-            <select value={likelihood} onChange={e => setLikelihood(e.target.value)} style={sel}>
-              {LIKELIHOODS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
-            </select>
+          <Field label="Strapline (optional)"><input className="sg-input" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Saturday afternoon" /></Field>
+          <div className="sg-row">
+            <Field label="Handle" style={{ flex: 1 }}><input className="sg-input" value={handle} onChange={e => setHandle(e.target.value)} /></Field>
+            <Btn sm on={showKey} onClick={() => setShowKey(v => !v)}>Show key</Btn>
           </div>
-          <div>
-            <span style={lbl}>Chance %</span>
-            <input value={percent} onChange={e => setPercent(e.target.value.replace(/[^0-9]/g, ''))}
-                   style={{ ...sel, width: 80 }} inputMode="numeric" />
-          </div>
-          <div>
-            <span style={lbl}>Pill colour</span>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <input type="color" value={likeColor} onChange={e => setLikeColor(e.target.value)}
-                     style={{ width: 40, height: 34, borderRadius: 8, background: 'transparent', border: '1px solid rgba(148,163,184,0.25)', cursor: 'pointer' }} />
-              <button type="button" onClick={() => setPicking({ kind: 'like' })}
-                      title="Reuse a colour already on the graphic"
-                      style={{ ...btn, padding: '8px 9px', borderColor: picking?.kind === 'like' ? '#38bdf8' : btn.border }}>
-                <Pipette style={{ width: 13, height: 13 }} />
-              </button>
+          {/* Colour reuse row — appears only while picking, so it never competes
+              with the normal colour inputs for attention. */}
+          {picking && (
+            <div className="sg-panel">
+              <div className="sg-row">
+                <span className="sg-note"><b>Pick a colour already in use:</b></span>
+                {usedColours.map(c => (
+                  <button key={c} type="button" onClick={() => applyPicked(c)} title={c} className="sg-swatch" style={{ background: c, borderRadius: 7 }} />
+                ))}
+                <span className="sg-grow" />
+                <Btn sm icon={X} onClick={() => setPicking(null)}>Cancel</Btn>
+              </div>
             </div>
-          </div>
-          <div style={{ flex: 1, minWidth: 180 }}>
-            <span style={lbl}>Strapline (optional)</span>
-            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Saturday afternoon"
-                   style={{ ...sel, width: '100%' }} />
-          </div>
-        </div>
+          )}
+        </Section>
 
-        {/* Colour reuse row — appears only while picking, so it never competes
-            with the normal colour inputs for attention. */}
-        {picking && (
-          <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(56,189,248,0.07)', border: '1px solid rgba(56,189,248,0.35)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: '#7dd3fc' }}>Pick a colour already in use:</span>
-              {usedColours.map(c => (
-                <button key={c} type="button" onClick={() => applyPicked(c)} title={c}
-                        style={{ width: 26, height: 26, borderRadius: 7, background: c, border: '1.5px solid rgba(255,255,255,0.35)', cursor: 'pointer' }} />
-              ))}
-              <button type="button" onClick={() => setPicking(null)} style={{ ...btn, marginLeft: 'auto' }}>
-                <X style={{ width: 12, height: 12 }} /> Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Weather types */}
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-            <span style={{ ...lbl, marginBottom: 0 }}>Weather types</span>
-            <button type="button" onClick={addType} style={{ ...btn, padding: '5px 9px' }}>
-              <Plus style={{ width: 12, height: 12 }} /> Add
-            </button>
-            <button type="button" onClick={savePreset} style={{ ...btn, padding: '5px 9px' }}>
-              <Save style={{ width: 12, height: 12 }} /> Save palette
-            </button>
+        <Section id="wxt-types" icon={Palette} color="#38bdf8" title="Weather types" sub={`${types.length} types · ${areas.length} areas`}>
+          <div className="sg-row">
+            <Btn sm icon={Plus} onClick={addType}>Add</Btn>
+            <Btn sm icon={Save} onClick={savePreset}>Save palette</Btn>
             {presets.length > 0 && (
-              <select value="" onChange={e => { if (e.target.value) loadPreset(e.target.value); }} style={{ ...sel, padding: '5px 8px' }}>
+              <select className="sg-input" style={{ width: 'auto', minHeight: 28, padding: '3px 8px' }} value="" onChange={e => { if (e.target.value) loadPreset(e.target.value); }}>
                 <option value="">Load palette…</option>
                 {presets.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
               </select>
             )}
             {presets.length > 0 && (
-              <select value="" onChange={e => { if (e.target.value) deletePreset(e.target.value); }} style={{ ...sel, padding: '5px 8px' }}>
+              <select className="sg-input" style={{ width: 'auto', minHeight: 28, padding: '3px 8px' }} value="" onChange={e => { if (e.target.value) deletePreset(e.target.value); }}>
                 <option value="">Delete palette…</option>
                 {presets.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
               </select>
             )}
           </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+          <div className="sg-list" style={{ maxHeight: 'none' }}>
             {types.map(t => (
-              <div key={t.id} style={{
-                display: 'flex', alignItems: 'center', gap: 8, padding: '7px 9px', borderRadius: 10,
-                background: activeType === t.id ? 'rgba(56,189,248,0.10)' : 'rgba(148,163,184,0.04)',
-                border: `1.5px solid ${activeType === t.id ? '#38bdf8' : 'rgba(148,163,184,0.14)'}`,
-              }}>
-                <button type="button" onClick={() => setActiveType(t.id)} title="Draw with this type"
-                        style={{ ...btn, padding: '4px 8px', fontSize: 11, borderColor: 'transparent', background: 'transparent', color: activeType === t.id ? '#7dd3fc' : '#64748b' }}>
-                  {activeType === t.id ? <Check style={{ width: 12, height: 12 }} /> : <span style={{ width: 12 }} />}
-                </button>
-                <input type="color" value={t.color} onChange={e => updType(t.id, { color: e.target.value })}
-                       style={{ width: 34, height: 28, borderRadius: 7, background: 'transparent', border: '1px solid rgba(148,163,184,0.25)', cursor: 'pointer' }} />
-                <button type="button" onClick={() => setPicking({ kind: 'type', id: t.id })} title="Reuse a colour already on the graphic"
-                        style={{ ...btn, padding: '6px 7px' }}>
-                  <Pipette style={{ width: 12, height: 12 }} />
-                </button>
-                <input value={t.name} onChange={e => updType(t.id, { name: e.target.value })}
-                       style={{ ...sel, flex: 1, minWidth: 90, padding: '5px 8px' }} />
-                <select value={t.fill} onChange={e => updType(t.id, { fill: e.target.value })} style={{ ...sel, padding: '5px 8px' }}>
-                  <option value="solid">Solid</option>
-                  <option value="stripe">Stripes</option>
-                </select>
+              <div key={t.id} className="sg-item" style={{ flexWrap: 'wrap', ...(activeType === t.id ? { borderColor: 'var(--sg-accent)' } : {}) }}>
+                <Btn sm on={activeType === t.id} icon={activeType === t.id ? Check : undefined} onClick={() => setActiveType(t.id)} title="Draw with this type">{activeType === t.id ? null : 'Use'}</Btn>
+                <input type="color" className="sg-color" value={t.color} onChange={e => updType(t.id, { color: e.target.value })} />
+                <Btn sm icon={Pipette} onClick={() => setPicking({ kind: 'type', id: t.id })} title="Reuse a colour already on the graphic" />
+                <input className="sg-input" style={{ flex: 1, minWidth: 90, minHeight: 30, padding: '4px 8px' }} value={t.name} onChange={e => updType(t.id, { name: e.target.value })} />
+                <Seg value={t.fill} onChange={(v) => updType(t.id, { fill: v })} options={[['solid', 'Solid'], ['stripe', 'Stripes']]} />
                 {t.fill === 'stripe' && (
-                  <>
-                    <label style={{ fontSize: 10.5, color: '#64748b', fontWeight: 700 }}>Thick</label>
-                    <input type="range" min="2" max="16" value={t.thickness}
-                           onChange={e => updType(t.id, { thickness: Number(e.target.value) })}
-                           style={{ width: 70, accentColor: t.color }} />
-                    <label style={{ fontSize: 10.5, color: '#64748b', fontWeight: 700 }}>Gap</label>
-                    <input type="range" min="2" max="24" value={t.gap}
-                           onChange={e => updType(t.id, { gap: Number(e.target.value) })}
-                           style={{ width: 70, accentColor: t.color }} />
-                  </>
+                  <span className="sg-row" style={{ gap: 6 }}>
+                    <span className="sg-note">Thick</span>
+                    <input type="range" className="sg-range" min="2" max="16" value={t.thickness} onChange={e => updType(t.id, { thickness: Number(e.target.value) })} style={{ width: 70, accentColor: t.color }} />
+                    <span className="sg-note">Gap</span>
+                    <input type="range" className="sg-range" min="2" max="24" value={t.gap} onChange={e => updType(t.id, { gap: Number(e.target.value) })} style={{ width: 70, accentColor: t.color }} />
+                  </span>
                 )}
-                <button type="button" onClick={() => delType(t.id)} style={{ ...btn, padding: '6px 7px', color: '#f87171', borderColor: 'rgba(248,113,113,0.3)' }}>
-                  <Trash2 style={{ width: 12, height: 12 }} />
-                </button>
+                <Btn sm danger icon={Trash2} onClick={() => delType(t.id)} aria-label={`Delete ${t.name}`} />
               </div>
             ))}
           </div>
-        </div>
+        </Section>
 
-        {/* Tools */}
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          {[['area', 'Draw area'], ['low', 'Place L'], ['high', 'Place H'], ['arrow', 'Arrow']].map(([id, label]) => (
-            <button key={id} type="button" onClick={() => setTool(id)} style={{
-              ...btn, fontWeight: 800,
-              background: tool === id ? 'rgba(56,189,248,0.16)' : btn.background,
-              borderColor: tool === id ? '#38bdf8' : btn.border,
-              color: tool === id ? '#7dd3fc' : '#94a3b8',
-            }}>{label}</button>
-          ))}
-          <button type="button" onClick={() => { setStripeMode(v => !v); setSelected(null); }} style={{
-            ...btn, fontWeight: 800,
-            background: stripeMode ? 'rgba(250,204,21,0.18)' : btn.background,
-            borderColor: stripeMode ? '#facc15' : btn.border,
-            color: stripeMode ? '#facc15' : '#94a3b8',
-          }}>{stripeMode ? 'Striping — click an area' : 'Add stripes'}</button>
-
+        <Section id="wxt-draw" icon={PenLine} color="#a78bfa" title="Draw" sub={stripeMode ? 'Striping: click an area' : ({ area: 'Draw area', low: 'Place L', high: 'Place H', arrow: 'Arrow' })[tool]}>
+          <div className="sg-row">
+            <Seg value={tool} onChange={setTool} color="#a78bfa" options={[['area', 'Draw area'], ['low', 'Place L'], ['high', 'Place H'], ['arrow', 'Arrow']]} />
+            <Btn sm on={stripeMode} color="#facc15" onClick={() => { setStripeMode(v => !v); setSelected(null); }}>{stripeMode ? 'Striping — click an area' : 'Add stripes'}</Btn>
+          </div>
           {tool === 'area' && draft.length > 0 && (
-            <>
-              <button type="button" onClick={finishArea} disabled={draft.length < 3}
-                      style={{ ...btn, color: '#86efac', borderColor: 'rgba(74,222,128,0.4)', opacity: draft.length < 3 ? 0.5 : 1 }}>
-                <Check style={{ width: 12, height: 12 }} /> Finish area ({draft.length})
-              </button>
-              <button type="button" onClick={() => setDraft(d => d.slice(0, -1))} style={btn}>
-                <Undo2 style={{ width: 12, height: 12 }} /> Undo point
-              </button>
-              <button type="button" onClick={() => setDraft([])} style={{ ...btn, color: '#f87171' }}>Cancel</button>
-            </>
+            <div className="sg-row">
+              <Btn sm on color="#22c55e" icon={Check} disabled={draft.length < 3} onClick={finishArea}>Finish area ({draft.length})</Btn>
+              <Btn sm icon={Undo2} onClick={() => setDraft(d => d.slice(0, -1))}>Undo point</Btn>
+              <Btn sm danger onClick={() => setDraft([])}>Cancel</Btn>
+            </div>
           )}
           {tool === 'arrow' && arrowDraft.length > 0 && (
-            <>
-              <button type="button" onClick={finishArrow} disabled={arrowDraft.length < 2}
-                      style={{ ...btn, color: '#86efac', borderColor: 'rgba(74,222,128,0.4)' }}>
-                <Check style={{ width: 12, height: 12 }} /> Finish arrow
-              </button>
-              <button type="button" onClick={() => setArrowDraft([])} style={{ ...btn, color: '#f87171' }}>Cancel</button>
-            </>
+            <div className="sg-row">
+              <Btn sm on color="#22c55e" icon={Check} disabled={arrowDraft.length < 2} onClick={finishArrow}>Finish arrow</Btn>
+              <Btn sm danger onClick={() => setArrowDraft([])}>Cancel</Btn>
+            </div>
           )}
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: '#94a3b8', marginLeft: 8 }}>
-            <input type="checkbox" checked={showKey} onChange={e => setShowKey(e.target.checked)} /> Show key
-          </label>
-        </div>
+          {/* Stripe settings, shown only while striping is armed so they don't
+              compete with the weather-type colours the rest of the time. */}
+          {stripeMode && (
+            <div className="sg-panel" style={{ borderColor: 'color-mix(in srgb, #facc15 45%, transparent)' }}>
+              <div className="sg-row">
+                <span className="sg-note"><b>Stripe overlay</b></span>
+                <input type="color" className="sg-color" value={overlayColor} onChange={e => setOverlayColor(e.target.value)} />
+                <Btn sm icon={Pipette} onClick={() => setPicking({ kind: 'overlay' })} title="Reuse a colour already on the graphic" />
+                <input className="sg-input" style={{ width: 150, minHeight: 30, padding: '4px 8px' }} value={overlayLabel} onChange={e => setOverlayLabel(e.target.value)} placeholder="Key label" />
+              </div>
+              <div className="sg-row">
+                <span className="sg-note">Thickness {overlayThickness}</span>
+                <input type="range" className="sg-range" min="2" max="18" value={overlayThickness} onChange={e => setOverlayThickness(Number(e.target.value))} style={{ width: 110, accentColor: overlayColor }} />
+                <span className="sg-note">Gap {overlayGap}</span>
+                <input type="range" className="sg-range" min="2" max="26" value={overlayGap} onChange={e => setOverlayGap(Number(e.target.value))} style={{ width: 110, accentColor: overlayColor }} />
+              </div>
+              <p className="sg-note">Click an area to add or remove its stripes.</p>
+            </div>
+          )}
 
-        {/* Stripe settings, shown only while striping is armed so they don't
-            compete with the weather-type colours the rest of the time. */}
-        {stripeMode && (
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', padding: '10px 12px', borderRadius: 10, background: 'rgba(250,204,21,0.07)', border: '1px solid rgba(250,204,21,0.35)' }}>
-            <span style={{ fontSize: 11.5, fontWeight: 800, color: '#facc15' }}>Stripe overlay</span>
-            <input type="color" value={overlayColor} onChange={e => setOverlayColor(e.target.value)}
-                   style={{ width: 40, height: 30, borderRadius: 7, background: 'transparent', border: '1px solid rgba(148,163,184,0.25)', cursor: 'pointer' }} />
-            <button type="button" onClick={() => setPicking({ kind: 'overlay' })} title="Reuse a colour already on the graphic"
-                    style={{ ...btn, padding: '7px 8px' }}>
-              <Pipette style={{ width: 12, height: 12 }} />
-            </button>
-            <label style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Thickness {overlayThickness}</label>
-            <input type="range" min="2" max="18" value={overlayThickness}
-                   onChange={e => setOverlayThickness(Number(e.target.value))} style={{ width: 110, accentColor: overlayColor }} />
-            <label style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Gap {overlayGap}</label>
-            <input type="range" min="2" max="26" value={overlayGap}
-                   onChange={e => setOverlayGap(Number(e.target.value))} style={{ width: 110, accentColor: overlayColor }} />
-            <input value={overlayLabel} onChange={e => setOverlayLabel(e.target.value)}
-                   placeholder="Key label" style={{ ...sel, width: 150, padding: '5px 8px' }} />
-            <span style={{ fontSize: 11, color: '#64748b' }}>Click an area to add or remove its stripes.</span>
+          {selected?.kind === 'area' && (
+            <div className="sg-panel" style={{ borderColor: 'color-mix(in srgb, var(--sg-accent) 45%, transparent)' }}>
+              <div className="sg-row">
+                <span className="sg-note"><b>Selected area</b></span>
+                <select className="sg-input" style={{ width: 'auto', minHeight: 30, padding: '4px 8px' }} value={areas.find(a => a.id === selected.id)?.typeId || ''}
+                  onChange={e => setAreas(a => a.map(x => (x.id === selected.id ? { ...x, typeId: e.target.value } : x)))}>
+                  {types.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <Btn sm danger icon={Trash2} onClick={() => { setAreas(a => a.filter(x => x.id !== selected.id)); setSelected(null); }}>Delete</Btn>
+                <span className="sg-grow" />
+                <Btn sm onClick={() => setSelected(null)}>Done</Btn>
+              </div>
+            </div>
+          )}
+
+          <div className="sg-row">
+            <Btn sm danger icon={Trash2} onClick={() => { setAreas([]); setDraft([]); setSymbols([]); setArrows([]); setArrowDraft([]); }}>Clear map</Btn>
           </div>
-        )}
+          <p className="sg-note">
+            Click the map to drop points, then <b>Finish area</b>. Fills are clipped to the
+            coastline, so colour never spills into the sea — click a little offshore and the edge still lands on the coast.
+            Click a finished area to recolour or delete it. To lay stripes over an area, press <b>Add stripes</b> first, then click the area — click it again to take them off.
+            {busy && <b style={{ color: 'var(--sg-amber)' }}> Loading coastline…</b>}
+          </p>
+        </Section>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-
-          <button type="button" onClick={() => { setAreas([]); setDraft([]); setSymbols([]); setArrows([]); setArrowDraft([]); }}
-                  style={{ ...btn, color: '#f87171', borderColor: 'rgba(248,113,113,0.35)' }}>
-            <Trash2 style={{ width: 12, height: 12 }} /> Clear map
-          </button>
-
-          <input value={handle} onChange={e => setHandle(e.target.value)} style={{ ...sel, width: 150, marginLeft: 'auto' }} />
-          <button type="button" onClick={download} disabled={exporting} style={{
-            ...btn, fontWeight: 800, background: 'linear-gradient(135deg,#0ea5e9,#0284c7)', borderColor: 'transparent', color: '#fff',
-          }}>
-            {exporting ? <Loader2 style={{ width: 13, height: 13, animation: 'spin 1s linear infinite' }} /> : <Download style={{ width: 13, height: 13 }} />}
-            {exporting ? 'Exporting…' : 'Download PNG'}
-          </button>
-        </div>
-
-        {selected?.kind === 'area' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 10, background: 'rgba(56,189,248,0.07)', border: '1px solid rgba(56,189,248,0.3)' }}>
-            <span style={{ fontSize: 11.5, fontWeight: 700, color: '#7dd3fc' }}>Selected area</span>
-            <select value={areas.find(a => a.id === selected.id)?.typeId || ''}
-                    onChange={e => setAreas(a => a.map(x => (x.id === selected.id ? { ...x, typeId: e.target.value } : x)))}
-                    style={{ ...sel, padding: '5px 8px' }}>
-              {types.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-            <button type="button" onClick={() => { setAreas(a => a.filter(x => x.id !== selected.id)); setSelected(null); }}
-                    style={{ ...btn, color: '#f87171', borderColor: 'rgba(248,113,113,0.35)' }}>
-              <Trash2 style={{ width: 12, height: 12 }} /> Delete
-            </button>
-            <button type="button" onClick={() => setSelected(null)} style={{ ...btn, marginLeft: 'auto' }}>Done</button>
-          </div>
-        )}
-
-        <p style={{ margin: 0, fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
-          Click the map to drop points, then <b style={{ color: '#94a3b8' }}>Finish area</b>. Fills are clipped to the
-          coastline, so colour never spills into the sea — click a little offshore and the edge still lands on the coast.
-          Click a finished area to recolour or delete it. To lay stripes over an area, press{' '}
-          <b style={{ color: '#facc15' }}>Add stripes</b> first, then click the area — click it again to take them off.
-          {busy && <b style={{ color: '#fbbf24' }}> Loading coastline…</b>}
-        </p>
+        <Section id="wxt-export" icon={Download} color="#0ea5e9" title="Export">
+          <Btn primary color="#0ea5e9" icon={exporting ? Loader2 : Download} disabled={exporting} onClick={download}>{exporting ? 'Exporting…' : 'Download PNG'}</Btn>
+        </Section>
       </div>
 
       {/* ══ Graphic ══ */}

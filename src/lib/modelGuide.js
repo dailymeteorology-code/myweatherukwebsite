@@ -2,15 +2,17 @@
    Met Office, ECMWF and NOAA open data on AWS, built by this server). Nothing here uses Open-Meteo.
 
    - A chance: the share of ensemble members past a threshold, ECMWF ENS and AIFS ENS together
-     (100 members, 16 km), taken as the highest chance within about 15 miles.
-   - An amount: the ensemble median, or the UKV's own 2 km field while the day is in its range.
-   - A day's peak gust: the strongest gust in any hour (UKV) or 6-hour step (ECMWF ENS median).
+     (100 members, 16 km), taken as the highest chance within about 15 miles; over several times,
+     its peak or its average.
+   - An amount: the ensemble median, or the UKV's own 2 km field while the span is in its range.
+   - Gusts: the peak or the average over the span's hours (UKV) or 6-hour steps (ECMWF ENS median).
 
    A field the server has not built for a run yet is queued (the status call does that) and read
    once its step is ready, which for an ensemble can take a few minutes the first time. */
 import { contours } from 'd3-contour';
 import { API, loadFrame, runTag } from '@/lib/modelViewer';
 import { laeaInverse } from '@/lib/ukRadar';
+import { SHAPES } from '@/lib/novaOutlook';
 
 export const FINE = { nx: 1042, ny: 970, dx: 2000, x0: -1158000, yTop: 902000 };   // the 2 km display grid
 const HOUR = 3600e3;
@@ -77,41 +79,53 @@ const decode = (f, m = 0) => {
 };
 const gridOf = (f) => ({ nx: f.head.nx, ny: f.head.ny, k: f.head.k || 1 });
 
-/** Chance (0..1) that the pooled members of the ensembles pass `thr` at one valid time. */
-export async function ensChance(ids, v, validMs, thr, opts) {
-  let cnt = null, seen = null, grid = null, used = [];
-  for (const id of ids) {
-    const at = await runCovering(id, [validMs]);
-    if (!at) continue;
-    const f = await waitFrame(id, at.tag, v, at.steps[0], opts);
-    if (!f) continue;
-    const g = gridOf(f), n = g.nx * g.ny;
-    if (!grid) { grid = g; cnt = new Uint16Array(n); seen = new Uint16Array(n); }
-    if (g.nx !== grid.nx || g.ny !== grid.ny) continue;
-    let qa = 255;
-    for (let q = 0; q < 255; q++) if (f.table[q] >= thr - 1e-6) { qa = q; break; }
-    for (let m = 0; m < (f.head.members || 1); m++) {
-      const o = m * n;
-      for (let i = 0; i < n; i++) { const q = f.q[o + i]; if (q === 255) continue; seen[i]++; if (q >= qa) cnt[i]++; }
+/** Chance (0..1) that the pooled members of the ensembles pass `thr` at each valid time, then
+    the peak ('peak') or the average ('mean') of those chances. */
+export async function ensChance(ids, v, times, thr, how, opts) {
+  let out = null, grid = null, n = 0;
+  const used = new Set();
+  for (const t of times) {
+    let cnt = null, seen = null;
+    for (const id of ids) {
+      const at = await runCovering(id, [t]);
+      if (!at) continue;
+      const f = await waitFrame(id, at.tag, v, at.steps[0], opts);
+      if (!f) continue;
+      const g = gridOf(f), cells = g.nx * g.ny;
+      if (!grid) grid = g;
+      if (g.nx !== grid.nx || g.ny !== grid.ny) continue;
+      if (!cnt) { cnt = new Uint16Array(cells); seen = new Uint16Array(cells); }
+      let qa = 255;
+      for (let q = 0; q < 255; q++) if (f.table[q] >= thr - 1e-6) { qa = q; break; }
+      for (let m = 0; m < (f.head.members || 1); m++) {
+        const o = m * cells;
+        for (let i = 0; i < cells; i++) { const q = f.q[o + i]; if (q === 255) continue; seen[i]++; if (q >= qa) cnt[i]++; }
+      }
+      used.add(`${id.replace('_ens', '').toUpperCase()} ENS ${at.run.slice(11, 13)}Z`);
     }
-    used.push(`${id.replace('_ens', '').toUpperCase()} ENS ${at.run.slice(11, 13)}Z`);
+    if (!cnt) continue;
+    const ch = new Float32Array(cnt.length);
+    for (let i = 0; i < ch.length; i++) ch[i] = seen[i] ? cnt[i] / seen[i] : NaN;
+    if (!out) out = ch;
+    else for (let i = 0; i < ch.length; i++) out[i] = how === 'mean' ? out[i] + ch[i] : Math.max(out[i], ch[i]);
+    n++;
   }
-  if (!grid) return null;
-  const data = new Float32Array(cnt.length);
-  for (let i = 0; i < data.length; i++) data[i] = seen[i] ? cnt[i] / seen[i] : NaN;
-  return { ...grid, data, used };
+  if (!out) return null;
+  if (how === 'mean') for (let i = 0; i < out.length; i++) out[i] /= n;
+  return { ...grid, data: out, used: [...used] };
 }
 
-/** The member median of each ensemble at several valid times, reduced over the times by `how`
-    ('max' for a day's peak, 'last' for an amount ending at the last time). */
+/** The member median of an ensemble at several valid times, reduced over the times by `how`
+    ('peak', 'mean', or 'last' for an amount ending at the last time). */
 export async function ensMedian(id, v, times, how, opts) {
   const at = await runCovering(id, times);
   if (!at) return null;
-  let out = null, grid = null;
+  let out = null, grid = null, used = 0;
   for (const step of at.steps) {
     const f = await waitFrame(id, at.tag, v, step, opts);
     if (!f) continue;
     grid = gridOf(f);
+    used++;
     const n = grid.nx * grid.ny, M = f.head.members || 1, buf = new Float32Array(M), med = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       let c = 0;
@@ -121,9 +135,11 @@ export async function ensMedian(id, v, times, how, opts) {
       med[i] = c % 2 ? s[(c - 1) / 2] : (s[c / 2 - 1] + s[c / 2]) / 2;
     }
     if (!out || how === 'last') out = med;
+    else if (how === 'mean') for (let i = 0; i < n; i++) out[i] += med[i];
     else for (let i = 0; i < n; i++) if (!(out[i] >= med[i])) out[i] = med[i];
   }
   if (!out) return null;
+  if (how === 'mean') for (let i = 0; i < out.length; i++) out[i] /= used;
   return { ...grid, data: out, used: [`${id.replace('_ens', '').toUpperCase()} ENS ${at.run.slice(11, 13)}Z median`] };
 }
 
@@ -146,18 +162,22 @@ export async function detAccum(id, v, from, to, opts) {
   return null;
 }
 
-/** A deterministic model's highest value of a field over the steps inside [from, to]. */
-export async function detMax(id, v, from, to, opts) {
-  const at = await runSpanning(id, from, to, 6);
+/** A deterministic model's peak ('peak') or average ('mean') of a field over its steps inside [from, to]. */
+export async function detStat(id, v, from, to, how, opts) {
+  const at = await runSpanning(id, from, to, 3);
   if (!at) return null;
-  let out = null;
+  let out = null, used = 0;
   for (const step of at.steps) {
     const f = await waitFrame(id, at.tag, v, step, opts);
     if (!f) continue;
     const d = decode(f);
-    if (!out) out = d; else for (let i = 0; i < d.length; i++) if (!(out[i] >= d[i])) out[i] = d[i];
+    used++;
+    if (!out) out = d;
+    else if (how === 'mean') for (let i = 0; i < d.length; i++) out[i] += d[i];
+    else for (let i = 0; i < d.length; i++) if (!(out[i] >= d[i])) out[i] = d[i];
   }
   if (!out) return null;
+  if (how === 'mean') for (let i = 0; i < out.length; i++) out[i] /= used;
   return { nx: FINE.nx, ny: FINE.ny, k: 1, data: out, used: [`${id.toUpperCase()} ${at.run.slice(11, 13)}Z`] };
 }
 
@@ -199,19 +219,6 @@ export function blur(f, r) {
   }
   return { ...f, data: a };
 }
-/** The mean of several fields on the same grid (cells missing in all stay NaN). */
-export function meanOf(fields) {
-  const fs = fields.filter(Boolean);
-  if (!fs.length) return null;
-  const n = fs[0].data.length, out = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    let s = 0, c = 0;
-    for (const f of fs) { const v = f.data[i]; if (v === v) { s += v; c++; } }
-    out[i] = c ? s / c : NaN;
-  }
-  return { ...fs[0], data: out, used: fs.flatMap((f) => f.used || []) };
-}
-
 /** 1 for the cells whose centre is inside a lon/lat box (none: every cell). */
 export function boxMaskOf(f, box) {
   if (!box) return null;
@@ -244,14 +251,20 @@ function simplify(ring, tol) {
   return ring.filter((_, i) => keep[i]);
 }
 
-/** Contours a field at each level's `min`: [{ id, rings: [[[lat, lon]]] }], lowest first. Cells
-    outside the mask count as nothing, so the areas close at the view's edge. */
-export function contourField(f, levels, mask = null) {
-  const { nx, ny } = f, k = f.k || 1;
+/** Contours a field at each level's `min`: [{ id, rings: [[[lat, lon]]] }], lowest first, shaped
+    like the NOVA import (SHAPES: Detailed, Smooth or Broad). Cells outside the mask count as
+    nothing, so the areas close at the view's edge. */
+export function contourField(f, levels, mask = null, shape = 'detailed') {
+  const sh = SHAPES[shape] || SHAPES.detailed, k = f.k || 1, cellKm = (FINE.dx / 1000) * k;
+  const r = (km) => Math.round(km / cellKm / 2);
+  let g = f;
+  if (r(sh.grow) >= 1) g = maxWithin(g, r(sh.grow));
+  if (r(sh.blur) >= 1) g = blur(g, r(sh.blur));
+  const { nx, ny } = g;
   const v = new Float64Array(nx * ny);
-  for (let i = 0; i < v.length; i++) { const x = f.data[i]; v[i] = (mask && !mask[i]) || !(x === x) ? -1e9 : x; }
+  for (let i = 0; i < v.length; i++) { const x = g.data[i]; v[i] = (mask && !mask[i]) || !(x === x) ? -1e9 : x; }
   const gen = contours().size([nx, ny]).smooth(true);
-  const minCells = Math.max(2, 6 / (k * k));       // under ~25 km²: speckle
+  const minCells = Math.max(1.5, sh.minKm2 / (cellKm * cellKm)), tol = Math.max(0.25, sh.tolKm / cellKm);
   const out = [];
   for (const lv of levels) {
     const mp = gen.contour(v, lv.min);
@@ -260,7 +273,7 @@ export function contourField(f, levels, mask = null) {
       const outer = poly[0];
       if (!outer || outer.length < 4 || ringArea(outer) < minCells) continue;
       /* d3 puts cell (i, j) at [i, i+1] x [j, j+1]: its centre is i + 0.5 */
-      rings.push(simplify(outer, k > 1 ? 0.25 : 0.6).map(([x, y]) => {
+      rings.push(simplify(outer, tol).map(([x, y]) => {
         const [lon, lat] = laeaInverse(FINE.x0 + ((x - 0.5) * k + (k - 1) / 2) * FINE.dx, FINE.yTop - ((y - 0.5) * k + (k - 1) / 2) * FINE.dx);
         return [lat, lon];
       }));

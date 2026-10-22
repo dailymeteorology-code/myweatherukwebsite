@@ -5,8 +5,9 @@
 
    NOVA's fields sit on a 2 km British National Grid (row 0 = south) and come from /api/nova
    (admin only, like the NOVA page): zlib-compressed float16, or int8. Everything here is the
-   peak over a whole London day (the run's day summaries) or over the timeline's window (the
-   frames inside it), inside the graphic's map view when it is zoomed to a region. */
+   peak or the average over a whole London day (a day's peak comes straight from the run's day
+   summaries), the timeline's window or any span of dates and times (the frames inside it),
+   inside the graphic's map view when it is zoomed to a region. */
 import { contours } from 'd3-contour';
 
 const authHeaders = () => {
@@ -92,9 +93,10 @@ export function boxMask(grid, box) {
   return m;
 }
 
-/* ~6 km smoothing, the way NOVA's page draws its levels: a NaN-aware box blur, twice */
-function smooth(data, grid) {
-  const { nx, ny } = grid, r = Math.max(1, Math.round(3000 / grid.dx_m));
+/* NaN-aware box blur of radius r cells, twice (close to a Gaussian) */
+function smooth(data, grid, r) {
+  if (r < 1) return data;
+  const { nx, ny } = grid;
   let a = data;
   for (let pass = 0; pass < 2; pass++) {
     const h = new Float32Array(a.length), out = new Float32Array(a.length);
@@ -117,6 +119,32 @@ function smooth(data, grid) {
   }
   return a;
 }
+/* the highest value within r cells (a square), NaN-aware: spreads each area outwards */
+function grow(data, grid, r) {
+  if (r < 1) return data;
+  const { nx, ny } = grid, h = new Float32Array(data.length), out = new Float32Array(data.length);
+  for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
+    let m = NaN;
+    for (let k = Math.max(0, x - r), e = Math.min(nx - 1, x + r); k <= e; k++) { const v = data[y * nx + k]; if (v > m || m !== m) m = v; }
+    h[y * nx + x] = m;
+  }
+  for (let x = 0; x < nx; x++) for (let y = 0; y < ny; y++) {
+    let m = NaN;
+    for (let k = Math.max(0, y - r), e = Math.min(ny - 1, y + r); k <= e; k++) { const v = h[k * nx + x]; if (v > m || m !== m) m = v; }
+    out[y * nx + x] = m;
+  }
+  return out;
+}
+
+/** How imported areas are shaped, in km: `grow` spreads each area out first, `blur` smooths the
+    field, areas under `minKm2` are dropped and outlines are simplified to about `tolKm`.
+    Detailed is NOVA's own look (about 6 km smoothing); Smooth and Broad are what a forecaster
+    draws by hand, fewer and rounder areas that cover a little more ground. */
+export const SHAPES = {
+  detailed: { label: 'Detailed', grow: 0, blur: 8, minKm2: 120, tolKm: 1.1 },
+  smooth: { label: 'Smooth', grow: 4, blur: 18, minKm2: 500, tolKm: 2.5 },
+  broad: { label: 'Broad', grow: 12, blur: 36, minKm2: 1800, tolKm: 4.5 },
+};
 
 /* Douglas-Peucker in grid cells */
 function simplify(ring, tol) {
@@ -141,10 +169,13 @@ function simplify(ring, tol) {
 const ringArea = (r) => { let s = 0; for (let i = 0, j = r.length - 1; i < r.length; j = i++) s += (r[j][0] + r[i][0]) * (r[j][1] - r[i][1]); return Math.abs(s / 2); };
 
 /** Contours a probability field (0..1) at each level's threshold: [{ id, rings: [[[lat, lon]]] }],
-    lowest level first. Outside the mask counts as zero, so areas close at the view's edge. */
-export function contourLevels(data, grid, levels, mask = null) {
+    lowest level first, shaped by SHAPES[shape]. Outside the mask counts as zero, so areas close
+    at the view's edge. */
+export function contourLevels(data, grid, levels, mask = null, shape = 'detailed') {
+  const sh = SHAPES[shape] || SHAPES.detailed, km = grid.dx_m / 1000;
+  const cells = (k) => Math.round(k / km / 2);          // a radius for a width in km
+  const sm = smooth(grow(data, grid, cells(sh.grow)), grid, Math.max(1, cells(sh.blur)));
   const v = new Float64Array(data.length);
-  const sm = smooth(data, grid);
   for (let i = 0; i < v.length; i++) v[i] = (mask && !mask[i]) || !(sm[i] === sm[i]) ? 0 : sm[i];
   const gen = contours().size([grid.nx, grid.ny]).smooth(true);
   const out = [];
@@ -153,8 +184,8 @@ export function contourLevels(data, grid, levels, mask = null) {
     const rings = [];
     for (const poly of mp.coordinates) {
       const outer = poly[0];
-      if (!outer || outer.length < 4 || ringArea(outer) < 30) continue;   // under ~120 km²: speckle, not an outlook area
-      rings.push(simplify(outer, 0.55).map(([x, y]) => fromBNG(grid.x0 + x * grid.dx_m, grid.y0 + y * grid.dx_m)));
+      if (!outer || outer.length < 4 || ringArea(outer) * km * km < sh.minKm2) continue;   // speckle, not an outlook area
+      rings.push(simplify(outer, sh.tolKm / km).map(([x, y]) => fromBNG(grid.x0 + x * grid.dx_m, grid.y0 + y * grid.dx_m)));
     }
     if (rings.length) out.push({ id: lv.id, rings });
   }
@@ -178,10 +209,16 @@ export function framesIn(m, from, to) {
   return near && Math.abs(near.t - mid) <= 3 * 3600e3 ? [near] : [];
 }
 
-/** The peak of a field over several frames, cell by cell. */
-export async function framesPeak(m, frames, name) {
+/** A field over several frames, cell by cell: the peak ('peak') or the average ('mean'). */
+export async function framesStat(m, frames, name, how = 'peak') {
   const all = await Promise.all(frames.map((f) => novaField(m, { lead: f.lead }, name)));
-  const out = new Float32Array(all[0].length).fill(NaN);
-  for (const a of all) for (let i = 0; i < a.length; i++) { const x = a[i]; if (x === x && !(x <= out[i])) out[i] = x; }
+  const n = all[0].length, out = new Float32Array(n).fill(NaN);
+  if (how === 'mean') {
+    const cnt = new Uint16Array(n);
+    for (const a of all) for (let i = 0; i < n; i++) { const x = a[i]; if (x === x) { out[i] = cnt[i] ? out[i] + x : x; cnt[i]++; } }
+    for (let i = 0; i < n; i++) if (cnt[i]) out[i] /= cnt[i];
+    return out;
+  }
+  for (const a of all) for (let i = 0; i < n; i++) { const x = a[i]; if (x === x && !(x <= out[i])) out[i] = x; }
   return out;
 }

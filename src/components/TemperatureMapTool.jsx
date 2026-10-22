@@ -16,6 +16,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Loader2, Thermometer, RefreshCw, Download } from 'lucide-react';
 import { CITY_DB } from '@/components/tcm/cityDB';
+import { StudioStyles, Btn } from '@/components/studio/StudioUI';
 
 // UK & Ireland cities only, ranked by rough prominence (earlier = more major).
 // The list order in CITY_DB roughly follows population for the UK section.
@@ -474,56 +475,17 @@ export default function TemperatureMapTool() {
   const dateLabel = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, color: '#f1f5f9' }}>
+    <div className="sg" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <StudioStyles />
       {/* Toolbar */}
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        background: '#0c1422', border: '1px solid rgba(148,163,184,0.10)',
-        borderRadius: 14, padding: '12px 16px',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 10,
-            background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.28)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Thermometer style={{ width: 18, height: 18, color: '#fbbf24' }} />
-          </div>
-          <div>
-            <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>Live Temperature Map</p>
-            <p style={{ margin: '1px 0 0', fontSize: 11, color: '#64748b' }}>
-              Pan & zoom · {dateLabel}
-              {updatedAt ? ` · ${updatedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : ''}
-            </p>
-          </div>
-          {fetchingTemps && (
-            <Loader2 style={{ width: 14, height: 14, color: '#fbbf24', animation: 'spin 0.8s linear infinite' }} />
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={refresh} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10,
-            fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
-            background: 'rgba(56,189,248,0.10)', border: '1px solid rgba(56,189,248,0.25)', color: '#38bdf8',
-          }}>
-            {fetchingTemps
-              ? <Loader2 style={{ width: 13, height: 13, animation: 'spin 0.8s linear infinite' }} />
-              : <RefreshCw style={{ width: 13, height: 13 }} />}
-            Refresh
-          </button>
-          <button type="button" onClick={downloadPNG} disabled={exporting || loading} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10,
-            fontSize: 12, fontWeight: 700, cursor: exporting ? 'default' : 'pointer', fontFamily: 'inherit',
-            background: 'linear-gradient(135deg, #0284c7, #0369a1)', border: 'none', color: '#fff',
-            boxShadow: '0 4px 14px rgba(2,132,199,0.25)',
-            opacity: exporting || loading ? 0.6 : 1,
-          }}>
-            {exporting
-              ? <Loader2 style={{ width: 13, height: 13, animation: 'spin 0.8s linear infinite' }} />
-              : <Download style={{ width: 13, height: 13 }} />}
-            {exporting ? 'Generating…' : 'Download PNG'}
-          </button>
-        </div>
+      <div className="sg-toolbar" style={{ padding: '10px 12px' }}>
+        <span className="sg-sec-icon" style={{ '--c': '#f59e0b' }}><Thermometer /></span>
+        <span className="sg-sec-title" style={{ flex: 1 }}>
+          <b>Live Temperature Map</b>
+          <small>Pan & zoom · {dateLabel}{updatedAt ? ` · ${updatedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : ''}</small>
+        </span>
+        <Btn sm icon={fetchingTemps ? Loader2 : RefreshCw} onClick={refresh}>Refresh</Btn>
+        <Btn sm primary color="#0284c7" icon={exporting ? Loader2 : Download} disabled={exporting || loading} onClick={downloadPNG}>{exporting ? 'Generating…' : 'Download PNG'}</Btn>
       </div>
 
       {/* Map — styled like the other graphics with a branded title header */}
@@ -610,11 +572,10 @@ export default function TemperatureMapTool() {
         </div>
       </div>
 
-      <p style={{ margin: 0, fontSize: 11.5, color: '#64748b', lineHeight: 1.6, textAlign: 'center' }}>
+      <p className="sg-note" style={{ textAlign: 'center' }}>
         Pan and zoom freely — city temperatures scale with view. More detail as you zoom in. Live data from Open-Meteo.
       </p>
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

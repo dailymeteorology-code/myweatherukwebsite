@@ -5,7 +5,7 @@ import {
   Download, Eraser, Eye, EyeOff, Clock, Pen, MousePointer, Undo2, X, Zap,
   CloudLightning, Tornado, AlertTriangle, ShieldAlert, MapPin,
   CloudRain, CloudDrizzle, CloudRainWind, Radar, Save, FolderOpen, Check, Loader2, Circle, RefreshCw,
-  Type, MoveUpRight, DownloadCloud, FileText, Map as MapIcon, Trash2, Wind,
+  Type, MoveUpRight, MousePointer2, Redo2, DownloadCloud, FileText, Map as MapIcon, Trash2, Wind,
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { toast } from 'sonner';
@@ -23,6 +23,7 @@ import { GRANS, defaultTimeline, buildCells, cellLevels, markCells, shiftTimelin
 import { StudioLayout, Section, Btn, Seg, Field, Swatches } from '@/components/studio/StudioUI';
 import MapViewPicker from '@/components/studio/MapViewPicker';
 import ModelOverlay from '@/components/studio/ModelOverlay';
+import useHistory from '@/components/studio/useHistory';
 import NovaImportPanel from '@/components/studio/NovaImportPanel';
 
 // --- Conditional Severe -----------------------------------------------------
@@ -523,6 +524,19 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   // --- TCM NOVA import panel (studio/NovaImportPanel) ---
   const [showNovaPanel, setShowNovaPanel] = useState(false);
 
+  // --- Undo / redo (studio/useHistory): what the graphic is made of, a step per settled change ---
+  const docSnap = useMemo(() => ({ shapes, annotations, arrows, timeline, hazards, hazardPct, validDate, outlookRegion, mapAreas, mapContext, confidence }),
+    [shapes, annotations, arrows, timeline, hazards, hazardPct, validDate, outlookRegion, mapAreas, mapContext, confidence]);
+  const history = useHistory(docSnap, (d) => {
+    setShapes(d.shapes); setAnnotations(d.annotations); setArrows(d.arrows); setTimeline(d.timeline);
+    setHazards(d.hazards); setHazardPct(d.hazardPct); setValidDate(d.validDate); setOutlookRegion(d.outlookRegion);
+    setMapAreas(d.mapAreas); setMapContext(d.mapContext); setConfidence(d.confidence);
+  });
+  /* the area picked with the Select tool (an index into shapes), the one under a chip, and a drag */
+  const [selectedShape, setSelectedShape] = useState(null);
+  const [hoverShape, setHoverShape] = useState(null);
+  const dragRef = useRef(null);
+
   // Capture current state as a serialisable object
   const captureState = () => ({
     tool: 'outlook', validDate, validDate2, activeRisk, hazards, hazardPct, timeline, footerText, handle, version,
@@ -794,7 +808,17 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
 
   // Whether the map surface should currently capture pointer drawing. Text-drop
   // is a click (handled separately); arrow is a drag; draw is a freehand drag.
-  const surfaceActive = mapTool === 'draw' || mapTool === 'arrow';
+  const surfaceActive = mapTool === 'draw' || mapTool === 'arrow' || mapTool === 'select';
+
+  /* the topmost drawn area under a point (tested against the smoothed outline that is drawn) */
+  const hitShape = (pt, plainOnly = false) => {
+    for (let i = shapes.length - 1; i >= 0; i--) {
+      const sh = shapes[i];
+      if (plainOnly && (isSevereId(sh.riskLevel) || isCondSevereId(sh.riskLevel))) continue;
+      if (pointInPolygon(pt, smoothPoints(sh.points))) return i;
+    }
+    return -1;
+  };
 
   const handleDown = (e) => {
     // Region zoom is inverted in eventToNormPoint, so drawing/placement works at
@@ -803,17 +827,21 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     // flag on THAT area (click again to remove). Tests against the smoothed
     // outline so the hit region matches what's rendered. Picks the topmost
     // (last-drawn) matching area. Special tiers can't take a per-area flag.
+    // SELECT tool: click an area to pick it (the panel and toolbar then edit it); drag to move it.
+    if (mapTool === 'select') {
+      const pt = eventToNormPoint(e);
+      if (!pt) return;
+      e.preventDefault();
+      const hit = hitShape(pt);
+      setSelectedShape(hit >= 0 ? hit : null);
+      if (hit >= 0) { dragRef.current = { idx: hit, last: pt }; isPointerDown.current = true; }
+      return;
+    }
     if (mapTool === 'cond') {
       const pt = eventToNormPoint(e);
       if (!pt) return;
       e.preventDefault();
-      let hitIdx = -1;
-      for (let i = shapes.length - 1; i >= 0; i--) {
-        const s = shapes[i];
-        if (isSevereId(s.riskLevel) || isCondSevereId(s.riskLevel)) continue;
-        const poly = smoothPoints(s.points);
-        if (pointInPolygon(pt, poly)) { hitIdx = i; break; }
-      }
+      const hitIdx = hitShape(pt, true);
       if (hitIdx >= 0) {
         setShapes(prev => prev.map((s, j) => (j === hitIdx ? { ...s, cond: !s.cond } : s)));
       }
@@ -852,6 +880,16 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
 
   const handleMove = (e) => {
     if (!isPointerDown.current) return;
+    if (mapTool === 'select' && dragRef.current) {
+      e.preventDefault();
+      const pt = eventToNormPoint(e);
+      if (!pt) return;
+      const { idx, last } = dragRef.current;
+      const dx = pt[0] - last[0], dy = pt[1] - last[1];
+      dragRef.current.last = pt;
+      setShapes((prev) => prev.map((sh, j) => (j === idx ? { ...sh, points: sh.points.map(([x, y]) => [x + dx, y + dy]) } : sh)));
+      return;
+    }
     if (mapTool === 'arrow') {
       e.preventDefault();
       const pt = eventToNormPoint(e);
@@ -867,6 +905,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   const handleUp = () => {
     if (!isPointerDown.current) return;
     isPointerDown.current = false;
+    if (mapTool === 'select') { dragRef.current = null; return; }
     if (mapTool === 'arrow') {
       setArrowDraft(d => {
         if (d && Math.hypot(d.x2 - d.x1, d.y2 - d.y1) > 0.03) {
@@ -883,7 +922,6 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     setCurrentPath([]);
   };
 
-  const undoLast = () => setShapes(prev => prev.slice(0, -1));
   const clearShapes = () => {
     if (!shapes.length) return;
     if (window.confirm('Clear all drawn risk areas?')) setShapes([]);
@@ -897,19 +935,36 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     if (editingAnnId === id) setEditingAnnId(null);
   };
   const clearArrows = () => setArrows([]);
-  const undoArrow = () => setArrows(prev => prev.slice(0, -1));
 
-  // Cycle a finished shape's risk level up the ladder (so you can promote a
-  // drawn area without redrawing). Wraps round at the top.
-  const cycleShapeRisk = (idx) => {
-    setShapes(prev => prev.map((s, j) => {
-      if (j !== idx) return s;
-      const order = GRAPHIC_LEVELS.map(l => l.id);
-      const cur = order.indexOf(s.riskLevel);
-      const next = order[(cur + 1) % order.length];
-      return { ...s, riskLevel: next };
-    }));
+  // --- The selected area -----------------------------------------------------------
+  const sel = selectedShape != null && selectedShape < shapes.length ? selectedShape : null;
+  const patchSelected = (patch) => setShapes((prev) => prev.map((sh, j) => (j === sel ? { ...sh, ...patch } : sh)));
+  const deleteSelected = () => { if (sel == null) return; setShapes((prev) => prev.filter((_, j) => j !== sel)); setSelectedShape(null); };
+  const orderSelected = (front) => {
+    if (sel == null) return;
+    setShapes((prev) => { const sh = prev[sel], rest = prev.filter((_, j) => j !== sel); return front ? [...rest, sh] : [sh, ...rest]; });
+    setSelectedShape(front ? shapes.length - 1 : 0);
   };
+  const duplicateSelected = () => {
+    if (sel == null) return;
+    setShapes((prev) => [...prev, { ...prev[sel], points: prev[sel].points.map(([x, y]) => [x + 0.02, y + 0.02]) }]);
+    setSelectedShape(shapes.length);
+  };
+  /* Delete removes the selected area, Esc lets it go (not while typing in a box) */
+  useEffect(() => {
+    const onKey = (e) => {
+      const el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+      if (e.key === 'Escape') setSelectedShape(null);
+      else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedShape != null) {
+        e.preventDefault();
+        setShapes((prev) => prev.filter((_, j) => j !== selectedShape));
+        setSelectedShape(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedShape]);
 
   // --- TCM NOVA -----------------------------------------------------------------
   // The newest Main Run, imported by studio/NovaImportPanel: risk areas (lat/lon rings into the
@@ -1341,9 +1396,31 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
           <div>
             <span className="sg-label">On the map</span>
             <Seg value={mapTool} color="#a78bfa" onChange={(t) => { setMapTool(t); if (t === 'draw') setDrawMode(true); }}
-              options={[['draw', 'Draw', Pen], ['text', 'Label', Type], ['arrow', 'Arrow', MoveUpRight], ['cond', 'Conditional', ShieldAlert]]} />
+              options={[['draw', 'Draw', Pen], ['select', 'Select', MousePointer2], ['text', 'Label', Type], ['arrow', 'Arrow', MoveUpRight], ['cond', 'Conditional', ShieldAlert]]} />
           </div>
           {mapTool === 'draw' && <p className="sg-note">Drag anywhere on the graphic to draw an area in the selected level. Areas can run off the map, under the cards or into the corners.</p>}
+          {mapTool === 'select' && <p className="sg-note">Click an area on the graphic to select it, then change it below or drag it to move it. <b>Delete</b> removes it, <b>Esc</b> lets it go.</p>}
+          {sel != null && (
+            <div className="sg-panel" style={{ borderColor: 'color-mix(in srgb, #a78bfa 50%, transparent)' }}>
+              <div className="sg-row" style={{ justifyContent: 'space-between' }}>
+                <span className="sg-note"><b>Selected area</b> · {LEVEL_LOOKUP[shapes[sel].riskLevel]?.short || shapes[sel].riskLevel}{shapes[sel].cond ? ' · conditional' : ''}</span>
+                <Btn sm icon={X} onClick={() => setSelectedShape(null)} aria-label="Let go of the area" />
+              </div>
+              <div className="sg-row">
+                {pickLevels.map((r) => (
+                  <button key={r.id} type="button" className="sg-level" aria-pressed={shapes[sel].riskLevel === r.id} style={{ '--c': r.id === COND_SEVERE_ID ? '#94a3b8' : r.color, minHeight: 28, padding: '0 9px' }}
+                    onClick={() => patchSelected({ riskLevel: r.id, ...(layerOf(r.id) === 'over' ? { cond: false } : {}) })}><i />{r.short}</button>
+                ))}
+              </div>
+              <div className="sg-row">
+                {!isSevereId(shapes[sel].riskLevel) && !isCondSevereId(shapes[sel].riskLevel) && <Btn sm on={!!shapes[sel].cond} color="#a78bfa" onClick={() => patchSelected({ cond: !shapes[sel].cond })}>Conditional</Btn>}
+                <Btn sm onClick={() => orderSelected(true)}>To front</Btn>
+                <Btn sm onClick={() => orderSelected(false)}>To back</Btn>
+                <Btn sm onClick={duplicateSelected}>Duplicate</Btn>
+                <Btn sm danger icon={Trash2} onClick={deleteSelected}>Delete</Btn>
+              </div>
+            </div>
+          )}
           {mapTool === 'cond' && (
             <p className="sg-note">Click inside a drawn area to mark it <b>conditional</b> (a dashed, darker outline); click again to clear.
               {shapes.some((s) => s.cond) ? ` ${shapes.filter((s) => s.cond).length} conditional now.` : ''}</p>
@@ -1367,7 +1444,6 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 <Swatches colors={ANNOTATION_COLORS} value={arrowColor} onChange={setArrowColor} />
               </div>
               <div className="sg-row">
-                <Btn sm icon={Undo2} disabled={!arrows.length} onClick={undoArrow}>Undo arrow</Btn>
                 <Btn sm danger icon={Eraser} disabled={!arrows.length} onClick={clearArrows}>Clear arrows</Btn>
               </div>
             </div>
@@ -1389,7 +1465,8 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
             </div>
           )}
           <div className="sg-row">
-            <Btn sm icon={Undo2} disabled={!shapes.length} onClick={undoLast}>Undo</Btn>
+            <Btn sm icon={Undo2} disabled={!history.canUndo} onClick={history.undo} title="Undo (Ctrl+Z)">Undo</Btn>
+            <Btn sm icon={Redo2} disabled={!history.canRedo} onClick={history.redo} title="Redo (Ctrl+Y)">Redo</Btn>
             <Btn sm danger icon={Eraser} disabled={!shapes.length} onClick={clearShapes}>Clear areas</Btn>
             <Btn sm on={!showShapes} icon={showShapes ? Eye : EyeOff} onClick={() => setShowShapes((v) => !v)}>{showShapes ? 'Hide areas' : 'Areas hidden'}</Btn>
             <label className="sg-row" style={{ gap: 6 }}>
@@ -1404,8 +1481,9 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 const m = LEVEL_LOOKUP[s.riskLevel] || GRAPHIC_LEVELS[0];
                 const canCond = !isSevereId(s.riskLevel) && !isCondSevereId(s.riskLevel);
                 return (
-                  <span key={i} className="sg-chipx" style={{ '--c': s.riskLevel === COND_SEVERE_ID ? '#94a3b8' : m.color, borderStyle: s.cond ? 'dashed' : 'solid' }}>
-                    <button type="button" onClick={() => cycleShapeRisk(i)} title="Change the level">{m.short}</button>
+                  <span key={i} className="sg-chipx" onMouseEnter={() => setHoverShape(i)} onMouseLeave={() => setHoverShape(null)}
+                    style={{ '--c': s.riskLevel === COND_SEVERE_ID ? '#94a3b8' : m.color, borderStyle: s.cond ? 'dashed' : 'solid', ...(sel === i ? { boxShadow: '0 0 0 2px var(--sg-text)' } : {}) }}>
+                    <button type="button" onClick={() => { setSelectedShape(i); setMapTool('select'); }} title="Select this area (it is outlined on the graphic)">{m.short}</button>
                     {canCond && <button type="button" onClick={() => setShapes((prev) => prev.map((sh, j) => (j === i ? { ...sh, cond: !sh.cond } : sh)))} title="Conditional" style={s.cond ? { background: 'rgba(0,0,0,0.3)', color: '#fff' } : undefined}>C</button>}
                     <button type="button" onClick={() => setShapes((prev) => prev.filter((_, j) => j !== i))} aria-label="Delete area"><X /></button>
                   </span>
@@ -1528,16 +1606,20 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
           <Btn sm on={penOn} color="#a78bfa" icon={penOn ? Pen : MousePointer} onClick={() => { if (mapTool !== 'draw') { setMapTool('draw'); setDrawMode(true); } else setDrawMode((d) => !d); }}>{penOn ? 'Drawing' : 'Draw'}</Btn>
           <span className="sg-row" style={{ gap: 3 }}>
             {pickLevels.filter((l) => !isCondSevereId(l.id)).map((r) => (
-              <button key={r.id} type="button" title={`${r.short} · ${r.range}`} aria-pressed={activeRisk === r.id} onClick={() => setActiveRisk(r.id)}
+              <button key={r.id} type="button" title={sel != null ? `Make the selected area ${r.short}` : `${r.short} · ${r.range}`} aria-pressed={activeRisk === r.id}
+                onClick={() => { setActiveRisk(r.id); if (sel != null) patchSelected({ riskLevel: r.id, ...(layerOf(r.id) === 'over' ? { cond: false } : {}) }); }}
                 style={{ width: 22, height: 22, borderRadius: 7, cursor: 'pointer', padding: 0, background: isSevereId(r.id) ? 'repeating-linear-gradient(45deg, #312e81 0 3px, transparent 3px 6px)' : r.color,
                   border: activeRisk === r.id ? '2px solid var(--sg-text)' : '2px solid transparent', boxShadow: '0 0 0 1px rgba(0,0,0,0.25)' }} />
             ))}
           </span>
-          <Btn sm icon={Undo2} disabled={!shapes.length} onClick={undoLast} title="Undo the last area" />
+          <Btn sm on={mapTool === 'select'} color="#a78bfa" icon={MousePointer2} onClick={() => setMapTool('select')} title="Select an area on the graphic">Select</Btn>
+          {sel != null && <Btn sm danger icon={Trash2} onClick={deleteSelected} title="Delete the selected area" />}
           <span className="sg-sep" />
           <Btn sm on={isAnimating} color="#22c55e" disabled={isExporting} onClick={() => setIsAnimating((v) => !v)} title="Play the timeline hour by hour">{isAnimating ? '❚❚ Pause' : '▶ Play'}</Btn>
         </>
       )}
+      <Btn sm icon={Undo2} disabled={!history.canUndo} onClick={history.undo} title="Undo (Ctrl+Z)" />
+      <Btn sm icon={Redo2} disabled={!history.canRedo} onClick={history.redo} title="Redo (Ctrl+Y)" />
       <span className="sg-grow" />
       <Btn sm primary color="#0ea5e9" icon={isExporting ? Loader2 : Download} disabled={isExporting} onClick={handleDownload}>JPG</Btn>
     </div>
@@ -1554,7 +1636,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
           onMouseDown={handleDown} onMouseMove={handleMove} onMouseUp={handleUp} onMouseLeave={handleUp}
           onTouchStart={handleDown} onTouchMove={handleMove} onTouchEnd={handleUp}
           style={{
-          cursor: mapTool === 'text' ? 'text' : mapTool === 'arrow' ? 'crosshair' : mapTool === 'cond' ? 'pointer' : (drawMode ? 'crosshair' : 'default'),
+          cursor: mapTool === 'text' ? 'text' : mapTool === 'arrow' ? 'crosshair' : mapTool === 'cond' || mapTool === 'select' ? 'pointer' : (drawMode ? 'crosshair' : 'default'),
           userSelect: 'none',
           touchAction: (surfaceActive && (drawMode || mapTool === 'arrow')) ? 'none' : 'auto',
           width: GRAPHIC_W, height: GRAPHIC_H, position: 'relative', overflow: 'hidden',
@@ -2002,6 +2084,11 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                     </g>
                   );
                 })}
+                {/* the selected area (dashed white) and the one under a chip (dotted), never exported */}
+                {!exportMode && [[hoverShape, false], [sel, true]].map(([idx, main]) => (idx != null && shapes[idx] && (main || idx !== sel) ? (
+                  <path key={main ? 'sel' : 'hov'} d={shapePaths[idx]} fill="none" stroke={main ? '#ffffff' : 'rgba(255,255,255,0.75)'} strokeWidth={main ? 4.5 : 3}
+                    strokeDasharray={main ? '11 7' : '3 6'} strokeLinejoin="round" strokeLinecap="round" style={{ filter: 'drop-shadow(0 0 3px rgba(0,0,0,0.9))' }} />
+                ) : null))}
                 {currentPath.length > 1 && (
                   <path d={pointsToPath(currentPath)}
                     fill={activeMeta.fill} stroke={activeMeta.border}

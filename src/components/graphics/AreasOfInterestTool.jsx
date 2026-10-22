@@ -18,10 +18,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import html2canvas from 'html2canvas';
-import { Check, Download, Loader2, MousePointer2, PenLine, Trash2, Undo2, X } from 'lucide-react';
+import { Check, Download, Loader2, MousePointer2, PenLine, Target, Trash2, Undo2, X } from 'lucide-react';
 import { loadSynopticGeo, MAP_EXTENTS } from '@/lib/synopticGeo';
 import { smoothPath } from '@/components/synoptic/synopticDraw';
 import { inkOn } from '@/components/graphics/GraphicMeta';
+import { StudioStyles, Section, Btn, Seg, Field, Swatches } from '@/components/studio/StudioUI';
 
 const GW = 1080, GH = 1920;                // the graphic
 const VW = 1080, VH = 1300;                // the map's drawing space
@@ -114,7 +115,6 @@ function anchorOf(pts) {
 const lbl = { display: 'block', fontSize: 10, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#64748b', marginBottom: 7 };
 const btn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', background: 'rgba(148,163,184,0.06)', border: '1.5px solid rgba(148,163,184,0.18)', color: '#a8b5c7' };
 const field = { padding: '8px 10px', borderRadius: 10, background: '#101c2e', border: '1px solid rgba(148,163,184,0.2)', color: '#f1f5f9', fontSize: 13, fontWeight: 600, fontFamily: 'inherit', outline: 'none' };
-const seg = (on) => ({ ...btn, padding: '7px 11px', background: on ? 'rgba(56,189,248,0.16)' : btn.background, borderColor: on ? '#38bdf8' : btn.border, color: on ? '#7dd3fc' : btn.color });
 
 /* the first palette colour not already on the map, so each new area stands apart */
 const nextColour = (list) => PALETTE.find((c) => !list.some((a) => a.colour === c)) || PALETTE[list.length % PALETTE.length];
@@ -274,95 +274,77 @@ export default function AreasOfInterestTool({ siteLogoUrl = '' }) {
   const open = areas.find((a) => a.id === editing) || null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, color: '#f1f5f9' }}>
+    <div className="sg" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <StudioStyles />
       {/* ══ controls ══ */}
-      <div style={{ background: '#0c1422', border: '1px solid rgba(148,163,184,0.1)', borderRadius: 16, padding: 18, display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div style={{ flex: '1 1 220px' }}>
-            <span style={lbl}>Title</span>
-            <input value={title} onChange={(e) => setTitle(e.target.value)} style={{ ...field, width: '100%' }} />
+      <div className="sg-controls">
+        <Section id="aoi-graphic" icon={Target} color="#22c55e" title="Graphic" sub={title || 'Areas of interest'}>
+          <div className="sg-grid2">
+            <Field label="Title"><input className="sg-input" value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
+            <Field label="Subtitle"><input className="sg-input" value={subtitle} onChange={(e) => setSubtitle(e.target.value)} placeholder={span || 'The days covered, filled in from the areas'} /></Field>
           </div>
-          <div style={{ flex: '1 1 220px' }}>
-            <span style={lbl}>Subtitle</span>
-            <input value={subtitle} onChange={(e) => setSubtitle(e.target.value)} placeholder={span || 'The days covered, filled in from the areas'} style={{ ...field, width: '100%' }} />
-          </div>
-          <div>
-            <span style={lbl}>Look</span>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button type="button" style={seg(themeId === 'dark')} onClick={() => setThemeId('dark')}>Dark</button>
-              <button type="button" style={seg(themeId === 'light')} onClick={() => setThemeId('light')}>Light</button>
+          <div className="sg-row">
+            <div>
+              <span className="sg-label">Look</span>
+              <Seg value={themeId} onChange={setThemeId} options={[['dark', 'Dark'], ['light', 'Light']]} />
             </div>
+            <Field label="Map" style={{ flex: 1, minWidth: 160 }}>
+              <select className="sg-input" value={extent} onChange={(e) => setExtent(e.target.value)}>
+                <option value="uk">{MAP_EXTENTS.uk.label}</option>
+                <option value="uk-france">{MAP_EXTENTS['uk-france'].label}</option>
+              </select>
+            </Field>
           </div>
-          <div>
-            <span style={lbl}>Map</span>
-            <select value={extent} onChange={(e) => setExtent(e.target.value)} style={field}>
-              <option value="uk">{MAP_EXTENTS.uk.label}</option>
-              <option value="uk-france">{MAP_EXTENTS['uk-france'].label}</option>
-            </select>
-          </div>
-        </div>
+          <Field label="Handle"><input className="sg-input" value={handle} onChange={(e) => setHandle(e.target.value)} aria-label="Handle on the graphic" /></Field>
+        </Section>
 
-        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button type="button" style={seg(mode === 'free')} onClick={() => { setMode('free'); setDraft([]); }}><PenLine size={13} />Freehand</button>
-            <button type="button" style={seg(mode === 'points')} onClick={() => { setMode('points'); setDraft([]); }}><MousePointer2 size={13} />Click points</button>
+        <Section id="aoi-areas" icon={PenLine} color="#a78bfa" title="Areas" sub={`${areas.length} on the map`}>
+          <div className="sg-row">
+            <Seg value={mode} onChange={(m) => { setMode(m); setDraft([]); }} color="#a78bfa" options={[['free', 'Freehand', PenLine], ['points', 'Click points', MousePointer2]]} />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>Next area</span>
-            {PALETTE.map((c) => (
-              <button key={c} type="button" onClick={() => setColour(c)} aria-label={`Draw in ${c}`}
-                style={{ width: 24, height: 24, borderRadius: 8, background: c, cursor: 'pointer', border: colour === c ? '2.5px solid #fff' : '1.5px solid rgba(255,255,255,0.25)', boxShadow: colour === c ? `0 0 0 2px ${c}66` : 'none' }} />
-            ))}
-            <input type="color" value={colour} onChange={(e) => setColour(e.target.value)} title="Any colour"
-              style={{ width: 30, height: 26, borderRadius: 8, background: 'transparent', border: '1px solid rgba(148,163,184,0.3)', cursor: 'pointer' }} />
+          <div className="sg-row">
+            <span className="sg-label" style={{ margin: 0 }}>Next area</span>
+            <Swatches colors={PALETTE} value={colour} onChange={setColour} custom />
           </div>
           {mode === 'points' && draft.length > 0 && (
-            <>
-              <button type="button" onClick={finishPoints} disabled={draft.length < 3} style={{ ...btn, color: '#86efac', borderColor: 'rgba(74,222,128,0.4)', opacity: draft.length < 3 ? 0.5 : 1 }}>
-                <Check size={13} />Finish area ({draft.length})
-              </button>
-              <button type="button" onClick={() => setDraft((d) => d.slice(0, -1))} style={btn}><Undo2 size={13} />Undo point</button>
-            </>
+            <div className="sg-row">
+              <Btn sm color="#22c55e" on icon={Check} disabled={draft.length < 3} onClick={finishPoints}>Finish area ({draft.length})</Btn>
+              <Btn sm icon={Undo2} onClick={() => setDraft((d) => d.slice(0, -1))}>Undo point</Btn>
+            </div>
           )}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#a8b5c7' }}>
-            <input type="checkbox" checked={clip} onChange={(e) => setClip(e.target.checked)} /> Keep areas on land
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#a8b5c7' }}>
-            <input type="checkbox" checked={mapLabels} onChange={(e) => setMapLabels(e.target.checked)} /> Name areas on the map
-          </label>
-        </div>
-
-        {areas.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {areas.map((a, i) => (
-              <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 11, background: editing === a.id ? `${a.colour}1f` : 'rgba(148,163,184,0.05)', border: `1.5px solid ${editing === a.id ? a.colour : 'rgba(148,163,184,0.12)'}` }}>
-                <span style={{ width: 24, height: 24, borderRadius: 99, background: a.colour, color: inkOn(a.colour), display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 800, flex: 'none' }}>{i + 1}</span>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {a.what || <span style={{ color: '#64748b', fontWeight: 600 }}>Not described yet</span>}
-                  <span style={{ marginLeft: 8, fontWeight: 600, color: '#94a3b8' }}>{whenText(a.from, a.to)}</span>
-                </span>
-                <button type="button" onClick={() => setEditing(a.id)} style={{ ...btn, padding: '5px 10px' }}>Edit</button>
-                <button type="button" onClick={() => delArea(a.id)} aria-label={`Delete area ${i + 1}`} style={{ ...btn, padding: '5px 8px', color: '#f87171', borderColor: 'rgba(248,113,113,0.3)' }}><Trash2 size={12} /></button>
-              </div>
-            ))}
+          <div className="sg-row">
+            <Btn sm on={clip} onClick={() => setClip((v) => !v)}>Keep areas on land</Btn>
+            <Btn sm on={mapLabels} onClick={() => setMapLabels((v) => !v)}>Name areas on the map</Btn>
           </div>
-        )}
+          {areas.length > 0 && (
+            <div className="sg-list">
+              {areas.map((a, i) => (
+                <div key={a.id} className="sg-item" style={editing === a.id ? { borderColor: a.colour, background: `${a.colour}1f` } : undefined}>
+                  <b style={{ width: 24, height: 24, borderRadius: 99, background: a.colour, color: inkOn(a.colour), display: 'grid', placeItems: 'center', fontSize: 12, flex: 'none' }}>{i + 1}</b>
+                  <span style={{ fontWeight: 700 }}>
+                    {a.what || <span style={{ color: 'var(--sg-faint)', fontWeight: 600 }}>Not described yet</span>}
+                    <span style={{ marginLeft: 8, fontWeight: 600, color: 'var(--sg-dim)' }}>{whenText(a.from, a.to)}</span>
+                  </span>
+                  <Btn sm onClick={() => setEditing(a.id)}>Edit</Btn>
+                  <Btn sm danger icon={Trash2} onClick={() => delArea(a.id)} aria-label={`Delete area ${i + 1}`} />
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="sg-row">
+            <Btn sm icon={Undo2} disabled={!areas.length} onClick={() => setAreas((l) => l.slice(0, -1))}>Undo last area</Btn>
+            <Btn sm danger icon={Trash2} disabled={!areas.length} onClick={() => { if (window.confirm('Remove every area?')) { setAreas([]); setEditing(null); } }}>Clear all</Btn>
+          </div>
+          <p className="sg-note">
+            <b>Freehand:</b> press on the map and drag round the area, then let go. <b>Click points:</b> click its corners, then Finish (or press Enter).
+            When an area closes, a box in its colour opens beside it: say what it is for and pick one day, or a first and last day. Click an area (or Edit) to change it, drag its number to move it, Escape to close the box.
+            {!geo && <b style={{ color: 'var(--sg-amber)' }}> Loading the coastline…</b>}
+          </p>
+        </Section>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button type="button" onClick={() => setAreas((l) => l.slice(0, -1))} disabled={!areas.length} style={{ ...btn, opacity: areas.length ? 1 : 0.5 }}><Undo2 size={13} />Undo last area</button>
-          <button type="button" onClick={() => { if (window.confirm('Remove every area?')) { setAreas([]); setEditing(null); } }} disabled={!areas.length}
-            style={{ ...btn, color: '#f87171', borderColor: 'rgba(248,113,113,0.35)', opacity: areas.length ? 1 : 0.5 }}><Trash2 size={13} />Clear all</button>
-          <input value={handle} onChange={(e) => setHandle(e.target.value)} style={{ ...field, width: 160, marginLeft: 'auto' }} aria-label="Handle on the graphic" />
-          <button type="button" onClick={download} disabled={exporting} style={{ ...btn, fontWeight: 800, background: 'linear-gradient(135deg,#0ea5e9,#0284c7)', borderColor: 'transparent', color: '#fff' }}>
-            {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{exporting ? 'Exporting…' : 'Download PNG (1080 × 1920)'}
-          </button>
-        </div>
-
-        <p style={{ margin: 0, fontSize: 11.5, color: '#64748b', lineHeight: 1.55 }}>
-          <b style={{ color: '#94a3b8' }}>Freehand:</b> press on the map and drag round the area, then let go. <b style={{ color: '#94a3b8' }}>Click points:</b> click its corners, then Finish (or press Enter).
-          When an area closes, a box in its colour opens beside it: say what it is for and pick one day, or a first and last day. Click an area (or Edit) to change it, drag its number to move it, Escape to close the box.
-          {!geo && <b style={{ color: '#fbbf24' }}> Loading the coastline…</b>}
-        </p>
+        <Section id="aoi-export" icon={Download} color="#0ea5e9" title="Export">
+          <Btn primary color="#0ea5e9" icon={exporting ? Loader2 : Download} disabled={exporting} onClick={download}>{exporting ? 'Exporting…' : 'Download PNG (1080 × 1920)'}</Btn>
+        </Section>
       </div>
 
       {/* ══ the graphic ══ */}
