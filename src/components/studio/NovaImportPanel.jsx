@@ -4,12 +4,16 @@
 
    Each is the peak or the average over a London day, the timeline's window or any dates and times,
    inside the map view, and the areas come Detailed (NOVA's own look), Smooth or Broad (fewer,
-   rounder areas, the way an outlook is drawn by hand). */
+   rounder areas, the way an outlook is drawn by hand).
+
+   "Split by time" matches the areas with the run's 3-hourly frames (lib/areaEvents): each gets
+   its first and last hours, an area two separate spells share is cut in two, and the graphic
+   orders them first, second… with outlines from white to grey. */
 import React, { useEffect, useState } from 'react';
 import { DownloadCloud, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { novaLatest, novaField, boxMask, contourLevels, peak, framesIn, framesStat, SHAPES } from '@/lib/novaOutlook';
-import { buildCells, shiftTimeline, parseLocal, toLocalInput } from '@/components/studio/studioTimeline';
+import { novaLatest, novaField, boxMask, contourLevels, peak, framesIn, framesStat, timingFrames, SHAPES } from '@/lib/novaOutlook';
+import { buildCells, shiftTimeline, parseLocal, toLocalInput, hourKey, marksFromStamps } from '@/components/studio/studioTimeline';
 import { Btn, Seg, Field } from '@/components/studio/StudioUI';
 import { MAP_BBOX } from '@/components/studio/studioGeo';
 
@@ -29,7 +33,7 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
   const [err, setErr] = useState(null);
   const [span, setSpan] = useState('day0');
   const [custom, setCustom] = useState(() => ({ from: timeline.from, to: timeline.to }));
-  const [prefs, setPrefs] = useState(() => ({ bands: 'key', stat: 'peak', shape: 'smooth', ...readPrefs() }));
+  const [prefs, setPrefs] = useState(() => ({ bands: 'key', stat: 'peak', shape: 'smooth', timed: true, ...readPrefs() }));
   const [want, setWant] = useState({ areas: true, severe: false, timeline: true, hazards: true });
   const [busy, setBusy] = useState(false);
   const pref = (k) => (v) => setPrefs((p) => { const n = { ...p, [k]: v }; try { localStorage.setItem(PREF_KEY, JSON.stringify({ ...readPrefs(), ...n })); } catch { /* storage blocked */ } return n; });
@@ -81,23 +85,27 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
         const p = await fieldOver('p_thunder');
         if (!p) throw new Error('Those dates are outside this NOVA run.');
         out.peak = peak(p, mask);
-        if (want.areas) out.areas = contourLevels(p, m.grid, thr, mask, prefs.shape).flatMap((l) => l.rings.map((ring) => ({ riskLevel: l.id, ring })));
+        /* each level's areas in time order, so the first in the day is the first on the graphic */
+        const asAreas = (levels) => levels.flatMap((l) => l.areas
+          .map((a) => ({ riskLevel: l.id, ring: a.ring, ...(a.from != null ? { from: hourKey(a.from), to: hourKey(a.to), t: a.from } : {}) }))
+          .sort((a, b) => (a.t ?? 0) - (b.t ?? 0)))
+          .map(({ t, ...a }) => a);
+        const timing = async (name) => (prefs.timed ? timingFrames(m, spanFrames, name, mask) : null);
+        if (want.areas) out.areas = asAreas(contourLevels(p, m.grid, thr, mask, prefs.shape, await timing('p_thunder')));
         if (want.severe) {
           const s = await fieldOver('p_severe');
-          out.areas = [...(out.areas || []), ...contourLevels(s, m.grid, [{ id: 'Severe', min: 0.15 }], mask, prefs.shape).flatMap((l) => l.rings.map((ring) => ({ riskLevel: l.id, ring })))];
+          out.areas = [...(out.areas || []), ...asAreas(contourLevels(s, m.grid, [{ id: 'Severe', min: 0.15 }], mask, prefs.shape, await timing('p_severe')))];
         }
       }
       if (want.timeline && cells.length) {
-        const winFrames = framesIn(m, cells[0].ms, cells[cells.length - 1].end);
+        /* each stamp takes the frames within 90 minutes of it (NOVA is 3-hourly) */
+        const winFrames = framesIn(m, cells[0].ms - 90 * 60e3, cells[cells.length - 1].ms + 90 * 60e3 + 1);
         const peaks = await Promise.all(winFrames.map(async (f) => ({ t: f.t, v: peak(await novaField(m, { lead: f.lead }, 'p_thunder'), mask) })));
-        const risk = {};
-        for (const c of cells) {
-          const inCell = peaks.filter((p) => p.t >= c.ms - 90 * 60e3 && p.t < c.end + 90 * 60e3);
-          if (!inCell.length) continue;
-          const lv = levelOf(Math.max(...inCell.map((p) => p.v)));
-          if (lv) for (const h of c.hours) risk[h] = lv;
-        }
-        out.timeline = { ...tl, risk };
+        const stampLv = cells.map((c) => {
+          const near = peaks.filter((p) => Math.abs(p.t - c.ms) <= 90 * 60e3);
+          return near.length ? levelOf(Math.max(...near.map((p) => p.v))) : null;
+        });
+        out.timeline = { ...tl, v: 2, risk: marksFromStamps(cells, stampLv, Object.fromEntries(thr.map((t, i) => [t.id, i]))) };
       }
       if (want.hazards && (day || spanFrames.length)) {
         const entries = await Promise.all(Object.entries(hazardFields).map(async ([id, f]) => { const d = await fieldOver(f); return [id, d ? Math.round(100 * peak(d, mask)) : 0]; }));
@@ -105,7 +113,8 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
       }
       onImport(out);
       const n = out.areas?.length || 0;
-      toast.success(`TCM NOVA imported: ${n} area${n === 1 ? '' : 's'}${out.peak != null ? `, highest ${statWord} ${Math.round(out.peak * 100)}%` : ''}${out.timeline ? ', timeline filled' : ''}${out.hazards ? ', hazard chances set' : ''}`);
+      const spells = new Set((out.areas || []).filter((a) => a.from).map((a) => `${a.from}|${a.to}`)).size;
+      toast.success(`TCM NOVA imported: ${n} area${n === 1 ? '' : 's'}${spells > 1 ? ` in ${spells} spells, first to last` : ''}${out.peak != null ? `, highest ${statWord} ${Math.round(out.peak * 100)}%` : ''}${out.timeline ? ', timeline filled' : ''}${out.hazards ? ', hazard chances set' : ''}`);
     } catch (e) {
       console.error('[nova import]', e);
       toast.error(e.message || 'TCM NOVA import failed');
@@ -153,6 +162,7 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
         <Btn sm on={want.severe} color="#818cf8" onClick={() => toggle('severe')}>Severe ≥15%</Btn>
         <Btn sm on={want.timeline} color="#818cf8" onClick={() => toggle('timeline')}>Timeline</Btn>
         <Btn sm on={want.hazards} color="#818cf8" onClick={() => toggle('hazards')}>Hazard chances</Btn>
+        <Btn sm on={prefs.timed} color="#818cf8" onClick={() => pref('timed')(!prefs.timed)} title="Give each area its hours from NOVA's 3-hourly frames, and split areas two spells share">Split by time</Btn>
       </div>
       <div className="sg-row">
         <Btn primary color="#6366f1" icon={busy ? Loader2 : DownloadCloud} disabled={busy} onClick={() => run('replace')}>{busy ? 'Importing…' : 'Import, replacing areas'}</Btn>
@@ -162,6 +172,7 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
         {view && !view.whole ? `Inside the ${view.label} view only. ` : ''}
         {prefs.stat === 'mean' ? 'Average: the mean of the 3-hourly frames at each place, so it shows how long a risk lasts. ' : 'Peak: the highest chance at any time. '}
         {prefs.shape === 'detailed' ? 'Detailed keeps NOVA\'s own outlines.' : prefs.shape === 'smooth' ? 'Smooth gives fewer, rounder areas.' : 'Broad gives a few big, simple areas, the way an outlook is drawn by hand.'}
+        {prefs.timed ? ' Split by time gives each area its own hours (first, second…) and outlines them white to grey, cutting an area that two spells share.' : ''}
         {' '}The timeline always takes each hour's peak. Areas stay editable.
         {day ? ' Picking a day moves the outlook day (and the timeline) to it.' : ''}
       </p>

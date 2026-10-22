@@ -1,12 +1,16 @@
-/* The outlook timeline: a window from one date and time to another, cut into cells of 1, 2, 3 or
-   6 hours.
+/* The outlook timeline: a window from one date and time to another, with a stamp every 1, 2, 3
+   or 6 hours from the start up to AND including the end (06 09 12 15 18 21 00 for 06:00 to
+   midnight, 3-hourly).
 
-   What the forecaster marks is kept by the HOUR ({ 'YYYY-MM-DDTHH': level id }), not by cell. A
-   cell shows the highest level among its hours, and marking a cell marks all of its hours. So
-   switching from 3-hourly to hourly keeps every mark where it was, a window can run over two or
-   three days, and moving the window never shuffles marks onto the wrong hours. (The old timeline
-   kept one array slot per cell and re-matched them by clock label, which mixed up the two "06"s
-   and lost marks whenever the cell count changed.) */
+   A stamp is a moment, not a block of hours: colour over 21 means the risk runs to 21:00, so the
+   Valid line runs from the first coloured stamp to the last, never on to the next one.
+
+   What the forecaster marks is kept by the HOUR ({ 'YYYY-MM-DDTHH': level id }, `v: 2`): a marked
+   stamp marks its own hour, and the hours between two marked neighbours take the lower of their
+   two levels. A stamp shows the most severe mark within half a step of it. So 3-hourly marks read
+   the same hourly (06 to 21 stays 06 to 21), a window can run over two or three days, and moving
+   the window never shuffles marks onto the wrong hours. Timelines saved before (`v` missing) kept
+   each cell as the block of hours after its stamp; savedTimeline turns them into stamps. */
 
 export const GRANS = [['1h', 'Hourly'], ['2h', '2-hourly'], ['3h', '3-hourly'], ['6h', '6-hourly']];
 export const stepHours = (g) => ({ '1h': 1, '2h': 2, '3h': 3, '6h': 6 }[g] || 3);
@@ -17,39 +21,51 @@ const pad = (n) => String(n).padStart(2, '0');
 export const toLocalInput = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 export const parseLocal = (s) => { const d = s ? new Date(s) : null; return d && !Number.isNaN(d.getTime()) ? d : null; };
 export const hourKey = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}`; };
+/** 'YYYY-MM-DDTHH' -> ms (local), or null. */
+export const keyMs = (k) => (k ? parseLocal(`${k}:00`)?.getTime() ?? null : null);
+/** An hour key moved by whole days (null stays null). */
+export const shiftKey = (k, days) => { const t = keyMs(k); if (t == null || !days) return k; const d = new Date(t); d.setDate(d.getDate() + days); return hourKey(d.getTime()); };
+/** "Thu 21:00" */
+export const stampLabel = (ms) => new Date(ms).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).replace(',', '');
 
 /** The usual outlook window: 06:00 on the day to 06:00 the next, 3-hourly. */
 export function defaultTimeline(day) {
   const a = parseLocal(`${day}T06:00`) || new Date();
-  return { from: toLocalInput(a), to: toLocalInput(new Date(a.getTime() + 24 * HOUR)), gran: '3h', risk: {}, over: {} };
+  return { v: 2, from: toLocalInput(a), to: toLocalInput(new Date(a.getTime() + 24 * HOUR)), gran: '3h', risk: {}, over: {} };
 }
 
-export const MAX_CELLS = 72;
+export const MAX_CELLS = 73;
 
-/** The cells of a window: { ms, end, label ('HH'), newDay, weekday, hours: [keys] }. */
-export function buildCells(tl) {
+/** The window's stamp times, the end included (an end off the step gets its own last stamp). */
+function stampTimes(tl) {
   const a = parseLocal(tl?.from);
   let b = parseLocal(tl?.to);
-  if (!a) return [];
+  if (!a) return { times: [], step: HOUR };
   if (!b || b <= a) b = new Date(a.getTime() + 24 * HOUR);
-  const step = stepHours(tl.gran) * HOUR;
-  const out = [];
-  for (let t = a.getTime(); t < b.getTime() && out.length < MAX_CELLS; t += step) {
-    const end = Math.min(t + step, b.getTime());
-    const hours = [];
-    for (let h = t; h < end; h += HOUR) hours.push(hourKey(h));
-    const d = new Date(t);
-    const prev = out[out.length - 1];
-    out.push({
-      ms: t, end, hours, label: pad(d.getHours()),
-      newDay: !!prev && new Date(prev.ms).getDate() !== d.getDate(),
-      weekday: d.toLocaleDateString('en-GB', { weekday: 'short' }),
-    });
-  }
-  return out;
+  const step = stepHours(tl.gran) * HOUR, end = b.getTime(), times = [];
+  for (let t = a.getTime(); t < end && times.length < MAX_CELLS - 1; t += step) times.push(t);
+  if (hourKey(end) !== hourKey(times[times.length - 1])) times.push(end);
+  return { times, step };
 }
 
-/** Each cell's level: the most severe of its hours (base levels), or the overlay on any of them. */
+/** The stamps of a window: { ms, end (the next stamp), at (its hour), hours (the hours it shows:
+    within half a step), label ('HH'), newDay, weekday }. */
+export function buildCells(tl) {
+  const { times, step } = stampTimes(tl);
+  const reach = Math.ceil(step / HOUR / 2) - 1;
+  return times.map((t, i) => {
+    const d = new Date(t);
+    const hours = [];
+    for (let k = -reach; k <= reach; k++) hours.push(hourKey(t + k * HOUR));
+    return {
+      ms: t, end: times[i + 1] ?? t + step, at: hourKey(t), hours, label: pad(d.getHours()),
+      newDay: i > 0 && new Date(times[i - 1]).getDate() !== d.getDate(),
+      weekday: d.toLocaleDateString('en-GB', { weekday: 'short' }),
+    };
+  });
+}
+
+/** Each stamp's level: the most severe mark within half a step of it. */
 export function cellLevels(cells, map, severity) {
   return cells.map((c) => {
     let best = null;
@@ -61,27 +77,76 @@ export function cellLevels(cells, map, severity) {
   });
 }
 
-/** Marks (value) or clears (null) every hour of cells a..b. */
-export function markCells(map, cells, a, b, value) {
-  const next = { ...map };
-  for (let i = Math.min(a, b); i <= Math.max(a, b); i++) {
-    for (const h of cells[i]?.hours || []) { if (value) next[h] = value; else delete next[h]; }
+/* the hours strictly between two neighbouring stamps: the lower level when both are marked */
+function fillBetween(map, cells, i, lv, severity) {
+  const x = lv[i], y = lv[i + 1];
+  const fill = x && y ? ((severity[x] ?? 0) <= (severity[y] ?? 0) ? x : y) : null;
+  for (let h = cells[i].ms + HOUR; h < cells[i + 1].ms; h += HOUR) {
+    const k = hourKey(h);
+    if (fill) map[k] = fill; else delete map[k];
   }
+}
+
+/** Marks (value) or clears (null) stamps a..b, and joins them to marked neighbours. */
+export function markCells(map, cells, a, b, value, severity = {}) {
+  const lo = Math.max(0, Math.min(a, b)), hi = Math.min(cells.length - 1, Math.max(a, b));
+  const lv = cellLevels(cells, map, severity);
+  const next = { ...map };
+  for (let i = lo; i <= hi; i++) {
+    lv[i] = value || null;
+    for (const h of cells[i].hours) delete next[h];
+    if (value) next[cells[i].at] = value;
+  }
+  for (let i = Math.max(0, lo - 1); i < Math.min(cells.length - 1, hi + 1); i++) fillBetween(next, cells, i, lv, severity);
   return next;
+}
+
+/** Hour marks from one level (or null) per stamp, as if each had been clicked. */
+export function marksFromStamps(cells, levels, severity = {}) {
+  const map = {};
+  cells.forEach((c, i) => { if (levels[i]) map[c.at] = levels[i]; });
+  for (let i = 0; i < cells.length - 1; i++) fillBetween(map, cells, i, levels, severity);
+  return map;
 }
 
 /** Moves the window and its marks by whole days (when the outlook day changes). */
 export function shiftTimeline(tl, days) {
   if (!days) return tl;
   const mv = (s) => { const d = parseLocal(s); if (!d) return s; d.setDate(d.getDate() + days); return toLocalInput(d); };
-  const mvMap = (m) => Object.fromEntries(Object.entries(m || {}).map(([k, v]) => [mv(`${k}:00`).slice(0, 13), v]));
+  const mvMap = (m) => Object.fromEntries(Object.entries(m || {}).map(([k, v]) => [shiftKey(k, days), v]));
   return { ...tl, from: mv(tl.from), to: mv(tl.to), risk: mvMap(tl.risk), over: mvMap(tl.over) };
 }
 
-/** A saved graphic's timeline, including those saved before the timeline had dates: those kept
-    one slot per cell from 06:00 (or their start time) on the outlook day. */
-export function savedTimeline(s, fallbackDay) {
-  if (s?.timeline?.from) return { risk: {}, over: {}, gran: '3h', ...s.timeline };
+/* A version-1 timeline (each cell the block of hours after its stamp, the end not stamped) as
+   stamps: each stamp takes its old cell's level, and the end stamp starts clear. */
+function fromV1(tl, severity) {
+  const a = parseLocal(tl.from), b = parseLocal(tl.to);
+  const step = stepHours(tl.gran) * HOUR;
+  const out = { ...tl, v: 2 };
+  const cells = buildCells(out);
+  for (const key of ['risk', 'over']) {
+    const levels = cells.map((c) => {
+      if (!a || !b || c.ms >= b.getTime()) return null;
+      let best = null;
+      for (let h = c.ms; h < Math.min(c.ms + step, b.getTime()); h += HOUR) {
+        const v = tl[key]?.[hourKey(h)];
+        if (v && (best == null || (severity[v] ?? -1) > (severity[best] ?? -1))) best = v;
+      }
+      return best;
+    });
+    out[key] = marksFromStamps(cells, levels, severity);
+  }
+  return out;
+}
+
+/** A saved graphic's timeline: as saved, a version-1 one turned into stamps, or one saved before
+    the timeline had dates (one slot per stamp from 06:00, or its start time, on the outlook day,
+    the last slot on the end time). */
+export function savedTimeline(s, fallbackDay, severity = {}) {
+  if (s?.timeline?.from) {
+    const tl = { risk: {}, over: {}, gran: '3h', ...s.timeline };
+    return tl.v === 2 ? tl : fromV1(tl, severity);
+  }
   const day = s?.validDate || fallbackDay;
   const gran = s?.timelineGran || '3h';
   const startHH = s?.timelineStart || '06:00', endHH = s?.timelineEnd || '06:00';
@@ -91,23 +156,19 @@ export function savedTimeline(s, fallbackDay) {
   let span = (eh * 60 + em) - (sh * 60 + sm);
   if (span <= 0) span += 1440;
   const step = stepHours(gran) * HOUR;
-  /* the old layout had a cell on the end time too, covering the hours just after it */
   const n = Math.floor((span * 60e3) / step) + 1;
-  const tl = { from: toLocalInput(a), to: toLocalInput(new Date(a.getTime() + n * step)), gran, risk: {}, over: {} };
-  const put = (arr, key) => (arr || []).forEach((v, i) => {
-    if (!v || i >= n) return;
-    for (let h = a.getTime() + i * step; h < a.getTime() + (i + 1) * step; h += HOUR) tl[key][hourKey(h)] = v;
-  });
-  put(s?.stampRisks, 'risk');
-  put(s?.stampOverlays, 'over');
+  const tl = { v: 2, from: toLocalInput(a), to: toLocalInput(new Date(a.getTime() + Math.max(1, n - 1) * step)), gran, risk: {}, over: {} };
+  const cells = buildCells(tl);
+  tl.risk = marksFromStamps(cells, cells.map((_, i) => s?.stampRisks?.[i] || null), severity);
+  tl.over = marksFromStamps(cells, cells.map((_, i) => s?.stampOverlays?.[i] || null), severity);
   return tl;
 }
 
-/** "Thu 12:00 → Fri 03:00" for the span of the marked cells, or null. */
+/** "Thu 12:00 → Thu 21:00" from the first coloured stamp to the last (one stamp: its time), or null. */
 export function markedSpan(cells, risks, overlays) {
   let first = -1, last = -1;
   cells.forEach((c, i) => { if (risks[i] || overlays[i]) { if (first < 0) first = i; last = i; } });
   if (first < 0) return null;
-  const fmt = (ms) => new Date(ms).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).replace(',', '');
-  return { from: cells[first].ms, to: cells[last].end, label: `${fmt(cells[first].ms)} → ${fmt(cells[last].end)}` };
+  const from = cells[first].ms, to = cells[last].ms;
+  return { from, to, label: first === last ? stampLabel(from) : `${stampLabel(from)} → ${stampLabel(to)}` };
 }

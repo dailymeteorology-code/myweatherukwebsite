@@ -9,6 +9,7 @@
    summaries), the timeline's window or any span of dates and times (the frames inside it),
    inside the graphic's map view when it is zoomed to a region. */
 import { contours } from 'd3-contour';
+import { coarsenMax, detectEvents, timeRing } from '@/lib/areaEvents';
 
 const authHeaders = () => {
   try { const t = localStorage.getItem('base44_access_token'); return t ? { Authorization: `Bearer ${t}` } : {}; } catch { return {}; }
@@ -168,28 +169,46 @@ function simplify(ring, tol) {
 }
 const ringArea = (r) => { let s = 0; for (let i = 0, j = r.length - 1; i < r.length; j = i++) s += (r[j][0] + r[i][0]) * (r[j][1] - r[i][1]); return Math.abs(s / 2); };
 
-/** Contours a probability field (0..1) at each level's threshold: [{ id, rings: [[[lat, lon]]] }],
-    lowest level first, shaped by SHAPES[shape]. Outside the mask counts as zero, so areas close
-    at the view's edge. */
-export function contourLevels(data, grid, levels, mask = null, shape = 'detailed') {
+/** Contours a probability field (0..1) at each level's threshold: [{ id, areas: [{ ring: [[lat,
+    lon]], from?, to? }] }], lowest level first, shaped by SHAPES[shape]. Outside the mask counts
+    as zero, so areas close at the view's edge. With `timing` (timingFrames), each area is matched
+    with the run's frames to give its first and last times, and an area two separate spells share
+    is cut in two (lib/areaEvents). */
+export function contourLevels(data, grid, levels, mask = null, shape = 'detailed', timing = null) {
   const sh = SHAPES[shape] || SHAPES.detailed, km = grid.dx_m / 1000;
   const cells = (k) => Math.round(k / km / 2);          // a radius for a width in km
   const sm = smooth(grow(data, grid, cells(sh.grow)), grid, Math.max(1, cells(sh.blur)));
   const v = new Float64Array(data.length);
   for (let i = 0; i < v.length; i++) v[i] = (mask && !mask[i]) || !(sm[i] === sm[i]) ? 0 : sm[i];
   const gen = contours().size([grid.nx, grid.ny]).smooth(true);
+  const minArea = sh.minKm2 / (km * km);
   const out = [];
   for (const lv of levels) {
     const mp = gen.contour(v, lv.min);
-    const rings = [];
+    const events = timing && detectEvents(timing.frames, timing.w, timing.h, lv.min, timing.opts);
+    const areas = [];
     for (const poly of mp.coordinates) {
       const outer = poly[0];
-      if (!outer || outer.length < 4 || ringArea(outer) * km * km < sh.minKm2) continue;   // speckle, not an outlook area
-      rings.push(simplify(outer, sh.tolKm / km).map(([x, y]) => fromBNG(grid.x0 + x * grid.dx_m, grid.y0 + y * grid.dx_m)));
+      if (!outer || outer.length < 4 || ringArea(outer) < minArea) continue;   // speckle, not an outlook area
+      const parts = events ? timeRing(outer, events, { v, nx: grid.nx, ny: grid.ny, c: timing.c, w: timing.w, h: timing.h, thr: lv.min, minArea: minArea / 2 }) : [{ ring: outer }];
+      for (const p of parts) {
+        areas.push({ ring: simplify(p.ring, sh.tolKm / km).map(([x, y]) => fromBNG(grid.x0 + x * grid.dx_m, grid.y0 + y * grid.dx_m)), from: p.from, to: p.to });
+      }
     }
-    if (rings.length) out.push({ id: lv.id, rings });
+    if (areas.length) out.push({ id: lv.id, areas });
   }
   return out;
+}
+
+/** A run's frames of a field through a span, coarsened 4 times (8 km) for timing areas: null
+    with fewer than two frames, when there is nothing to tell apart. */
+export async function timingFrames(m, frames, name, mask = null) {
+  if (frames.length < 2) return null;
+  const { nx, ny } = m.grid, c = 4, w = Math.ceil(nx / c), h = Math.ceil(ny / c);
+  const data = await Promise.all(frames.map(async (f) => ({ t: f.t, data: coarsenMax(await novaField(m, { lead: f.lead }, name), nx, ny, c, w, h) })));
+  const cm = mask ? coarsenMax(Float32Array.from(mask), nx, ny, c, w, h).map((x) => (x > 0 ? 1 : 0)) : null;
+  const km = (m.grid.dx_m / 1000) * c;
+  return { frames: data, c, w, h, opts: { link: Math.max(1, Math.round(24 / km)), mask: cm, minCells: 2 } };
 }
 
 /** The highest value of a field inside the mask (or anywhere). */

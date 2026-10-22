@@ -25,6 +25,7 @@ import MapViewPicker from '@/components/studio/MapViewPicker';
 import ModelOverlay from '@/components/studio/ModelOverlay';
 import useHistory from '@/components/studio/useHistory';
 import NovaImportPanel from '@/components/studio/NovaImportPanel';
+import { AreaTimingPanel, shadeColor, timedActive, shiftTiming, timingOrder, shadeByTiming, timingRings, isTimed } from '@/components/studio/areaTiming';
 
 // --- Conditional Severe -----------------------------------------------------
 // A risk tier that sits BETWEEN High and Severe. Like Severe it flags the
@@ -591,7 +592,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     if (s.activeRisk !== undefined) setActiveRisk(s.activeRisk);
     if (s.hazards !== undefined) setHazards(s.hazards);
     if (s.hazardPct !== undefined) setHazardPct(s.hazardPct || {});
-    setTimeline(savedTimeline(s, new Date().toLocaleDateString('en-CA')));
+    setTimeline(savedTimeline(s, new Date().toLocaleDateString('en-CA'), SEV));
     if (s.footerText !== undefined) setFooterText(s.footerText);
     if (s.handle !== undefined) setHandle(s.handle);
     if (s.version !== undefined) setVersion(s.version);
@@ -666,14 +667,18 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   useEffect(() => { if (!isAnimating && !isRecording) setPlayhead(null); }, [isAnimating, isRecording]);
   const animOpacityFor = (s) => {
     if (playhead == null || isRadar) return drawOpacity;
-    if (!anyStamps) return drawOpacity;
+    if (!anyStamps && !isTimed(s)) return drawOpacity;
     const N = timelineStamps.length;
     let f = playhead;
     if (f >= N) f = N - 0.0001; if (f < 0) f = 0;
     const i0 = Math.floor(f), i1 = Math.min(N - 1, i0 + 1), frac = f - i0;
     const band = 0.15, tn = Math.max(0, Math.min(1, (frac - (0.5 - band)) / (2 * band))), ease = tn * tn * (3 - 2 * tn);
+    /* a timed area shows during its own hours; the rest follow the level marked on each stamp */
+    const tol = (timelineStamps[1] ? timelineStamps[1].ms - timelineStamps[0].ms : 3600e3) / 2 - 1;
     const activeAt = (idx) => {
       if (idx < 0 || idx >= N) return 0;
+      const timed = timedActive(s, timelineStamps[idx].ms, tol);
+      if (timed != null) return timed ? 1 : 0;
       if (isSevereId(s.riskLevel) || isCondSevereId(s.riskLevel)) return stampOverlays[idx] === s.riskLevel ? 1 : 0;
       const st = stampRisks[idx];
       return st && SEV[st] >= SEV[s.riskLevel] ? 1 : 0;
@@ -685,7 +690,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
 
   const handleExportVideo = async () => {
     if (!graphicRef.current) return;
-    if (!anyStamps) { window.alert('Mark some timeline hours with a risk level first — the animation reveals the areas that match each hour.'); return; }
+    if (!anyStamps && !shapes.some(isTimed)) { window.alert('Mark some timeline hours with a risk level, or give areas their hours, first — the animation reveals the areas that match each hour.'); return; }
     const N = timelineStamps.length;
     const wasAnimating = isAnimating;
     setIsAnimating(false); setIsRecording(true); setExportMode(true); setIsExporting(true);
@@ -950,6 +955,17 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     setShapes((prev) => [...prev, { ...prev[sel], points: prev[sel].points.map(([x, y]) => [x + 0.02, y + 0.02]) }]);
     setSelectedShape(shapes.length);
   };
+  /* "Pick on the timeline" for the selected area (studio/areaTiming): the next stamp clicked is
+     its first hour, the one after that its last */
+  const [timingPick, setTimingPick] = useState(false);
+  const [timingAnchor, setTimingAnchor] = useState(null);
+  useEffect(() => { setTimingPick(false); setTimingAnchor(null); }, [selectedShape]);
+  const strokeOf = (s) => {
+    if (s.stroke != null) return shadeColor(s.stroke);
+    const m = LEVEL_LOOKUP[s.riskLevel] || GRAPHIC_LEVELS[0];
+    return s.cond && !isSevereId(s.riskLevel) && !isCondSevereId(s.riskLevel) ? darkenColor(m.border, 0.4) : darkenColor(m.border, 0.2);
+  };
+  const order = useMemo(() => timingOrder(shapes), [shapes]);
   /* Delete removes the selected area, Esc lets it go (not while typing in a box) */
   useEffect(() => {
     const onKey = (e) => {
@@ -969,18 +985,23 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   // --- TCM NOVA -----------------------------------------------------------------
   // The newest Main Run, imported by studio/NovaImportPanel: risk areas (lat/lon rings into the
   // drawing space), a timeline already moved to the imported day, and hazard chances (%) by
-  // hazard id. A hazard NOVA gives 10% or more is ticked as well.
+  // hazard id. A hazard NOVA gives 10% or more is ticked as well. Areas split by time come with
+  // their hours, and get outline shades from white (first) to grey (last).
   const applyNova = ({ mode, day, areas, timeline: tl, hazards: hz }) => {
-    if (day && day !== validDate) {
+    const n = day && day !== validDate ? dayDiff(validDate, day) : 0;
+    if (n) {
       setValidDate(day);
-      if (!tl) setTimeline((t) => shiftTimeline(t, dayDiff(validDate, day)));
+      if (!tl) setTimeline((t) => shiftTimeline(t, n));
     }
     if (tl) setTimeline(tl);
     if (areas) {
-      const mapped = areas.map(({ riskLevel, ring }) => ({ riskLevel, points: ring.map(([lat, lon]) => latLonToNorm(lat, lon)) }))
+      const mapped = areas.map(({ riskLevel, ring, from, to }) => ({ riskLevel, points: ring.map(([lat, lon]) => latLonToNorm(lat, lon)), ...(from ? { from, to } : {}) }))
         .filter((s) => s.points.length >= 3);
-      setShapes((prev) => (mode === 'append' ? [...prev, ...mapped] : mapped));
-    }
+      setShapes((prev) => {
+        const next = mode === 'append' ? [...prev.map((s) => shiftTiming(s, n)), ...mapped] : mapped;
+        return Math.max(0, ...timingOrder(mapped)) > 1 ? shadeByTiming(next) : next;
+      });
+    } else if (n) setShapes((prev) => prev.map((s) => shiftTiming(s, n)));
     if (hz) {
       setHazardPct((p) => {
         const next = { ...p };
@@ -995,7 +1016,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
     if (!d) return;
     const n = dayDiff(validDate, d);
     setValidDate(d);
-    if (n) setTimeline((t) => shiftTimeline(t, n));
+    if (n) { setTimeline((t) => shiftTimeline(t, n)); setShapes((prev) => prev.map((s) => shiftTiming(s, n))); }
   };
 
   // Severe & Conditional Severe are OVERLAY tiers: stamping one of them onto a
@@ -1009,18 +1030,24 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
   const layerOf = (id) => (isSevereId(id) || isCondSevereId(id) ? 'over' : 'risk');
   const applyStampRange = (start, end) => {
     const k = layerOf(activeRisk);
-    setTimeline((t) => ({ ...t, [k]: markCells(t[k], timelineStamps, start, end, activeRisk) }));
+    setTimeline((t) => ({ ...t, [k]: markCells(t[k], timelineStamps, start, end, activeRisk, SEV) }));
   };
 
   const toggleSingleStamp = (i) => {
     const k = layerOf(activeRisk);
     const cur = (k === 'over' ? stampOverlays : stampRisks)[i];
-    setTimeline((t) => ({ ...t, [k]: markCells(t[k], timelineStamps, i, i, cur === activeRisk ? null : activeRisk) }));
+    setTimeline((t) => ({ ...t, [k]: markCells(t[k], timelineStamps, i, i, cur === activeRisk ? null : activeRisk, SEV) }));
   };
   const clearTimeline = () => setTimeline((t) => ({ ...t, risk: {}, over: {} }));
   const setWindow = (patch) => setTimeline((t) => ({ ...t, ...patch }));
 
   const cycleStamp = (i) => {
+    if (timingPick && sel != null) {
+      if (timingAnchor == null) { setTimingAnchor(i); patchSelected({ from: timelineStamps[i].at, to: timelineStamps[i].at }); return; }
+      patchSelected({ from: timelineStamps[Math.min(i, timingAnchor)].at, to: timelineStamps[Math.max(i, timingAnchor)].at });
+      setTimingAnchor(null); setTimingPick(false);
+      return;
+    }
     if (timelineRangeMode) {
       if (rangeAnchor == null) { setRangeAnchor(i); return; }
       if (rangeAnchor === i) { setRangeAnchor(null); toggleSingleStamp(i); return; }
@@ -1399,7 +1426,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
               options={[['draw', 'Draw', Pen], ['select', 'Select', MousePointer2], ['text', 'Label', Type], ['arrow', 'Arrow', MoveUpRight], ['cond', 'Conditional', ShieldAlert]]} />
           </div>
           {mapTool === 'draw' && <p className="sg-note">Drag anywhere on the graphic to draw an area in the selected level. Areas can run off the map, under the cards or into the corners.</p>}
-          {mapTool === 'select' && <p className="sg-note">Click an area on the graphic to select it, then change it below or drag it to move it. <b>Delete</b> removes it, <b>Esc</b> lets it go.</p>}
+          {mapTool === 'select' && <p className="sg-note">Click an area on the graphic to select it, then change it below or drag it to move it. <b>Delete</b> removes it, <b>Esc</b> lets it go. Give areas live at different times their hours and an outline from white to grey: each gets a dashed ring in that shade on the timeline.</p>}
           {sel != null && (
             <div className="sg-panel" style={{ borderColor: 'color-mix(in srgb, #a78bfa 50%, transparent)' }}>
               <div className="sg-row" style={{ justifyContent: 'space-between' }}>
@@ -1412,6 +1439,8 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                     onClick={() => patchSelected({ riskLevel: r.id, ...(layerOf(r.id) === 'over' ? { cond: false } : {}) })}><i />{r.short}</button>
                 ))}
               </div>
+              <AreaTimingPanel shape={shapes[sel]} cells={timelineStamps} levelColor={strokeOf({ ...shapes[sel], stroke: null })} onPatch={patchSelected}
+                picking={timingPick} onPicking={(on) => { setTimingPick(on); setTimingAnchor(null); }} />
               <div className="sg-row">
                 {!isSevereId(shapes[sel].riskLevel) && !isCondSevereId(shapes[sel].riskLevel) && <Btn sm on={!!shapes[sel].cond} color="#a78bfa" onClick={() => patchSelected({ cond: !shapes[sel].cond })}>Conditional</Btn>}
                 <Btn sm onClick={() => orderSelected(true)}>To front</Btn>
@@ -1469,6 +1498,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
             <Btn sm icon={Redo2} disabled={!history.canRedo} onClick={history.redo} title="Redo (Ctrl+Y)">Redo</Btn>
             <Btn sm danger icon={Eraser} disabled={!shapes.length} onClick={clearShapes}>Clear areas</Btn>
             <Btn sm on={!showShapes} icon={showShapes ? Eye : EyeOff} onClick={() => setShowShapes((v) => !v)}>{showShapes ? 'Hide areas' : 'Areas hidden'}</Btn>
+            {Math.max(0, ...order) > 1 && <Btn sm icon={Clock} onClick={() => setShapes(shadeByTiming)} title="Outline the timed areas from white (first) to grey (last)">Shade by time</Btn>}
             <label className="sg-row" style={{ gap: 6 }}>
               <span className="sg-note">Opacity</span>
               <input type="range" className="sg-range" min="20" max="100" step="5" value={Math.round(drawOpacity * 100)} onChange={(e) => setDrawOpacity(Number(e.target.value) / 100)} style={{ width: 80 }} />
@@ -1483,7 +1513,10 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 return (
                   <span key={i} className="sg-chipx" onMouseEnter={() => setHoverShape(i)} onMouseLeave={() => setHoverShape(null)}
                     style={{ '--c': s.riskLevel === COND_SEVERE_ID ? '#94a3b8' : m.color, borderStyle: s.cond ? 'dashed' : 'solid', ...(sel === i ? { boxShadow: '0 0 0 2px var(--sg-text)' } : {}) }}>
-                    <button type="button" onClick={() => { setSelectedShape(i); setMapTool('select'); }} title="Select this area (it is outlined on the graphic)">{m.short}</button>
+                    <button type="button" onClick={() => { setSelectedShape(i); setMapTool('select'); }} title={isTimed(s) ? `Select this area · ${order[i]}${['st', 'nd', 'rd'][order[i] - 1] || 'th'} by time` : 'Select this area (it is outlined on the graphic)'}>
+                      {s.stroke != null && <span style={{ width: 9, height: 9, borderRadius: '50%', border: `2px solid ${shadeColor(s.stroke)}`, marginRight: 4, boxShadow: '0 0 0 1px rgba(0,0,0,0.45)' }} />}
+                      {m.short}{order[i] ? <sup style={{ marginLeft: 2, fontSize: 9 }}>{order[i]}</sup> : null}
+                    </button>
                     {canCond && <button type="button" onClick={() => setShapes((prev) => prev.map((sh, j) => (j === i ? { ...sh, cond: !sh.cond } : sh)))} title="Conditional" style={s.cond ? { background: 'rgba(0,0,0,0.3)', color: '#fff' } : undefined}>C</button>}
                     <button type="button" onClick={() => setShapes((prev) => prev.filter((_, j) => j !== i))} aria-label="Delete area"><X /></button>
                   </span>
@@ -1770,7 +1803,8 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
 
             </div>
 
-            {!isRadar && <TimelinePill stamps={timelineStamps} stampRisks={stampRisks} stampOverlays={stampOverlays} levels={GRAPHIC_LEVELS} onStampClick={cycleStamp} rangeAnchor={rangeAnchor} validLabel={timelineValid?.label} playhead={playhead} exportMode={exportMode} />}
+            {!isRadar && <TimelinePill stamps={timelineStamps} stampRisks={stampRisks} stampOverlays={stampOverlays} levels={GRAPHIC_LEVELS} onStampClick={cycleStamp} rangeAnchor={timingAnchor ?? rangeAnchor} validLabel={timelineValid?.label} playhead={playhead} exportMode={exportMode}
+              rings={showShapes ? timingRings(shapes, timelineStamps, strokeOf, sel) : []} />}
 
 
             {!isRadar && overnightEnabled && (
@@ -2077,7 +2111,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                       {severe && <path d={pathD} fill="url(#severeHatch)" stroke="none" />}
                       <path d={pathD}
                         fill={severe ? 'none' : m.fill}
-                        stroke={areaCond ? condColor : darkenColor(m.border, 0.2)}
+                        stroke={s.stroke != null ? shadeColor(s.stroke) : areaCond ? condColor : darkenColor(m.border, 0.2)}
                         strokeWidth={severe ? 6 : condSevere ? 5.5 : areaCond ? 5 : 4}
                         strokeLinejoin="round" strokeLinecap="round"
                         strokeDasharray={condSevere ? '12 9' : areaCond ? '13 8' : 'none'} />
@@ -2122,7 +2156,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '' }) {
                 <g transform={drawZoom}>
                 {shapes.map((s, i) => {
                   const m = LEVEL_LOOKUP[s.riskLevel] || activeMeta, severe = isSevereId(s.riskLevel), condSevere = isCondSevereId(s.riskLevel), areaCond = !!s.cond && !severe && !condSevere;
-                  return <path key={i} d={pointsToPath(s.points)} fill="none" stroke={areaCond ? darkenColor(m.border, 0.3) : darkenColor(m.border, 0.2)} strokeWidth={severe ? 9 : condSevere ? 8 : areaCond ? 7.5 : 6} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={condSevere ? '14 10' : areaCond ? '15 9' : 'none'} opacity={Math.min(1, drawOpacity + 0.15)} />;
+                  return <path key={i} d={pointsToPath(s.points)} fill="none" stroke={s.stroke != null ? shadeColor(s.stroke) : areaCond ? darkenColor(m.border, 0.3) : darkenColor(m.border, 0.2)} strokeWidth={severe ? 9 : condSevere ? 8 : areaCond ? 7.5 : 6} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={condSevere ? '14 10' : areaCond ? '15 9' : 'none'} opacity={Math.min(1, drawOpacity + 0.15)} />;
                 })}
               </g>
               </svg>

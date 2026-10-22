@@ -58,6 +58,54 @@ function timelineRuns(cells, sev) {
   return runs.sort((a, b) => (sev[a.risk] ?? 0) - (sev[b.risk] ?? 0));
 }
 
+// Timing rings: a dashed ring round the stamps each timed risk area is active over, in that area's
+// outline colour. Rings sharing stretches of the pill interleave: each takes every k-th dash
+// (k = how many overlap there), lined up on the pill's own x so the dashes of one fall in the
+// gaps of the other, and two areas live at once read as one line in two shades.
+const DASH = 5;
+function TimingRings({ rings, cellW, cellH, W, exportMode }) {
+  const items = rings.map((r) => ({ ...r })).sort((p, q) => p.a - q.a || p.b - q.b);
+  /* lanes: greedy colouring of the overlapping spans; k: the lanes in each run of overlaps */
+  const laneEnd = [];
+  let group = [], groupEnd = -1;
+  const closeGroup = () => { const k = Math.max(1, ...group.map((g) => g.lane + 1)); group.forEach((g) => { g.k = k; }); group = []; };
+  for (const it of items) {
+    if (it.a > groupEnd && group.length) closeGroup();
+    let lane = laneEnd.findIndex((e) => e < it.a);
+    if (lane < 0) { lane = laneEnd.length; laneEnd.push(it.b); } else laneEnd[lane] = it.b;
+    it.lane = lane;
+    group.push(it);
+    groupEnd = Math.max(groupEnd, it.b);
+  }
+  if (group.length) closeGroup();
+  /* on the band's own edge, like the Conditional Severe dashed border */
+  const y0 = 1, y1 = cellH - 1, ry = (y1 - y0) / 2;
+  const mod = (x, p) => ((x % p) + p) % p;
+  return (
+    <svg width={W} height={cellH} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible', pointerEvents: 'none', zIndex: 2 }}
+      aria-hidden="true">
+      <g style={{ filter: 'drop-shadow(0 0 1.2px rgba(0,0,0,0.95))' }}>
+        {items.map((r) => {
+          const x0 = r.openA ? -2 : r.a * cellW + 1, x1 = r.openB ? (r.b + 1) * cellW + 2 : (r.b + 1) * cellW - 1;
+          const rx = Math.min(ry, (x1 - x0) / 2);
+          const l = r.openA ? x0 : x0 + rx, rr = r.openB ? x1 : x1 - rx;
+          const P = r.k > 1 ? r.k * DASH : DASH * 1.8;
+          const dash = r.k > 1 ? `${DASH} ${(r.k - 1) * DASH}` : `${DASH} ${DASH * 0.8}`;
+          const common = { fill: 'none', stroke: r.color, strokeWidth: r.sel && !exportMode ? 2.6 : 2, strokeDasharray: dash, strokeLinecap: 'butt' };
+          const lineOff = mod(l - r.lane * DASH, P), capOff = mod(-r.lane * DASH, P);
+          return (
+            <g key={r.key} style={r.sel && !exportMode ? { filter: 'drop-shadow(0 0 3px rgba(255,255,255,0.85))' } : undefined}>
+              {rr > l && [y0, y1].map((y) => <path key={y} d={`M${l},${y} L${rr},${y}`} {...common} strokeDashoffset={lineOff} />)}
+              {!r.openA && <path d={`M${l},${y0} A${rx},${ry} 0 0 0 ${l},${y1}`} {...common} strokeDashoffset={capOff} />}
+              {!r.openB && <path d={`M${rr},${y0} A${rx},${ry} 0 0 1 ${rr},${y1}`} {...common} strokeDashoffset={capOff} />}
+            </g>
+          );
+        })}
+      </g>
+    </svg>
+  );
+}
+
 export default function TimelinePill({
   stamps = DEFAULT_STAMPS,
   stampRisks,
@@ -69,6 +117,7 @@ export default function TimelinePill({
   playhead = null,
   exportMode = false,
   showNames = true,
+  rings = [],
 }) {
   const N = stamps.length;
   const byId = Object.fromEntries(levels.map((l) => [l.id, l]));
@@ -99,6 +148,7 @@ export default function TimelinePill({
   }
   const days = stamps.map((s, i) => (s.newDay ? { i, text: s.weekday } : null)).filter(Boolean);
   const nameRow = names.length > 0 || days.length > 0;
+  const ringed = rings.length > 0;
   /* the colour under each cell, so its hour reads on it */
   const under = stamps.map((_, i) => {
     let best = null;
@@ -167,6 +217,7 @@ export default function TimelinePill({
                 </button>
               );
             })}
+            {ringed && <TimingRings rings={rings} cellW={CELL_W} cellH={CELL_H} W={W} exportMode={exportMode} />}
             {playhead != null && (
               <div style={{
                 position: 'absolute', top: -3, bottom: -3, left: Math.max(0, Math.min(N, playhead)) * CELL_W, width: 2, borderRadius: 2, boxSizing: 'border-box', marginLeft: -1,

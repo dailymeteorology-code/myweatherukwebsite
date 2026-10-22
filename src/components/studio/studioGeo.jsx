@@ -68,7 +68,7 @@ function buildCounties(raw) {
     if (!g) { g = { name: a.group, country: a.country, ids: [] }; groups.push(g); }
     g.ids.push(a.id);
   }
-  const context = raw.context.map((c) => ({ id: c.id, coarse: polysPath(c.polys.map((p) => p.map(unflat)), 0.45) }));
+  const context = raw.context.map((c) => { const polys = c.polys.map((p) => p.map(unflat)); return { id: c.id, polys, coarse: polysPath(polys, 0.45) }; });
   return { areas, byId, groups, context };
 }
 export function loadCounties() {
@@ -237,13 +237,17 @@ export const CORE_CITIES = [
   { name: 'Cork', lon: -8.47, lat: 51.90, flip: true },
 ];
 let TOWNS = null, townsLoad = null;
+/** The towns and cities of the UK and Ireland with their populations, biggest first. */
+export function loadTowns() {
+  if (!townsLoad) townsLoad = fetch('/geo/uk-ie-towns.json').then((r) => r.json()).then((j) => (TOWNS = j.rows.map(([name, lon, lat, pop]) => ({ name, lon, lat, pop })))).catch(() => { townsLoad = null; return null; });
+  return townsLoad;
+}
 function useTowns() {
   const [t, setT] = useState(TOWNS);
   useEffect(() => {
     if (t) return undefined;
     let live = true;
-    if (!townsLoad) townsLoad = fetch('/geo/uk-ie-towns.json').then((r) => r.json()).then((j) => (TOWNS = j.rows.map(([name, lon, lat, pop]) => ({ name, lon, lat, pop })))).catch(() => { townsLoad = null; return null; });
-    townsLoad.then((x) => live && x && setT(x));
+    loadTowns().then((x) => live && x && setT(x));
     return () => { live = false; };
   }, [t]);
   return t;

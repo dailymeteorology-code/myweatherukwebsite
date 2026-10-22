@@ -13,6 +13,7 @@ import { contours } from 'd3-contour';
 import { API, loadFrame, runTag } from '@/lib/modelViewer';
 import { laeaInverse } from '@/lib/ukRadar';
 import { SHAPES } from '@/lib/novaOutlook';
+import { coarsenMax, detectEvents, timeRing } from '@/lib/areaEvents';
 
 export const FINE = { nx: 1042, ny: 970, dx: 2000, x0: -1158000, yTop: 902000 };   // the 2 km display grid
 const HOUR = 3600e3;
@@ -56,18 +57,23 @@ export async function runSpanning(id, from, to, minSteps = 1) {
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 /** One step of a field, waiting for the server to build it if it has to; null if the run has
     no such step (a past-hour maximum has none at T+0). */
-export async function waitFrame(model, tag, v, step, { alive = () => true, onStatus } = {}) {
+export async function waitFrame(model, tag, v, step, opts = {}) {
+  return (await stepReady(model, tag, v, step, opts)) ? loadFrame(model, tag, v, step) : null;
+}
+/** Whether a step of a field is on the server, waiting (and queuing the build) if it is not yet:
+    true when it is, false if the run has no such step or the wait was called off. */
+export async function stepReady(model, tag, v, step, { alive = () => true, onStatus } = {}) {
   for (let tries = 0; tries < 90 && alive(); tries++) {
     const st = await fetch(`${API}/frames/${model}/${tag}/${v}/status?first=${step}`).then((r) => r.json()).catch(() => null);
-    if (st?.done?.includes(step)) return loadFrame(model, tag, v, step);
+    if (st?.done?.includes(step)) return true;
     /* built and still not there; a run that has grown since its last build is rebuilt, so wait for that */
-    if (st?.missing?.includes(step) || (st?.state === 'complete' && st.steps?.includes(step))) return null;
+    if (st?.missing?.includes(step) || (st?.state === 'complete' && st.steps?.includes(step))) return false;
     if (st?.state === 'failed') throw new Error(`${model} ${v} could not be built`);
     onStatus?.(`Building ${model.toUpperCase().replace('_', ' ')} ${v.replace('_', ' ')}${st?.done?.length ? ` (${st.done.length} steps ready)` : ''}…`);
     await sleep(tries < 10 ? 2500 : 5000);
   }
   if (alive()) throw new Error(`${model} ${v} is taking too long to build; try again shortly`);
-  return null;
+  return false;
 }
 
 /* ── fields: { nx, ny, k, data: Float32Array } on the display grid (k = 1) or its k-fold
@@ -116,7 +122,8 @@ export async function ensChance(ids, v, times, thr, how, opts) {
 }
 
 /** The member median of an ensemble at several valid times, reduced over the times by `how`
-    ('peak', 'mean', or 'last' for an amount ending at the last time). */
+    ('peak', 'mean', or 'last' for an amount ending at the last time). `opts.onStep` gets each
+    time's median ({ t, data }), for timing the areas. */
 export async function ensMedian(id, v, times, how, opts) {
   const at = await runCovering(id, times);
   if (!at) return null;
@@ -134,6 +141,7 @@ export async function ensMedian(id, v, times, how, opts) {
       const s = buf.subarray(0, c).sort();
       med[i] = c % 2 ? s[(c - 1) / 2] : (s[c / 2 - 1] + s[c / 2]) / 2;
     }
+    opts?.onStep?.({ t: Date.parse(at.run) + step * HOUR, data: med.slice() });
     if (!out || how === 'last') out = med;
     else if (how === 'mean') for (let i = 0; i < n; i++) out[i] += med[i];
     else for (let i = 0; i < n; i++) if (!(out[i] >= med[i])) out[i] = med[i];
@@ -251,10 +259,13 @@ function simplify(ring, tol) {
   return ring.filter((_, i) => keep[i]);
 }
 
-/** Contours a field at each level's `min`: [{ id, rings: [[[lat, lon]]] }], lowest first, shaped
-    like the NOVA import (SHAPES: Detailed, Smooth or Broad). Cells outside the mask count as
-    nothing, so the areas close at the view's edge. */
-export function contourField(f, levels, mask = null, shape = 'detailed') {
+/** Contours a field at each level's `min`: [{ id, areas: [{ ring: [[lat, lon]], from?, to? }] }],
+    lowest first, shaped like the NOVA import (SHAPES: Detailed, Smooth or Broad). Cells outside
+    the mask count as nothing, so the areas close at the view's edge. With `timing` (from
+    ukvTiming / ensTiming), each area gets its first and last times and an area two separate
+    spells share is cut in two (lib/areaEvents); `timing.thr(i, min)` is the threshold that makes
+    level i "on" in the timing frames. */
+export function contourField(f, levels, mask = null, shape = 'detailed', timing = null) {
   const sh = SHAPES[shape] || SHAPES.detailed, k = f.k || 1, cellKm = (FINE.dx / 1000) * k;
   const r = (km) => Math.round(km / cellKm / 2);
   let g = f;
@@ -266,21 +277,52 @@ export function contourField(f, levels, mask = null, shape = 'detailed') {
   const gen = contours().size([nx, ny]).smooth(true);
   const minCells = Math.max(1.5, sh.minKm2 / (cellKm * cellKm)), tol = Math.max(0.25, sh.tolKm / cellKm);
   const out = [];
-  for (const lv of levels) {
+  const cm = timing && mask ? coarsenMax(Float32Array.from(mask), nx, ny, timing.c, timing.w, timing.h).map((x) => (x > 0 ? 1 : 0)) : null;
+  const link = timing ? Math.max(1, Math.round(24 / (cellKm * timing.c))) : 0;
+  levels.forEach((lv, li) => {
     const mp = gen.contour(v, lv.min);
-    const rings = [];
+    const events = timing && detectEvents(timing.frames, timing.w, timing.h, timing.thr ? timing.thr(li, lv.min) : lv.min, { link, mask: cm, minCells: 2 });
+    const areas = [];
     for (const poly of mp.coordinates) {
       const outer = poly[0];
       if (!outer || outer.length < 4 || ringArea(outer) < minCells) continue;
+      const parts = events ? timeRing(outer, events, { v, nx, ny, c: timing.c, w: timing.w, h: timing.h, thr: lv.min, minArea: minCells / 2 }) : [{ ring: outer }];
       /* d3 puts cell (i, j) at [i, i+1] x [j, j+1]: its centre is i + 0.5 */
-      rings.push(simplify(outer, tol).map(([x, y]) => {
-        const [lon, lat] = laeaInverse(FINE.x0 + ((x - 0.5) * k + (k - 1) / 2) * FINE.dx, FINE.yTop - ((y - 0.5) * k + (k - 1) / 2) * FINE.dx);
-        return [lat, lon];
-      }));
+      for (const p of parts) {
+        areas.push({
+          ring: simplify(p.ring, tol).map(([x, y]) => {
+            const [lon, lat] = laeaInverse(FINE.x0 + ((x - 0.5) * k + (k - 1) / 2) * FINE.dx, FINE.yTop - ((y - 0.5) * k + (k - 1) / 2) * FINE.dx);
+            return [lat, lon];
+          }),
+          from: p.from, to: p.to,
+        });
+      }
     }
-    if (rings.length) out.push({ id: lv.id, rings });
-  }
+    if (areas.length) out.push({ id: lv.id, areas });
+  });
   return out;
+}
+
+/* ── timing: frames through the span on the field's grid coarsened to about 8 km ──────────── */
+const timingGrid = (into) => { const k = into.k || 1, c = Math.max(1, Math.round(4 / k)); return { c, w: Math.ceil(into.nx / c), h: Math.ceil(into.ny / c), f: c * k }; };
+
+/** The UKV's hourly frames of `v` through [from, to] for timing the areas of a field (`into`):
+    null when no UKV run reaches that far or it has fewer than two of them. */
+export async function ukvTiming(v, from, to, into, thr, opts) {
+  const at = await runSpanning('ukv', from, to, 2);
+  if (!at) return null;
+  const g = timingGrid(into), t0 = Date.parse(at.run), frames = [];
+  for (const step of at.steps) {
+    const fr = await waitFrame('ukv', at.tag, v, step, opts);
+    if (fr) frames.push({ t: t0 + step * HOUR, data: coarsenMax(decode(fr), FINE.nx, FINE.ny, g.f, g.w, g.h) });
+  }
+  return frames.length >= 2 ? { frames, c: g.c, w: g.w, h: g.h, thr } : null;
+}
+/** Timing from fields already at each time on the field's own grid ([{ t, data }]). */
+export function ensTiming(steps, into, thr) {
+  if (!steps || steps.length < 2) return null;
+  const g = timingGrid(into);
+  return { frames: steps.map((s) => ({ t: s.t, data: g.c === 1 ? s.data : coarsenMax(s.data, into.nx, into.ny, g.c, g.w, g.h) })), c: g.c, w: g.w, h: g.h, thr };
 }
 
 /** The highest value inside the mask. */

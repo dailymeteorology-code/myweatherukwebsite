@@ -1827,7 +1827,7 @@ function StormGraphicTab({ logoUrl }) {
         {sub === 'snowacc'  && <SnowOutlookGraphicTool key="accumulation" variant="accumulation" myWeatherLogoUrl={logoUrl} />}
         {sub === 'snowrisk' && <SnowOutlookGraphicTool key="risk" variant="risk" myWeatherLogoUrl={logoUrl} />}
         {sub === 'wind'     && <SnowOutlookGraphicTool key="wind" variant="wind" myWeatherLogoUrl={logoUrl} />}
-        {sub === 'temp'     && <TemperatureMapTool />}
+        {sub === 'temp'     && <TemperatureMapTool siteLogoUrl={logoUrl} />}
         {sub === 'interest' && <AreasOfInterestTool siteLogoUrl={logoUrl} />}
         {sub === 'mapdraw'  && <MapDrawingSection logoUrl={logoUrl} />}
         {sub === 'pastfut'  && <PastFutureTools logoUrl={logoUrl} />}
