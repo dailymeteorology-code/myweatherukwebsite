@@ -18,10 +18,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Clock3, CalendarDays, Radar, AlertTriangle, CloudRain, ChevronLeft, ChevronRight, Loader2, Palette, LocateFixed, MoreHorizontal, Link2, Thermometer, Check,
+  Umbrella, Sunrise, Sunset,
 } from 'lucide-react';
 import LocationSearchBox from '@/components/location/LocationSearchBox';
 import LocationLanding from '@/components/location/LocationLanding';
-import LocationWarnings from '@/components/location/LocationWarnings';
+import LocationWarnings, { warningIcon, warningName, warningSpan, severityFill, severityInk } from '@/components/location/LocationWarnings';
 import LocationRadar from '@/components/location/LocationRadar';
 import LocationTiles from '@/components/location/LocationTiles';
 import LocationCharts, { tempColour } from '@/components/location/LocationCharts';
@@ -34,7 +35,7 @@ import { currentUser, loadRecent, rememberSearch, forgetSearch, clearRecent } fr
 import { fetchAllWarningsForPoint } from '@/lib/locationWarnings';
 import {
   fetchLocation, shape, condLabel, isWet, nextHoursText, dayText, hhmm, hourOf, sunElevation, compass,
-  minutelyText, wetMinute, bandOf,
+  minutelyText, wetMinute, bandOf, ukDay,
 } from '@/lib/ukvLocation';
 
 const REFRESH_MS = 5 * 60e3;                       // a new radar scan every 15 minutes: the next hour follows each one
@@ -44,7 +45,9 @@ const runName = (iso) => {
 };
 
 /* ── the hourly strip ────────────────────────────────────────────────────── */
-function HourlyCard({ model, T, stripRef }) {
+const COL_W = 58;                                  // every column of the strip (.lw-hour, border-box)
+const LANE_H = 24;                                 // one warning bar, with its gap
+function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
   const items = useMemo(() => {
     const start = model.full.findIndex((h) => h.t >= Date.now() - 30 * 60e3);
     const hs = model.full.slice(Math.max(0, start));
@@ -57,6 +60,24 @@ function HourlyCard({ model, T, stripRef }) {
     }
     return [...hs.map((h) => ({ h, t: h.t })), ...suns].sort((a, b) => a.t - b.t);
   }, [model]);
+  /* Each warning as a bar in its colour under exactly the columns it covers: an hour column covers
+     its hour (three hours beyond T+54), a sunrise or sunset column its moment. One lane per
+     warning, the most severe on top; the label stays in view while the bar is scrolled through. */
+  const lanes = useMemo(() => {
+    if (!items.length) return [];
+    const out = [];
+    for (const w of warnings) {
+      if (!w.startMs || !w.endMs) continue;
+      let a = -1, b = -1;
+      items.forEach((it, k) => {
+        const t0 = it.t, t1 = it.h ? it.t + Math.max(1, it.h.span || 1) * 3600e3 : it.t + 1;
+        if (t0 < w.endMs && t1 > w.startMs) { if (a < 0) a = k; b = k; }
+      });
+      if (a < 0) continue;
+      out.push({ w, a, b, openStart: w.startMs < items[0].t, openEnd: w.endMs > items[items.length - 1].t + 3600e3 });
+    }
+    return out;
+  }, [items, warnings]);
   const scroll = (dir) => stripRef.current?.scrollBy({ left: dir * stripRef.current.clientWidth * 0.8, behavior: 'smooth' });
   let lastDay = null;
   return (
@@ -71,6 +92,39 @@ function HourlyCard({ model, T, stripRef }) {
       <p className="lw-summary">{nextHoursText(model)}</p>
       <div className="lw-hours" ref={stripRef}
         onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && e.currentTarget.scrollWidth > e.currentTarget.clientWidth) { e.currentTarget.scrollLeft += e.deltaY; } }}>
+        <div className="lw-hours-track" style={lanes.length ? { paddingBottom: lanes.length * LANE_H + 6 } : undefined}>
+        {lanes.map(({ w, a, b, openStart, openEnd }, j) => {
+          const Icon = warningIcon(w.type);
+          const fill = severityFill(w.severity);
+          const bottom = 4 + (lanes.length - 1 - j) * LANE_H;
+          const toBar = () => stripRef.current?.scrollTo({ left: Math.max(0, a * COL_W - 24), behavior: 'smooth' });
+          return (
+            <React.Fragment key={w.id}>
+            {/* the hours it covers, washed faintly in its colour */}
+            <i className="lw-wwash" aria-hidden="true" style={{ left: a * COL_W, width: (b - a + 1) * COL_W, background: `linear-gradient(180deg, ${fill}00, ${fill}24)` }} />
+            {/* until the bar is in view, its lane says what is coming and takes you there */}
+            {a >= 5 && (
+              <div className="lw-wahead" style={{ width: a * COL_W, bottom }}>
+                <button type="button" onClick={toBar}>
+                  <Icon size={12} strokeWidth={2.4} style={{ color: fill }} />
+                  {w.severity} {String(w.type).toLowerCase()} warning from {new Date(w.startMs).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'Europe/London' })} {hhmm(w.startMs)}
+                  <ChevronRight size={13} />
+                </button>
+              </div>
+            )}
+            <div role="button" tabIndex={0} className="lw-wbar"
+              onClick={() => onWarning(w.id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onWarning(w.id); } }}
+              title={`${warningName(w)}, ${warningSpan(w)}`} aria-label={`${warningName(w)}, ${warningSpan(w)}. Show the warning.`}
+              style={{
+                left: a * COL_W + (openStart ? 0 : 3), width: (b - a + 1) * COL_W - (openStart ? 0 : 3) - (openEnd ? 0 : 3),
+                bottom, background: fill, color: severityInk(w.severity),
+                borderRadius: `${openStart ? 0 : 8}px ${openEnd ? 0 : 8}px ${openEnd ? 0 : 8}px ${openStart ? 0 : 8}px`,
+              }}>
+              <span className="lw-wbar-label"><Icon size={13} strokeWidth={2.4} />{w.severity} warning · {w.type}</span>
+            </div>
+            </React.Fragment>
+          );
+        })}
         {items.map((it, k) => {
           const day = new Date(it.t).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'Europe/London' });
           const dayStart = it.h && lastDay !== null && it.h.day !== lastDay;
@@ -103,6 +157,7 @@ function HourlyCard({ model, T, stripRef }) {
             </div>
           );
         })}
+        </div>
       </div>
     </div>
   );
@@ -222,7 +277,15 @@ function PrecipCard({ model }) {
 }
 
 /* ── the days ─────────────────────────────────────────────────────────────── */
-function DaysCard({ model, T, dayIdx, onDay }) {
+/* the part of a warning that falls on a day: "10:00–21:00", "from 18:00", "until 06:00" or "all day" */
+function warningHours(w, day) {
+  const s = ukDay(w.startMs) === day ? hhmm(w.startMs) : null;
+  const e = ukDay(w.endMs - 1) === day ? hhmm(w.endMs) : null;
+  return s && e ? `${s}–${e}` : s ? `from ${s}` : e ? `until ${e}` : 'all day';
+}
+const onDay = (w, day) => w.startMs && w.endMs && ukDay(w.startMs) <= day && ukDay(w.endMs - 1) >= day;
+
+function DaysCard({ model, T, dayIdx, onDay: pick, warnings, onWarning }) {
   const ds = model.days.filter((d) => d.hi != null);
   const gLo = Math.min(...ds.map((d) => d.lo)), gHi = Math.max(...ds.map((d) => d.hi));
   const span = Math.max(1, gHi - gLo);
@@ -232,14 +295,24 @@ function DaysCard({ model, T, dayIdx, onDay }) {
       <div className="lw-title"><CalendarDays />{ds.length}-day forecast<span className="lw-title-aside">Met Office UKV</span></div>
       {ds.map((d) => {
         const i = model.days.indexOf(d);
+        const on = i === dayIdx;
         const left = ((d.lo - gLo) / span) * 100, width = Math.max(4, ((d.hi - d.lo) / span) * 100);
+        const ws = warnings.filter((w) => onDay(w, d.day));                   // most severe first already
         return (
-          <React.Fragment key={d.day}>
-            <button type="button" className={`lw-day${i === dayIdx ? ' is-on' : ''}`} onClick={() => onDay(i)} aria-pressed={i === dayIdx}>
+          /* The selected day and its description are one highlighted block: the description used to
+             hang underneath the highlight, outside it, looking like part of the next row. */
+          <div key={d.day} className={`lw-dayrow${on ? ' is-on' : ''}`}>
+            <button type="button" className="lw-day" onClick={() => pick(i)} aria-pressed={on} aria-expanded={on}>
               <span className="lw-day-name">{d.label}</span>
               <span className="lw-day-icon">
                 <WxIcon cond={d.cond} day windy={d.windy} size={30} title={condLabel(d.cond, true, d.windy)} />
                 {d.pRain != null && d.pRain >= 20 && isWet(d.cond) ? <b>{d.pRain}%</b> : null}
+                {ws.length > 0 && (
+                  <span className="lw-day-warn" style={{ background: severityFill(ws[0].severity), color: severityInk(ws[0].severity) }}
+                    title={ws.map((w) => `${warningName(w)} ${warningHours(w, d.day)}`).join('; ')}>
+                    <AlertTriangle size={9} strokeWidth={3} />
+                  </span>
+                )}
               </span>
               <span className="lw-day-lo">{Math.round(T(d.lo))}°</span>
               <span className="lw-range">
@@ -248,12 +321,27 @@ function DaysCard({ model, T, dayIdx, onDay }) {
               </span>
               <span className="lw-day-hi">{Math.round(T(d.hi))}°</span>
             </button>
-            {i === dayIdx && (
-              <div className="lw-day-sub">
-                {dayText(d)}{d.sun.rise ? ` · sunrise ${hhmm(d.sun.rise)}, sunset ${hhmm(d.sun.set)}` : ''}{d.partial ? ' · part day (end of the UKV run)' : ''}
+            {on && (
+              <div className="lw-day-detail">
+                <p className="lw-day-text">{dayText(d)}</p>
+                <div className="lw-day-facts">
+                  {ws.map((w) => {
+                    const Icon = warningIcon(w.type);
+                    return (
+                      <button key={w.id} type="button" className="lw-day-fact is-warn" onClick={() => onWarning(w.id)}
+                        style={{ background: severityFill(w.severity), color: severityInk(w.severity) }}>
+                        <Icon size={13} strokeWidth={2.4} />{w.severity} {String(w.type).toLowerCase()} warning · {warningHours(w, d.day)}
+                      </button>
+                    );
+                  })}
+                  {d.pRain != null && d.pRain >= 20 && <span className="lw-day-fact"><Umbrella size={13} />{d.pRain}% chance of rain</span>}
+                  {d.sun.rise && <span className="lw-day-fact"><Sunrise size={13} />{hhmm(d.sun.rise)}</span>}
+                  {d.sun.set && <span className="lw-day-fact"><Sunset size={13} />{hhmm(d.sun.set)}</span>}
+                  {d.partial && <span className="lw-day-fact">Part day: the end of the UKV run</span>}
+                </div>
               </div>
             )}
-          </React.Fragment>
+          </div>
         );
       })}
     </div>
@@ -326,6 +414,14 @@ export default function LocationForecast() {
   const [locating, setLocating] = useState(false);
   const [geoError, setGeoError] = useState('');
   const [warnings, setWarnings] = useState([]);
+  const [openWarn, setOpenWarn] = useState(null);
+  /* a warning's bar on the hourly forecast, or its chip on a day, opens its card above */
+  const showWarning = useCallback((id) => {
+    setOpenWarn(id);
+    /* after the card has opened: while it grows, the browser's scroll anchoring shifts the page
+       by the growth, which left the card's top under the search bar */
+    setTimeout(() => document.getElementById(`lw-warn-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 280);
+  }, []);
   /* admins can preview every sky (components/location/SkyPreview.jsx) */
   const [isAdmin, setIsAdmin] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -407,7 +503,7 @@ export default function LocationForecast() {
   const lat = place?.lat, lon = place?.lon;
   useEffect(() => {
     let cancelled = false;
-    setWarnings([]);
+    setWarnings([]); setOpenWarn(null);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return undefined;
     fetchAllWarningsForPoint(lat, lon).then((list) => { if (!cancelled) setWarnings(list); });
     return () => { cancelled = true; };
@@ -533,16 +629,16 @@ export default function LocationForecast() {
 
             {warnings.length > 0 && (
               <div className="lw-glass lw-card" style={{ marginBottom: 14 }}>
-                <div className="lw-title"><AlertTriangle />Weather warnings</div>
-                <LocationWarnings warnings={warnings} />
+                <div className="lw-title"><AlertTriangle />Weather warnings<span className="lw-title-aside">{warnings.length === 1 ? '1 for this place' : `${warnings.length} for this place`}</span></div>
+                <LocationWarnings warnings={warnings} openId={openWarn} onToggle={setOpenWarn} />
               </div>
             )}
 
             <div className="lw-grid">
               <div className="lw-col">
-                <HourlyCard model={model} T={T} stripRef={stripRef} />
+                <HourlyCard model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} />
                 <PrecipCard model={model} />
-                <DaysCard model={model} T={T} dayIdx={dayIdx} onDay={pickDay} />
+                <DaysCard model={model} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />
                 <div className="lw-glass lw-card">
                   <div className="lw-title"><Radar />Rain radar<span className="lw-title-aside">Met Office 1 km · then UKV</span></div>
                   <LocationRadar lat={model.lat} lon={model.lon} />
@@ -561,7 +657,7 @@ export default function LocationForecast() {
               Forecast: Met Office UKV 2 km model from the Met Office&rsquo;s open data on AWS
               {runs.length ? ` — ${runs.map((r) => `${runName(r.run)} run to T+${r.top}`).join(', then ')}` : ''}.
               {model.cell ? ` The nearest model grid point is ${model.cell.offset_km} km away.` : ''}
-              <br />Now: UKV analysis corrected by station reports every 15 minutes. Radar: Met Office 1 km composite.
+              <br />Now: the UKV analysed every 15 minutes with station reports, the cloud Meteosat sees and the radar&rsquo;s rain. Radar: Met Office 1 km composite.
               The next hour: the newest radar scan carried forward by the way the rain has moved over the last half hour.
               Chance of rain counts model rain within 10 km; chance of lightning within 16 km.
             </p>

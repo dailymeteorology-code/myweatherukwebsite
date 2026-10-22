@@ -124,25 +124,57 @@
 .lw-hour .lw-h-day { font-size: 11px; font-weight: 700; color: var(--ink3); text-transform: uppercase; letter-spacing: 0.04em; min-height: 14px; }
 .lw-hour .lw-h-wind { font-size: 11px; color: var(--ink3); display: inline-flex; align-items: center; gap: 2px; }
 .lw-hours-nav { display: none; }
+/* the columns, and under them a bar for each warning across the hours it covers (columns are a
+   fixed 58px, so a bar's place is simple arithmetic) */
+.lw-hours-track { position: relative; display: flex; flex: 0 0 auto; }
+.lw-wbar {
+  position: absolute; height: 20px; display: flex; align-items: center; cursor: pointer;
+  overflow: clip; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: filter 0.15s;
+}
+.lw-wbar:hover { filter: brightness(1.06); }
+.lw-wbar:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+/* sticky, so the words stay in view while a long warning is scrolled through */
+.lw-wbar-label { position: sticky; left: 6px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; font-size: 11.5px; font-weight: 750; white-space: nowrap; }
+.lw-hour { position: relative; z-index: 1; }
+.lw-wwash { position: absolute; top: 0; bottom: 0; z-index: 0; border-radius: 12px; pointer-events: none; }
+.lw-wbar { z-index: 2; }
+/* before the bar: what is coming, as a quiet link, until the bar itself scrolls into view */
+.lw-wahead { position: absolute; left: 0; height: 20px; z-index: 2; pointer-events: none; }
+.lw-wahead button {
+  position: sticky; left: 6px; display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px 0 7px;
+  border: 1px dashed rgba(255, 255, 255, 0.35); border-radius: 8px; background: rgba(255, 255, 255, 0.08);
+  color: var(--ink2); font: inherit; font-size: 11.5px; font-weight: 650; white-space: nowrap; cursor: pointer; pointer-events: auto;
+}
+.lw-wahead button:hover { background: rgba(255, 255, 255, 0.16); color: var(--ink); }
 @media (hover: hover) and (min-width: 768px) {
   .lw-hours-nav { display: inline-flex; gap: 6px; margin-left: auto; }
   .lw-hours-nav button { width: 26px; height: 26px; border-radius: 99px; }
 }
 
 /* ── days ── */
-.lw-day { display: grid; grid-template-columns: 74px 44px 40px minmax(60px, 1fr) 40px; align-items: center; gap: 8px; width: 100%; padding: 9px 4px; border: 0; border-top: 1px solid var(--line); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 0; }
-.lw-day:first-of-type { border-top: 0; }
-.lw-day:hover { background: rgba(255, 255, 255, 0.06); }
-.lw-day.is-on { background: rgba(255, 255, 255, 0.1); border-radius: 12px; }
+/* a row and, when it is the selected day, its description: one highlighted block */
+.lw-dayrow { border-top: 1px solid var(--line); border-radius: 14px; transition: background 0.2s ease; }
+.lw-title + .lw-dayrow, .lw-dayrow.is-on, .lw-dayrow.is-on + .lw-dayrow { border-top-color: transparent; }
+.lw-dayrow.is-on { background: rgba(255, 255, 255, 0.13); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2); }
+.lw-day { display: grid; grid-template-columns: 74px 44px 40px minmax(60px, 1fr) 40px; align-items: center; gap: 8px; width: 100%; padding: 9px 4px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 14px; }
+.lw-dayrow:not(.is-on) .lw-day:hover { background: rgba(255, 255, 255, 0.06); }
+.lw-day-warn { position: absolute; top: -3px; right: 2px; display: grid; place-items: center; width: 15px; height: 15px; border-radius: 99px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
+.lw-day-detail { padding: 0 10px 12px 6px; animation: lw-rise 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.lw-day-text { margin: 0 0 9px; font-size: 14.5px; font-weight: 500; line-height: 1.35; color: var(--ink); }
+.lw-day-facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.lw-day-fact { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 8px; border: 0; border-radius: 99px; background: rgba(255, 255, 255, 0.14); font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.lw-day-fact svg { opacity: 0.85; }
+.lw-day-fact.is-warn { cursor: pointer; font-weight: 700; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); }
+.lw-day-fact.is-warn svg { opacity: 1; }
 .lw-day-name { font-size: 17px; font-weight: 600; }
-.lw-day-icon { display: flex; flex-direction: column; align-items: center; line-height: 1; }
+.lw-day-icon { position: relative; display: flex; flex-direction: column; align-items: center; line-height: 1; }
 .lw-day-icon b { font-size: 11px; font-weight: 700; color: #8fd0ff; margin-top: 1px; }
 .lw-day-lo { font-size: 17px; font-weight: 500; color: var(--ink3); text-align: right; }
 .lw-day-hi { font-size: 17px; font-weight: 600; text-align: right; }
 .lw-range { position: relative; height: 5px; border-radius: 99px; background: rgba(0, 0, 0, 0.22); overflow: visible; }
 .lw-range i { position: absolute; top: 0; bottom: 0; border-radius: 99px; }
 .lw-range em { position: absolute; top: 50%; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 99px; background: #fff; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35); }
-.lw-day-sub { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink3); margin-top: -4px; padding-left: 2px; }
 
 /* ── precipitation: the next hour minute by minute, or the next 12 hours ── */
 .lw-seg.lw-seg-sm { padding: 2px; border-radius: 10px; text-transform: none; letter-spacing: 0; }
@@ -335,3 +367,39 @@
 .lw-suggest::-webkit-scrollbar { width: 8px; }
 .lw-suggest::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.25); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
 .lw-suggest::-webkit-scrollbar-track { background: transparent; }
+
+/* ── weather warnings ── */
+.lw-warns { display: flex; flex-direction: column; gap: 10px; }
+/* opened from the hourly bar or a day: land below the site's bar and the floating search bar */
+.lw-warn { border: 1px solid; border-radius: 16px; overflow: hidden; scroll-margin-top: 136px; }
+@media (max-width: 767px) { .lw-warn { scroll-margin-top: 72px; } }
+.lw-warn-head { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 12px 12px 16px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.lw-warn-icon { display: grid; place-items: center; width: 46px; height: 46px; flex-shrink: 0; border-radius: 14px; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.45); }
+.lw-warn-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.lw-warn-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.lw-warn-badge { padding: 2px 8px; border-radius: 99px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.lw-warn-type { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+.lw-warn-when { font-size: 13px; color: var(--ink2); }
+.lw-warn-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.lw-warn-status i { width: 7px; height: 7px; flex-shrink: 0; border-radius: 99px; }
+.lw-warn-status.is-live i { animation: lw-pulse 1.6s ease-in-out infinite; }
+@keyframes lw-pulse { 50% { opacity: 0.3; } }
+.lw-warn-chev { flex-shrink: 0; color: var(--ink2); transition: transform 0.2s; }
+.lw-warn-body { margin: 0 14px 0 16px; padding: 12px 0 14px; border-top: 1px solid; }
+.lw-warn-headline { margin: 0; font-size: 14.5px; font-weight: 600; line-height: 1.45; }
+.lw-warn-label { margin: 14px 0 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink3); }
+.lw-warn-headline + .lw-warn-label { margin-top: 12px; }
+.lw-warn-body > .lw-warn-label:first-child { margin-top: 0; }
+.lw-warn-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.lw-warn-list li { position: relative; padding-left: 16px; font-size: 13.5px; line-height: 1.45; color: var(--ink); }
+.lw-warn-list li i { position: absolute; left: 2px; top: 0.55em; width: 6px; height: 6px; border-radius: 99px; }
+.lw-warn-desc { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--ink2); white-space: pre-line; }
+.lw-warn-foot { margin-top: 14px; font-size: 12.5px; color: var(--ink3); }
+.lw-warn-foot a { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 99px; background: rgba(255, 255, 255, 0.14); color: var(--ink); font-weight: 600; text-decoration: none; }
+.lw-warn-foot a:hover { background: rgba(255, 255, 255, 0.22); }
+@media (max-width: 480px) {
+  .lw-warn-head { gap: 10px; padding: 11px 10px 11px 14px; }
+  .lw-warn-icon { width: 40px; height: 40px; border-radius: 12px; }
+  .lw-warn-type { font-size: 15.5px; }
+}
+@media (prefers-reduced-motion: reduce) { .lw-warn-status.is-live i, .lw-day-detail { animation: none; } }
