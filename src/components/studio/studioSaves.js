@@ -24,6 +24,11 @@ export async function saveStudioGraphic({ basic, me, title, state }) {
   return base44.entities.WeatherGraphic.create({ title, graphic_tool_state: state, published: false, is_forecast: false });
 }
 
+/** Deletes a saved graphic for good (in the public studio, only the visitor's own). */
+export async function deleteStudioGraphic({ basic, id }) {
+  return basic ? base44.entities.StudioGraphic.delete(id) : base44.entities.WeatherGraphic.delete(id);
+}
+
 /** The saved graphics, newest first, each with its state as `state`, for the tool `keep` accepts. */
 export async function listStudioGraphics({ basic, me, keep }) {
   const rows = basic

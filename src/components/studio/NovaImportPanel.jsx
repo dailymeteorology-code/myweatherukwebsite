@@ -14,7 +14,7 @@ import React, { useEffect, useState } from 'react';
 import { DownloadCloud, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { novaRecentRuns, novaRun, runName, novaField, boxMask, contourLevels, peak, framesIn, framesStat, timingFrames, SHAPES } from '@/lib/novaOutlook';
-import { buildCells, shiftTimeline, parseLocal, toLocalInput, hourKey, marksFromStamps } from '@/components/studio/studioTimeline';
+import { GRANS, buildCells, shiftTimeline, parseLocal, toLocalInput, hourKey, marksFromStamps } from '@/components/studio/studioTimeline';
 import { Btn, Seg, Field } from '@/components/studio/StudioUI';
 import { MAP_BBOX } from '@/components/studio/studioGeo';
 
@@ -26,6 +26,8 @@ const dayBounds = (d) => { const a = new Date(`${d}T00:00:00`), b = new Date(a);
 const runDays = (m) => (m.days?.length ? m.days.map((d) => ({ ...d, summary: true }))
   : [...new Set((m.frames || []).filter((f) => f.valid).map((f) => new Date(f.valid).toLocaleDateString('en-CA')))].map((date) => ({ date })));
 const runKey = (r) => `${r.product}|${r.run_id}`;
+/* chosen dates and times become the timeline in its own steps, coarser when they would give more stamps than this */
+const CUSTOM_STAMPS = 25;
 
 /* the choices that are a matter of taste are remembered */
 const PREF_KEY = 'mwuk_studio_import';
@@ -94,21 +96,36 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
     try {
       /* the view, or the whole map: nothing beyond its edges, where it would land under the cards */
       const mask = boxMask(m.grid, view && !view.whole ? padBox(view.box) : MAP_BBOX);
-      /* the window the timeline will have once the outlook day moves to the imported day */
-      const tl = day && day !== validDate ? shiftTimeline(timeline, dayDiff(validDate, day)) : timeline;
-      const cells = buildCells(tl);
       /* the span the areas and hazards are taken over */
       let from, to;
       if (day) [from, to] = dayBounds(day);
       else if (span === 'custom') { from = parseLocal(custom.from)?.getTime(); to = parseLocal(custom.to)?.getTime(); }
-      else { from = cells[0]?.ms; to = cells[cells.length - 1]?.end; }
+      if (span !== 'window' && !(from < to)) throw new Error('The end has to be after the start.');
+      /* the window the timeline will have: chosen dates and times become the timeline itself (in
+         steps that keep it readable) and the outlook's day or days; a day moves the window to it */
+      let tl = day && day !== validDate ? shiftTimeline(timeline, dayDiff(validDate, day)) : timeline;
+      const out = { mode, day };
+      if (span === 'custom') {
+        tl = { ...timeline, v: 2, from: custom.from, to: custom.to };
+        const g = GRANS.map(([k]) => k), stamps = (i) => buildCells({ ...tl, gran: g[i] }).length;
+        let gi = Math.max(0, g.indexOf(tl.gran));
+        while (gi < g.length - 1 && stamps(gi) > CUSTOM_STAMPS) gi++;
+        while (gi > 0 && stamps(gi) < 4) gi--;
+        tl.gran = g[gi];
+        out.day = toLocalInput(new Date(from)).slice(0, 10);
+        const last = toLocalInput(new Date(to - 60e3)).slice(0, 10);   // an end at midnight closes the day before
+        out.day2 = last === out.day ? '' : last;
+        out.timeline = tl;   // the window, even when its marks are not imported
+      }
+      const cells = buildCells(tl);
+      if (span === 'window') { from = cells[0]?.ms; to = cells[cells.length - 1]?.end; }
       if (!(from < to)) throw new Error('The end has to be after the start.');
       const spanFrames = framesIn(m, from, to);
+      if (span === 'custom' && !spanFrames.length) throw new Error('Those dates and times are outside this NOVA run.');
       /* a day's peak is in a Main Run's day summaries; anything else is worked out from the frames */
       const summary = day && days.find((d) => d.date === day)?.summary;
       const fieldOver = (name) => (summary && prefs.stat === 'peak' ? novaField(m, { day }, name)
         : spanFrames.length ? framesStat(m, spanFrames, name, prefs.stat) : null);
-      const out = { mode, day };
 
       if (want.areas || want.severe) {
         const p = await fieldOver('p_thunder');
@@ -205,6 +222,7 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
         {prefs.timed ? ' Split by time gives each area its own hours (first, second…) and outlines them white to grey, cutting an area that two spells share.' : ''}
         {' '}The timeline always takes each hour's peak. Areas stay editable.
         {day ? ' Picking a day moves the outlook day (and the timeline) to it.' : ''}
+        {span === 'custom' ? ' The dates and times become the timeline on the graphic, and its outlook day or days.' : ''}
       </p>
     </div>
   );

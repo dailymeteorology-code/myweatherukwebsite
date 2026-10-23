@@ -31,12 +31,12 @@ import { variantOf } from '@/lib/graphicVariants';
 import { RADAR_BANDS, UKRadarLayer } from '@/lib/ukRadar';
 import { VIEW_W, VIEW_H, MAP_BBOX, projectPt, latLonToBox, useCounties, resolveView, viewZoom, CountyLand, TownLabels } from '@/components/studio/studioGeo';
 import { GRANS, defaultTimeline, buildCells, cellLevels, markCells, shiftTimeline, savedTimeline, markedSpan, parseLocal } from '@/components/studio/studioTimeline';
-import { StudioLayout, Section, Btn, Seg, Field, Swatches } from '@/components/studio/StudioUI';
+import { StudioLayout, Section, Btn, Seg, Field, Swatches, SavedList, Popover } from '@/components/studio/StudioUI';
 import MapViewPicker from '@/components/studio/MapViewPicker';
 import ModelOverlay from '@/components/studio/ModelOverlay';
 import useHistory from '@/components/studio/useHistory';
 import ModelGuidePanel from '@/components/studio/ModelGuidePanel';
-import { useStudioUser, saveStudioGraphic, listStudioGraphics } from '@/components/studio/studioSaves';
+import { useStudioUser, saveStudioGraphic, listStudioGraphics, deleteStudioGraphic } from '@/components/studio/studioSaves';
 import { AreaTimingPanel, shadeColor, timedActive, shiftTiming, timingOrder, shadeByTiming, timingRings, isTimed } from '@/components/studio/areaTiming';
 
 // --- Conditional Severe -----------------------------------------------------
@@ -480,6 +480,15 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
       setSavedGraphics(await listStudioGraphics({ basic, me, keep: (st) => st.tool === V.tool }));
     } finally {
       setLoadingGraphics(false);
+    }
+  };
+  const deleteSaved = async (g) => {
+    try {
+      await deleteStudioGraphic({ basic, id: g.id });
+      setSavedGraphics((list) => list.filter((x) => x.id !== g.id));
+    } catch (e) {
+      console.error('[Studio] delete failed:', e);
+      toast.error('The graphic could not be deleted.');
     }
   };
 
@@ -1476,19 +1485,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
   const penOn = mapTool === 'draw' && drawMode;
   /* the saved graphics, newest first; `after` runs once one is opened */
   function savedList(after) {
-    return (
-      <div className="sg-list">
-        {loadingGraphics && <p className="sg-note">Loading…</p>}
-        {!loadingGraphics && savedGraphics.length === 0 && <p className="sg-note">Nothing saved yet.</p>}
-        {savedGraphics.map((g) => (
-          <button key={g.id} type="button" className="sg-item" style={{ cursor: 'pointer', font: 'inherit', color: 'inherit', textAlign: 'left' }} onClick={() => { loadState(g); after(); }} title={g.title}>
-            <FolderOpen style={{ width: 13, height: 13, color: '#fbbf24', flexShrink: 0 }} />
-            <span>{g.title}</span>
-            <small className="sg-note">{new Date(g.created_date).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '')}</small>
-          </button>
-        ))}
-      </div>
-    );
+    return <SavedList items={savedGraphics} loading={loadingGraphics} onOpen={(g) => { loadState(g); after(); }} onDelete={deleteSaved} />;
   }
   const toolbar = (
     <div className="sg-toolbar">
@@ -1514,9 +1511,9 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
       <span className="sg-grow" />
       <Btn sm on={saveSuccess} color="#22c55e" icon={saving ? Loader2 : saveSuccess ? Check : Save} disabled={saving} onClick={() => handleSaveToStudio(true)}
         title={saveName.trim() ? `Save as "${saveName.trim()}"` : 'Save this graphic (named for its days, or type a name under Save & export)'}>{saveSuccess ? 'Saved' : 'Save'}</Btn>
-      <Btn sm on={savedPop} color="#fbbf24" icon={FolderOpen} onClick={() => { if (!savedPop) loadSaved(); setSavedPop((v) => !v); }} title="Open a saved graphic">Saved</Btn>
+      <Btn sm on={savedPop} color="#fbbf24" icon={FolderOpen} data-pop-toggle onClick={() => { if (!savedPop) loadSaved(); setSavedPop((v) => !v); }} title="Open a saved graphic">Saved</Btn>
       <Btn sm primary color="#0ea5e9" icon={isExporting ? Loader2 : Download} disabled={isExporting} onClick={handleDownload}>JPG</Btn>
-      {savedPop && <div className="sg-pop">{savedList(() => setSavedPop(false))}</div>}
+      {savedPop && <Popover title="Saved graphics" onClose={() => setSavedPop(false)}>{savedList(() => setSavedPop(false))}</Popover>}
     </div>
   );
 

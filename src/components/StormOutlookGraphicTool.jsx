@@ -5,7 +5,7 @@ import {
   Download, Eraser, Eye, EyeOff, Clock, Pen, MousePointer, Undo2, X, Zap,
   CloudLightning, Tornado, AlertTriangle, ShieldAlert, MapPin,
   CloudRain, CloudDrizzle, CloudRainWind, Radar, Save, FolderOpen, Check, Loader2, Circle, RefreshCw,
-  Type, MoveUpRight, MousePointer2, Redo2, DownloadCloud, FileText, Map as MapIcon, Trash2, Wind,
+  Type, MoveUpRight, MousePointer2, Redo2, DownloadCloud, FileText, Map as MapIcon, Trash2, Wind, Target,
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { toast } from 'sonner';
@@ -20,13 +20,13 @@ import { RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConf
 import TimelinePill from '@/components/tcm/StormOutlookTimelinePill';
 import { RADAR_BANDS, UKRadarLayer } from '@/lib/ukRadar';
 import { VIEW_W, VIEW_H, MAP_BBOX, projectPt, latLonToBox, useCounties, resolveView, viewZoom, CountyLand, TownLabels } from '@/components/studio/studioGeo';
-import { GRANS, defaultTimeline, buildCells, cellLevels, markCells, shiftTimeline, savedTimeline, markedSpan, parseLocal } from '@/components/studio/studioTimeline';
-import { StudioLayout, Section, Btn, Seg, Field, Swatches } from '@/components/studio/StudioUI';
+import { GRANS, defaultTimeline, buildCells, cellLevels, markCells, shiftTimeline, savedTimeline, markedSpan, parseLocal, keyMs } from '@/components/studio/studioTimeline';
+import { StudioLayout, Section, Btn, Seg, Field, Swatches, SavedList, Popover } from '@/components/studio/StudioUI';
 import MapViewPicker from '@/components/studio/MapViewPicker';
 import ModelOverlay from '@/components/studio/ModelOverlay';
 import useHistory from '@/components/studio/useHistory';
 import NovaImportPanel from '@/components/studio/NovaImportPanel';
-import { useStudioUser, saveStudioGraphic, listStudioGraphics } from '@/components/studio/studioSaves';
+import { useStudioUser, saveStudioGraphic, listStudioGraphics, deleteStudioGraphic } from '@/components/studio/studioSaves';
 import { AreaTimingPanel, shadeColor, timedActive, shiftTiming, timingOrder, shadeByTiming, timingRings, isTimed } from '@/components/studio/areaTiming';
 
 // --- Conditional Severe -----------------------------------------------------
@@ -238,12 +238,14 @@ function FloodHouseIcon({ size = 12, color = '#3b82f6' }) {
 function LightningLayer({ strikes, color = '#ffffff', outline = false, outlineColor = '#000000' }) {
   // Build a single compact <path> of all strike dots instead of thousands of
   // individual <circle> elements — dramatically faster rendering for large counts.
-  // When `outline` is on we build a SECOND path at a slightly larger radius and
-  // stroke it, so every dot gets a crisp ring without adding per-strike nodes.
+  // When `outline` is on we build a SECOND path of slightly larger discs in the
+  // outline colour, laid under ALL the dots: where strikes overlap, every dot
+  // still sits on top of every outline, and the one group opacity is applied to
+  // the finished picture, so a cluster never shows darker seams or blends.
   const { fillD, outlineD } = useMemo(() => {
     if (!strikes || !strikes.length) return { fillD: '', outlineD: '' };
-    const r = 2.4;
-    const ro = r + 1.1; // outline ring radius — fully encloses the fill dot
+    const r = 1.6;
+    const ro = r + 0.75; // outline disc radius — a thin rim round the fill dot
     let f = '';
     let o = '';
     const circle = (x, y, rad) => {
@@ -266,10 +268,10 @@ function LightningLayer({ strikes, color = '#ffffff', outline = false, outlineCo
   return (
     <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} preserveAspectRatio="xMidYMid meet"
       style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}>
-      {outline && outlineD && (
-        <path d={outlineD} fill="none" stroke={outlineColor} strokeWidth={1.3} opacity={0.95} />
-      )}
-      <path d={fillD} fill={color} opacity={0.9} />
+      <g opacity={0.92}>
+        {outline && outlineD && <path d={outlineD} fill={outlineColor} />}
+        <path d={fillD} fill={color} />
+      </g>
     </svg>
   );
 }
@@ -536,6 +538,15 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
       setSavedGraphics(await listStudioGraphics({ basic, me, keep: (st) => (basic ? st.tool === 'outlook' : !st._scenarioTool && (!st.tool || st.tool === 'outlook')) }));
     } finally {
       setLoadingGraphics(false);
+    }
+  };
+  const deleteSaved = async (g) => {
+    try {
+      await deleteStudioGraphic({ basic, id: g.id });
+      setSavedGraphics((list) => list.filter((x) => x.id !== g.id));
+    } catch (e) {
+      console.error('[Studio] delete failed:', e);
+      toast.error('The graphic could not be deleted.');
     }
   };
 
@@ -943,12 +954,13 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
   // drawing space), a timeline already moved to the imported day, and hazard chances (%) by
   // hazard id. A hazard NOVA gives 10% or more is ticked as well. Areas split by time come with
   // their hours, and get outline shades from white (first) to grey (last).
-  const applyNova = ({ mode, day, areas, timeline: tl, hazards: hz }) => {
+  const applyNova = ({ mode, day, day2, areas, timeline: tl, hazards: hz }) => {
     const n = day && day !== validDate ? dayDiff(validDate, day) : 0;
     if (n) {
       setValidDate(day);
       if (!tl) setTimeline((t) => shiftTimeline(t, n));
     }
+    if (day2 !== undefined) setValidDate2(day2);   // chosen dates and times: the outlook's days are theirs
     if (tl) setTimeline(tl);
     if (areas) {
       const mapped = areas.map(({ riskLevel, ring, from, to }) => ({ riskLevel, points: ring.map(([lat, lon]) => latLonToBox(lat, lon)), ...(from ? { from, to } : {}) }))
@@ -1173,6 +1185,48 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
   /* the lon/lat box on screen, for the radar and the UKV layer */
   const viewBox = regional ? view.box : null;
 
+  /* How well the areas caught the lightning, for the card under the Lightning one. Of the strikes on
+     the map (in a regional view, that region's), the share inside a risk area, at that area's own
+     hours when it has them (give or take an hour); and of the risk areas, the share that saw a
+     strike. The score is the harmonic mean of the two, so it is high only when the areas caught the
+     strikes AND were not drawn where none fell. Severe and Conditional Severe are overlays on the
+     risk areas, not areas of their own, so they are left out, and so is an area whose hours have
+     not begun yet (tomorrow's, on a two-day outlook): it cannot have seen anything. */
+  const lightningScore = useMemo(() => {
+    if (!showLightning || isRadar || !strikes?.length) return null;
+    const now = Date.now();
+    const risk = shapes.filter((s) => s.points?.length >= 3 && !isSevereId(s.riskLevel) && !isCondSevereId(s.riskLevel));
+    const areas = risk.filter((s) => !(isTimed(s) && keyMs(s.from) > now));
+    if (!areas.length) return null;
+    const boxes = areas.map((s) => {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const [x, y] of s.points) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+      return [x0, y0, x1, y1];
+    });
+    const seen = new Array(areas.length).fill(false);
+    let total = 0, caught = 0;
+    for (const st of strikes) {
+      const lat = st.lat ?? st.la, lon = st.lon ?? st.lo;
+      if (lat == null || lon == null) continue;
+      if (viewBox && (lon < viewBox.lonMin || lon > viewBox.lonMax || lat < viewBox.latMin || lat > viewBox.latMax)) continue;
+      total++;
+      const p = latLonToBox(lat, lon);
+      let hit = false;
+      areas.forEach((s, i) => {
+        const b = boxes[i];
+        if (p[0] < b[0] || p[0] > b[2] || p[1] < b[1] || p[1] > b[3]) return;
+        if (timedActive(s, st.t, 3600e3) === false || !pointInPolygon(p, s.points)) return;
+        hit = true;
+        seen[i] = true;
+      });
+      if (hit) caught++;
+    }
+    if (!total) return null;
+    const pod = caught / total, areaHit = seen.filter(Boolean).length / areas.length;
+    const score = pod + areaHit > 0 ? (2 * pod * areaHit) / (pod + areaHit) : 0;
+    return { score: Math.round(score * 100), pod: Math.round(pod * 100), caught, total, areasHit: seen.filter(Boolean).length, areas: areas.length, later: risk.length - areas.length };
+  }, [showLightning, isRadar, strikes, shapes, viewBox]);
+
   // --- Timeline: the span of what is marked, and the hour the UKV layer shows ------------
   const timelineValid = useMemo(() => markedSpan(timelineStamps, stampRisks, stampOverlays), [timelineStamps, stampRisks, stampOverlays]);
   const windowBad = (() => { const a = parseLocal(timeline.from), b = parseLocal(timeline.to); return !a || !b || b <= a; })();
@@ -1277,6 +1331,11 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
           {lightningStats.count > 0 && lightningStats.peakHour != null ? <> · peak <b>{fmtHour(lightningStats.peakHour)}–{fmtHour((lightningStats.peakHour + 1) % 24)} {tzAbbr}</b></> : ''}</span>
       </div>
       {lightningError && <p className="sg-note" style={{ color: 'var(--sg-amber)' }}>{lightningError}</p>}
+      {lightningStats.count > 0 && (
+        <p className="sg-note">{lightningScore
+          ? <>Accuracy <b>{lightningScore.score}%</b>: {lightningScore.caught.toLocaleString()} of {lightningScore.total.toLocaleString()} strikes{viewBox ? ' in this view' : ''} fell in a risk area, and {lightningScore.areasHit} of {lightningScore.areas} areas saw lightning{lightningScore.later > 0 ? ` (${lightningScore.later} still to come are left out)` : ''}. The score is on the graphic, under the Lightning card.</>
+          : 'Draw or import risk areas to score them against the strikes.'}</p>
+      )}
       <div className="sg-row">
         <span className="sg-label" style={{ margin: 0 }}>Dots</span>
         <Swatches colors={LIGHTNING_SWATCHES} value={lightningColor} onChange={setLightningColor} custom />
@@ -1597,19 +1656,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
   const penOn = mapTool === 'draw' && drawMode;
   /* the saved graphics, newest first; `after` runs once one is opened */
   function savedList(after) {
-    return (
-      <div className="sg-list">
-        {loadingGraphics && <p className="sg-note">Loading…</p>}
-        {!loadingGraphics && savedGraphics.length === 0 && <p className="sg-note">Nothing saved yet.</p>}
-        {savedGraphics.map((g) => (
-          <button key={g.id} type="button" className="sg-item" style={{ cursor: 'pointer', font: 'inherit', color: 'inherit', textAlign: 'left' }} onClick={() => { loadState(g); after(); }} title={g.title}>
-            <FolderOpen style={{ width: 13, height: 13, color: '#fbbf24', flexShrink: 0 }} />
-            <span>{g.title}</span>
-            <small className="sg-note">{new Date(g.created_date).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '')}</small>
-          </button>
-        ))}
-      </div>
-    );
+    return <SavedList items={savedGraphics} loading={loadingGraphics} onOpen={(g) => { loadState(g); after(); }} onDelete={deleteSaved} />;
   }
   const toolbar = (
     <div className="sg-toolbar">
@@ -1635,9 +1682,9 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
       <span className="sg-grow" />
       <Btn sm on={saveSuccess} color="#22c55e" icon={saving ? Loader2 : saveSuccess ? Check : Save} disabled={saving} onClick={() => handleSaveToStudio(true)}
         title={saveName.trim() ? `Save as "${saveName.trim()}"` : 'Save this graphic (named for its days, or type a name under Save & export)'}>{saveSuccess ? 'Saved' : 'Save'}</Btn>
-      <Btn sm on={savedPop} color="#fbbf24" icon={FolderOpen} onClick={() => { if (!savedPop) loadSaved(); setSavedPop((v) => !v); }} title="Open a saved graphic">Saved</Btn>
+      <Btn sm on={savedPop} color="#fbbf24" icon={FolderOpen} data-pop-toggle onClick={() => { if (!savedPop) loadSaved(); setSavedPop((v) => !v); }} title="Open a saved graphic">Saved</Btn>
       <Btn sm primary color="#0ea5e9" icon={isExporting ? Loader2 : Download} disabled={isExporting} onClick={handleDownload}>JPG</Btn>
-      {savedPop && <div className="sg-pop">{savedList(() => setSavedPop(false))}</div>}
+      {savedPop && <Popover title="Saved graphics" onClose={() => setSavedPop(false)}>{savedList(() => setSavedPop(false))}</Popover>}
     </div>
   );
 
@@ -2020,6 +2067,38 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
               </div>
             )}
 
+            {/* Accuracy card — how well the drawn areas caught the strikes shown (see lightningScore) */}
+            {showLightning && lightningScore && (() => {
+              const c = lightningScore.score >= 70 ? '#4ade80' : lightningScore.score >= 40 ? '#facc15' : '#f87171';
+              const sub = { fontSize: 7.5, fontWeight: 700, color: 'rgba(148,163,184,0.95)', letterSpacing: '0.12em', textTransform: 'uppercase' };
+              return (
+                <div style={{ ...glass({ padding: '8px 10px', borderRadius: 12, alignSelf: 'flex-start', width: 150 }, glassMode) }}>
+                  <GlassSheen />
+                  <span style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6, paddingBottom: 5, borderBottom: '1px solid rgba(255,255,255,0.10)', fontSize: 8.5, fontWeight: 800, letterSpacing: '0.18em', color: 'rgba(148,163,184,0.95)', textTransform: 'uppercase' }}>
+                    <Target style={{ width: 10, height: 10, color: c }} strokeWidth={2.6} /> Accuracy
+                  </span>
+                  <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 19, fontWeight: 800, color: c, lineHeight: 1, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>
+                        {lightningScore.score}<span style={{ fontSize: 11, marginLeft: 1 }}>%</span>
+                      </span>
+                      <span style={{ display: 'block', height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.12)', overflow: 'hidden' }}>
+                        <span style={{ display: 'block', height: '100%', width: `${lightningScore.score}%`, background: c, borderRadius: 2 }} />
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: '#fff', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{lightningScore.pod}%</span>
+                      <span style={sub}>Strikes in risk areas</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: '#fff', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{lightningScore.areasHit} / {lightningScore.areas}</span>
+                      <span style={sub}>Areas with lightning</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Forecast discussion card — forecaster narrative, left column.
                 Display-only; inherits the header's pointer-events:none. Width
                 matches the other cards so it clears the centred map, and the
@@ -2133,12 +2212,19 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
             {showLightning && <CountyLand data={counties} view={view} k={outlookZoom.k} linesOnly zIndex={5.5} />}
            </div>
           </div>
+          {/* the outlines again over the strikes, exactly as they are drawn without them */}
           {showShapes && showLightning && shapes.length > 0 && (
               <svg viewBox={DRAW_VB} preserveAspectRatio="none" style={{ ...DRAW_BOX, pointerEvents: 'none', zIndex: 3 }}>
                 <g transform={drawZoom}>
                 {shapes.map((s, i) => {
                   const m = LEVEL_LOOKUP[s.riskLevel] || activeMeta, severe = isSevereId(s.riskLevel), condSevere = isCondSevereId(s.riskLevel), areaCond = !!s.cond && !severe && !condSevere;
-                  return <path key={i} d={pointsToPath(s.points)} fill="none" stroke={s.stroke != null ? shadeColor(s.stroke) : areaCond ? darkenColor(m.border, 0.3) : darkenColor(m.border, 0.2)} strokeWidth={severe ? 9 : condSevere ? 8 : areaCond ? 7.5 : 6} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={condSevere ? '14 10' : areaCond ? '15 9' : 'none'} opacity={Math.min(1, drawOpacity + 0.15)} />;
+                  return (
+                    <g key={i} opacity={animOpacityFor(s)}>
+                      {condSevere && <path d={shapePaths[i]} fill="none" stroke="rgba(255,255,255,0.75)" strokeWidth={8} strokeLinejoin="round" strokeLinecap="round" strokeDasharray="12 9" />}
+                      <path d={shapePaths[i]} fill="none" stroke={s.stroke != null ? shadeColor(s.stroke) : areaCond ? darkenColor(m.border, 0.4) : darkenColor(m.border, 0.2)}
+                        strokeWidth={severe ? 6 : condSevere ? 5.5 : areaCond ? 5 : 4} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={condSevere ? '12 9' : areaCond ? '13 8' : 'none'} />
+                    </g>
+                  );
                 })}
               </g>
               </svg>

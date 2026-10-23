@@ -6,8 +6,8 @@
    while drawing. The colours are the admin page's tokens (--ad-*), so the studio re-colours with the rest of Admin
    Settings; outside it they fall back to the dark set. Only the controls follow the theme: the
    graphic itself is the same image in both. */
-import React, { useEffect, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ChevronDown, FolderOpen, Loader2, Trash2, X } from 'lucide-react';
 
 const CSS = `
 .sg { --sg-text: var(--ad-text, #f2f6fc); --sg-mid: var(--ad-text-mid, #9fb0c6); --sg-dim: var(--ad-text-dim, rgba(159,176,198,.7));
@@ -113,6 +113,22 @@ textarea.sg-input { resize: vertical; line-height: 1.45; }
   background: color-mix(in srgb, var(--ad-bg, #0b1220) 94%, transparent); border: 1px solid var(--sg-border2);
   -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%); box-shadow: var(--sg-shadow); }
 .sg-pop .sg-list { max-height: 340px; }
+.sg-pop-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px 6px; font-size: 12px; font-weight: 750; letter-spacing: .02em; }
+.sg-pop-head b { flex: 1; }
+.sg-pop-x { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--sg-border2);
+  background: var(--sg-surface2); color: var(--sg-mid); cursor: pointer; padding: 0; }
+.sg-pop-x:hover { color: var(--sg-text); border-color: var(--sg-border3); }
+.sg-pop-x svg { width: 14px; height: 14px; }
+.sg-saved { padding: 0 4px 0 0; gap: 4px; }
+.sg-saved-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 4px 7px 9px; border: 0; background: transparent;
+  color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 10px; }
+.sg-saved-open > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-saved-open > svg { width: 13px; height: 13px; color: var(--sg-amber); flex-shrink: 0; }
+.sg-saved-del { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 28px; height: 28px; padding: 0 6px;
+  border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--sg-dim); cursor: pointer; font: inherit; font-size: 11px; font-weight: 750; }
+.sg-saved-del:hover { color: var(--sg-red); border-color: color-mix(in srgb, var(--sg-red) 40%, transparent); }
+.sg-saved-del.is-confirm { color: #fff; background: var(--sg-red); border-color: var(--sg-red); }
+.sg-saved-del svg { width: 13px; height: 13px; }
 .sg-grow { flex: 1; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .sg-spin { animation: spin 1s linear infinite; }
@@ -161,6 +177,64 @@ export function Seg({ value, onChange, options, color }) {
           {Icon && <Icon />}{label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** The saved graphics, newest first. A click on one opens it; its bin deletes it, after a second
+    click to confirm (the first turns it into "Delete?", and leaving the row cancels). */
+export function SavedList({ items, loading, onOpen, onDelete }) {
+  const [confirm, setConfirm] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const del = async (g) => {
+    if (confirm !== g.id) { setConfirm(g.id); return; }
+    setBusy(g.id);
+    try { await onDelete(g); } finally { setBusy(null); setConfirm(null); }
+  };
+  return (
+    <div className="sg-list">
+      {loading && <p className="sg-note">Loading…</p>}
+      {!loading && items.length === 0 && <p className="sg-note">Nothing saved yet.</p>}
+      {items.map((g) => (
+        <div key={g.id} className="sg-item sg-saved" onMouseLeave={() => confirm === g.id && busy !== g.id && setConfirm(null)}>
+          <button type="button" className="sg-saved-open" onClick={() => onOpen(g)} title={g.title}>
+            <FolderOpen />
+            <span>{g.title}</span>
+            <small className="sg-note">{new Date(g.created_date).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '')}</small>
+          </button>
+          <button type="button" className={`sg-saved-del${confirm === g.id ? ' is-confirm' : ''}`} disabled={busy === g.id} onClick={() => del(g)}
+            title={confirm === g.id ? 'Click again to delete it for good' : 'Delete this saved graphic'} aria-label={`Delete ${g.title}`}>
+            {busy === g.id ? <Loader2 className="sg-spin" /> : <Trash2 />}{confirm === g.id && busy !== g.id && 'Delete?'}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** A small glass window hanging from the toolbar. It closes with its X, Escape, or a click
+    anywhere outside it (except on the control marked data-pop-toggle, which toggles it itself). */
+export function Popover({ title, onClose, children }) {
+  const ref = useRef(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const key = (e) => { if (e.key === 'Escape') close.current(); };
+    const down = (e) => {
+      if (ref.current?.contains(e.target) || e.target.closest?.('[data-pop-toggle]')) return;
+      close.current();
+    };
+    document.addEventListener('keydown', key);
+    document.addEventListener('pointerdown', down);
+    return () => { document.removeEventListener('keydown', key); document.removeEventListener('pointerdown', down); };
+  }, []);
+  return (
+    <div ref={ref} className="sg-pop" role="dialog" aria-label={title}>
+      <div className="sg-pop-head">
+        <b>{title}</b>
+        <button type="button" className="sg-pop-x" onClick={() => close.current()} aria-label="Close" title="Close (Esc)"><X /></button>
+      </div>
+      {children}
     </div>
   );
 }
