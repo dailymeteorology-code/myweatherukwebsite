@@ -168,6 +168,24 @@ async function deliverCode(email, subject, line) {
   }
 }
 
+/* what a user's preferences may hold (src/lib/preferences.jsx keeps the same lists) */
+const PREF_CHOICES = { language: ['en', 'es', 'pl', 'zh', 'fr', 'de'], theme: ['system', 'light', 'dark'] };
+const UNIT_CHOICES = {
+  temperature: ['celsius', 'fahrenheit'], windSpeed: ['mph', 'kmh', 'knots', 'ms'],
+  precipitation: ['mm', 'inches'], hail: ['mm', 'inches'],
+};
+function cleanPreferences(p) {
+  if (!p || typeof p !== 'object') return null;
+  const out = {};
+  for (const [k, ok] of Object.entries(PREF_CHOICES)) if (ok.includes(p[k])) out[k] = p[k];
+  if (p.units && typeof p.units === 'object') {
+    const units = {};
+    for (const [k, ok] of Object.entries(UNIT_CHOICES)) if (ok.includes(p.units[k])) units[k] = p.units[k];
+    if (Object.keys(units).length) out.units = units;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /* ── routes ─────────────────────────────────────────────────────────────── */
 
 export function authRouter() {
@@ -177,6 +195,33 @@ export function authRouter() {
     const user = userFromRequest(req);
     if (!user) return res.status(401).json({ error: 'Not authenticated' });
     res.json(publicUser(user));
+  });
+
+  /* The signed-in user's display preferences (language, theme, units), kept with the account so
+     they follow the user to any device. Only the known keys and values are stored. */
+  router.put('/me/preferences', (req, res) => {
+    const user = userFromRequest(req);
+    if (!user) return res.status(401).json({ error: 'Not authenticated' });
+    const prefs = cleanPreferences(req.body?.preferences);
+    if (!prefs) return res.status(400).json({ error: 'No preferences to save' });
+    const old = user.preferences || {};
+    const saved = db.updateUser(user.id, { preferences: { ...old, ...prefs, units: { ...(old.units || {}), ...(prefs.units || {}) } } });
+    res.json({ preferences: saved.preferences });
+  });
+
+  /* Deleting one's own account: the sign-in itself (and its sessions) and every record that is
+     the user's alone. An admin account is not deleted from here. */
+  router.delete('/me', (req, res) => {
+    const user = userFromRequest(req);
+    if (!user) return res.status(401).json({ error: 'Not authenticated' });
+    if (user.role === 'admin') return res.status(403).json({ error: 'An admin account cannot be deleted from Settings.' });
+    const email = String(user.email || '').toLowerCase();
+    const mine = (r) => r.created_by_id === user.id || (!!email && String(r.user_email || r.email || r.created_by || '').toLowerCase() === email);
+    for (const entity of ['EmailNotificationPref', 'LocationSearchHistory', 'StudioGraphic', 'UserSubscription', 'SiteAccessCode']) {
+      for (const r of db.list(entity).filter(mine)) db.remove(entity, r.id);
+    }
+    db.removeUser(user.id);
+    res.status(204).end();
   });
 
   /**

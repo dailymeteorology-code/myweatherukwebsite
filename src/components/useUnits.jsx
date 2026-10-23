@@ -1,96 +1,52 @@
-import { useState, useEffect, useCallback } from 'react';
+/* The visitor's units (lib/preferences), and the numbers in them. Everything that shows a
+   temperature, a wind speed, a rain or snow amount or a hail size goes through here, so a change
+   in Settings shows everywhere at once. Values come in as °C, mph, mm and cm. */
+import { useCallback, useMemo } from 'react';
+import { usePreferences } from '@/lib/preferences';
 
-const STORAGE_KEY = 'weatherUnits';
-const UNITS_CHANGED_EVENT = 'weatherUnitsChanged';
-
-const defaults = {
-  temperature: 'celsius',   // 'celsius' | 'fahrenheit'
-  windSpeed: 'mph',         // 'mph' | 'kmh'
-  precipitation: 'mm',      // 'mm' | 'inches'
-  hail: 'mm',               // 'mm' | 'inches'
+const WIND = {
+  mph: { unit: 'mph', f: 1 },
+  kmh: { unit: 'km/h', f: 1.609344 },
+  knots: { unit: 'kt', f: 0.868976 },
+  ms: { unit: 'm/s', f: 0.44704 },
 };
 
-function readFromStorage() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
-  } catch {
-    return defaults;
-  }
-}
-
 export function useUnits() {
-  const [units, setUnits] = useState(readFromStorage);
+  const { prefs, setPref } = usePreferences();
+  const units = prefs.units;
+  const updateUnit = useCallback((key, value) => setPref(`units.${key}`, value), [setPref]);
 
-  // Listen for changes made by other useUnits instances
-  useEffect(() => {
-    const handler = () => setUnits(readFromStorage());
-    window.addEventListener(UNITS_CHANGED_EVENT, handler);
-    return () => window.removeEventListener(UNITS_CHANGED_EVENT, handler);
-  }, []);
+  return useMemo(() => {
+    const F = units.temperature === 'fahrenheit';
+    const wind = WIND[units.windSpeed] || WIND.mph;
+    const inches = units.precipitation === 'inches';
+    const hailInches = units.hail === 'inches';
 
-  const updateUnit = useCallback((key, value) => {
-    setUnits(prev => {
-      const updated = { ...prev, [key]: value };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      // Notify all other useUnits instances on this page
-      window.dispatchEvent(new Event(UNITS_CHANGED_EVENT));
-      return updated;
+    /** °C in the chosen scale (a number), and with its unit. */
+    const temp = (c) => (c == null ? null : F ? (c * 9) / 5 + 32 : c);
+    const fmtTemp = (c) => (c == null ? 'N/A' : `${Math.round(temp(c))}${F ? '°F' : '°C'}`);
+    /** mph in the chosen speed unit (a number), and with its unit. */
+    const windSpeed = (mph) => (mph == null ? null : mph * wind.f);
+    const fmtWind = (mph) => (mph == null ? 'N/A' : `${Math.round(windSpeed(mph))} ${wind.unit}`);
+    /** mm in mm or inches (a number), and with its unit. */
+    const precip = (mm) => (mm == null ? null : inches ? mm / 25.4 : mm);
+    const fmtPrecip = (mm, label = 'Rainfall', color = 'text-blue-300') => ({
+      value: mm == null ? 'N/A' : inches ? `${(mm / 25.4).toFixed(2)} in` : `${mm.toFixed(1)} mm`, label, color,
     });
-  }, []);
+    const fmtRain = (mm, d = 1) => (mm == null ? 'N/A' : inches ? `${(mm / 25.4).toFixed(2)} in` : `${mm.toFixed(d)} mm`);
+    const fmtRate = (mmh) => (mmh == null ? 'N/A' : inches ? `${(mmh / 25.4).toFixed(2)} in/h` : `${mmh.toFixed(1)} mm/h`);
+    const fmtSnow = (cm) => (cm == null ? 'N/A' : inches ? `${(cm * 0.393701).toFixed(1)} in` : `${cm.toFixed(1)} cm`);
+    const fmtHail = (mm) => (mm == null ? 'N/A' : hailInches ? `${(mm / 25.4).toFixed(2)} in` : `${mm} mm`);
+    /* the hail size typed into a form, in the chosen unit, to mm and back */
+    const hailToMm = (val) => (val == null || val === '' ? undefined : hailInches ? Math.round(Number(val) * 25.4) : Number(val));
+    const hailFromMm = (mm) => (mm == null ? '' : hailInches ? (mm / 25.4).toFixed(2) : mm);
 
-  const fmtTemp = (c) => {
-    if (c == null) return 'N/A';
-    if (units.temperature === 'fahrenheit') return `${Math.round(c * 9 / 5 + 32)}°F`;
-    return `${Math.round(c)}°C`;
-  };
-
-  const tempUnit = units.temperature === 'fahrenheit' ? '°F' : '°C';
-
-  const fmtWind = (mph) => {
-    if (mph == null) return 'N/A';
-    if (units.windSpeed === 'kmh') return `${Math.round(mph * 1.60934)} km/h`;
-    return `${Math.round(mph)} mph`;
-  };
-
-  const windUnit = units.windSpeed === 'kmh' ? 'km/h' : 'mph';
-
-  const fmtPrecip = (mm, label = 'Rainfall', color = 'text-blue-300') => {
-    if (mm == null) return { value: 'N/A', label, color };
-    if (units.precipitation === 'inches') {
-      return { value: `${(mm / 25.4).toFixed(2)} in`, label, color };
-    }
-    return { value: `${mm.toFixed(1)} mm`, label, color };
-  };
-
-  const fmtSnow = (cm) => {
-    if (cm == null) return 'N/A';
-    if (units.precipitation === 'inches') return `${(cm * 0.393701).toFixed(2)} in`;
-    return `${cm.toFixed(1)} cm`;
-  };
-
-  const precipUnit = units.precipitation === 'inches' ? 'in' : 'mm';
-
-  const fmtHail = (mm) => {
-    if (mm == null) return 'N/A';
-    if (units.hail === 'inches') return `${(mm / 25.4).toFixed(2)} in`;
-    return `${mm} mm`;
-  };
-
-  const hailUnit = units.hail === 'inches' ? 'in' : 'mm';
-
-  // Convert from display unit back to mm for storage
-  const hailToMm = (val) => {
-    if (val == null || val === '') return undefined;
-    return units.hail === 'inches' ? Math.round(Number(val) * 25.4) : Number(val);
-  };
-
-  // Convert stored mm to display unit
-  const hailFromMm = (mm) => {
-    if (mm == null) return '';
-    if (units.hail === 'inches') return (mm / 25.4).toFixed(2);
-    return mm;
-  };
-
-  return { units, updateUnit, fmtTemp, tempUnit, fmtWind, windUnit, fmtPrecip, fmtSnow, precipUnit, fmtHail, hailUnit, hailToMm, hailFromMm };
+    return {
+      units, updateUnit,
+      temp, fmtTemp, tempUnit: F ? '°F' : '°C', isF: F,
+      windSpeed, fmtWind, windUnit: wind.unit,
+      precip, fmtPrecip, fmtRain, fmtRate, fmtSnow, precipUnit: inches ? 'in' : 'mm',
+      fmtHail, hailUnit: hailInches ? 'in' : 'mm', hailToMm, hailFromMm,
+    };
+  }, [units, updateUnit]);
 }

@@ -33,7 +33,6 @@ import { Navigate } from 'react-router-dom';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { base44 } from '@/api/base44Client';
-import { LanguageProvider } from '@/lib/LanguageContext';
 
 const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
@@ -250,19 +249,9 @@ function PageWrapper({ children }) {
    Now: isobars drifting behind, a single glint crossing the name, one light
    running the progress line. The keyframes live in index.css. */
 
-/** The theme, read the way ThemeContext itself reads it.
- *
- *  Deliberately from storage and not from the `dark` class: this paints before
- *  ThemeContext's effect has run, so reading the class would show a dark loader
- *  to someone on the light theme for the first frame and then snap. */
-function loaderIsDark() {
-  try {
-    const saved = localStorage.getItem('theme');
-    return !(saved === 'false' || saved === 'light');
-  } catch {
-    return true;
-  }
-}
+/** The theme, as index.html stamped it before the first paint (from the saved preferences), so
+ *  the loader matches the page from its first frame. */
+const loaderIsDark = () => document.documentElement.classList.contains('dark');
 
 function loaderPalette(isDark) {
   return isDark ? {
@@ -342,7 +331,7 @@ function LoaderWordmark({ P, size }) {
   };
   return (
     <span style={{ position: 'relative', display: 'inline-block' }}>
-      <span style={{ ...type, color: P.ink }}>
+      <span translate="no" style={{ ...type, color: P.ink }}>
         MyWeather<span style={{ color: P.accent }}>UK</span>
       </span>
       <span
@@ -560,7 +549,6 @@ const AuthenticatedApp = () => {
 
 function App() {
   return (
-    <LanguageProvider>
     <AuthProvider>
       <QueryClientProvider client={queryClientInstance}>
         <Router>
@@ -571,7 +559,6 @@ function App() {
         <SonnerToaster />
       </QueryClientProvider>
     </AuthProvider>
-    </LanguageProvider>
   );
 }
 

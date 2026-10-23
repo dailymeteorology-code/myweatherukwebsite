@@ -183,7 +183,7 @@ function StoryList({ articles }) {
     <>
       <header className="nw-glass nn-hero">
         <p className="nw-eyebrow"><Newspaper />MyWeatherUK News</p>
-        <h1 className="nw-h1">Weather <span>News</span></h1>
+        <h1 className="nw-h1"><span>Weather News</span></h1>
         <p className="nw-lede">The stories behind the forecasts: analysis, storms, climate and what is new on MyWeatherUK, for the UK and Ireland.</p>
         <div className="nn-tools">
           <label className="nn-search">

@@ -5,6 +5,7 @@
    reports) and the radar at each city, read from this site's own server in one request; no
    per-card forecast call. */
 import React, { useEffect, useState } from 'react';
+import { useUnits } from '@/components/useUnits';
 import { MapPin, Clock, Crosshair, X, Loader2, ShieldCheck } from 'lucide-react';
 import LocationSearchBox from './LocationSearchBox';
 import WxIcon from './WxIcon';
@@ -46,8 +47,9 @@ export default function LocationLanding({
   query, onQueryChange, onSearch, loading,
   recent = [], onForget, onClearAll,
   user, authChecked,
-  onUseMyLocation, locating, geoError, unit = 'C',
+  onUseMyLocation, locating, geoError,
 }) {
+  const { temp } = useUnits();
   const [now, setNow] = useState(null);
   useEffect(() => {
     const ac = new AbortController();
@@ -122,7 +124,7 @@ export default function LocationLanding({
               <button key={c.name} type="button" className="lw-city" onClick={() => onSearch({ name: c.name, region: c.region, lat: c.lat, lon: c.lon })}>
                 <span className="lw-city-top">
                   <span className="lw-city-name">{c.name}</span>
-                  {n?.t2 != null && <span className="lw-city-temp">{Math.round(unit === 'F' ? (n.t2 * 9) / 5 + 32 : n.t2)}°</span>}
+                  {n?.t2 != null && <span className="lw-city-temp">{Math.round(temp(n.t2))}°</span>}
                 </span>
                 <span className="lw-city-bottom">
                   {cond && <WxIcon cond={cond} day={day} windy={windy} size={22} />}

@@ -194,7 +194,7 @@ export default function NewsletterSignup() {
       <div className="nl-grid">
         <section className="nw-glass nl-about">
           <p className="nw-eyebrow"><Mail />Free newsletter</p>
-          <h1 className="nw-h1">The MyWeatherUK <span>newsletter</span></h1>
+          <h1 className="nw-h1"><span>The MyWeatherUK newsletter</span></h1>
           <p className="nw-lede">The weather that matters across the UK and Ireland, written by our forecasters and sent straight to your inbox.</p>
         </section>
 

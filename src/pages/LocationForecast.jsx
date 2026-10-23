@@ -15,6 +15,7 @@
    The route key stays "LocationWeather" (pages.config.js), so every old link still works;
    ?location=Name opens a place directly. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useUnits } from '@/components/useUnits';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Clock3, CalendarDays, Radar, AlertTriangle, CloudRain, ChevronLeft, ChevronRight, Loader2, Palette, LocateFixed, MoreHorizontal, Link2, Thermometer, Check,
@@ -49,6 +50,7 @@ const runName = (iso) => {
 const COL_W = 58;                                  // every column of the strip (.lw-hour, border-box)
 const LANE_H = 24;                                 // one warning bar, with its gap
 function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
+  const U = useUnits();
   const items = useMemo(() => {
     const start = model.full.findIndex((h) => h.t >= Date.now() - 30 * 60e3);
     const hs = model.full.slice(Math.max(0, start));
@@ -91,7 +93,7 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
           <button type="button" className="lw-icon-btn" onClick={() => scroll(1)} aria-label="Later hours"><ChevronRight size={15} /></button>
         </span>
       </div>
-      <p className="lw-summary">{nextHoursText(model)}</p>
+      <p className="lw-summary">{nextHoursText(model, U)}</p>
       <div className="lw-hours" ref={stripRef}
         onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && e.currentTarget.scrollWidth > e.currentTarget.clientWidth) { e.currentTarget.scrollLeft += e.deltaY; } }}>
         <div className="lw-hours-track" style={lanes.length ? { paddingBottom: lanes.length * LANE_H + 6 } : undefined}>
@@ -153,9 +155,9 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
                 title={k === 0 ? condLabel(model.now.cond, model.now.isDay, model.now.windy) : condLabel(h.cond, h.isDay, h.windy)} />
               <span className="lw-h-pop">{pop}</span>
               <span className="lw-h-temp">{Math.round(T(k === 0 ? model.now.t2 : h.t2))}°</span>
-              <span className="lw-h-wind" title={`Wind ${Math.round(h.wind)} mph from the ${compass(h.wdir)}`}>
+              <span className="lw-h-wind" title={`Wind ${U.fmtWind(h.wind)} from the ${compass(h.wdir)}`}>
                 <svg width="9" height="9" viewBox="-5 -5 10 10" style={{ transform: `rotate(${(h.wdir ?? 0) + 180}deg)` }}><path d="M0 -5 L3.5 3 L0 1.4 L-3.5 3Z" fill="currentColor" /></svg>
-                {Math.round(h.wind)}
+                {Math.round(U.windSpeed(h.wind))}
               </span>
               {anyThunder && (
                 <span className="lw-h-ts" style={ts ? { color: ts.colour } : undefined}
@@ -191,6 +193,7 @@ function PrecipGuides() {
   );
 }
 function PrecipCard({ model }) {
+  const U = useUnits();
   const [view, setView] = useState(null);                         // null: the hour when rain is near, else the 12 hours
   const [hover, setHover] = useState(null);
   const barsRef = useRef(null);
@@ -213,7 +216,7 @@ function PrecipCard({ model }) {
     const { mins } = mm;
     const word = (b) => (b ? `${BAND_WORDS[b]} ${mm.snow ? 'snow' : 'rain'}` : 'Dry');
     const hm = hover != null ? mins[hover] : null;
-    const motion = mm.motion && mm.motion.kmh >= 3 ? `, the rain moving ${HEADING[Math.round(mm.motion.towards / 45) % 8]} at ${Math.round(mm.motion.kmh / 1.609)} mph` : '';
+    const motion = mm.motion && mm.motion.kmh >= 3 ? `, the rain moving ${HEADING[Math.round(mm.motion.towards / 45) % 8]} at ${U.fmtWind(mm.motion.kmh / 1.609344)}` : '';
     body = (
       <>
         <p className="lw-summary lw-psum">{minutelyText(mm, nowLabel)}</p>
@@ -230,7 +233,7 @@ function PrecipCard({ model }) {
         </div>
         <div className="lw-paxis"><span>Now</span><span>15 min</span><span>30 min</span><span>45 min</span><span>{mins.length > 55 ? '60 min' : `${mins.length - 1} min`}</span></div>
         <p className="lw-pnote">
-          {hm ? <><b>{hhmm(hm.t)}</b> · {word(bandOf(hm.rate))}{hm.rate >= 0.1 ? ` · ${hm.rate.toFixed(1)} mm/h · ${hm.chance}% chance` : ''}</>
+          {hm ? <><b>{hhmm(hm.t)}</b> · {word(bandOf(hm.rate))}{hm.rate >= 0.1 ? ` · ${U.fmtRate(hm.rate)} · ${hm.chance}% chance` : ''}</>
             : `Met Office radar at ${hhmm(mm.scan)}, carried forward to now${motion}.`}
         </p>
       </>
@@ -265,8 +268,8 @@ function PrecipCard({ model }) {
           ))}
         </div>
         <p className="lw-pnote">
-          {hh ? <><b>{hhmm(hh.t)}</b> · {condLabel(hh.cond, hh.isDay)} · {rate(hh).toFixed(1)} mm/h{hh.pRain != null ? ` · ${hh.pRain}% chance within 10 km` : ''}</>
-            : total >= 0.1 ? `About ${total >= 10 ? Math.round(total) : total.toFixed(1)} mm in the next 12 hours (Met Office UKV). The % is the chance of rain within 10 km.`
+          {hh ? <><b>{hhmm(hh.t)}</b> · {condLabel(hh.cond, hh.isDay)} · {U.fmtRate(rate(hh))}{hh.pRain != null ? ` · ${hh.pRain}% chance within 10 km` : ''}</>
+            : total >= 0.1 ? `About ${U.fmtRain(total, total >= 10 ? 0 : 1)} in the next 12 hours (Met Office UKV). The % is the chance of rain within 10 km.`
               : 'Met Office UKV. The % is the chance of rain within 10 km.'}
         </p>
       </>
@@ -298,13 +301,14 @@ function warningHours(w, day) {
 const onDay = (w, day) => w.startMs && w.endMs && ukDay(w.startMs) <= day && ukDay(w.endMs - 1) >= day;
 
 function DaysCard({ model, T, dayIdx, onDay: pick, warnings, onWarning }) {
+  const U = useUnits();
   const ds = model.days.filter((d) => d.hi != null);
   const gLo = Math.min(...ds.map((d) => d.lo)), gHi = Math.max(...ds.map((d) => d.hi));
   const span = Math.max(1, gHi - gLo);
   const nowT = model.now.t2;
   return (
     <div className="lw-glass lw-card">
-      <div className="lw-title"><CalendarDays />{ds.length}-day forecast<span className="lw-title-aside">Met Office UKV</span></div>
+      <div className="lw-title"><CalendarDays />{`${ds.length}-day forecast`}<span className="lw-title-aside">Met Office UKV</span></div>
       {ds.map((d) => {
         const i = model.days.indexOf(d);
         const on = i === dayIdx;
@@ -335,14 +339,14 @@ function DaysCard({ model, T, dayIdx, onDay: pick, warnings, onWarning }) {
             </button>
             {on && (
               <div className="lw-day-detail">
-                <p className="lw-day-text">{dayText(d)}</p>
+                <p className="lw-day-text">{dayText(d, U)}</p>
                 <div className="lw-day-facts">
                   {ws.map((w) => {
                     const Icon = warningIcon(w.type);
                     return (
                       <button key={w.id} type="button" className="lw-day-fact is-warn" onClick={() => onWarning(w.id)}
                         style={{ background: severityFill(w.severity), color: severityInk(w.severity) }}>
-                        <Icon size={13} strokeWidth={2.4} />{w.severity} {String(w.type).toLowerCase()} warning · {warningHours(w, d.day)}
+                        <Icon size={13} strokeWidth={2.4} />{`${w.severity} ${String(w.type).toLowerCase()} warning · ${warningHours(w, d.day)}`}
                       </button>
                     );
                   })}
@@ -366,7 +370,8 @@ function DaysCard({ model, T, dayIdx, onDay: pick, warnings, onWarning }) {
 }
 
 /* ── the top bar's "more" menu: units, a link to this place, and (admins) the sky preview ── */
-function BarMenu({ unit, setUnit, link, isAdmin, previewOn, onPreview }) {
+function BarMenu({ link, isAdmin, previewOn, onPreview }) {
+  const { isF, updateUnit } = useUnits();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const ref = useRef(null);
@@ -391,8 +396,8 @@ function BarMenu({ unit, setUnit, link, isAdmin, previewOn, onPreview }) {
           <div className="lw-menu-row is-static">
             <Thermometer size={16} />Units
             <div className="lw-seg" role="group" aria-label="Temperature unit" style={{ marginLeft: 'auto' }}>
-              <button type="button" aria-pressed={unit === 'C'} onClick={() => setUnit('C')}>°C</button>
-              <button type="button" aria-pressed={unit === 'F'} onClick={() => setUnit('F')}>°F</button>
+              <button type="button" aria-pressed={!isF} onClick={() => updateUnit('temperature', 'celsius')}>°C</button>
+              <button type="button" aria-pressed={isF} onClick={() => updateUnit('temperature', 'fahrenheit')}>°F</button>
             </div>
           </div>
           {link && (
@@ -423,8 +428,7 @@ export default function LocationForecast() {
   const [outside, setOutside] = useState(null);
   const [dayIdx, setDayIdx] = useState(0);
   const [tick, setTick] = useState(0);
-  const [unit, setUnit] = useState(() => { try { return localStorage.getItem('lw-unit') === 'F' ? 'F' : 'C'; } catch { return 'C'; } });
-  useEffect(() => { try { localStorage.setItem('lw-unit', unit); } catch { /* storage blocked */ } }, [unit]);
+  const { temp } = useUnits();
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [recent, setRecent] = useState([]);
@@ -531,7 +535,7 @@ export default function LocationForecast() {
     try { return shape(resp); } catch { return null; }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resp, tick]);
-  const T = useCallback((c) => (c == null ? null : unit === 'F' ? (c * 9) / 5 + 32 : c), [unit]);
+  const T = temp;
   const deg = (c) => (c == null ? '—' : `${Math.round(T(c))}°`);
 
   /* back from a forecast goes to the search; from the search, to the previous page */
@@ -606,7 +610,7 @@ export default function LocationForecast() {
           <button type="button" className="lw-bar-btn" onClick={useMyLocation} aria-label="Use my location" title="Use my location">
             {locating ? <Loader2 size={18} className="animate-spin" /> : <LocateFixed size={18} />}
           </button>
-          <BarMenu unit={unit} setUnit={setUnit} isAdmin={isAdmin} previewOn={!!preview} onPreview={togglePreview}
+          <BarMenu isAdmin={isAdmin} previewOn={!!preview} onPreview={togglePreview}
             link={model ? `${window.location.origin}/LocationWeather?lat=${model.lat.toFixed(4)}&lon=${model.lon.toFixed(4)}&name=${encodeURIComponent(model.location.name)}` : null} />
         </div>
       </div>
@@ -627,7 +631,7 @@ export default function LocationForecast() {
             onForget={async (r) => { const list = await forgetSearch(user, r); if (list) setRecent(list); }}
             onClearAll={async () => { const list = await clearRecent(user); if (list) setRecent(list); }}
             user={user} authChecked={authChecked}
-            onUseMyLocation={useMyLocation} locating={locating} geoError={geoError} unit={unit}
+            onUseMyLocation={useMyLocation} locating={locating} geoError={geoError}
           />
         )}
 
@@ -663,12 +667,12 @@ export default function LocationForecast() {
                 </div>
               </div>
               <div className="lw-col">
-                <LocationTiles model={model} unit={unit} />
+                <LocationTiles model={model} />
               </div>
             </div>
 
             <div style={{ marginTop: 14 }}>
-              <LocationCharts model={model} unit={unit} dayIdx={dayIdx} onDay={pickDay} />
+              <LocationCharts model={model} dayIdx={dayIdx} onDay={pickDay} />
             </div>
 
             <p className="lw-source">

@@ -475,7 +475,7 @@ function pruneOldRuns() {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
       if (!k || !k.startsWith('tcm_')) continue;
-      try {const d = JSON.parse(localStorage.getItem(k));if (d?.builtAt && d.builtAt < cutoff) localStorage.removeItem(k);} catch {localStorage.removeItem(k);}
+      try {const d = JSON.parse(localStorage.getItem(k));if (d?.builtAt && d.builtAt < cutoff) localStorage.removeItem(k);} catch {/* not a cached run but a saved choice (tcm_engine, a policy): keep it */}
     }
   } catch {}
 }

@@ -400,7 +400,11 @@ const SUMMARY_H = 12;
     hours (thunderstorms, strong gusts or frost). It used to cover 24 hours and dropped the day:
     "Drizzle likely from around 21:00, heaviest near 13:00. Gusts up to 47 mph." meant 13:00 and
     the gusts tomorrow afternoon. Every time it names now says which day it is on. */
-export function nextHoursText(m) {
+/* a speed or an amount in the visitor's units, when the page passes its useUnits (U); else mph and mm */
+const windSaid = (mph, U) => (U ? U.fmtWind(mph) : `${Math.round(mph)} mph`);
+const rainSaid = (mm, U) => (U ? U.fmtRain(mm, mm >= 10 ? 0 : 1) : `${mm >= 10 ? Math.round(mm) : mm.toFixed(1)} mm`);
+
+export function nextHoursText(m, U) {
   const nowMs = Date.now(), end = nowMs + SUMMARY_H * 36e5;
   const hs = m.full.filter((h) => h.t > nowMs && h.t <= end);
   if (!hs.length) return '';
@@ -436,18 +440,17 @@ export function nextHoursText(m) {
   const frost = hs.find((h) => (h.ground ?? 9) <= 0 || (h.t2 ?? 9) <= 0);
   let more = '';
   if (storm && storm.p >= 15 && !first.startsWith('Thunder')) more = `A ${thunderRisk(storm.p).word.toLowerCase()} risk of thunderstorms around ${whenSaid(storm.t)}.`;
-  else if ((gusty.gust ?? 0) >= 35) more = `Gusts up to ${Math.round(gusty.gust)} mph around ${whenSaid(gusty.t)}.`;
+  else if ((gusty.gust ?? 0) >= 35) more = `Gusts up to ${windSaid(gusty.gust, U)} around ${whenSaid(gusty.t)}.`;
   else if (frost) more = `${(frost.t2 ?? 9) <= 0 ? 'Freezing' : 'A ground frost'} by ${whenSaid(frost.t)}.`;
   return more ? `${first} ${more}` : first;
 }
 
-export function dayText(d) {
+export function dayText(d, U) {
   const bits = [condLabel(d.cond, true, d.windy)];
-  const mm = (v) => (v >= 10 ? Math.round(v) : v.toFixed(1));
   if (d.rainSoFar != null) {
-    if (d.rainSoFar >= 0.2) bits.push(`${mm(d.rainSoFar)} mm of rain so far`);
-    if (d.rainAhead >= 0.2) bits.push(`${mm(d.rainAhead)} mm more to come`);
-  } else if (d.rain >= 0.2) bits.push(`${mm(d.rain)} mm of ${d.snow > d.rain / 2 ? 'snow (water equivalent)' : 'rain'}`);
-  if ((d.gust ?? 0) >= 35) bits.push(`gusts ${Math.round(d.gust)} mph`);
+    if (d.rainSoFar >= 0.2) bits.push(`${rainSaid(d.rainSoFar, U)} of rain so far`);
+    if (d.rainAhead >= 0.2) bits.push(`${rainSaid(d.rainAhead, U)} more to come`);
+  } else if (d.rain >= 0.2) bits.push(d.snow > d.rain / 2 ? `${rainSaid(d.rain, U)} of snow (water equivalent)` : `${rainSaid(d.rain, U)} of rain`);
+  if ((d.gust ?? 0) >= 35) bits.push(`gusts ${windSaid(d.gust, U)}`);
   return bits.join(' · ');
 }

@@ -2,7 +2,9 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from '@/App.jsx'
 import '@/index.css'
-import { ThemeProvider } from '@/components/ThemeContext' // ✅ ADD
+import { ThemeProvider } from '@/components/ThemeContext'
+import { PreferencesProvider } from '@/lib/preferences'
+import { LanguageSync } from '@/lib/i18n'
 
 // In dev/preview, tear down any stale service worker BEFORE React mounts.
 // A previously-installed service worker can still be CONTROLLING the page and
@@ -37,9 +39,12 @@ if (IS_DEV && 'serviceWorker' in navigator) {
 
 function renderApp() {
   ReactDOM.createRoot(document.getElementById('root')).render(
-    <ThemeProvider>   {/* ✅ ADD */}
-      <App />
-    </ThemeProvider>
+    <PreferencesProvider>
+      <LanguageSync />
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    </PreferencesProvider>
   );
 }
 

@@ -1,46 +1,27 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+/* Light or dark, from the visitor's theme preference (lib/preferences): 'light', 'dark', or
+   'system', which follows the device and changes with it. The site's own toggle sets light or
+   dark explicitly. The `dark` class on <html> drives the Tailwind dark styles. */
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { usePreferences } from '@/lib/preferences';
 
 const ThemeContext = createContext();
+const systemDark = () => { try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch { return true; } };
 
 export function ThemeProvider({ children }) {
-  const [isDark, setIsDark] = useState(() => {
-    try {
-      const saved = localStorage.getItem('theme');
-      // Accept both the current boolean format ("true"/"false") and the legacy
-      // Layout format ("dark"/"light") so returning visitors migrate seamlessly
-      // now that this is the single source of truth for the theme.
-      if (saved === 'true'  || saved === 'dark')  return true;
-      if (saved === 'false' || saved === 'light') return false;
-      return true; // Default to dark mode when nothing is saved
-    } catch {
-      return true;
-    }
-  });
+  const { prefs, setPref } = usePreferences();
+  const [deviceDark, setDeviceDark] = useState(systemDark);
 
-  useEffect(() => {
-    localStorage.setItem('theme', JSON.stringify(isDark));
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [isDark]);
-
-  // Listen for iOS/system color-scheme changes so the app theme flips
-  // instantly when the user switches their device theme — but only while
-  // they haven't manually chosen a theme in-app (no saved preference).
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const handleChange = (e) => {
-      if (localStorage.getItem('theme') === null) {
-        setIsDark(e.matches);
-      }
-    };
-    mq.addEventListener('change', handleChange);
-    return () => mq.removeEventListener('change', handleChange);
+    const onChange = (e) => setDeviceDark(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  const toggleTheme = () => setIsDark(prev => !prev);
+  const isDark = prefs.theme === 'system' ? deviceDark : prefs.theme === 'dark';
+  useEffect(() => { document.documentElement.classList.toggle('dark', isDark); }, [isDark]);
+
+  const toggleTheme = () => setPref('theme', isDark ? 'light' : 'dark');
 
   return (
     <ThemeContext.Provider value={{ isDark, toggleTheme }}>

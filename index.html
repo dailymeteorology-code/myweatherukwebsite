@@ -9,16 +9,18 @@
     <link rel="manifest" href="/manifest.json" />
     <title>MyWeatherUK</title>
     <script>
-      // Stamp the theme before first paint so the page never flashes the wrong
-      // one. Must match ThemeProvider in src/components/ThemeContext.jsx: the
-      // key is 'theme', the value is the string "true"/"false", and an absent
-      // value means dark.
+      // Stamp the theme (and the language) before first paint so the page never
+      // flashes the wrong one. Reads the preferences src/lib/preferences.jsx saves
+      // under 'mwuk_prefs' (or the old 'theme' key before that has run once);
+      // nothing saved means dark.
       (function () {
         try {
-          var saved = localStorage.getItem('theme');
-          if (saved === null || saved === 'true') {
-            document.documentElement.classList.add('dark');
-          }
+          var p = JSON.parse(localStorage.getItem('mwuk_prefs') || 'null');
+          var t = p && p.theme;
+          if (!t) { var old = localStorage.getItem('theme'); t = old === 'false' || old === 'light' ? 'light' : 'dark'; }
+          var dark = t === 'system' ? window.matchMedia('(prefers-color-scheme: dark)').matches : t !== 'light';
+          if (dark) document.documentElement.classList.add('dark');
+          if (p && p.language) document.documentElement.lang = p.language;
         } catch (e) {
           document.documentElement.classList.add('dark');
         }

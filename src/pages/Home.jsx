@@ -962,7 +962,7 @@ export default function Home() {
                 UK rather than one long run of letters. Split on the suffix
                 rather than hard-coding the string: an admin can rename the
                 site, and a name that does not end in UK simply renders whole. */}
-            <h1 className="lg-display" style={{ margin: 0 }}>
+            <h1 className="lg-display" translate="no" style={{ margin: 0 }}>
               {(() => {
                 const name = settings?.site_name || 'MyWeatherUK';
                 if (!/UK$/.test(name) || name.length < 3) return name;

@@ -2,8 +2,9 @@
    number, a small picture of it, and a sentence that says what it means. Every value is the
    place's own UKV hour (or the 15-minute analysis for "now"); the sentences only describe them. */
 import React from 'react';
+import { useUnits } from '@/components/useUnits';
 import {
-  Thermometer, Wind, Sun, Sunset, Droplets, Droplet, Eye, Gauge, Cloud, CloudLightning, Snowflake, Moon, SunMedium, History,
+  Thermometer, Wind, Sun, Sunset, Droplets, Eye, Gauge, Cloud, CloudLightning, Snowflake, Moon, SunMedium, History,
 } from 'lucide-react';
 import { beaufort, compass, condLabel, hhmm, moonPhase, sunTimes, thunderRisk, ukDay, uvWord, visWord } from '@/lib/ukvLocation';
 
@@ -17,7 +18,7 @@ const Tile = ({ icon: Icon, label, children }) => (
 const fmtLen = (h) => `${Math.floor(h)} h ${String(Math.round((h % 1) * 60)).padStart(2, '0')} min`;
 const r1 = (v) => (v >= 10 ? Math.round(v) : Math.round(v * 10) / 10);
 
-function WindDial({ dir, speed }) {
+function WindDial({ dir, speed, unit }) {
   const ticks = Array.from({ length: 36 }, (_, i) => i * 10);
   return (
     <svg viewBox="0 0 100 100" width="100%" style={{ maxWidth: 118, display: 'block', margin: '0 auto' }} aria-hidden="true">
@@ -35,7 +36,7 @@ function WindDial({ dir, speed }) {
       )}
       <circle cx="50" cy="50" r="15" fill="rgba(10,20,35,0.55)" />
       <text x="50" y="52" textAnchor="middle" fontSize="13" fontWeight="700" fill="#fff">{speed == null ? '—' : Math.round(speed)}</text>
-      <text x="50" y="60" textAnchor="middle" fontSize="6" fill="rgba(255,255,255,0.7)">mph</text>
+      <text x="50" y="60" textAnchor="middle" fontSize="6" fill="rgba(255,255,255,0.7)">{unit}</text>
     </svg>
   );
 }
@@ -86,9 +87,9 @@ function MoonDisc({ phase }) {
   );
 }
 
-export default function LocationTiles({ model, unit }) {
-  const T = (c) => (c == null ? null : unit === 'F' ? (c * 9) / 5 + 32 : c);
-  const deg = (c) => (c == null ? '—' : `${Math.round(T(c))}°`);
+export default function LocationTiles({ model }) {
+  const U = useUnits();
+  const deg = (c) => (c == null ? '—' : `${Math.round(U.temp(c))}°`);
   const now = model.now, nowMs = Date.now();
   const next = (hrs) => model.full.filter((h) => h.t > nowMs - 30 * 60e3 && h.t <= nowMs + hrs * 36e5);
   const today = model.days[0];
@@ -136,8 +137,8 @@ export default function LocationTiles({ model, unit }) {
       </Tile>
 
       <Tile icon={Wind} label="Wind">
-        <WindDial dir={now.wdir} speed={now.wind} />
-        <div className="lw-foot">From the {compass(now.wdir) || '—'}, gusts {now.gust == null ? '—' : Math.round(now.gust)} mph · {beaufort(now.wind).name.toLowerCase()}</div>
+        <WindDial dir={now.wdir} speed={U.windSpeed(now.wind)} unit={U.windUnit} />
+        <div className="lw-foot">From the {compass(now.wdir) || '—'}, gusts {now.gust == null ? '—' : U.fmtWind(now.gust)} · {beaufort(now.wind).name.toLowerCase()}</div>
       </Tile>
 
       <Tile icon={Sun} label="UV index">
@@ -159,15 +160,15 @@ export default function LocationTiles({ model, unit }) {
       </Tile>
 
       <Tile icon={Droplets} label="Rain">
-        <div className="lw-big">{r1(rain24)}<small>mm</small></div>
+        <div className="lw-big">{U.precipUnit === 'in' ? U.precip(rain24).toFixed(2) : r1(rain24)}<small>{U.precipUnit}</small></div>
         <div className="lw-mini">in the next 24 hours</div>
         <div className="lw-foot">
-          {obs?.precip_total != null && <>Today so far {r1(obs.precip_total)} mm (radar). </>}
-          {wetDay ? `${wetDay.label}: ${r1(wetDay.rain)} mm expected.` : 'No wetter day in the forecast.'}
+          {obs?.precip_total != null && <>Today so far {U.fmtRain(obs.precip_total)} (radar). </>}
+          {wetDay ? `${wetDay.label}: ${U.fmtRain(wetDay.rain)} expected.` : 'No wetter day in the forecast.'}
         </div>
       </Tile>
 
-      <Tile icon={Droplet} label="Humidity">
+      <Tile icon={Sun} label="Solar power">
         <div className="lw-big">{now.rh == null ? '—' : `${Math.round(now.rh)}%`}</div>
         <div className="lw-foot">The dew point is {deg(now.td)} right now{now.rh >= 95 ? ' and the air is close to saturated.' : now.rh <= 45 ? ', fairly dry air.' : '.'}</div>
       </Tile>
@@ -241,7 +242,7 @@ export default function LocationTiles({ model, unit }) {
       <Tile icon={History} label="Today so far">
         {obs ? (
           <div style={{ display: 'grid', gap: 6, fontSize: 14 }}>
-            {[['High', deg(obs.t2_max)], ['Low', deg(obs.t2_min)], ['Rain', obs.precip_total == null ? '—' : `${r1(obs.precip_total)} mm`], ['Max gust', obs.gust10_max == null ? '—' : `${Math.round(obs.gust10_max)} mph`]].map(([l, v]) => (
+            {[['High', deg(obs.t2_max)], ['Low', deg(obs.t2_min)], ['Rain', obs.precip_total == null ? '—' : U.fmtRain(obs.precip_total)], ['Max gust', obs.gust10_max == null ? '—' : U.fmtWind(obs.gust10_max)]].map(([l, v]) => (
               <div key={l} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: 4 }}><span style={{ color: 'var(--ink2)' }}>{l}</span><b>{v}</b></div>
             ))}
           </div>

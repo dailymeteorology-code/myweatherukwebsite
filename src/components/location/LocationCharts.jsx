@@ -6,6 +6,7 @@
    time. Beyond T+54 UKV is three-hourly for most fields, so those curves simply have fewer
    points; temperature stays hourly. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useUnits } from '@/components/useUnits';
 import { ChartSpline } from 'lucide-react';
 import { compass, condLabel, hhmm, hourOf, longDay, uvWord, visWord } from '@/lib/ukvLocation';
 import WxIcon from '@/components/location/WxIcon';
@@ -241,7 +242,8 @@ function Plot({ width, x0, x1, nowMs, left, right, items, range, tip, band = 0 }
   );
 }
 
-export default function LocationCharts({ model, unit, dayIdx, onDay }) {
+export default function LocationCharts({ model, dayIdx, onDay }) {
+  const U = useUnits();
   const [metric, setMetric] = useState('temp');
   const wrap = useRef(null);
   const [width, setWidth] = useState(600);
@@ -260,7 +262,7 @@ export default function LocationCharts({ model, unit, dayIdx, onDay }) {
   const hs = model.hours.filter(near);
   const fs = hs.filter((h) => h.full);
   const nowMs = Date.now();
-  const T = (c) => (c == null ? null : unit === 'F' ? (c * 9) / 5 + 32 : c);
+  const T = U.temp;
   const deg = (v) => (v == null ? '—' : `${Math.round(v)}°`);
   const rnd = (v, d = 0) => (v == null ? '—' : d ? v.toFixed(d) : Math.round(v));
   /* a field at any moment, off its curve (`list`: the hours it is drawn from) */
@@ -287,14 +289,14 @@ export default function LocationCharts({ model, unit, dayIdx, onDay }) {
       items: [
         { type: 'line', pts: hs.map((h) => [h.t, T(h.td)]), colour: '#7fe0cf', width: 1.6 },
         { type: 'line', pts: hs.map((h) => [h.t, T(h.feels)]), colour: 'rgba(255,255,255,0.75)', width: 1.8, dash: '4 4' },
-        { type: 'line', pts: hs.map((h) => [h.t, T(h.t2)]), gradient: (x) => tempColour(unit === 'F' ? ((x - 32) * 5) / 9 : x), width: 3.2 },
+        { type: 'line', pts: hs.map((h) => [h.t, T(h.t2)]), gradient: (x) => tempColour(U.isF ? ((x - 32) * 5) / 9 : x), width: 3.2 },
       ],
       tip: (t) => <>{tipHead(t)}<div>Temperature <b>{deg(v('t2', t, hs, T))}</b></div><div>Feels like {deg(v('feels', t, hs, T))}</div><div>Dew point {deg(v('td', t, hs, T))}</div></>,
     };
     legend = [['Temperature', 'linear-gradient(90deg,#4fc8f0,#f2d43c,#ff7a2f)'], ['Feels like', 'rgba(255,255,255,0.75)'], ['Dew point', '#7fe0cf']];
   } else if (metric === 'rain') {
-    const bars = fs.filter((h) => h.span > 0).map((h) => [h.t - h.span * 36e5, h.t, (h.precip ?? 0) / h.span, (h.snow ?? 0) > (h.precip ?? 0) / 2 ? '#eef5ff' : '#4cb0ff']);
-    const left = domain(bars.map((b) => b[2]), { min: 0, span: 1 });
+    const bars = fs.filter((h) => h.span > 0).map((h) => [h.t - h.span * 36e5, h.t, U.precip((h.precip ?? 0) / h.span), (h.snow ?? 0) > (h.precip ?? 0) / 2 ? '#eef5ff' : '#4cb0ff']);
+    const left = domain(bars.map((b) => b[2]), { min: 0, span: U.precipUnit === 'in' ? 0.04 : 1 });
     left.fmt = (x) => (x ? `${x}` : '0');
     const right = { lo: 0, hi: 100, ticks: [0, 50, 100], fmt: (x) => `${x}%` };
     plot = {
@@ -304,28 +306,28 @@ export default function LocationCharts({ model, unit, dayIdx, onDay }) {
         const h = fs.find((x) => x.span > 0 && t > x.t - x.span * 36e5 && t <= x.t) || hourAt(t);
         return (
           <>{tipHead(t)}
-            <div><b>{(h.precip ?? 0).toFixed(1)} mm</b> {h.span > 1 ? `in the three hours to ${hhmm(h.t)}` : `in the hour to ${hhmm(h.t)}`}{(h.snow ?? 0) > 0.05 ? ` (${h.snow.toFixed(1)} mm as snow)` : ''}</div>
+            <div><b>{U.fmtRain(h.precip ?? 0)}</b> {h.span > 1 ? `in the three hours to ${hhmm(h.t)}` : `in the hour to ${hhmm(h.t)}`}{(h.snow ?? 0) > 0.05 ? ` (${U.fmtRain(h.snow)} as snow)` : ''}</div>
             <div>Chance within 10 km {rnd(v('pRain', t))}%</div>
           </>
         );
       },
     };
-    legend = [['Rain per hour (mm)', '#4cb0ff'], ['Snow', '#eef5ff'], ['Chance of rain', '#9fd8ff']];
-    note = 'Bars show each hour’s rain as mm per hour; past T+54 UKV gives three-hour totals, spread over the three hours.';
+    legend = [[`Rain per hour (${U.precipUnit})`, '#4cb0ff'], ['Snow', '#eef5ff'], ['Chance of rain', '#9fd8ff']];
+    note = `Bars show each hour’s rain in ${U.precipUnit} per hour; past T+54 UKV gives three-hour totals, spread over the three hours.`;
   } else if (metric === 'wind') {
-    const left = domain(fs.flatMap((h) => [h.wind, h.gust]), { min: 0, span: 10 });
+    const left = domain(fs.flatMap((h) => [U.windSpeed(h.wind), U.windSpeed(h.gust)]), { min: 0, span: 10 });
     left.fmt = (x) => `${x}`;
     plot = {
       left, band: 26,
       items: [
-        { type: 'area', pts: fs.map((h) => [h.t, h.wind]), colour: '#8fd3ff', opacity: 0.55 },
-        { type: 'line', pts: fs.map((h) => [h.t, h.wind]), colour: '#8fd3ff', width: 2.4 },
-        { type: 'line', pts: fs.map((h) => [h.t, h.gust]), colour: '#ffffff', width: 1.8, dash: '5 4' },
+        { type: 'area', pts: fs.map((h) => [h.t, U.windSpeed(h.wind)]), colour: '#8fd3ff', opacity: 0.55 },
+        { type: 'line', pts: fs.map((h) => [h.t, U.windSpeed(h.wind)]), colour: '#8fd3ff', width: 2.4 },
+        { type: 'line', pts: fs.map((h) => [h.t, U.windSpeed(h.gust)]), colour: '#ffffff', width: 1.8, dash: '5 4' },
         { type: 'arrows', pts: fs.map((h) => [h.t, h.wdir, h.wind]) },
       ],
-      tip: (t) => { const h = hourAt(t); return <>{tipHead(t)}<div>Wind <b>{rnd(v('wind', t))} mph</b> from the {compass(h.wdir)}</div><div>Gusts {rnd(v('gust', t))} mph</div></>; },
+      tip: (t) => { const h = hourAt(t); return <>{tipHead(t)}<div>Wind <b>{U.fmtWind(v('wind', t))}</b> from the {compass(h.wdir)}</div><div>Gusts {U.fmtWind(v('gust', t))}</div></>; },
     };
-    legend = [['Wind (mph)', '#8fd3ff'], ['Gusts', '#ffffff'], ['Direction (arrows, top)', 'rgba(255,255,255,0.88)']];
+    legend = [[`Wind (${U.windUnit})`, '#8fd3ff'], ['Gusts', '#ffffff'], ['Direction (arrows, top)', 'rgba(255,255,255,0.88)']];
   } else if (metric === 'cloud') {
     const cells = (k) => fs.map((h, i) => [h.t - (i ? (h.t - fs[i - 1].t) / 2 : 18e5), h.t + (i < fs.length - 1 ? (fs[i + 1].t - h.t) / 2 : 18e5), Math.min(1, (h[k] ?? 0) / 100)]);
     /* the rows named down the left, where a value axis would be */

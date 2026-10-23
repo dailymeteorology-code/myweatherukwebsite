@@ -82,7 +82,7 @@ function WarningCard({ warning: w, open, onToggle, now }) {
         <span className="lw-warn-text">
           <span className="lw-warn-top">
             <b className="lw-warn-badge" style={{ background: fill, color: ink }}>{w.severity}</b>
-            <span className="lw-warn-type">{w.type} warning</span>
+            <span className="lw-warn-type">{`${w.type} warning`}</span>
           </span>
           <span className="lw-warn-when">{warningSpan(w)}</span>
           <span className={`lw-warn-status${status.live ? ' is-live' : ''}`}>

@@ -483,7 +483,7 @@ export default function SolarEclipseGraphicTool() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                 <img src={logos.site} alt="" crossOrigin="anonymous" style={{ height: 72, width: 'auto', objectFit: 'contain' }} />
                 <div style={{ lineHeight: 1.1 }}>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#0f172a' }}>
+                  <div translate="no" style={{ fontSize: 32, fontWeight: 800, color: '#0f172a' }}>
                     MyWeather<span style={{ color: '#0284c7' }}>UK</span>
                   </div>
                   <div style={{ fontSize: 15, color: '#0284c7', fontWeight: 600 }}>@MyWeatherUK</div>
