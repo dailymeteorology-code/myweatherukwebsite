@@ -700,7 +700,8 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   const box = [Math.max(0, gx0), Math.max(0, gy0), Math.min(gx1, NX), Math.min(gy1, NY)];
   if (L.grid?.frame) drawValueGrid(ctx, L.grid, X, Y, ...box, s, u, st);
   if (L.arrows?.frame) drawArrows(ctx, L.arrows, X, Y, ...box, s, u, st);
-  if (L.strikes?.length) drawStrikes(ctx, L.strikes, X, Y, u, L.strikesDaily);
+  if (L.risk?.areas?.length) drawRisk(ctx, L.risk, X, Y, u);
+  if (L.strikes?.length) drawStrikes(ctx, L.strikes, X, Y, u, L.strikesDaily, L.strikeStyle);
   if (L.contours && L.contourLabels) drawContourLabels(ctx, L.contours, X, Y, rect, u, st);
   if (L.cities) drawCities(ctx, L.cities, X, Y, rect, s / u, u, st, L.chrome ? 150 * u : 0, L.wx);
   if (L.star) {
@@ -731,30 +732,59 @@ function edgeFade(ctx, x, y, w, h, f, bg) {
   band(0, y + h, 0, y + h - f, x, y + h - f, w, f);
 }
 
-/* strikes = [[gx, gy, age minutes]]: the newest as bright crosses, older ones fading dots */
-function drawStrikes(ctx, strikes, X, Y, u, daily) {
+/* strikes = [[gx, gy, age minutes]] (a day's strikes have no age), every one a circle. By age the
+   newest are white and largest, then yellow, orange and red as they get older; or all one colour.
+   An outline (any colour) is optional. */
+export const STRIKE_STYLE = { colour: 'age', fill: '#ffd21f', outline: true, outlineColour: '#1a0f00' };
+const STRIKE_AGES = [[5, '255,255,255', 5.2], [15, '255,226,60', 4.4], [30, '255,150,40', 3.8], [Infinity, '235,70,50', 3.2]];
+function drawStrikes(ctx, strikes, X, Y, u, daily, sty = STRIKE_STYLE) {
+  const one = sty.colour === 'one';
+  const fill = one ? hex(sty.fill || STRIKE_STYLE.fill).join(',') : null;
   ctx.save();
-  if (daily) {
-    ctx.fillStyle = 'rgba(255,196,40,0.9)';
-    ctx.strokeStyle = 'rgba(40,20,0,0.6)';
-    ctx.lineWidth = 0.8 * u;
-    for (const [gx, gy] of strikes) { ctx.beginPath(); ctx.arc(X(gx), Y(gy), 2.4 * u, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
-    ctx.restore();
-    return;
-  }
+  ctx.lineWidth = (daily ? 0.9 : 1.2) * u;
+  ctx.strokeStyle = sty.outline ? sty.outlineColour || STRIKE_STYLE.outlineColour : 'transparent';
   for (const [gx, gy, age] of strikes) {
+    const [, c, r] = daily ? [0, '255,196,40', 2.6] : STRIKE_AGES.find(([lim]) => age < lim);
     const x = X(gx), y = Y(gy);
-    if (age < 5) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = 3 * u; ctx.shadowColor = 'rgba(255,240,150,0.9)'; ctx.shadowBlur = 10 * u;
-      const r = 8 * u;
-      ctx.beginPath(); ctx.moveTo(x - r, y); ctx.lineTo(x + r, y); ctx.moveTo(x, y - r); ctx.lineTo(x, y + r); ctx.stroke();
-      ctx.shadowBlur = 0;
-      continue;
+    ctx.fillStyle = `rgba(${one ? fill : c},${daily || age < 30 ? 0.95 : 0.75})`;
+    ctx.beginPath(); ctx.arc(x, y, r * u, 0, Math.PI * 2); ctx.fill();
+    if (sty.outline) ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* a risk overlay: { alpha, areas: [{ colour, rings: [[[gx, gy]]], dash?, hatch? }] }, lowest level
+   first, each area tinted and outlined in its level's colour; Severe areas hatched */
+function drawRisk(ctx, risk, X, Y, u) {
+  const a = risk.alpha ?? 0.85;
+  ctx.save();
+  ctx.lineJoin = 'round';
+  for (const ar of risk.areas) {
+    ctx.beginPath();
+    for (const ring of ar.rings) ring.forEach(([gx, gy], i) => (i ? ctx.lineTo(X(gx), Y(gy)) : ctx.moveTo(X(gx), Y(gy))));
+    ctx.closePath();
+    const c = hex(ar.colour).join(',');
+    if (ar.hatch) {
+      ctx.save();
+      ctx.clip('evenodd');
+      const b = ctx.canvas;
+      ctx.strokeStyle = `rgba(${c},${0.55 * a})`;
+      ctx.lineWidth = 1.6 * u;
+      ctx.beginPath();
+      for (let d = -b.height; d < b.width; d += 9 * u) { ctx.moveTo(d, b.height); ctx.lineTo(d + b.height, 0); }
+      ctx.stroke();
+      ctx.restore();
+      ctx.beginPath();
+      for (const ring of ar.rings) ring.forEach(([gx, gy], i) => (i ? ctx.lineTo(X(gx), Y(gy)) : ctx.moveTo(X(gx), Y(gy))));
+      ctx.closePath();
+    } else {
+      ctx.fillStyle = `rgba(${c},${0.3 * a})`;
+      ctx.fill('evenodd');
     }
-    const c = age < 15 ? '255,226,60' : age < 30 ? '255,150,40' : '235,70,50';
-    ctx.fillStyle = `rgba(${c},${age < 30 ? 0.95 : 0.7})`;
-    ctx.beginPath(); ctx.arc(x, y, (age < 15 ? 4.2 : 3.4) * u, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(20,10,0,0.55)'; ctx.lineWidth = 1.2 * u; ctx.stroke();
+    ctx.setLineDash(ar.dash ? [7 * u, 5 * u] : []);
+    ctx.strokeStyle = `rgba(${c},${Math.min(1, a + 0.1)})`;
+    ctx.lineWidth = 2.2 * u;
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -967,6 +997,14 @@ function drawValueGrid(ctx, G, X, Y, gx0, gy0, gx1, gy1, s, u, st) {
 
 /* ── wind arrows (direction the wind blows towards), turned for the grid's convergence ── */
 function gridLonLat(gx, gy) { return invLaea(-1159000 + gx * 2000, 903000 - gy * 2000); }
+/** lon/lat -> the display grid (2 km cells, gx east, gy south): the LAEA forward of invLaea. */
+export function lonLatToGrid(lon, lat) {
+  const la = lat * DEG, dl = lon * DEG - LON0;
+  const k = Math.sqrt(2 / (1 + Math.sin(LAT0) * Math.sin(la) + Math.cos(LAT0) * Math.cos(la) * Math.cos(dl)));
+  const x = R * k * Math.cos(la) * Math.sin(dl);
+  const y = R * k * (Math.cos(LAT0) * Math.sin(la) - Math.sin(LAT0) * Math.cos(la) * Math.cos(dl));
+  return [(x + 1159000) / 2000, (903000 - y) / 2000];
+}
 function drawArrows(ctx, A, X, Y, gx0, gy0, gx1, gy1, s, u, st) {
   const f = A.frame;
   const g = NICE.find((n) => n >= 1 && n * s >= 58 * u) || 200;

@@ -1,9 +1,11 @@
-/* TCM NOVA for the thunderstorm graphic: the newest Main Run turned into what the graphic is
-   made of. Its thunderstorm probability becomes editable risk areas (contoured at the graphic's
-   own key, so an area marked SLGT 22-34% really is 22-34% in NOVA), its 3-hourly frames fill the
-   timeline, and its hazard probabilities give the Hazards card its percentages.
+/* TCM NOVA for the thunderstorm graphic (and the risk overlay on Model Data): a Main Run or a
+   Hyper-Short run turned into what the graphic is made of. Its thunderstorm probability becomes
+   editable risk areas (contoured at the graphic's own key, so an area marked SLGT 22-34% really
+   is 22-34% in NOVA), its frames fill the timeline, and its hazard probabilities give the Hazards
+   card its percentages.
 
-   NOVA's fields sit on a 2 km British National Grid (row 0 = south) and come from /api/nova
+   NOVA's fields sit on a British National Grid (2 km Main Run, 1.5 km Hyper-Short; row 0 =
+   south) and come from /api/nova
    (admin only, like the NOVA page): zlib-compressed float16, or int8. Everything here is the
    peak or the average over a whole London day (a day's peak comes straight from the run's day
    summaries), the timeline's window or any span of dates and times (the frames inside it),
@@ -26,6 +28,30 @@ export async function novaLatest() {
   return (await novaGet('/api/nova/main/latest')).json();
 }
 
+/** Every Main Run and Hyper-Short run made in the last `hours`, newest first:
+    [{ product, run_id, init_utc, horizon_h, frames }]. */
+export async function novaRecentRuns(hours = 48) {
+  const since = Date.now() - hours * 3600e3;
+  const lists = await Promise.all(['main', 'hyper'].map(async (p) => {
+    try { return (await (await novaGet(`/api/nova/${p}/runs`)).json()).runs || []; } catch { return []; }
+  }));
+  return lists.flat().filter((r) => r.status !== 'failed' && Date.parse(r.init_utc) >= since)
+    .sort((a, b) => Date.parse(b.init_utc) - Date.parse(a.init_utc));
+}
+
+/** One run's manifest (a Main Run's or a Hyper-Short run's), knowing its product. */
+export async function novaRun(product, id) {
+  return { product, ...(await (await novaGet(`/api/nova/${product}/runs/${id}`)).json()) };
+}
+
+/** "Main Run 14Z Thu 23 Oct" / "Hyper-Short 15:30Z Thu 23 Oct" */
+export function runName(r) {
+  const t = new Date(r.init_utc);
+  const hh = String(t.getUTCHours()).padStart(2, '0'), mm = t.getUTCMinutes();
+  const at = r.product === 'hyper' ? `${hh}:${String(mm).padStart(2, '0')}Z` : `${hh}Z`;
+  return `${r.product === 'hyper' ? 'Hyper-Short' : 'Main Run'} ${at} ${t.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}`;
+}
+
 function f16(u) {
   const s = (u & 0x8000) ? -1 : 1, e = (u >> 10) & 0x1f, f = u & 0x3ff;
   if (e === 0) return s * 2 ** -14 * (f / 1024);
@@ -35,7 +61,8 @@ function f16(u) {
 const FIELDS = new Map();
 /** One field: a day summary ({ day }) or one frame ({ lead }), decoded to Float32Array. */
 export function novaField(m, { day, lead }, name) {
-  const url = day != null ? `/api/nova/main/runs/${m.run_id}/day/${day}/${name}` : `/api/nova/main/runs/${m.run_id}/frame/${lead}/${name}`;
+  const prod = m.product === 'hyper' ? 'hyper' : 'main';
+  const url = day != null ? `/api/nova/${prod}/runs/${m.run_id}/day/${day}/${name}` : `/api/nova/${prod}/runs/${m.run_id}/frame/${lead}/${name}`;
   if (FIELDS.has(url)) return FIELDS.get(url);
   const p = (async () => {
     const r = await novaGet(url);
@@ -240,4 +267,44 @@ export async function framesStat(m, frames, name, how = 'peak') {
   }
   for (const a of all) for (let i = 0; i < n; i++) { const x = a[i]; if (x === x && !(x <= out[i])) out[i] = x; }
   return out;
+}
+
+/* ── the risk overlay on Model Data ───────────────────────────────────────────────────────── */
+
+/** The outlook graphics' key: each level's lower bound and colour (TSTM 5 % … HIGH 65 %). */
+export const RISK_KEY = [
+  { id: 'Very Low', short: 'TSTM', min: 0.05, colour: '#60a5fa' },
+  { id: 'Low', short: 'MRGL', min: 0.12, colour: '#86efac' },
+  { id: 'Marginal', short: 'SLGT', min: 0.22, colour: '#facc15' },
+  { id: 'Slight', short: 'ENH', min: 0.35, colour: '#fb923c' },
+  { id: 'Moderate', short: 'MDT', min: 0.5, colour: '#f87171' },
+  { id: 'High', short: 'HIGH', min: 0.65, colour: '#a78bfa' },
+];
+
+/** 'YYYY-MM-DD' in London for a time (ms). */
+export const londonDay = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+/* the instant London's day starts: at 00:00 UTC London is on that midnight's own offset */
+const londonMidnight = (day) => {
+  const t = Date.parse(`${day}T00:00:00Z`);
+  return t - Number(new Date(t).toLocaleString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', hour12: false })) * 3600e3;
+};
+const nextDay = (day) => new Date(Date.parse(`${day}T12:00:00Z`) + 864e5).toISOString().slice(0, 10);
+
+/** A run's thunderstorm risk at the graphic key over a London `day` or a span [from, to) (ms):
+    { peak, levels: [{ id, colour, areas: [{ ring: [[lat, lon]] }] }] }, lowest level first, or
+    null when the run does not reach that time. A Main Run's day comes from its day summary,
+    anything else is the peak of the frames inside. `shape`: 'smooth' (the graphics' look) or
+    'detailed' (NOVA's own outlines). */
+export async function riskAreas(m, { day, from, to }, shape = 'smooth') {
+  const summary = day && (m.days || []).some((d) => d.date === day && d.fields?.includes('p_thunder'));
+  let data;
+  if (summary) data = await novaField(m, { day }, 'p_thunder');
+  else {
+    const [a, b] = day ? [londonMidnight(day), londonMidnight(nextDay(day))] : [from, to];
+    const inside = (m.frames || []).filter((f) => f.valid && Date.parse(f.valid) >= a && Date.parse(f.valid) < b);
+    if (!inside.length) return null;
+    data = await framesStat(m, inside.map((f) => ({ lead: f.lead_min, t: Date.parse(f.valid) })), 'p_thunder', 'peak');
+  }
+  const levels = contourLevels(data, m.grid, RISK_KEY.map(({ id, min }) => ({ id, min })), null, shape);
+  return { peak: peak(data), levels: levels.map((l) => ({ ...l, colour: RISK_KEY.find((k) => k.id === l.id).colour })) };
 }

@@ -17,12 +17,17 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
   Waves, MapPin, Search, ChevronDown, X, Layers, Star, Minus, Plus, Zap, Route, Grid3x3, Navigation, CloudSun, Cloud,
-  Map as MapIcon,
+  Map as MapIcon, CloudLightning,
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, frameCanvas, frameContours, drawScene,
   realtimeBasemap, fmtValue, download, makeGif, probFrame, loadLive, loadRoads, smoothCanvas, loadObserved, WX_NAMES, sampleFrame,
+  lonLatToGrid, STRIKE_STYLE,
 } from '@/lib/modelViewer';
+import { useAuth } from '@/lib/AuthContext';
+import { novaRecentRuns, novaRun, runName, riskAreas, RISK_KEY, londonDay } from '@/lib/novaOutlook';
+import { listStudioGraphics } from '@/components/studio/studioSaves';
+import { boxToLatLon } from '@/components/studio/studioGeo';
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Fit', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
@@ -134,6 +139,23 @@ const OBS_LIST = [
 const OBS = Object.fromEntries(OBS_LIST.map((x) => [x.key, x]));
 const dayMs = (d) => Date.parse(`${d}T12:00:00Z`);
 const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/* The risk overlay (admins only, as TCM NOVA itself is): a NOVA run's thunderstorm risk at the
+   outlook graphics' key, or an outlook saved in the Graphic Studio, over any layer. */
+const OUTLOOK_ORDER = [...RISK_KEY.map((k) => k.id), 'Conditional Severe', 'Severe'];
+const OUTLOOK_COLOURS = { ...Object.fromEntries(RISK_KEY.map((k) => [k.id, k.colour])), 'Conditional Severe': '#a5b4fc', Severe: '#a5b4fc' };
+const toGridRing = (ring) => ring.map(([lat, lon]) => lonLatToGrid(lon, lat));
+const isOutlookState = (st) => !st._scenarioTool && (!st.tool || st.tool === 'outlook');
+/** A saved outlook's drawn areas on the display grid, lowest level first (Severe hatched). */
+function outlookOverlay(state) {
+  return (state?.shapes || []).filter((s) => OUTLOOK_COLOURS[s.riskLevel] && s.points?.length > 2)
+    .sort((a, b) => OUTLOOK_ORDER.indexOf(a.riskLevel) - OUTLOOK_ORDER.indexOf(b.riskLevel))
+    .map((s) => ({
+      colour: OUTLOOK_COLOURS[s.riskLevel], rings: [toGridRing(s.points.map(([x, y]) => boxToLatLon(x, y)))],
+      dash: !!s.cond || s.riskLevel === 'Conditional Severe', hatch: /Severe/.test(s.riskLevel),
+    }));
+}
+const dayLabel = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
 /* frames of one more variable of the same model run (wind direction, weather type, cloud),
    fetched the way the main layer is: made on demand, the step on screen first */
@@ -396,6 +418,21 @@ export default function ModelData() {
   const [liveCat, setLiveCat] = useState(null);
   const [strikes, setStrikes] = useState(null);
   const [showLightning, setShowLightning] = useState(prefs.showLightning ?? true);
+  /* the strikes' look: coloured by age or one colour, with or without an outline */
+  const [strikeStyle, setStrikeStyle] = useState(() => ({ ...STRIKE_STYLE, ...(prefs.strikeStyle || {}) }));
+  const setStrikeK = (k, v) => setStrikeStyle((s) => ({ ...s, [k]: v }));
+  /* the risk overlay: on, the source (a NOVA run or a saved outlook), over the day on show or a
+     span of dates and times, simplified or detailed, and how strongly it is drawn */
+  const { user } = useAuth() || {};
+  const isAdmin = user?.role === 'admin';
+  const [ov, setOv] = useState(() => ({ on: false, src: 'nova', run: null, span: 'day', from: '', to: '', look: 'smooth', outlook: null, alpha: 0.85, ...(prefs.ov || {}) }));
+  const setOvK = (k, v) => setOv((o) => ({ ...o, [k]: v }));
+  const [ovRuns, setOvRuns] = useState(null);       // the last 48 hours' runs
+  const [ovRun, setOvRun] = useState(null);         // the chosen one's manifest
+  const [ovAreas, setOvAreas] = useState({});       // London day (or 'custom') -> { peak, areas } or null
+  const [ovOutlooks, setOvOutlooks] = useState(null);
+  const [ovErr, setOvErr] = useState(null);
+  const ovOn = isAdmin && ov.on;
   const [newRun, setNewRun] = useState(null);
   const liveItem = LIVE[liveKey];
   const liveProd = liveCat?.products?.[liveItem.src];
@@ -434,9 +471,70 @@ export default function ModelData() {
   useEffect(() => {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours,
-        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning }));
+        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov }));
     } catch { /* private window: nothing to remember */ }
-  }, [mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours, showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning]);
+  }, [mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours, showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning,
+    strikeStyle, ov]);
+
+  /* the overlay's runs (the last 48 hours), the newest Main Run chosen unless one already is */
+  useEffect(() => {
+    if (!ovOn || ov.src !== 'nova' || ovRuns) return;
+    novaRecentRuns(48).then((rs) => {
+      setOvRuns(rs);
+      if (!rs.length) { setOvErr('No TCM NOVA run in the last 48 hours.'); return; }
+      if (!rs.some((r) => `${r.product}|${r.run_id}` === ov.run)) { const r = rs.find((x) => x.product === 'main') || rs[0]; setOvK('run', `${r.product}|${r.run_id}`); }
+    }).catch((e) => setOvErr(e.message));
+  }, [ovOn, ov.src, ovRuns]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!ovOn || ov.src !== 'nova' || !ov.run) return undefined;
+    let live = true;
+    const [p, id] = ov.run.split('|');
+    setOvRun(null); setOvErr(null);
+    novaRun(p, id).then((m) => live && setOvRun(m)).catch((e) => live && setOvErr(e.message));
+    return () => { live = false; };
+  }, [ovOn, ov.src, ov.run]);
+  /* its areas for every day it reaches (so stepping and exports across days have each day's), or
+     for the span asked for */
+  useEffect(() => {
+    if (!ovRun) return undefined;
+    let live = true;
+    setOvAreas({}); setOvErr(null);
+    const asOverlay = (r) => (r ? { peak: r.peak, areas: r.levels.flatMap((l) => l.areas.map((a) => ({ colour: l.colour, rings: [toGridRing(a.ring)] }))) } : null);
+    (async () => {
+      if (ov.span === 'custom') {
+        const from = Date.parse(ov.from), to = Date.parse(ov.to);           // datetime-local: local time
+        if (!(from < to)) { setOvErr('Choose a start and an end after it.'); return; }
+        const r = await riskAreas(ovRun, { from, to }, ov.look);
+        if (!live) return;
+        setOvAreas({ custom: asOverlay(r) });
+        if (!r) setOvErr('That span is outside this run.');
+        return;
+      }
+      const days = [...new Set(ovRun.frames.filter((f) => f.valid).map((f) => londonDay(Date.parse(f.valid))))];
+      for (const d of days) {
+        const r = await riskAreas(ovRun, { day: d }, ov.look);
+        if (!live) return;
+        setOvAreas((o) => ({ ...o, [d]: asOverlay(r) }));
+      }
+    })().catch((e) => live && setOvErr(e.message));
+    return () => { live = false; };
+  }, [ovRun, ov.span, ov.from, ov.to, ov.look]);
+  /* the outlooks saved in the Graphic Studio, newest first */
+  useEffect(() => {
+    if (!ovOn || ov.src !== 'outlook' || ovOutlooks) return;
+    listStudioGraphics({ basic: false, me: null, keep: isOutlookState }).then((gs) => {
+      setOvOutlooks(gs);
+      if (gs.length && !gs.some((g) => g.id === ov.outlook)) setOvK('outlook', gs[0].id);
+    }).catch((e) => setOvErr(e.message));
+  }, [ovOn, ov.src, ovOutlooks]); // eslint-disable-line react-hooks/exhaustive-deps
+  const outlookShown = useMemo(() => (ov.src === 'outlook' && ovOutlooks ? outlookOverlay(ovOutlooks.find((g) => g.id === ov.outlook)?.state) : null),
+    [ov.src, ov.outlook, ovOutlooks]);
+  /** the overlay for a frame's time: the outlook, the span, or that London day's */
+  const riskFor = useCallback((validMs) => {
+    if (!ovOn) return null;
+    const areas = ov.src === 'outlook' ? outlookShown : (ov.span === 'custom' ? ovAreas.custom : ovAreas[londonDay(validMs)])?.areas;
+    return areas?.length ? { alpha: ov.alpha, areas } : null;
+  }, [ovOn, ov.src, ov.span, ov.alpha, outlookShown, ovAreas]);
   const canvasRef = useRef(null);
   const stageRef = useRef(null);
   const topRef = useRef(null);
@@ -844,12 +942,13 @@ export default function ModelData() {
       star: isObs && showStar && ext?.value != null ? { at: { gx: ext.gx, gy: ext.gy, v: ext.value, place: ext.place }, unit: vmeta?.unit }
         : showStar && canStar && f?.q && !isObs ? { frame: f, unit: vmeta?.unit, floor: sc.floor } : null,
       strikes: !showLightning || !raw ? null : isLive ? (strikes ? strikesAt(Date.parse(raw.head.valid)) : null) : isObs ? obsStrikes[day] || null : null,
-      strikesDaily: isObs,
+      strikesDaily: isObs, strikeStyle,
+      risk: raw ? riskFor(Date.parse(raw.head.valid)) : null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disp, style, basemapFor, statics, showCities, scaleKey, smooth, showContours, model, chromeFor, fontsOk, showStar, vmeta, isLive, isObs, showLightning, strikes,
     arrowsOn, wxOn, cloudsOn, lvArrows, fcArrows, lvWx, fcWx, lvCloud, fcCloud, showRoads, roads, showGrid, timeSteps, obsSummary, obsKey, obsStrikes,
-    selfArrows, ownWx, canGrid, canStar, canContours, underMeta, underVar, fcUnder]);
+    selfArrows, ownWx, canGrid, canStar, canContours, underMeta, underVar, fcUnder, strikeStyle, riskFor]);
   useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); smoothCache.current.clear(); }, [thr, dir, scaleKey]);
 
   /* draw: the map everywhere, dimmed outside the frame, the finished graphic inside it */
@@ -1139,13 +1238,91 @@ export default function ModelData() {
   );
 
   const layerCount = [showCities || wxOn, wxOn, arrowsOn, cloudsOn, canLightning && showLightning, showRoads, canGrid && showGrid,
-    canContours && showContours, canStar && showStar].filter(Boolean).length;
+    canContours && showContours, canStar && showStar, ovOn].filter(Boolean).length;
   const styleSeg = <Seg small items={Object.entries(MAP_STYLES).map(([k, s]) => [k, s.label])} value={style} onChange={setStyle} />;
   const frameSeg = <Seg small items={Object.entries(FRAMES).map(([k, f]) => [k, f.label])} value={frameKey} onChange={setFrameKey} />;
   const smoothPill = (
     <Pill on={smooth} title={smooth ? 'Smoothed: click to see the radar and model cells as they are' : 'Cells as they are: click to smooth'} onClick={() => setSmooth((x) => !x)}>
       {smooth ? 'Smooth' : 'Pixels'}
     </Pill>
+  );
+  /* under the Lightning switch: the strikes' colours and outline */
+  const subRow = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11.5, color: T.ink2, fontWeight: 650 };
+  const swatch = (value, onChange, title) => (
+    <input type="color" value={value} onChange={(e) => onChange(e.target.value)} title={title} aria-label={title}
+      style={{ width: 28, height: 22, padding: 0, border: `1px solid ${T.line}`, borderRadius: 7, background: 'none', cursor: 'pointer' }} />
+  );
+  const strikeControls = (
+    <div style={{ display: 'grid', gap: 8, padding: '0 8px 10px 46px' }}>
+      <div style={subRow}>
+        <Seg small items={[['age', 'By age'], ['one', 'One colour']]} value={strikeStyle.colour} onChange={(v) => setStrikeK('colour', v)} />
+        {strikeStyle.colour === 'one' && swatch(strikeStyle.fill, (v) => setStrikeK('fill', v), 'Strike colour')}
+      </div>
+      <div style={subRow}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+          <input type="checkbox" checked={strikeStyle.outline} onChange={(e) => setStrikeK('outline', e.target.checked)} /> Outline
+        </label>
+        {strikeStyle.outline && swatch(strikeStyle.outlineColour, (v) => setStrikeK('outlineColour', v), 'Outline colour')}
+      </div>
+      {strikeStyle.colour === 'age' && (
+        <div style={{ ...subRow, gap: 10, fontWeight: 600, fontSize: 11 }}>
+          {[['#ffffff', 'under 5 min'], ['#ffe23c', '15'], ['#ff9628', '30'], ['#eb4632', 'older']].map(([c, l]) => (
+            <span key={l} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><i style={{ width: 9, height: 9, borderRadius: 99, background: c, border: '1px solid rgba(0,0,0,0.45)' }} />{l}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+  /* the risk overlay's controls (admins) */
+  const ovDays = useMemo(() => new Set((ovRun?.frames || []).filter((f) => f.valid).map((f) => londonDay(Date.parse(f.valid)))), [ovRun]);
+  const shownDay = frame?.head?.valid ? londonDay(Date.parse(frame.head.valid)) : null;
+  const ovStatus = (() => {
+    if (ovErr) return ovErr;
+    if (ov.src === 'outlook') return !ovOutlooks ? 'Loading your saved outlooks…' : ovOutlooks.length ? `${outlookShown?.length || 0} area${outlookShown?.length === 1 ? '' : 's'}, drawn as saved` : 'No outlook saved in the Graphic Studio yet.';
+    if (!ovRun) return 'Loading the run…';
+    if (ov.span === 'custom') return !('custom' in ovAreas) ? 'Working out the span…' : ovAreas.custom ? `Peak over the span: ${Math.round(ovAreas.custom.peak * 100)}%` : null;
+    if (!shownDay) return null;
+    if (!ovDays.has(shownDay)) return `${dayLabel(shownDay)} is outside this run.`;
+    const a = ovAreas[shownDay];
+    return a === undefined ? `Working out ${dayLabel(shownDay)}…` : a ? `${dayLabel(shownDay)}: peak ${Math.round(a.peak * 100)}%` : `Nothing for ${dayLabel(shownDay)}.`;
+  })();
+  /* a span starts as the day on show */
+  const pickSpan = (v) => setOv((o) => {
+    if (v !== 'custom' || (o.from && o.to)) return { ...o, span: v };
+    const d = shownDay || londonDay(Date.now());
+    return { ...o, span: v, from: `${d}T00:00`, to: `${new Date(Date.parse(`${d}T12:00:00Z`) + 864e5).toISOString().slice(0, 10)}T00:00` };
+  });
+  const field = { ...sel, borderRadius: 12, padding: '6px 10px', width: '100%', boxSizing: 'border-box' };
+  const ovControls = (
+    <div style={{ display: 'grid', gap: 8, padding: '0 8px 10px 46px' }}>
+      <Seg small items={[['nova', 'TCM NOVA'], ['outlook', 'My outlooks']]} value={ov.src} onChange={(v) => { setOvErr(null); setOvK('src', v); }} />
+      {ov.src === 'nova' ? (
+        <>
+          <select value={ov.run || ''} onChange={(e) => setOvK('run', e.target.value)} style={field} aria-label="TCM NOVA run">
+            {(ovRuns || []).map((r) => <option key={`${r.product}|${r.run_id}`} value={`${r.product}|${r.run_id}`} style={{ color: '#111' }}>{runName(r)}</option>)}
+          </select>
+          <Seg small items={[['day', 'Day on show'], ['custom', 'Dates & times']]} value={ov.span} onChange={pickSpan} />
+          {ov.span === 'custom' && (
+            <div style={{ display: 'grid', gap: 6 }}>
+              <input type="datetime-local" value={ov.from} max={ov.to || undefined} onChange={(e) => setOvK('from', e.target.value)} style={field} aria-label="From" />
+              <input type="datetime-local" value={ov.to} min={ov.from || undefined} onChange={(e) => setOvK('to', e.target.value)} style={field} aria-label="To" />
+            </div>
+          )}
+          <Seg small items={[['smooth', 'Simplified'], ['detailed', 'Detailed']]} value={ov.look} onChange={(v) => setOvK('look', v)} />
+        </>
+      ) : (
+        <select value={ov.outlook || ''} onChange={(e) => setOvK('outlook', e.target.value)} style={field} aria-label="Saved outlook">
+          {(ovOutlooks || []).map((g) => <option key={g.id} value={g.id} style={{ color: '#111' }}>{g.title}</option>)}
+        </select>
+      )}
+      <label style={subRow}>Strength <input type="range" min={0.3} max={1} step={0.05} value={ov.alpha} onChange={(e) => setOvK('alpha', Number(e.target.value))} style={{ flex: 1, minWidth: 90 }} /></label>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+        {RISK_KEY.map((k) => (
+          <span key={k.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 800, color: T.ink2 }}><i style={{ width: 12, height: 8, borderRadius: 3, background: k.colour }} />{k.short}</span>
+        ))}
+      </div>
+      {ovStatus && <div style={{ fontSize: 11, color: ovErr ? '#f59e0b' : T.ink2 }}>{ovStatus}</div>}
+    </div>
   );
   const layerRows = (
     <div style={{ display: 'grid', gap: 1 }}>
@@ -1154,10 +1331,18 @@ export default function ModelData() {
       {canArrows && <LayerRow icon={<Navigation size={14} />} label="Wind arrows" note={ownArrows ? 'part of this layer' : 'the way the wind is blowing'} on={arrowsOn} locked={ownArrows} onClick={() => setShowArrows((x) => !x)} />}
       {canClouds && <LayerRow icon={<Cloud size={14} />} label="Cloud underneath" note={isLive ? 'satellite cloud under the radar' : 'the model’s cloud under its rain'} on={showClouds} onClick={() => setShowClouds((x) => !x)} />}
       {canLightning && <LayerRow icon={<Zap size={14} />} label="Lightning" note={isLive ? 'strikes in the hour before each frame' : 'every strike that day'} on={showLightning} onClick={() => setShowLightning((x) => !x)} />}
+      {canLightning && showLightning && strikeControls}
       <LayerRow icon={<Route size={14} />} label="Roads" note="motorways; A roads as you zoom in" on={showRoads} onClick={() => setShowRoads((x) => !x)} />
       {canGrid && <LayerRow icon={<Grid3x3 size={14} />} label="Value grid" note="the number at each point" on={showGrid} onClick={() => setShowGrid((x) => !x)} />}
       {canContours && <LayerRow icon={<Waves size={14} />} label="Contours" note="lines at set values" on={showContours} onClick={() => setShowContours((x) => !x)} />}
       {canStar && <LayerRow icon={<Star size={14} />} label={isObs ? "Star the day's extreme" : 'Star the highest value'} note={isObs ? 'with where it was' : 'in the part of the map you can see'} on={showStar} onClick={() => setShowStar((x) => !x)} />}
+      {isAdmin && (
+        <>
+          <div style={{ height: 1, background: T.line, margin: '6px 4px' }} />
+          <LayerRow icon={<CloudLightning size={14} />} label="Risk overlay" note="TCM NOVA or your outlooks, over any layer (admins)" on={ov.on} onClick={() => setOvK('on', !ov.on)} />
+          {ov.on && ovControls}
+        </>
+      )}
     </div>
   );
   const layersBtn = (

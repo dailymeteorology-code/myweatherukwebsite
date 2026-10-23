@@ -108,6 +108,11 @@ textarea.sg-input { resize: vertical; line-height: 1.45; }
 .sg-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border-radius: 18px; background: var(--sg-surface);
   border: 1px solid var(--sg-border); -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%); box-shadow: var(--sg-shadow), inset 0 1px 0 var(--sg-hl); }
 .sg-toolbar .sg-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--sg-border2); }
+.sg-toolbar { position: relative; }   /* the saved list hangs from it (the preview's own toolbar is sticky, above) */
+.sg-pop { position: absolute; right: 8px; top: calc(100% + 8px); z-index: 30; width: min(320px, 86vw); padding: 8px; border-radius: 16px;
+  background: color-mix(in srgb, var(--ad-bg, #0b1220) 94%, transparent); border: 1px solid var(--sg-border2);
+  -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%); box-shadow: var(--sg-shadow); }
+.sg-pop .sg-list { max-height: 340px; }
 .sg-grow { flex: 1; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .sg-spin { animation: spin 1s linear infinite; }

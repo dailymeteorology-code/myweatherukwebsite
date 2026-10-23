@@ -19,7 +19,7 @@ import { base44 } from '@/api/base44Client';
 import { RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConfig';
 import TimelinePill from '@/components/tcm/StormOutlookTimelinePill';
 import { RADAR_BANDS, UKRadarLayer } from '@/lib/ukRadar';
-import { VIEW_W, VIEW_H, MAP_BBOX, projectPt, latLonToNorm, useCounties, resolveView, viewZoom, CountyLand, TownLabels } from '@/components/studio/studioGeo';
+import { VIEW_W, VIEW_H, MAP_BBOX, projectPt, latLonToBox, useCounties, resolveView, viewZoom, CountyLand, TownLabels } from '@/components/studio/studioGeo';
 import { GRANS, defaultTimeline, buildCells, cellLevels, markCells, shiftTimeline, savedTimeline, markedSpan, parseLocal } from '@/components/studio/studioTimeline';
 import { StudioLayout, Section, Btn, Seg, Field, Swatches } from '@/components/studio/StudioUI';
 import MapViewPicker from '@/components/studio/MapViewPicker';
@@ -425,6 +425,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
   const [showLoadPanel, setShowLoadPanel]     = useState(false);
   const [loadingGraphics, setLoadingGraphics] = useState(false);
   const [saveSuccess, setSaveSuccess]         = useState(false);
+  const [savedPop, setSavedPop]               = useState(false);   // the saved list, dropped from the toolbar
   /* the UKV rain under the drawing (studio/ModelOverlay): on/off, the timeline cell it shows
      (null: the first marked cell) and what it last said about itself */
   const [showModel, setShowModel] = useState(false);
@@ -496,13 +497,24 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
     outlookRegion, mapAreas, mapContext, annotations, arrows,
   });
 
-  // Save current state to database
-  const handleSaveToStudio = async () => {
-    if (!saveName.trim()) return;
+  /* a name when none is typed: the outlook's days and when it was saved
+     ("Thunderstorm Outlook · 22 Oct → 24 Oct · saved 23 Oct 17:52") */
+  const autoTitle = (what = 'saved') => {
+    const day = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    const days = validDate2 && validDate2 !== validDate ? `${day(validDate)} → ${day(validDate2)}` : day(validDate);
+    const at = new Date().toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '');
+    return `Thunderstorm Outlook · ${days} · ${what} ${at}`;
+  };
+
+  // Save current state to database (`quick`: from the toolbar, named for it when no name is typed)
+  const handleSaveToStudio = async (quick = false) => {
+    const title = saveName.trim() || (quick ? autoTitle() : '');
+    if (!title) return;
     if (basic && !me) { base44.auth.redirectToLogin(); return; }
     setSaving(true);
     try {
-      await saveStudioGraphic({ basic, me, title: saveName.trim(), state: captureState() });
+      await saveStudioGraphic({ basic, me, title, state: captureState() });
+      if (savedPop || showLoadPanel) loadSaved();
       setSaveSuccess(true);
       setSaveName('');
       setTimeout(() => setSaveSuccess(false), 1500);
@@ -515,8 +527,8 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
   };
 
   // Load saved graphics list
-  const openLoadPanel = async () => {
-    setShowLoadPanel(true);
+  const openLoadPanel = () => { setShowLoadPanel(true); loadSaved(); };
+  const loadSaved = async () => {
     setLoadingGraphics(true);
     try {
       /* this tool's own: saved before graphics carried their tool (and not the scenario board's), or
@@ -939,7 +951,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
     }
     if (tl) setTimeline(tl);
     if (areas) {
-      const mapped = areas.map(({ riskLevel, ring, from, to }) => ({ riskLevel, points: ring.map(([lat, lon]) => latLonToNorm(lat, lon)), ...(from ? { from, to } : {}) }))
+      const mapped = areas.map(({ riskLevel, ring, from, to }) => ({ riskLevel, points: ring.map(([lat, lon]) => latLonToBox(lat, lon)), ...(from ? { from, to } : {}) }))
         .filter((s) => s.points.length >= 3);
       setShapes((prev) => {
         const next = mode === 'append' ? [...prev.map((s) => shiftTiming(s, n)), ...mapped] : mapped;
@@ -1125,7 +1137,13 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
       // Give the download a moment to take the URL before it is released.
       setTimeout(() => URL.revokeObjectURL(url), 60000);
 
-      toast.success(`Exported at ${canvas.width}x${canvas.height}`);
+      /* in Admin, every download is kept in Saved graphics too, so a graphic that is posted can
+         always be opened again and edited */
+      if (!basic) {
+        saveStudioGraphic({ basic, me, title: autoTitle('downloaded'), state: captureState() })
+          .then(() => toast.success(`Exported at ${canvas.width}x${canvas.height}, and kept in Saved graphics`))
+          .catch(() => toast.success(`Exported at ${canvas.width}x${canvas.height} (not kept in Saved graphics)`));
+      } else toast.success(`Exported at ${canvas.width}x${canvas.height}`);
     } catch (err) {
       console.error('[graphic export]', err);
       toast.error('The graphic could not be exported — see the console for why.');
@@ -1566,28 +1584,33 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
         )}
         <div className="sg-row" style={{ flexWrap: 'nowrap' }}>
           <input className="sg-input" value={saveName} onChange={(e) => setSaveName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSaveToStudio()} placeholder="Name this graphic (e.g. Day 1 Slight Risk)" />
-          <Btn on={saveSuccess} color="#22c55e" icon={saving ? Loader2 : saveSuccess ? Check : Save} disabled={saving || !saveName.trim()} onClick={handleSaveToStudio}>{saveSuccess ? 'Saved' : 'Save'}</Btn>
+          <Btn on={saveSuccess} color="#22c55e" icon={saving ? Loader2 : saveSuccess ? Check : Save} disabled={saving || !saveName.trim()} onClick={() => handleSaveToStudio()}>{saveSuccess ? 'Saved' : 'Save'}</Btn>
         </div>
+        {!basic && <p className="sg-note">Every JPG you download is kept here too.</p>}
         <Btn on={showLoadPanel} color="#fbbf24" icon={FolderOpen} onClick={() => (showLoadPanel ? setShowLoadPanel(false) : openLoadPanel())}>Saved graphics</Btn>
-        {showLoadPanel && (
-          <div className="sg-list">
-            {loadingGraphics && <p className="sg-note">Loading…</p>}
-            {!loadingGraphics && savedGraphics.length === 0 && <p className="sg-note">Nothing saved yet.</p>}
-            {savedGraphics.map((g) => (
-              <button key={g.id} type="button" className="sg-item" style={{ cursor: 'pointer', font: 'inherit', color: 'inherit', textAlign: 'left' }} onClick={() => loadState(g)}>
-                <FolderOpen style={{ width: 13, height: 13, color: '#fbbf24', flexShrink: 0 }} />
-                <span>{g.title}</span>
-                <small className="sg-note">{new Date(g.created_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</small>
-              </button>
-            ))}
-          </div>
-        )}
+        {showLoadPanel && savedList(() => {})}
       </Section>
     </>
   );
 
   /* quick tools over the graphic, so drawing never needs the controls scrolled into view */
   const penOn = mapTool === 'draw' && drawMode;
+  /* the saved graphics, newest first; `after` runs once one is opened */
+  function savedList(after) {
+    return (
+      <div className="sg-list">
+        {loadingGraphics && <p className="sg-note">Loading…</p>}
+        {!loadingGraphics && savedGraphics.length === 0 && <p className="sg-note">Nothing saved yet.</p>}
+        {savedGraphics.map((g) => (
+          <button key={g.id} type="button" className="sg-item" style={{ cursor: 'pointer', font: 'inherit', color: 'inherit', textAlign: 'left' }} onClick={() => { loadState(g); after(); }} title={g.title}>
+            <FolderOpen style={{ width: 13, height: 13, color: '#fbbf24', flexShrink: 0 }} />
+            <span>{g.title}</span>
+            <small className="sg-note">{new Date(g.created_date).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '')}</small>
+          </button>
+        ))}
+      </div>
+    );
+  }
   const toolbar = (
     <div className="sg-toolbar">
       {!isRadar && (
@@ -1610,7 +1633,11 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
       <Btn sm icon={Undo2} disabled={!history.canUndo} onClick={history.undo} title="Undo (Ctrl+Z)" />
       <Btn sm icon={Redo2} disabled={!history.canRedo} onClick={history.redo} title="Redo (Ctrl+Y)" />
       <span className="sg-grow" />
+      <Btn sm on={saveSuccess} color="#22c55e" icon={saving ? Loader2 : saveSuccess ? Check : Save} disabled={saving} onClick={() => handleSaveToStudio(true)}
+        title={saveName.trim() ? `Save as "${saveName.trim()}"` : 'Save this graphic (named for its days, or type a name under Save & export)'}>{saveSuccess ? 'Saved' : 'Save'}</Btn>
+      <Btn sm on={savedPop} color="#fbbf24" icon={FolderOpen} onClick={() => { if (!savedPop) loadSaved(); setSavedPop((v) => !v); }} title="Open a saved graphic">Saved</Btn>
       <Btn sm primary color="#0ea5e9" icon={isExporting ? Loader2 : Download} disabled={isExporting} onClick={handleDownload}>JPG</Btn>
+      {savedPop && <div className="sg-pop">{savedList(() => setSavedPop(false))}</div>}
     </div>
   );
 

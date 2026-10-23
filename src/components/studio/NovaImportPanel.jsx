@@ -1,4 +1,5 @@
-/* Imports TCM NOVA's newest Main Run into the thunderstorm graphic: its thunderstorm probability
+/* Imports a TCM NOVA run into the thunderstorm graphic (the newest Main Run, or any Main Run or
+   Hyper-Short run of the last 48 hours): its thunderstorm probability
    as editable risk areas, optionally its severe probability as Severe areas, its 3-hourly frames
    as the timeline, and its hazard probabilities as the Hazards card's percentages.
 
@@ -12,7 +13,7 @@
 import React, { useEffect, useState } from 'react';
 import { DownloadCloud, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { novaLatest, novaField, boxMask, contourLevels, peak, framesIn, framesStat, timingFrames, SHAPES } from '@/lib/novaOutlook';
+import { novaRecentRuns, novaRun, runName, novaField, boxMask, contourLevels, peak, framesIn, framesStat, timingFrames, SHAPES } from '@/lib/novaOutlook';
 import { buildCells, shiftTimeline, parseLocal, toLocalInput, hourKey, marksFromStamps } from '@/components/studio/studioTimeline';
 import { Btn, Seg, Field } from '@/components/studio/StudioUI';
 import { MAP_BBOX } from '@/components/studio/studioGeo';
@@ -21,6 +22,10 @@ const dayDiff = (a, b) => Math.round((Date.parse(`${b}T12:00:00`) - Date.parse(`
 const dayName = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 const padBox = (b) => (b ? { lonMin: b.lonMin - 0.5, lonMax: b.lonMax + 0.5, latMin: b.latMin - 0.35, latMax: b.latMax + 0.35 } : null);
 const dayBounds = (d) => { const a = new Date(`${d}T00:00:00`), b = new Date(a); b.setDate(b.getDate() + 1); return [a.getTime(), b.getTime()]; };
+/* the days a run covers: its day summaries (Main Run), else the days of its frames (Hyper-Short) */
+const runDays = (m) => (m.days?.length ? m.days.map((d) => ({ ...d, summary: true }))
+  : [...new Set((m.frames || []).filter((f) => f.valid).map((f) => new Date(f.valid).toLocaleDateString('en-CA')))].map((date) => ({ date })));
+const runKey = (r) => `${r.product}|${r.run_id}`;
 
 /* the choices that are a matter of taste are remembered */
 const PREF_KEY = 'mwuk_studio_import';
@@ -29,7 +34,9 @@ const readPrefs = () => { try { return JSON.parse(localStorage.getItem(PREF_KEY)
 /** `levels`: the graphic's base ladder, lowest first, each with `keyMin` (its key's lower bound)
     and `novaMin` (NOVA's own word band), both 0..1. `hazardFields`: { hazardId: NOVA field }. */
 export default function NovaImportPanel({ view, timeline, validDate, levels, hazardFields, onImport }) {
-  const [m, setM] = useState(null);
+  const [runs, setRuns] = useState(null);       // the last 48 hours' runs, newest first
+  const [pick, setPick] = useState(null);       // the run chosen ('main|main-20261023T1400Z')
+  const [m, setM] = useState(null);             // its manifest
   const [err, setErr] = useState(null);
   const [span, setSpan] = useState('day0');
   const [custom, setCustom] = useState(() => ({ from: timeline.from, to: timeline.to }));
@@ -38,22 +45,43 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
   const [busy, setBusy] = useState(false);
   const pref = (k) => (v) => setPrefs((p) => { const n = { ...p, [k]: v }; try { localStorage.setItem(PREF_KEY, JSON.stringify({ ...readPrefs(), ...n })); } catch { /* storage blocked */ } return n; });
 
+  /* the runs to choose from; the newest Main Run first in mind */
   useEffect(() => {
     let live = true;
-    novaLatest().then((x) => live && setM(x)).catch((e) => live && setErr(e.message));
+    novaRecentRuns(48).then((rs) => {
+      if (!live) return;
+      if (!rs.length) { setErr('No TCM NOVA run in the last 48 hours.'); return; }
+      setRuns(rs);
+      setPick(runKey(rs.find((r) => r.product === 'main') || rs[0]));
+    }).catch((e) => live && setErr(e.message));
     return () => { live = false; };
   }, []);
+  useEffect(() => {
+    if (!pick) return undefined;
+    let live = true;
+    const [product, id] = pick.split('|');
+    setM(null);
+    novaRun(product, id).then((x) => live && setM(x)).catch((e) => live && setErr(e.message));
+    return () => { live = false; };
+  }, [pick]);
   /* open on the outlook day when the run has it */
   useEffect(() => {
     if (!m) return;
-    const i = (m.days || []).findIndex((d) => d.date === validDate);
-    if (i >= 0) setSpan(`day${i}`);
+    const i = runDays(m).findIndex((d) => d.date === validDate);
+    setSpan(i >= 0 ? `day${i}` : 'window');
   }, [m]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (err) return <p className="sg-note" style={{ color: 'var(--sg-amber)' }}>{err}</p>;
-  if (!m) return <p className="sg-note"><Loader2 className="sg-spin" style={{ width: 12, height: 12, verticalAlign: -2 }} /> Loading the newest TCM NOVA run…</p>;
+  const runPicker = runs && (
+    <Field label="Run">
+      <select className="sg-input" value={pick || ''} onChange={(e) => setPick(e.target.value)}>
+        {runs.map((r) => <option key={runKey(r)} value={runKey(r)}>{runName(r)} · {r.horizon_h} h</option>)}
+      </select>
+    </Field>
+  );
+  if (!m) return <div className="sg-panel">{runPicker}<p className="sg-note"><Loader2 className="sg-spin" style={{ width: 12, height: 12, verticalAlign: -2 }} /> Loading the TCM NOVA run…</p></div>;
 
-  const days = (m.days || []).slice(0, 4);
+  const days = runDays(m).slice(0, 4);
   const day = span.startsWith('day') ? days[Number(span.slice(3))]?.date : null;
   const thr = levels.map((l) => ({ id: l.id, min: prefs.bands === 'key' ? l.keyMin : l.novaMin }));
   const levelOf = (p) => { let id = null; for (const t of thr) if (p >= t.min) id = t.id; return id; };
@@ -76,8 +104,9 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
       else { from = cells[0]?.ms; to = cells[cells.length - 1]?.end; }
       if (!(from < to)) throw new Error('The end has to be after the start.');
       const spanFrames = framesIn(m, from, to);
-      /* a day's peak is in the run's day summaries; anything else is worked out from the frames */
-      const fieldOver = (name) => (day && prefs.stat === 'peak' ? novaField(m, { day }, name)
+      /* a day's peak is in a Main Run's day summaries; anything else is worked out from the frames */
+      const summary = day && days.find((d) => d.date === day)?.summary;
+      const fieldOver = (name) => (summary && prefs.stat === 'peak' ? novaField(m, { day }, name)
         : spanFrames.length ? framesStat(m, spanFrames, name, prefs.stat) : null);
       const out = { mode, day };
 
@@ -125,8 +154,9 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
 
   return (
     <div className="sg-panel">
+      {runPicker}
       <span className="sg-note">
-        <b>Main Run {String(init.getUTCHours()).padStart(2, '0')}Z</b> {init.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} · {m.horizon_h} h
+        <b>{runName(m)}</b> · {m.horizon_h} h{m.product === 'hyper' ? `, every ${m.step_min || 30} min` : ', 3-hourly'}
         {m.calibration && /uncal/i.test(m.calibration) ? ' · uncalibrated' : ''}
       </span>
       <div>
@@ -142,7 +172,7 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
           <Field label="To"><input type="datetime-local" className="sg-input" value={custom.to} min={custom.from} onChange={(e) => setCustom((c) => ({ ...c, to: e.target.value }))} /></Field>
         </div>
       )}
-      {span === 'custom' && <p className="sg-note">NOVA runs from {toLocalInput(init).replace('T', ' ')} for {m.horizon_h} hours, in 3-hour steps.</p>}
+      {span === 'custom' && <p className="sg-note">This run goes from {toLocalInput(init).replace('T', ' ')} for {m.horizon_h} hours, in {m.product === 'hyper' ? `${m.step_min || 30}-minute` : '3-hour'} steps.</p>}
       <div className="sg-row">
         <div>
           <span className="sg-label">Value</span>

@@ -31,6 +31,26 @@ export function latLonToNorm(lat, lon) {
   return [x / VIEW_W, y / VIEW_H];
 }
 
+/* The outlook tools draw the land into their 450 x 666 map box at the projection's own shape
+   (xMidYMid meet: 439 px wide, centred) but their areas on a layer that fills the whole box, so an
+   area's points are the box's 0..1, not the land's. These turn [lat, lon] into an area's points
+   and back, so an imported area sits on the land it belongs to and a drawn one can be placed on
+   another map. */
+export const BOX_W = 450, BOX_H = 666;
+const FIT_K = Math.min(BOX_W / VIEW_W, BOX_H / VIEW_H);
+const FIT_X = (BOX_W - VIEW_W * FIT_K) / 2, FIT_Y = (BOX_H - VIEW_H * FIT_K) / 2;
+export function latLonToBox(lat, lon) {
+  const [x, y] = projectPt(lon, lat);
+  return [(FIT_X + x * FIT_K) / BOX_W, (FIT_Y + y * FIT_K) / BOX_H];
+}
+/** An area's point (the box's 0..1) -> [lat, lon]. */
+export function boxToLatLon(nx, ny) {
+  const x = (nx * BOX_W - FIT_X) / FIT_K, y = (ny * BOX_H - FIT_Y) / FIT_K;
+  const lon = MAP_BBOX.lonMin + (x / VIEW_W) * (MAP_BBOX.lonMax - MAP_BBOX.lonMin);
+  const m = Y_TOP - (y / VIEW_H) * (Y_TOP - Y_BOT);
+  return [(2 * Math.atan(Math.exp(m)) - Math.PI / 2) * 180 / Math.PI, lon];
+}
+
 /* ── the counties ───────────────────────────────────────────────────────────────────────── */
 export const COUNTRY_ORDER = ['England', 'Wales', 'Scotland', 'Northern Ireland', 'Ireland', 'Crown Dependencies'];
 
