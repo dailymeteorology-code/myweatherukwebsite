@@ -37,7 +37,7 @@ import { currentUser, loadRecent, rememberSearch, forgetSearch, clearRecent } fr
 import { fetchAllWarningsForPoint } from '@/lib/locationWarnings';
 import {
   fetchLocation, shape, condLabel, isWet, nextHoursText, dayText, hhmm, hourOf, sunElevation, compass,
-  minutelyText, wetMinute, bandOf, ukDay, thunderRisk,
+  minutelyText, wetMinute, bandOf, ukDay, thunderRisk, fromThisHour,
 } from '@/lib/ukvLocation';
 
 const REFRESH_MS = 5 * 60e3;                       // a new radar scan every 15 minutes: the next hour follows each one
@@ -52,8 +52,7 @@ const LANE_H = 24;                                 // one warning bar, with its 
 function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
   const U = useUnits();
   const items = useMemo(() => {
-    const start = model.full.findIndex((h) => h.t >= Date.now() - 30 * 60e3);
-    const hs = model.full.slice(Math.max(0, start));
+    const hs = fromThisHour(model.full);
     if (!hs.length) return [];
     const from = hs[0].t, to = hs[hs.length - 1].t;
     const suns = [];
@@ -144,7 +143,7 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
               </div>
             );
           }
-          const h = it.h;
+          const h = it.h, w = k === 0 ? model.now : h;   // "Now" shows the wind now, as it does the weather and temperature
           const pop = h.pRain != null && h.pRain >= 20 && isWet(h.cond) ? `${h.pRain}%` : h.pRain >= 40 ? `${h.pRain}%` : '';
           const ts = thunderRisk(h.nova?.p);
           return (
@@ -155,9 +154,9 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
                 title={k === 0 ? condLabel(model.now.cond, model.now.isDay, model.now.windy) : condLabel(h.cond, h.isDay, h.windy)} />
               <span className="lw-h-pop">{pop}</span>
               <span className="lw-h-temp">{Math.round(T(k === 0 ? model.now.t2 : h.t2))}°</span>
-              <span className="lw-h-wind" title={`Wind ${U.fmtWind(h.wind)} from the ${compass(h.wdir)}`}>
-                <svg width="9" height="9" viewBox="-5 -5 10 10" style={{ transform: `rotate(${(h.wdir ?? 0) + 180}deg)` }}><path d="M0 -5 L3.5 3 L0 1.4 L-3.5 3Z" fill="currentColor" /></svg>
-                {Math.round(U.windSpeed(h.wind))}
+              <span className="lw-h-wind" title={`Wind ${U.fmtWind(w.wind)} from the ${compass(w.wdir)}`}>
+                <svg width="9" height="9" viewBox="-5 -5 10 10" style={{ transform: `rotate(${(w.wdir ?? 0) + 180}deg)` }}><path d="M0 -5 L3.5 3 L0 1.4 L-3.5 3Z" fill="currentColor" /></svg>
+                {Math.round(U.windSpeed(w.wind))}
               </span>
               {anyThunder && (
                 <span className="lw-h-ts" style={ts ? { color: ts.colour } : undefined}
@@ -198,8 +197,8 @@ function PrecipCard({ model }) {
   const [hover, setHover] = useState(null);
   const barsRef = useRef(null);
   const mm = model.minutely;
-  const hs = model.full.filter((h) => h.t > Date.now() - 30 * 60e3).slice(0, 12);
-  const wetHours = hs.filter((h) => isWet(h.cond));
+  const hs = fromThisHour(model.full).slice(0, 12);
+  const wetHours = hs.slice(1).filter((h) => isWet(h.cond));   // the hours to come; the radar speaks for now
   const wetSoon = !!mm?.mins.some(wetMinute);
   if (!wetSoon && !(wetHours.length && hs.length >= 4)) return null;
   const v = mm ? view || (wetSoon || !wetHours.length ? 'hour' : 'day') : 'day';
@@ -246,8 +245,9 @@ function PrecipCard({ model }) {
     const head = !wetHours.length ? 'No rain in the next 12 hours.' : nowWet
       ? `${condLabel(model.now.cond, true)} now${heaviest}.`
       : `${condLabel(first.cond, first.isDay)} from about ${hhmm(first.t)}${heaviest}.`;
-    const total = hs.reduce((s, h) => s + (h.span > 0 ? h.precip ?? 0 : 0), 0);
-    const hh = hover != null ? hs[hover] : null;
+    /* an hour's rain is what falls in the hour up to it, so the hour we are in has already fallen */
+    const total = hs.slice(1).reduce((s, h) => s + (h.span > 0 ? h.precip ?? 0 : 0), 0);
+    const hh = hover == null ? null : hover === 0 ? { ...hs[0], ...model.now } : hs[hover];
     body = (
       <>
         <p className="lw-summary lw-psum">{head}</p>
@@ -256,7 +256,7 @@ function PrecipCard({ model }) {
           <PrecipGuides />
           <div className="lw-pbars is-hours" ref={barsRef}>
             {hs.map((h, k) => {
-              const r = rate(h);
+              const r = rate(k === 0 ? model.now : h);   // "Now": the rain falling now (the radar), not the hour's forecast
               const snowy = (h.snow ?? 0) > (h.precip ?? 0) / 2;
               return <i key={h.t} className={`${r < 0.05 ? 'is-dry' : snowy ? 'is-snow' : ''}${hover === k ? ' is-on' : ''}`} style={{ height: `${Math.max(r < 0.05 ? 2 : 4, barHeight(r) * 100)}%` }} />;
             })}
@@ -268,7 +268,7 @@ function PrecipCard({ model }) {
           ))}
         </div>
         <p className="lw-pnote">
-          {hh ? <><b>{hhmm(hh.t)}</b> · {condLabel(hh.cond, hh.isDay)} · {U.fmtRate(rate(hh))}{hh.pRain != null ? ` · ${hh.pRain}% chance within 10 km` : ''}</>
+          {hh ? <><b>{hover === 0 ? 'Now' : hhmm(hh.t)}</b> · {condLabel(hh.cond, hh.isDay)} · {U.fmtRate(rate(hh))}{hh.pRain != null ? ` · ${hh.pRain}% chance within 10 km` : ''}</>
             : total >= 0.1 ? `About ${U.fmtRain(total, total >= 10 ? 0 : 1)} in the next 12 hours (Met Office UKV). The % is the chance of rain within 10 km.`
               : 'Met Office UKV. The % is the chance of rain within 10 km.'}
         </p>

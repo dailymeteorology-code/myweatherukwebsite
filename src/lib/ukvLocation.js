@@ -19,6 +19,10 @@ const DAY_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', ye
 const HM_FMT = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const H_FMT = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', hourCycle: 'h23' });
 export const ukDay = (ms) => DAY_FMT.format(new Date(ms));
+/** The hours from the one we are in onwards (it began within the last hour): at 21:44 the list
+    starts at 21:00, shown as "Now", and 22:00 is next. Taking the nearest hour instead put 22:00
+    under "Now" from half past, so the strip seemed an hour ahead of the clock. */
+export const fromThisHour = (hours, nowMs = Date.now()) => hours.filter((h) => h.t > nowMs - 36e5);
 export const hhmm = (ms) => HM_FMT.format(new Date(ms));
 export const hourOf = (ms) => Number(H_FMT.format(new Date(ms)));
 export function dayLabel(day, today = ukDay(Date.now())) {
