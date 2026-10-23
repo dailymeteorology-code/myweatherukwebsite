@@ -18,6 +18,9 @@ import { attachPlaceLabels, readPlaceLabelsOn, writePlaceLabelsOn } from '@/lib/
                   warnings live at once, and usually only one is being looked
                   for.
 
+   IN FORCE AND UPCOMING ONLY. A warning that has ended is left off, even on the
+   day it ended, and one that ends while the map is open goes within a minute.
+
    EMPTY DAYS SAY SO. A day with nothing active says so in a banner over a
    sharp map of the UK, rather than leaving an empty map that is
    indistinguishable from one that failed to load.
@@ -51,16 +54,17 @@ const SEV_ORDER = ['Red', 'Amber', 'Yellow'];
 const UK_BOUNDS = [[49.85, -8.65], [61.0, 2.05]];
 /* framing clear of the floating glass: the title bar above, the day strip below */
 const FIT = { paddingTopLeft: [24, 86], paddingBottomRight: [24, 92] };
-const DAY_MS = 86400000;
 
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+/* the midnight `n` calendar days on: not n × 24 h, which the clock change (a 23- or 25-hour day) throws off */
+const daysOn = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 
 /** Is the warning in force at any point during that calendar day? */
 function activeOn(w, day) {
   const from = w.validFrom ? new Date(w.validFrom).getTime() : null;
   const to   = w.validTo   ? new Date(w.validTo).getTime()   : null;
   if (!from || !to) return false;
-  const s = day.getTime(), e = s + DAY_MS;
+  const s = day.getTime(), e = daysOn(day, 1).getTime();
   // Overlap, not containment: a warning running 21:00-03:00 belongs to both days.
   return from < e && to > s;
 }
@@ -112,8 +116,17 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
 
   const days = useMemo(() => {
     const t = startOfDay(new Date());
-    return Array.from({ length: 5 }, (_, i) => new Date(t.getTime() + i * DAY_MS));
+    return Array.from({ length: 5 }, (_, i) => daysOn(t, i));
   }, []);
+
+  /* the time now, kept fresh while the map is open, so an ended warning drops off */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, [isOpen]);
 
   /* Only warnings with real geometry can be drawn. One that never got a polygon
      would otherwise count towards a day's badge and then not appear when that
@@ -123,7 +136,7 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
      as [lat, lng] rings, so convert those to the same GeoJSON shape the Met
      Office feed uses rather than teaching the drawing code a second format. */
   const mappable = useMemo(
-    () => warnings.map(w => {
+    () => warnings.filter(w => !w.validTo || Date.parse(w.validTo) > now).map(w => {
       if (Array.isArray(w.polygons) && w.polygons.length > 0) return w;
       // Met Office NSWWS warnings carry their official area as `geometry`.
       if (w.geometry && (w.geometry.type === 'Polygon' || w.geometry.type === 'MultiPolygon')) return { ...w, polygons: [w.geometry] };
@@ -133,7 +146,7 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
         .map(ring => ({ type: 'Polygon', coordinates: [ring.map(([lat, lng]) => [lng, lat])] }));
       return drawn.length ? { ...w, polygons: drawn } : w;
     }).filter(w => Array.isArray(w.polygons) && w.polygons.length > 0),
-    [warnings]);
+    [warnings, now]);
 
   const types = useMemo(
     () => Array.from(new Set(mappable.map(w => w.type).filter(Boolean))).sort(),
