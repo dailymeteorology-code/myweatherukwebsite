@@ -23,7 +23,7 @@ const TOOLS = [
   { id: 'snow',     label: 'Snow Chance',          icon: Snowflake,      color: '#38bdf8', desc: 'The chance of settling snow' },
   { id: 'snowacc',  label: 'Snow Accumulation',    icon: Layers,         color: '#60a5fa', desc: 'How much snow could settle, in cm' },
   { id: 'snowrisk', label: 'Snow Risk',            icon: CloudSnow,      color: '#a78bfa', desc: 'The risk of disruption from snow and ice' },
-  { id: 'wind',     label: 'Wind',                 icon: Wind,           color: '#fb923c', desc: 'Peak gusts, in mph' },
+  { id: 'wind',     label: 'Wind Gusts',           icon: Wind,           color: '#fb923c', desc: 'Peak gusts, in mph' },
 ];
 const TOOL_KEY = 'mwuk_public_studio_tool';
 const STEPS = [

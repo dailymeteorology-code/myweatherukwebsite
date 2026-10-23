@@ -54,6 +54,16 @@ export async function runSpanning(id, from, to, minSteps = 1) {
   return null;
 }
 
+/** What a deterministic model's runs on the server reach: the newest run's start (`start`, ms),
+    the furthest valid time any run has (`end`, ms), and the run that has it (`run`). */
+export async function detCoverage(id) {
+  const runs = runsOf(await modelCatalog(), id).filter((r) => r.steps?.length);
+  if (!runs.length) return null;
+  let far = null;
+  for (const r of runs) { const end = Date.parse(r.run) + Math.max(...r.steps) * HOUR; if (!far || end > far.end) far = { run: r.run, end }; }
+  return { start: Date.parse(runs[0].run), end: far.end, run: far.run };
+}
+
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 /** One step of a field, waiting for the server to build it if it has to; null if the run has
     no such step (a past-hour maximum has none at T+0). */
@@ -78,7 +88,8 @@ export async function stepReady(model, tag, v, step, { alive = () => true, onSta
 
 /* ── fields: { nx, ny, k, data: Float32Array } on the display grid (k = 1) or its k-fold
    coarser ensemble grid ─────────────────────────────────────────────────────────────────── */
-const decode = (f, m = 0) => {
+/** A frame's values (member `m`) as a Float32Array, NaN where it has none. */
+export const decode = (f, m = 0) => {
   const n = f.head.nx * f.head.ny, out = new Float32Array(n), o = m * n;
   for (let i = 0; i < n; i++) { const q = f.q[o + i]; out[i] = q === 255 ? NaN : f.table[q]; }
   return out;
@@ -170,7 +181,8 @@ export async function detAccum(id, v, from, to, opts) {
   return null;
 }
 
-/** A deterministic model's peak ('peak') or average ('mean') of a field over its steps inside [from, to]. */
+/** A deterministic model's peak ('peak') or average ('mean') of a field over its steps inside [from, to].
+    `opts.onStep` gets each step's field ({ t, data }) as it is read, to be used there and then. */
 export async function detStat(id, v, from, to, how, opts) {
   const at = await runSpanning(id, from, to, 3);
   if (!at) return null;
@@ -179,6 +191,7 @@ export async function detStat(id, v, from, to, how, opts) {
     const f = await waitFrame(id, at.tag, v, step, opts);
     if (!f) continue;
     const d = decode(f);
+    opts?.onStep?.({ t: Date.parse(at.run) + step * HOUR, data: d });
     used++;
     if (!out) out = d;
     else if (how === 'mean') for (let i = 0; i < d.length; i++) out[i] += d[i];

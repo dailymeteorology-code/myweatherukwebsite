@@ -109,6 +109,22 @@ export function marksFromStamps(cells, levels, severity = {}) {
   return map;
 }
 
+/** The timeline made the window from `from` to `to` ('YYYY-MM-DDTHH:mm'), its marks kept, in its
+    own steps unless they would give more than `max` stamps (then coarser) or fewer than 4 (finer). */
+export function periodTimeline(tl, from, to, max = 25) {
+  const out = { ...tl, v: 2, from, to }, g = GRANS.map(([k]) => k), stamps = (i) => buildCells({ ...out, gran: g[i] }).length;
+  let gi = Math.max(0, g.indexOf(out.gran));
+  while (gi < g.length - 1 && stamps(gi) > max) gi++;
+  while (gi > 0 && stamps(gi) < 4) gi--;
+  return { ...out, gran: g[gi] };
+}
+/** The outlook day and second day ('' when it is the same day) a span of time (ms) covers; an end
+    at midnight closes the day before. */
+export function periodDays(from, to) {
+  const a = toLocalInput(new Date(from)).slice(0, 10), b = toLocalInput(new Date(to - 60e3)).slice(0, 10);
+  return [a, b === a ? '' : b];
+}
+
 /** Moves the window and its marks by whole days (when the outlook day changes). */
 export function shiftTimeline(tl, days) {
   if (!days) return tl;

@@ -1803,7 +1803,7 @@ const STUDIO_TOOLS = [
   { id: 'snow',     label: 'Snow Chance',          icon: Snowflake,      color: '#38bdf8', desc: 'Snow chance map with timeline, drawing & model snowfall' },
   { id: 'snowacc',  label: 'Snow Accumulation',    icon: Layers,         color: '#60a5fa', desc: 'Snow depth (cm) map with timeline & drawing' },
   { id: 'snowrisk', label: 'Snow Risk',            icon: CloudSnow,      color: '#a78bfa', desc: 'Snow disruption risk map with timeline & drawing' },
-  { id: 'wind',     label: 'Wind',                 icon: Wind,           color: '#fb923c', desc: 'Gust map (mph) with timeline & drawing' },
+  { id: 'wind',     label: 'Wind Gusts',           icon: Wind,           color: '#fb923c', desc: 'Gust map (mph) with timeline & drawing' },
   { id: 'temp',     label: 'Temperature Map',      icon: Thermometer,    color: '#f59e0b', desc: 'Live UK temperature surface' },
   { id: 'interest', label: 'Areas of Interest',    icon: Target,         color: '#22c55e', desc: 'Draw areas to keep an eye on, with what and when' },
   { id: 'mapdraw',  label: 'Map Drawing',          icon: Pen,            color: '#6366f1', desc: 'Synoptic charts & weather-type areas' },

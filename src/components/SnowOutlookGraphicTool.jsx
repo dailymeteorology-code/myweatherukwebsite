@@ -35,7 +35,8 @@ import { StudioLayout, Section, Btn, Seg, Field, Swatches, SavedList, Popover } 
 import MapViewPicker from '@/components/studio/MapViewPicker';
 import ModelOverlay from '@/components/studio/ModelOverlay';
 import useHistory from '@/components/studio/useHistory';
-import ModelGuidePanel from '@/components/studio/ModelGuidePanel';
+import ModelGuidePanel, { UkvPeriod, useUkvHours } from '@/components/studio/ModelGuidePanel';
+import { SHAPES } from '@/lib/novaOutlook';
 import { useStudioUser, saveStudioGraphic, listStudioGraphics, deleteStudioGraphic } from '@/components/studio/studioSaves';
 import { AreaTimingPanel, shadeColor, timedActive, shiftTiming, timingOrder, shadeByTiming, timingRings, isTimed } from '@/components/studio/areaTiming';
 
@@ -193,7 +194,9 @@ const GRAPHIC_W = 640, GRAPHIC_H = 760;
    middle) grown by DRAW_PAD on every side, in the box's own 0..1000 units. Areas, arrows and labels
    are stored in the box's 0..1 space; this lets them lie outside the box, anywhere on the graphic. */
 const DRAW_PAD = 700;
-const DRAW_BOX = { position: 'absolute', top: 2 - DRAW_PAD, left: `calc(50% - ${130 + DRAW_PAD}px)`, width: 450 + 2 * DRAW_PAD, height: 666 + 2 * DRAW_PAD };
+/* the variant can sit the map lower (V.mapDy); set with the levels in applyVariant */
+let MAP_TOP = 2;
+let DRAW_BOX = { position: 'absolute', top: MAP_TOP - DRAW_PAD, left: `calc(50% - ${130 + DRAW_PAD}px)`, width: 450 + 2 * DRAW_PAD, height: 666 + 2 * DRAW_PAD };
 const DRAW_VB = `${(-DRAW_PAD / 450) * 1000} ${(-DRAW_PAD / 666) * 1000} ${((450 + 2 * DRAW_PAD) / 450) * 1000} ${((666 + 2 * DRAW_PAD) / 666) * 1000}`;
 /* The graphic's own base colour, used behind the export so a JPEG's opaque
    corners match the frame rather than going black. */
@@ -219,10 +222,12 @@ let HAZARDS = [
 // AdminSettings keys it by variant, so these module bindings are set once per mount.
 function applyVariant(V) {
   const sev = GRAPHIC_LEVELS.find((l) => l.id === 'Severe');
-  GRAPHIC_LEVELS = [...V.levels, COND_SEVERE, { ...(sev || { id: 'Severe', color: '#a5b4fc', fill: 'rgba(165,180,252,0.30)', border: '#a5b4fc' }), ...V.severe }];
+  GRAPHIC_LEVELS = [...V.levels, ...(V.condSevere === false ? [] : [COND_SEVERE]), { ...(sev || { id: 'Severe', color: '#a5b4fc', fill: 'rgba(165,180,252,0.30)', border: '#a5b4fc' }), ...V.severe }];
   RISK_BY_ID = Object.fromEntries(GRAPHIC_LEVELS.map((l) => [l.id, l]));
   LEVEL_LOOKUP = { ...RADAR_BY_ID, ...RISK_BY_ID };
   HAZARDS = V.hazards;
+  MAP_TOP = 2 + (V.mapDy || 0);
+  DRAW_BOX = { ...DRAW_BOX, top: MAP_TOP - DRAW_PAD };
 }
 const variantBg = (V, id) => V.backgrounds.find((b) => b.id === id) || V.backgrounds[0];
 
@@ -377,6 +382,8 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
      variant): on/off, the timeline cell it shows (null: the first marked one), its status */
   const [showModel, setShowModel] = useState(false);
   const [overlayCell, setOverlayCell] = useState(null);
+  const [modelSpan, setModelSpan] = useState(null);         // a period instead of an hour ({ from, to }), where the variant has one
+  const [modelLook, setModelLook] = useState('detailed');   // the layer shaped Detailed, Smooth or Broad
   const [modelStatus, setModelStatus] = useState(null);
   const [confidence, setConfidence] = useState(null);
 
@@ -438,7 +445,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
   const captureState = () => ({
     tool: V.tool, validDate, validDate2, activeRisk, hazards, hazardPct, timeline, footerText, handle, version,
     forecastType, updateNumber, overnightEnabled, overnightStart, overnightEnd,
-    drawOpacity, shapes, showShapes, showCities, graphicMode, showModel,
+    drawOpacity, shapes, showShapes, showCities, graphicMode, showModel, modelSpan, modelLook,
     confidence, validUntil, discussionEnabled, discussionText,
     outlookRegion, mapAreas, mapContext, annotations, arrows, bgId,
   });
@@ -515,6 +522,8 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
     if (s.showShapes !== undefined) setShowShapes(s.showShapes);
     if (s.showCities !== undefined) setShowCities(s.showCities);
     setShowModel(!!s.showModel);
+    setModelSpan(s.modelSpan || null);
+    setModelLook(s.modelLook || 'detailed');
     setGraphicMode(s.graphicMode === 'radar' && V.radar ? 'radar' : 'outlook');
     if (s.bgId && V.backgrounds.some((b) => b.id === s.bgId)) setBgId(s.bgId);
     if (s.confidence !== undefined) setConfidence(s.confidence);
@@ -879,9 +888,11 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
   // --- From the models ----------------------------------------------------------
   // studio/ModelGuidePanel builds areas from the Model Data page's fields (lat/lon rings), contoured
   // at this graphic's key; they come in as ordinary editable areas. Areas split by time come with
-  // their hours, and get outline shades from white (first) to grey (last).
-  const applyGuide = ({ mode, day, areas }) => {
-    if (day && day !== validDate) changeDay(day);
+  // their hours, and get outline shades from white (first) to grey (last). A period of time comes
+  // with its own timeline window (and, for gusts, each stamp's level) and its day or days.
+  const applyGuide = ({ mode, day, day2, timeline: tl, areas }) => {
+    if (tl) { setValidDate(day); setValidDate2(day2); setTimeline(tl); }
+    else if (day && day !== validDate) changeDay(day);
     const mapped = areas.map(({ riskLevel, ring, from, to }) => ({ riskLevel, points: ring.map(([lat, lon]) => latLonToBox(lat, lon)), ...(from ? { from, to } : {}) }))
       .filter((s) => s.points.length >= 3);
     setShapes((prev) => {
@@ -1103,6 +1114,11 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
     ? Math.min(timelineStamps.length - 1, Math.floor(playhead))
     : Math.min(timelineStamps.length - 1, overlayCell ?? Math.max(0, firstMarked));
   const overlayTime = timelineStamps[overlayIdx]?.ms;
+  const ukv = useUkvHours(showModel && !!V.overlay?.period && !!modelSpan);
+  const overlaySpan = useMemo(() => {
+    const a = parseLocal(modelSpan?.from)?.getTime(), b = parseLocal(modelSpan?.to)?.getTime();
+    return V.overlay?.period && a < b ? { from: a, to: b } : null;
+  }, [modelSpan, V]);
   /* the UKV field this graphic shows, in its key's colours */
   const MODEL_FIELD = useMemo(() => (V.overlay ? { v: V.overlay.v, scale: V.overlay.scale, bands: V.levels.map((l, i) => ({ min: V.overlay.mins[i], color: l.color })) } : null), [V]);
 
@@ -1239,7 +1255,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
                   {validUntil && <Btn icon={X} onClick={() => setValidUntil('')} title="Clear the expiry" />}
                 </div>
               </Field>
-              <Field label="Footer caption"><input className="sg-input" value={footerText} onChange={(e) => setFooterText(e.target.value)} /></Field>
+              {V.caption !== false && <Field label="Footer caption"><input className="sg-input" value={footerText} onChange={(e) => setFooterText(e.target.value)} /></Field>}
             </div>
           </>
         )}
@@ -1258,15 +1274,28 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
         </div>
         {showModel && !isRadar && MODEL_FIELD && !basic && (
           <div className="sg-panel">
+            {V.overlay.period && (
+              <div className="sg-row">
+                <span className="sg-label" style={{ margin: 0 }}>Shows</span>
+                <Seg value={modelSpan ? 'period' : 'hour'} onChange={(m) => setModelSpan(m === 'period' ? { from: '', to: '' } : null)} color="#38bdf8"
+                  options={[['hour', 'One hour'], ['period', 'A period (its peak)']]} />
+              </div>
+            )}
+            {modelSpan ? <UkvPeriod {...ukv} value={modelSpan} onChange={setModelSpan} /> : (
+              <div className="sg-row">
+                <span className="sg-label" style={{ margin: 0 }}>{V.overlay.period ? 'Hour' : 'Shows'}</span>
+                <select className="sg-input" style={{ width: 'auto', flex: 1 }} value={overlayCell ?? ''} onChange={(e) => setOverlayCell(e.target.value === '' ? null : Number(e.target.value))}>
+                  <option value="">The first marked hour{firstMarked >= 0 ? ` (${timelineStamps[firstMarked].weekday} ${timelineStamps[firstMarked].label}:00)` : ''}</option>
+                  {timelineStamps.map((c, i) => <option key={c.ms} value={i}>{c.weekday} {c.label}:00</option>)}
+                </select>
+              </div>
+            )}
             <div className="sg-row">
-              <span className="sg-label" style={{ margin: 0 }}>Shows</span>
-              <select className="sg-input" style={{ width: 'auto', flex: 1 }} value={overlayCell ?? ''} onChange={(e) => setOverlayCell(e.target.value === '' ? null : Number(e.target.value))}>
-                <option value="">The first marked hour{firstMarked >= 0 ? ` (${timelineStamps[firstMarked].weekday} ${timelineStamps[firstMarked].label}:00)` : ''}</option>
-                {timelineStamps.map((c, i) => <option key={c.ms} value={i}>{c.weekday} {c.label}:00</option>)}
-              </select>
+              <span className="sg-label" style={{ margin: 0 }}>Look</span>
+              <Seg value={modelLook} onChange={setModelLook} color="#38bdf8" options={Object.entries(SHAPES).map(([id, sh]) => [id, sh.label])} />
             </div>
             {modelStatus && <span className="sg-status" style={{ '--c': modelStatus.state === 'ok' ? '#4ade80' : modelStatus.state === 'error' || modelStatus.state === 'none' ? '#f87171' : '#facc15' }}><i />{modelStatus.text}</span>}
-            <p className="sg-note">{V.overlay.note} In this graphic's key colours, from {V.overlay.mins[0]} upwards; it follows the timeline while it plays.</p>
+            <p className="sg-note">{V.overlay.note} In this graphic's key colours, from {V.overlay.mins[0]} upwards; {modelSpan ? 'a period shows the strongest of all its hours, and stays put while the timeline plays' : 'it follows the timeline while it plays'}. Smooth and Broad round the bands into fewer, bigger areas, the way the TCM NOVA import shapes its areas.</p>
           </div>
         )}
       </Section>
@@ -1286,7 +1315,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
           <div>
             <span className="sg-label">On the map</span>
             <Seg value={mapTool} color="#a78bfa" onChange={(t) => { setMapTool(t); if (t === 'draw') setDrawMode(true); }}
-              options={[['draw', 'Draw', Pen], ['select', 'Select', MousePointer2], ['text', 'Label', Type], ['arrow', 'Arrow', MoveUpRight], ['cond', 'Conditional', ShieldAlert]]} />
+              options={[['draw', 'Draw', Pen], ['select', 'Select', MousePointer2], ['text', 'Label', Type], ['arrow', 'Arrow', MoveUpRight], ...(V.condSevere === false ? [] : [['cond', 'Conditional', ShieldAlert]])]} />
           </div>
           {mapTool === 'draw' && <p className="sg-note">Drag anywhere on the graphic to draw an area in the selected level. Areas can run off the map, under the cards or into the corners.</p>}
           {mapTool === 'select' && <p className="sg-note">Click an area on the graphic to select it, then change it below or drag it to move it. <b>Delete</b> removes it, <b>Esc</b> lets it go. Give areas live at different times their hours and an outline from white to grey: each gets a dashed ring in that shade on the timeline.</p>}
@@ -1305,7 +1334,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
               <AreaTimingPanel shape={shapes[sel]} cells={timelineStamps} levelColor={strokeOf({ ...shapes[sel], stroke: null })} onPatch={patchSelected}
                 picking={timingPick} onPicking={(on) => { setTimingPick(on); setTimingAnchor(null); }} />
               <div className="sg-row">
-                {!isSevereId(shapes[sel].riskLevel) && !isCondSevereId(shapes[sel].riskLevel) && <Btn sm on={!!shapes[sel].cond} color="#a78bfa" onClick={() => patchSelected({ cond: !shapes[sel].cond })}>Conditional</Btn>}
+                {V.condSevere !== false && !isSevereId(shapes[sel].riskLevel) && !isCondSevereId(shapes[sel].riskLevel) && <Btn sm on={!!shapes[sel].cond} color="#a78bfa" onClick={() => patchSelected({ cond: !shapes[sel].cond })}>Conditional</Btn>}
                 <Btn sm onClick={() => orderSelected(true)}>To front</Btn>
                 <Btn sm onClick={() => orderSelected(false)}>To back</Btn>
                 <Btn sm onClick={duplicateSelected}>Duplicate</Btn>
@@ -1372,7 +1401,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
             <div className="sg-row" style={{ gap: 5 }}>
               {shapes.map((s, i) => {
                 const m = LEVEL_LOOKUP[s.riskLevel] || GRAPHIC_LEVELS[0];
-                const canCond = !isSevereId(s.riskLevel) && !isCondSevereId(s.riskLevel);
+                const canCond = V.condSevere !== false && !isSevereId(s.riskLevel) && !isCondSevereId(s.riskLevel);
                 return (
                   <span key={i} className="sg-chipx" onMouseEnter={() => setHoverShape(i)} onMouseLeave={() => setHoverShape(null)}
                     style={{ '--c': s.riskLevel === COND_SEVERE_ID ? '#94a3b8' : m.color, borderStyle: s.cond ? 'dashed' : 'solid', ...(sel === i ? { boxShadow: '0 0 0 2px var(--sg-text)' } : {}) }}>
@@ -1697,7 +1726,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
               </div>
             )}
 
-            <div style={{ ...glass({ padding: '8px 10px', borderRadius: 14, alignSelf: 'flex-start', width: 170 }, glassMode) }}>
+            <div style={{ ...glass({ padding: '8px 10px', borderRadius: 14, alignSelf: 'flex-start', width: V.keyUnit && !isRadar ? 186 : 170 }, glassMode) }}>
               <GlassSheen />
               <span style={{
                 position: 'relative', zIndex: 1, display: 'block', marginBottom: 6, paddingBottom: 6,
@@ -1706,7 +1735,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
                 color: 'rgba(148,163,184,0.95)', textTransform: 'uppercase',
               }}>{isRadar ? 'Rain Rate' : 'Risk Key'}</span>
               <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: 0 }}>
-                {levels.map((r, idx) => (
+                {(() => { const named = !!V.keyUnit && !isRadar; return levels.map((r, idx) => (
                   <React.Fragment key={r.id}>
                     {(() => {
                       if (idx === levels.findIndex(rr => isSevereId(rr.id) || isCondSevereId(rr.id)))
@@ -1740,13 +1769,16 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
                         }),
                       }} />
                       <span style={{
-                        fontSize: 10, fontWeight: 700, color: '#e8edf6', letterSpacing: '0.04em',
-                      }}>{r.short}</span>
+                        fontSize: 10, fontWeight: 700, color: '#e8edf6', letterSpacing: '0.04em', whiteSpace: 'nowrap',
+                      }}>{r.short}{named && !isSevereId(r.id) && <span style={{ marginLeft: 2, fontSize: 7.5, fontWeight: 800, color: 'rgba(232,237,246,0.75)' }}>{V.keyUnit}</span>}</span>
                       <span style={{
                         marginLeft: 'auto', display: 'flex', flexDirection: 'column',
                         alignItems: 'flex-end', lineHeight: 1.15,
                       }}>
-                        <span style={{
+                        <span style={named ? {
+                          fontSize: 8, fontWeight: 800, letterSpacing: '0.06em', whiteSpace: 'nowrap',
+                          color: 'rgba(255,255,255,0.72)',
+                        } : {
                           fontSize: 9, fontWeight: 700,
                           color: 'rgba(255,255,255,0.65)', fontFamily: 'monospace',
                         }}>{r.range}</span>
@@ -1760,7 +1792,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
                       </span>
                     </div>
                   </React.Fragment>
-                ))}
+                )); })()}
               </div>
               {/* Forecaster confidence — segmented multi-box meter. Boxes fill
                   left-to-right up to the selected level, so the reader gets the
@@ -1802,9 +1834,9 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
               })()}
               <span style={{
                 position: 'relative', zIndex: 1, display: 'block', marginTop: 8,
-                fontSize: 7.5, fontWeight: 700, letterSpacing: '0.07em',
-                color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase',
-              }}>{isRadar ? 'Source: Met Office radar & lightning' : `${V.keyNote} · COND = conditional`}</span>
+                fontSize: 7.5, fontWeight: 700, letterSpacing: V.keyUnit && !isRadar ? '0.04em' : '0.07em',
+                color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', ...(V.keyUnit && !isRadar ? { whiteSpace: 'nowrap' } : {}),
+              }}>{isRadar ? 'Source: Met Office radar & lightning' : V.condSevere === false ? V.keyNote : `${V.keyNote} · COND = conditional`}</span>
             </div>
 
             {/* Hazards card — hidden while the lightning overlay is active, since
@@ -1894,7 +1926,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
               DRAW_VB): an area can run out over the sea, under the cards or into the corners. The
               pointer is taken on the whole graphic (its root's handlers), not only over the box. */}
           <div ref={mapWrapRef} style={{
-              position: 'absolute', top: 2, left: '50%', marginLeft: -130, width: 450, height: 666,
+              position: 'absolute', top: MAP_TOP, left: '50%', marginLeft: -130, width: 450, height: 666,
               zIndex: 3, borderRadius: 12, overflow: 'hidden',
             }}
           >
@@ -1955,7 +1987,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
               </svg>
             )}
           <div style={{
-              position: 'absolute', top: 2, left: '50%', marginLeft: -130, width: 450, height: 666,
+              position: 'absolute', top: MAP_TOP, left: '50%', marginLeft: -130, width: 450, height: 666,
               zIndex: 3, borderRadius: 12, overflow: 'hidden', pointerEvents: 'none',
             }}
           >
@@ -1964,7 +1996,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
              transform: outlookZoom.transform, transformOrigin: '0 0',
              transition: 'transform 0.25s ease',
            }}>
-            {MODEL_FIELD && <ModelOverlay enabled={showModel && !isRadar} field={MODEL_FIELD} timeMs={overlayTime} box={viewBox} k={outlookZoom.k} onStatus={setModelStatus} />}
+            {MODEL_FIELD && <ModelOverlay enabled={showModel && !isRadar} field={MODEL_FIELD} timeMs={overlayTime} span={showModel && !isRadar ? overlaySpan : null} look={modelLook} box={viewBox} k={outlookZoom.k} onStatus={setModelStatus} />}
             {showCities && <TownLabels data={counties} view={view} k={outlookZoom.k} />}
            </div>
           </div>
@@ -2023,7 +2055,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
             </svg>
           )}
           {annotations.length > 0 && (
-            <div style={{ position: 'absolute', top: 2, left: '50%', marginLeft: -130, width: 450, height: 666, zIndex: 3, pointerEvents: 'none' }}>
+            <div style={{ position: 'absolute', top: MAP_TOP, left: '50%', marginLeft: -130, width: 450, height: 666, zIndex: 3, pointerEvents: 'none' }}>
            <div style={{
              position: 'absolute', inset: 0,
              transform: outlookZoom.transform, transformOrigin: '0 0',
@@ -2075,7 +2107,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
 
           {/* -- FOOTER: the logo in the bottom-left corner, a glass card in the bottom-right -- */}
           <GraphicFooter logoUrl={siteLogoUrl} FallbackIcon={CloudLightning} handle={handle} version={basic ? null : version} madeWith={basic} radar={isRadar}
-            caption={footerText} forecastLabel={forecastLabel} update={forecastType === 'update'} validDate={validDate} validUntil={validUntil}
+            caption={V.caption === false ? '' : footerText} forecastLabel={forecastLabel} update={forecastType === 'update'} validDate={validDate} validUntil={validUntil}
             tzAbbr={tzAbbr} regionLabel={view?.label || 'UK & Ireland'} />
         </div>
         </GlassBackdropContext.Provider>

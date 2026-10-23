@@ -14,7 +14,7 @@ import React, { useEffect, useState } from 'react';
 import { DownloadCloud, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { novaRecentRuns, novaRun, runName, novaField, boxMask, contourLevels, peak, framesIn, framesStat, timingFrames, SHAPES } from '@/lib/novaOutlook';
-import { GRANS, buildCells, shiftTimeline, parseLocal, toLocalInput, hourKey, marksFromStamps } from '@/components/studio/studioTimeline';
+import { buildCells, shiftTimeline, parseLocal, toLocalInput, hourKey, marksFromStamps, periodTimeline, periodDays } from '@/components/studio/studioTimeline';
 import { Btn, Seg, Field } from '@/components/studio/StudioUI';
 import { MAP_BBOX } from '@/components/studio/studioGeo';
 
@@ -26,8 +26,6 @@ const dayBounds = (d) => { const a = new Date(`${d}T00:00:00`), b = new Date(a);
 const runDays = (m) => (m.days?.length ? m.days.map((d) => ({ ...d, summary: true }))
   : [...new Set((m.frames || []).filter((f) => f.valid).map((f) => new Date(f.valid).toLocaleDateString('en-CA')))].map((date) => ({ date })));
 const runKey = (r) => `${r.product}|${r.run_id}`;
-/* chosen dates and times become the timeline in its own steps, coarser when they would give more stamps than this */
-const CUSTOM_STAMPS = 25;
 
 /* the choices that are a matter of taste are remembered */
 const PREF_KEY = 'mwuk_studio_import';
@@ -106,15 +104,8 @@ export default function NovaImportPanel({ view, timeline, validDate, levels, haz
       let tl = day && day !== validDate ? shiftTimeline(timeline, dayDiff(validDate, day)) : timeline;
       const out = { mode, day };
       if (span === 'custom') {
-        tl = { ...timeline, v: 2, from: custom.from, to: custom.to };
-        const g = GRANS.map(([k]) => k), stamps = (i) => buildCells({ ...tl, gran: g[i] }).length;
-        let gi = Math.max(0, g.indexOf(tl.gran));
-        while (gi < g.length - 1 && stamps(gi) > CUSTOM_STAMPS) gi++;
-        while (gi > 0 && stamps(gi) < 4) gi--;
-        tl.gran = g[gi];
-        out.day = toLocalInput(new Date(from)).slice(0, 10);
-        const last = toLocalInput(new Date(to - 60e3)).slice(0, 10);   // an end at midnight closes the day before
-        out.day2 = last === out.day ? '' : last;
+        tl = periodTimeline(timeline, custom.from, custom.to);
+        [out.day, out.day2] = periodDays(from, to);
         out.timeline = tl;   // the window, even when its marks are not imported
       }
       const cells = buildCells(tl);

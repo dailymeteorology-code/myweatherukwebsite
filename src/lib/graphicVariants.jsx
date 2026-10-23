@@ -101,17 +101,19 @@ export const GRAPHIC_VARIANTS = {
     guide: CHANCE_GUIDE(5, 'Chance of disruptive snow.'),
   },
   wind: {
-    title: 'Wind', Icon: Wind, tool: 'wind', file: 'wind', auto: false,
-    footer: 'Peak gusts within a 15 mile radius', keyNote: 'SVRE = SEVERE / DAMAGING WINDS',
+    title: 'Wind Gusts', Icon: Wind, tool: 'wind', file: 'wind', auto: false,
+    footer: '', caption: false, keyNote: 'SVRE = DAMAGING WINDS',   // one line, and no COND note (no Conditional Severe here)
+    /* no Conditional Severe (nor conditional areas); the key reads "40-50 MPH" on the left and a short name for it on the right */
+    condSevere: false, keyUnit: 'MPH', mapDy: 40,   // the map sits 40 px lower, into the space the caption left
     backgrounds: WIND_BACKGROUNDS, hazards: WIND_HAZARDS,
     levels: lv([
-      ['Very Low', '40-50', '40-50 mph', '#fef08a', 0.34], ['Low', '50-60', '50-60 mph', '#fde047', 0.40],
-      ['Marginal', '60-70', '60-70 mph', '#fb923c', 0.44], ['Slight', '70-80', '70-80 mph', '#ef4444', 0.46],
-      ['Moderate', '80-90', '80-90 mph', '#be123c', 0.48], ['High', '90+', '90+ mph', '#a21caf', 0.50],
+      ['Very Low', '40-50', 'STRONG', '#fef08a', 0.34], ['Low', '50-60', 'GALE', '#fde047', 0.40],
+      ['Marginal', '60-70', 'STRONG GALE', '#fb923c', 0.44], ['Slight', '70-80', 'SEVERE GALE', '#ef4444', 0.46],
+      ['Moderate', '80-90', 'STORM', '#be123c', 0.48], ['High', '90+', 'HURRICANE', '#a21caf', 0.50],
     ]),
     severe: { short: 'SVRE', range: 'SVR WIND' },
     radar: false,
-    overlay: { v: 'gust_max', scale: 1, mins: [40, 50, 60, 70, 80, 90], label: 'UKV gusts', note: 'Met Office UKV 2 km strongest gust in the hour (mph) from the AWS open data.' },
+    overlay: { v: 'gust_max', scale: 1, mins: [40, 50, 60, 70, 80, 90], label: 'UKV gusts', period: true, note: 'Met Office UKV 2 km strongest gust in the hour (mph) from the AWS open data.' },
     guide: {
       kind: 'gust', title: 'Gusts.', fmt: mph, mins: [40, 50, 60, 70, 80, 90],
       note: 'The UKV 2 km strongest gust in each hour, or the ECMWF ENS median of each 6-hour maximum.',
