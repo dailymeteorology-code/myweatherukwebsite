@@ -10,17 +10,12 @@
  * (LocationForecast.jsx); tapping one of those opens the matching card here (`openId`).
  */
 import React, { useEffect, useState } from 'react';
-import {
-  AlertTriangle, ChevronDown, Wind, CloudRain, CloudLightning, Snowflake, CloudFog, Sun, Flame, ExternalLink,
-} from 'lucide-react';
+import { ChevronDown, ExternalLink } from 'lucide-react';
+import { warningSymbol } from '@/components/warnings/WarningSymbols';
 import { AnimatePresence, motion } from 'framer-motion';
 
-/* the type's symbol: the same one the bar on the hourly forecast carries */
-const TYPE_ICON = [
-  [/thunder|lightning/i, CloudLightning], [/rain|flood/i, CloudRain], [/wind|gale/i, Wind],
-  [/snow|ice|frost|cold|freez/i, Snowflake], [/fog/i, CloudFog], [/heat|hot|sun/i, Sun], [/fire/i, Flame],
-];
-export const warningIcon = (type) => TYPE_ICON.find(([re]) => re.test(type || ''))?.[1] || AlertTriangle;
+/* the type's symbol (MyWeatherUK's own, warnings/WarningSymbols): the same one the bar on the hourly forecast carries */
+export const warningIcon = (type) => warningSymbol(type);
 
 /* Text on the severity colour. Dark on yellow and amber (white on orange is barely 3:1), white on
    red, which is a shade deeper than the map's red for the same reason. */

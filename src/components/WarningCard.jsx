@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
-  AlertTriangle, CloudRain, Wind, Snowflake, Thermometer, Zap,
-  Waves, Clock, MapPin, Eye, Trash2, RefreshCw, ChevronDown,
+  Clock, MapPin, Eye, Trash2, RefreshCw, ChevronDown,
 } from 'lucide-react';
+import { warningSymbol } from '@/components/warnings/WarningSymbols';
 import { format, isValid } from 'date-fns';
 import WarningCardModal from './WarningCardModal';
 import WarningAreaDiffMap from './WarningAreaDiffMap';
@@ -56,11 +56,6 @@ const SEV = {
   },
 };
 const getSev = (s) => SEV[s] || SEV.Yellow;
-
-const ICONS = {
-  Rain: CloudRain, Wind, Snow: Snowflake, Ice: Snowflake,
-  Thunderstorm: Zap, Thunderstorms: Zap, 'Extreme Heat': Thermometer, Fog: CloudRain, Flood: Waves,
-};
 
 /* No emoji on warnings. A severe-weather notice is not the place for a
    cartoon: the coloured severity chip and the type icon already carry the
@@ -186,7 +181,7 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
   const [expanded, setExpanded] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const sev     = getSev(warning.severity);
-  const Icon    = ICONS[warning.type] || AlertTriangle;
+  const Icon    = warningSymbol(warning.type);
   const impacts = extractImpacts(warning);
   const { isDark } = useTheme();
   const T = {
