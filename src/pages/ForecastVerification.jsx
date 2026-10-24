@@ -6,13 +6,14 @@
    everyone, written by admins. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { BarChart3, Plus, Zap, Pencil, Trash2, Download, Play, Pause, ChevronLeft, ChevronRight, Loader2, ImagePlus, Clock } from 'lucide-react';
+import { BarChart3, Plus, Zap, Pencil, Trash2, Download, Play, Pause, ChevronLeft, ChevronRight, Loader2, ImagePlus, Clock, Target } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { useAuth } from '@/lib/AuthContext';
 import VfPage, { Stat } from '@/components/verification/VfPage';
 import GraphicOverlay, { insideBounds, drawStrikes } from '@/components/verification/GraphicOverlay';
 import GraphicEditor from '@/components/verification/GraphicEditor';
 import { fetchStrikes, london, hhmm } from '@/components/verification/novaMaps';
+import { scoreAreas } from '@/components/verification/studioImport';
 
 const CSS = `
 .fv-top { display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 80px; }
@@ -50,6 +51,13 @@ const CSS = `
 .fv-card > div:last-child { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 5px; }
 .fv-card b { font-size: 13.5px; line-height: 1.3; }
 .fv-card small { font-size: 12px; color: var(--ad-text-dim); }
+.fv-swatches { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fv-swatches button { width: 24px; height: 24px; padding: 0; border-radius: 50%; cursor: pointer; background: var(--sw); border: 2px solid var(--ad-border3);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); transition: transform .12s; }
+.fv-swatches button:hover { transform: scale(1.1); }
+.fv-swatches button.on { border-color: var(--ad-text); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sw) 60%, transparent); }
+.fv-swatches label { position: relative; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ad-text-dim); cursor: pointer; }
+.fv-swatches input[type=color] { width: 30px; height: 26px; padding: 0; border: 1px solid var(--ad-border3); border-radius: 8px; background: none; cursor: pointer; }
 @media (max-width: 1000px) { .fv-edit, .fv-detail { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 640px) { .fv-edit, .fv-detail { padding: 10px; } .fv-gallery { padding: 8px; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); } .fv-two { grid-template-columns: minmax(0, 1fr); } }
 `;
@@ -57,6 +65,17 @@ const CSS = `
 const when = (iso) => `${london(iso, { weekday: 'short', day: 'numeric', month: 'short' })} ${hhmm(iso)}`;
 const period = (it) => `${when(it.valid_from)} – ${london(it.valid_from, { day: 'numeric', month: 'short' }) === london(it.valid_to, { day: 'numeric', month: 'short' }) ? hhmm(it.valid_to) : when(it.valid_to)}`;
 const span = (it) => [Date.parse(it.valid_from), Math.min(Date.parse(it.valid_to), Date.now())];
+
+/* the strikes' colour: through the period, yellow, or any colour (ten to pick from, or the picker);
+   remembered on this device */
+const PRESETS = ['#ffffff', '#f97316', '#ef4444', '#ec4899', '#a855f7', '#6366f1', '#3b82f6', '#22d3ee', '#22c55e', '#111827'];
+const COLOUR_KEY = 'fv-strike-colour';
+const readColour = () => { try { return { mode: 'time', custom: '#22d3ee', ...JSON.parse(localStorage.getItem(COLOUR_KEY) || '{}') }; } catch { return { mode: 'time', custom: '#22d3ee' }; } };
+function useStrikeColour() {
+  const [c, setC] = useState(readColour);
+  const set = (patch) => setC((p) => { const n = { ...p, ...patch }; try { localStorage.setItem(COLOUR_KEY, JSON.stringify(n)); } catch { /* storage blocked */ } return n; });
+  return [c, set];
+}
 
 /** The strikes on a graphic during its period, once `on`. */
 function useGraphicStrikes(it, on = true) {
@@ -95,14 +114,14 @@ function Histogram({ it, strikes, upTo }) {
 }
 
 /* the graphic with its lightning, made at the picture's own size */
-async function download(it, strikes, byTime, dot) {
+async function download(it, strikes, byTime, dot, color) {
   const img = await new Promise((resolve, reject) => { const im = new Image(); im.onload = () => resolve(im); im.onerror = reject; im.src = it.image_url; });
   const w = img.naturalWidth, h = img.naturalHeight;
   const cv = document.createElement('canvas');
   cv.width = w; cv.height = h;
   const ctx = cv.getContext('2d');
   ctx.drawImage(img, 0, 0, w, h);
-  drawStrikes(ctx, strikes, it.bounds, w, h, { byTime, dot });
+  drawStrikes(ctx, strikes, it.bounds, w, h, { byTime, dot, color });
   const pad = Math.round(w * 0.018), fs = Math.round(w * 0.019);
   ctx.font = `700 ${fs}px -apple-system, 'Segoe UI', Roboto, sans-serif`;
   const label = `⚡ ${strikes.length.toLocaleString()} strikes · ${period(it)} · Met Office lightning`;
@@ -123,7 +142,10 @@ async function download(it, strikes, byTime, dot) {
 function Detail({ it, admin, onEdit, onDelete, onCount, prev, next, go }) {
   const strikes = useGraphicStrikes(it);
   const [show, setShow] = useState(true);
-  const [byTime, setByTime] = useState(true);
+  const [colour, setColour] = useStrikeColour();
+  const byTime = colour.mode === 'time', color = colour.mode === 'custom' ? colour.custom : '#facc15';
+  /* an imported outlook's areas against the lightning (studioImport.scoreAreas) */
+  const score = useMemo(() => (it.areas ? scoreAreas(it.areas, strikes) : null), [it.areas, strikes]);
   const [dot, setDot] = useState(1);
   const [upTo, setUpTo] = useState(Infinity);
   const [playing, setPlaying] = useState(false);
@@ -153,12 +175,19 @@ function Detail({ it, admin, onEdit, onDelete, onCount, prev, next, go }) {
         <button type="button" className="vf-btn is-icon" disabled={!next} onClick={() => go(next)} aria-label="Newer graphic"><ChevronRight /></button>
       </div>
       <div className="fv-detail">
-        <GraphicOverlay item={it} strikes={strikes} show={show} upTo={upTo} byTime={byTime} dot={dot} maxVh={80} />
+        <GraphicOverlay item={it} strikes={strikes} show={show} upTo={upTo} byTime={byTime} dot={dot} color={color} maxVh={80} />
         <div className="fv-info">
           <div className="vf-stats" style={{ marginTop: 0, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
             <Stat label="Strikes on the graphic" value={strikes ? (shown ?? 0).toLocaleString() : '…'} note={upTo === Infinity ? (ended ? 'over the whole period' : 'so far; the period is still going') : `up to ${when(new Date(upTo).toISOString())}`} />
             <Stat label="Period" value={`${Math.round((b - a) / 3600e3)} h`} note={ended ? 'finished' : 'still going'} />
           </div>
+          {it.areas && (
+            <div className="vf-stats" style={{ marginTop: 0, gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+              <Stat label="Accuracy" value={score ? `${score.score}%` : strikes ? '–' : '…'} note={score ? (ended ? 'of the whole period' : 'so far') : strikes ? 'no lightning on the map yet' : ''} />
+              <Stat label="Strikes in risk areas" value={score ? `${score.pod}%` : '–'} note={score ? `${score.caught.toLocaleString()} of ${score.total.toLocaleString()}` : ''} />
+              <Stat label="Areas with lightning" value={score ? `${score.areasHit} / ${score.areas}` : '–'} note={score?.later ? `${score.later} not begun yet` : 'risk areas that saw a strike'} />
+            </div>
+          )}
           {strikes === null ? <div className="vf-skel" style={{ height: 110 }} /> : <Histogram it={it} strikes={strikes} upTo={upTo} />}
           <div className="fv-replay">
             <button type="button" className="vf-btn is-icon" onClick={() => { if (!playing && upTo === Infinity) setUpTo(a); setPlaying((p) => !p); }} aria-label={playing ? 'Pause' : 'Replay the lightning'} disabled={!strikes?.length}>{playing ? <Pause /> : <Play />}</button>
@@ -167,18 +196,30 @@ function Detail({ it, admin, onEdit, onDelete, onCount, prev, next, go }) {
           </div>
           <div className="fv-tools">
             <button type="button" className={`vf-btn${show ? ' is-on' : ''}`} style={{ '--c': '#facc15' }} onClick={() => setShow((s) => !s)} aria-pressed={show}><Zap />Strikes</button>
-            <div className="vf-seg">
-              <button type="button" className={byTime ? 'on' : ''} onClick={() => setByTime(true)}>By time</button>
-              <button type="button" className={!byTime ? 'on' : ''} onClick={() => setByTime(false)}>Yellow</button>
+            <div className="vf-seg" aria-label="Strike colour">
+              <button type="button" className={colour.mode === 'time' ? 'on' : ''} onClick={() => setColour({ mode: 'time' })}>By time</button>
+              <button type="button" className={colour.mode === 'yellow' ? 'on' : ''} onClick={() => setColour({ mode: 'yellow' })}>Yellow</button>
+              <button type="button" className={colour.mode === 'custom' ? 'on' : ''} onClick={() => setColour({ mode: 'custom' })}>
+                <i style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', marginRight: 5, background: colour.custom, boxShadow: '0 0 0 1px rgba(0,0,0,.3)' }} />Custom
+              </button>
             </div>
             <div className="vf-seg" aria-label="Dot size">
               {[[0.7, 'S'], [1, 'M'], [1.5, 'L']].map(([v, l]) => <button key={l} type="button" className={dot === v ? 'on' : ''} onClick={() => setDot(v)}>{l}</button>)}
             </div>
           </div>
+          {colour.mode === 'custom' && (
+            <div className="fv-swatches" role="group" aria-label="Strike colour">
+              {PRESETS.map((c) => <button key={c} type="button" className={colour.custom === c ? 'on' : ''} style={{ '--sw': c }} onClick={() => setColour({ custom: c })} aria-label={c} title={c} />)}
+              <label title="Any colour">
+                <input type="color" value={colour.custom} onChange={(e) => setColour({ custom: e.target.value })} />Any colour
+              </label>
+            </div>
+          )}
+          {it.areas && <p className="vf-note" style={{ margin: 0 }}><Target style={{ width: 13, height: 13, verticalAlign: -2, marginRight: 4 }} />Accuracy: the share of strikes that fell inside a risk area (at that area’s own hours, give or take an hour, when it has them) and the share of the risk areas that saw lightning, taken together so it is high only when the areas both caught the lightning and were not drawn where none fell. Severe areas are overlays and are not scored on their own.</p>}
           {byTime && show && <div className="vf-legend"><span><i style={{ background: 'linear-gradient(90deg,#dc2626,#f97316,#facc15,#fffbe6)' }} />strikes, earliest to latest in the period</span></div>}
           {it.notes && <div className="vf-note" style={{ whiteSpace: 'pre-wrap' }}>{it.notes}</div>}
           <div className="fv-tools">
-            <button type="button" className="vf-btn" disabled={!strikes || busy} onClick={async () => { setBusy(true); try { await download(it, strikes, byTime, dot); } finally { setBusy(false); } }}>{busy ? <Loader2 className="vf-spin" /> : <Download />}Download</button>
+            <button type="button" className="vf-btn" disabled={!strikes || busy} onClick={async () => { setBusy(true); try { await download(it, strikes, byTime, dot, color); } finally { setBusy(false); } }}>{busy ? <Loader2 className="vf-spin" /> : <Download />}Download</button>
             {admin && <button type="button" className="vf-btn" onClick={onEdit}><Pencil />Edit</button>}
             {admin && <button type="button" className="vf-btn is-danger" onClick={onDelete}><Trash2 />Delete</button>}
           </div>
@@ -198,13 +239,17 @@ function Card({ it, on, onPick }) {
     return () => io.disconnect();
   }, []);
   const strikes = useGraphicStrikes(it, seen);
+  const score = useMemo(() => (it.areas ? scoreAreas(it.areas, strikes) : null), [it.areas, strikes]);
   return (
     <button ref={ref} type="button" className={`fv-card${on ? ' on' : ''}`} onClick={onPick}>
       <GraphicOverlay item={it} strikes={strikes} lazy />
       <div>
         <b>{it.title || 'Forecast graphic'}</b>
         <small>{period(it)}</small>
-        <span className="vf-chip" style={{ '--k': '#facc15', alignSelf: 'flex-start' }}><Zap />{strikes ? `${strikes.length.toLocaleString()} strike${strikes.length === 1 ? '' : 's'}` : '…'}</span>
+        <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+          <span className="vf-chip" style={{ '--k': '#facc15' }}><Zap />{strikes ? `${strikes.length.toLocaleString()} strike${strikes.length === 1 ? '' : 's'}` : '…'}</span>
+          {score && <span className="vf-chip" style={{ '--k': '#22d3ee' }}><Target />{score.score}% accurate</span>}
+        </span>
       </div>
     </button>
   );

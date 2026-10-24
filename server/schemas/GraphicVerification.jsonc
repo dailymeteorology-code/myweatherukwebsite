@@ -44,6 +44,14 @@
     "notes": {
       "type": "string",
       "description": "A note on how it went"
+    },
+    "areas": {
+      "type": "array",
+      "description": "For a thunderstorm outlook imported from the Graphic Studio: its areas, scored against the lightning on the page. Each { level (the studio's level id), cond, ring: [[lat, lon], ...], from, to (local hour keys, when the area has its own hours) }"
+    },
+    "source_graphic": {
+      "type": "object",
+      "description": "The saved Graphic Studio graphic (WeatherGraphic) the areas were imported from: { id, title }"
     }
   },
   "required": ["image_url", "valid_from", "valid_to", "bounds"]

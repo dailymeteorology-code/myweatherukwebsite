@@ -36,6 +36,9 @@ import { AreaTimingPanel, shadeColor, timedActive, shiftTiming, timingOrder, sha
 // with a plain translucent-grey fill and NO hatching (Severe keeps the hatch).
 // Defined inline here (riskConfig isn't the place for a graphic-only tier).
 const COND_SEVERE_ID = 'Conditional Severe';
+/* the caption under the graphic; a graphic saved with the old wording takes the new one */
+const FOOTER_CAPTION = 'Risk of Lightning in a 15 mile radius';
+const OLD_FOOTER_CAPTION = 'Risk of Thunderstorms in a 15 mile radius';
 const COND_SEVERE_COLOR = '#0b0f1a';   // near-black dashed outline
 const COND_SEVERE = {
   id: COND_SEVERE_ID,
@@ -394,7 +397,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
   const timelineStamps = useMemo(() => buildCells(timeline), [timeline]);
   const stampRisks = useMemo(() => cellLevels(timelineStamps, timeline.risk, SEV), [timelineStamps, timeline.risk, SEV]);
   const stampOverlays = useMemo(() => cellLevels(timelineStamps, timeline.over, SEV), [timelineStamps, timeline.over, SEV]);
-  const [footerText, setFooterText]     = useState('Risk of Thunderstorms in a 15 mile radius');
+  const [footerText, setFooterText]     = useState(FOOTER_CAPTION);
   const [handle, setHandle]             = useState('@MyWeatherUK');
   const [version, setVersion]           = useState('v6.00');
   // Issue type: 'initial' = Initial Forecast, 'update' = Update #N
@@ -560,7 +563,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
     if (s.hazards !== undefined) setHazards(s.hazards);
     if (s.hazardPct !== undefined) setHazardPct(s.hazardPct || {});
     setTimeline(savedTimeline(s, new Date().toLocaleDateString('en-CA'), SEV));
-    if (s.footerText !== undefined) setFooterText(s.footerText);
+    if (s.footerText !== undefined) setFooterText(s.footerText === OLD_FOOTER_CAPTION ? FOOTER_CAPTION : s.footerText);
     if (s.handle !== undefined) setHandle(s.handle);
     if (s.version !== undefined) setVersion(s.version);
     if (s.forecastType !== undefined) setForecastType(s.forecastType);

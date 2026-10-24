@@ -8,8 +8,9 @@ import { strikeColour } from './VfMap';
 /** The strikes inside the graphic's picture. */
 export const insideBounds = (strikes, b) => (strikes || []).filter(([, la, lo]) => lo >= b.west && lo <= b.east && la >= b.south && la <= b.north);
 
-/** Draw strikes over a w x h picture of `bounds`, coloured over the whole period (so a replay keeps its colours). */
-export function drawStrikes(ctx, strikes, bounds, w, h, { upTo = Infinity, byTime = true, dot = 1 } = {}) {
+/** Draw strikes over a w x h picture of `bounds`, coloured over the whole period (so a replay keeps its
+    colours), or all in `color`. */
+export function drawStrikes(ctx, strikes, bounds, w, h, { upTo = Infinity, byTime = true, dot = 1, color = '#facc15' } = {}) {
   if (!strikes?.length) return;
   const P = mercator(bounds, w, h);
   const t0 = strikes[0][0], span = Math.max(strikes[strikes.length - 1][0] - t0, 1);
@@ -23,7 +24,7 @@ export function drawStrikes(ctx, strikes, bounds, w, h, { upTo = Infinity, byTim
     if (x < -halo || y < -halo || x > w + halo || y > h + halo) continue;
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.beginPath(); ctx.arc(x, y, halo, 0, 2 * Math.PI); ctx.fill();
-    ctx.fillStyle = byTime ? strikeColour((t - t0) / span) : '#facc15';
+    ctx.fillStyle = byTime ? strikeColour((t - t0) / span) : color;
     ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
   }
 }
@@ -48,7 +49,7 @@ export function useFitted(outer, w, h, maxVh) {
   return size;
 }
 
-export default function GraphicOverlay({ item, strikes, show = true, upTo = Infinity, byTime = true, dot = 1, lazy = false, maxVh = null }) {
+export default function GraphicOverlay({ item, strikes, show = true, upTo = Infinity, byTime = true, dot = 1, color = '#facc15', lazy = false, maxVh = null }) {
   const outer = useRef(null), box = useRef(null), cv = useRef(null);
   const w = item.image_w || 1080, h = item.image_h || 1920;
   const size = useFitted(outer, w, h, maxVh);
@@ -61,13 +62,13 @@ export default function GraphicOverlay({ item, strikes, show = true, upTo = Infi
       const ctx = c.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cw, ch);
-      if (show) drawStrikes(ctx, strikes, item.bounds, cw, ch, { upTo, byTime, dot });
+      if (show) drawStrikes(ctx, strikes, item.bounds, cw, ch, { upTo, byTime, dot, color });
     };
     draw();
     const ro = new ResizeObserver(draw);
     ro.observe(box.current);
     return () => ro.disconnect();
-  }, [item.bounds, strikes, show, upTo, byTime, dot]);
+  }, [item.bounds, strikes, show, upTo, byTime, dot, color]);
   return (
     <div ref={outer} className="fv-fit">
       <div ref={box} className="fv-pic" style={size ? { width: size[0], height: size[1] } : { aspectRatio: `${w} / ${h}` }}>

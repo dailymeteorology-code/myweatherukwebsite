@@ -6,13 +6,18 @@
    onto the graphic's own coast, and zoom (the mouse wheel, a pinch or the buttons) until they match.
    A graphic from the Graphic Studio is Web Mercator, so moving and zooming are enough; "Stretch"
    adds separate width and height for a graphic drawn in another projection. The result is kept as
-   the latitudes and longitudes of the picture's edges. */
+   the latitudes and longitudes of the picture's edges.
+
+   Or import a thunderstorm outlook saved in the admin Graphic Studio (verification/studioImport): its
+   areas are drawn on a map whose edges are known, so it needs no lining up, the period is its Valid
+   span, and the areas are kept with the record so the page can score them against the lightning. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Upload, Loader2, Save, X, ZoomIn, ZoomOut, RotateCcw, MoveHorizontal, MoveVertical, ImagePlus } from 'lucide-react';
+import { Upload, Loader2, Save, X, ZoomIn, ZoomOut, RotateCcw, MoveHorizontal, MoveVertical, ImagePlus, FolderOpen, DownloadCloud } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { loadLand, mercator, traceRings } from './landOutline';
 import { drawStrikes, insideBounds, useFitted } from './GraphicOverlay';
 import { fetchStrikes } from './novaMaps';
+import { savedOutlooks, outlookPeriod, outlookAreas, renderOutlook, uploadPicture } from './studioImport';
 
 const RAD = Math.PI / 180;
 const merc = (lat) => Math.log(Math.tan(Math.PI / 4 + lat * RAD / 2));
@@ -40,6 +45,8 @@ const pan = (k, du, dv) => ({ x0: k.x0 - du * (k.x1 - k.x0), x1: k.x1 - du * (k.
 
 const localInput = (ms) => { const d = new Date(ms); return new Date(d.getTime() - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16); };
 const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const ukWhen = (ms) => new Date(ms).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '');
+const savedWhen = (iso) => new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '');
 
 function Stage({ image, box, setBox, stretch, strikes }) {
   const outer = useRef(null), wrap = useRef(null), cv = useRef(null), drag = useRef(null);
@@ -138,6 +145,10 @@ export default function GraphicEditor({ item = null, onSaved, onCancel }) {
   const [busy, setBusy] = useState(null);
   const [err, setErr] = useState(null);
   const [strikes, setStrikes] = useState(null);
+  const [areas, setAreas] = useState(item?.areas || null);            // an imported outlook's areas, scored on the page
+  const [source, setSource] = useState(item?.source_graphic || null); // and the saved graphic they came from
+  const [studio, setStudio] = useState(null);                         // the studio's saved outlooks, once asked for
+  const [pick, setPick] = useState('');
   const fileRef = useRef(null);
 
   const t0 = Date.parse(from), t1 = Date.parse(to);
@@ -161,9 +172,44 @@ export default function GraphicEditor({ item = null, onSaved, onCancel }) {
       const img = await new Promise((resolve, reject) => { const im = new Image(); im.onload = () => resolve(im); im.onerror = reject; im.src = file_url; });
       setImage({ url: file_url, w: img.naturalWidth, h: img.naturalHeight });
       setBox(guessBox(img.naturalWidth, img.naturalHeight));
+      setAreas(null); setSource(null);   // a picture of its own has no areas to score
       if (!title) setTitle(file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' '));
     } catch (e) {
       setErr(`The upload failed (${e.message || e}).`);
+    }
+    setBusy(null);
+  };
+
+  const openStudio = async () => {
+    setStudio('loading');
+    try {
+      const list = await savedOutlooks();
+      setStudio(list);
+      setPick(list[0]?.id || '');
+    } catch (e) {
+      setStudio(null);
+      setErr(`The saved graphics could not be loaded (${e.message || e}).`);
+    }
+  };
+  /* the saved outlook drawn on the map, its period and its areas */
+  const importSaved = async () => {
+    const g = Array.isArray(studio) && studio.find((x) => x.id === pick);
+    if (!g) return;
+    setErr(null); setBusy('Importing…');
+    try {
+      const s = g.graphic_tool_state;
+      const [a, b] = outlookPeriod(s);
+      const ar = outlookAreas(s);
+      const pic = await renderOutlook({ areas: ar, periodLabel: `${ukWhen(a)} – ${ukWhen(b)}`, opacity: s.drawOpacity ?? 0.7 });
+      const url = await uploadPicture(pic.blob, g.title || 'outlook');
+      setImage({ url, w: pic.w, h: pic.h });
+      setBox(toBox(pic.bounds));
+      setAreas(ar);
+      setSource({ id: g.id, title: g.title || '' });
+      setTitle(g.title || 'Thunderstorm outlook');
+      setFrom(localInput(a)); setTo(localInput(b));
+    } catch (e) {
+      setErr(`It could not be imported (${e.message || e}).`);
     }
     setBusy(null);
   };
@@ -178,6 +224,7 @@ export default function GraphicEditor({ item = null, onSaved, onCancel }) {
       title: title.trim() || 'Forecast graphic', image_url: image.url, image_w: image.w, image_h: image.h,
       valid_from: new Date(t0).toISOString(), valid_to: new Date(t1).toISOString(), bounds: toBounds(box), notes: notes.trim(),
       strike_count: t1 <= Date.now() ? inside : null,
+      areas: areas || null, source_graphic: areas ? source : null,
     };
     try {
       const saved = item ? await base44.entities.GraphicVerification.update(item.id, payload) : await base44.entities.GraphicVerification.create(payload);
@@ -199,7 +246,29 @@ export default function GraphicEditor({ item = null, onSaved, onCancel }) {
       <div className="fv-edit">
         <div className="fv-edit-form">
           <div>
-            <span className="vf-label">Graphic</span>
+            <span className="vf-label">From the Graphic Studio</span>
+            {studio == null ? (
+              <button type="button" className="vf-btn" onClick={openStudio} disabled={!!busy}><FolderOpen />Import a saved graphic</button>
+            ) : studio === 'loading' ? (
+              <p className="vf-note" style={{ margin: 0 }}><Loader2 className="vf-spin" /> Loading the saved graphics…</p>
+            ) : studio.length === 0 ? (
+              <p className="vf-note" style={{ margin: 0 }}>No thunderstorm outlook with areas has been saved in the Graphic Studio yet.</p>
+            ) : (
+              <div className="fv-tools" style={{ flexWrap: 'nowrap' }}>
+                <select className="vf-input" value={pick} onChange={(e) => setPick(e.target.value)} style={{ minWidth: 0, flex: 1 }}>
+                  {studio.map((g) => <option key={g.id} value={g.id}>{g.title || 'Untitled'}{/\b(saved|downloaded) \d/.test(g.title || '') ? '' : ` · saved ${savedWhen(g.created_date)}`}</option>)}
+                </select>
+                <button type="button" className="vf-btn is-primary" onClick={importSaved} disabled={!!busy || !pick}>{busy === 'Importing…' ? <Loader2 className="vf-spin" /> : <DownloadCloud />}Import</button>
+              </div>
+            )}
+            <p className="vf-note" style={{ margin: '8px 0 0' }}>
+              {areas
+                ? <>Imported{source?.title ? <> from “{source.title}”</> : ''}: its {areas.length} area{areas.length === 1 ? '' : 's'} are drawn on the map, already lined up, and scored against the lightning. The period is its Valid time; change it below if you need to.</>
+                : 'A thunderstorm outlook saved in Admin Settings → Graphic Studio comes in already lined up, with its period, and the page scores its areas against the lightning.'}
+            </p>
+          </div>
+          <div>
+            <span className="vf-label">{areas ? 'Picture' : 'Or a picture of a graphic'}</span>
             <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => upload(e.target.files?.[0])} />
             <button type="button" className="fv-drop" onClick={() => fileRef.current?.click()}
               onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); upload(e.dataTransfer.files?.[0]); }} disabled={!!busy}>
