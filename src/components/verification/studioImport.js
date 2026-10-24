@@ -49,8 +49,9 @@ export function outlookPeriod(s) {
   }
   const a = Date.parse(tl.from), b = Date.parse(tl.to);
   if (b > a) return [a, b];
-  const d = Date.parse(`${s.validDate}T00:00:00`);
-  return [d, d + 86400e3];
+  const d = new Date(`${s.validDate}T00:00:00`), e = new Date(d);
+  e.setDate(e.getDate() + 1);   // the next midnight by the clock (a day can be 23 or 25 hours)
+  return [d.getTime(), e.getTime()];
 }
 
 /* the studio's smoothing of a drawn area (decimate, then three closed Chaikin passes), then

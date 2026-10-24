@@ -6,6 +6,7 @@
    interpolated smoothly on the server (clamped cubic), the live radar and satellite at 1 km
    (2084 x 1940). "Pixels" draws the UKV and radar cells as they are; "Smooth" interpolates
    the rain values before colouring (smoothCanvas) and blends other fields on screen. */
+import { ukZone } from '@/lib/ukZone';
 import { contours as d3contours } from 'd3-contour';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 
@@ -1328,7 +1329,7 @@ function drawChrome(ctx, R, u, C, st) {
 
   // ── title card, top left (below the brand when the frame is too narrow for both) ──
   const day = timeFmt(C.valid, { weekday: 'short', day: 'numeric', month: 'short' });
-  const hour = C.dayOnly ? '' : timeFmt(C.valid, { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
+  const hour = C.dayOnly ? '' : `${timeFmt(C.valid, { hour: '2-digit', minute: '2-digit' })} ${ukZone(C.valid)}`;
   const meta = C.metaLine || `${C.model} · run ${C.runLabel} · T+${C.step}`;
   const vlab = C.variable.toUpperCase();
   ctx.font = `800 ${36 * u}px ${FONT}`;

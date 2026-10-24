@@ -22,7 +22,7 @@ import { toast } from 'sonner';
 // (html2canvas is still used for the .webm frame grabs, where per-frame speed
 // matters more than exactness and the panels are not the subject.)
 import { toCanvas } from 'html-to-image';
-import { glass, GlassSheen, GlassBackdropContext, captureBackdrop, GraphicFooter } from '@/components/studio/graphicGlass';
+import { glass, GlassSheen, GlassBackdropContext, captureBackdrop, GraphicFooter, ukZone } from '@/components/studio/graphicGlass';
 import { base44 } from '@/api/base44Client';
 import { RISK_META, RISK_PALETTES, LEVEL_RANGE } from '@/components/tcm/riskConfig';
 import TimelinePill from '@/components/tcm/StormOutlookTimelinePill';
@@ -546,7 +546,7 @@ export default function SnowOutlookGraphicTool({ myWeatherLogoUrl = '', variant 
   const hazardList = isRadar ? RADAR_HAZARDS : HAZARDS;
 
   /* BST or GMT, for the footer's times */
-  const tzAbbr = useMemo(() => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', timeZoneName: 'short' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName')?.value || '', []);
+  const tzAbbr = ukZone();   // now (worked out each render: a page left open through the clock change follows it)
 
   // --- Timeline animation: hour-by-hour playback + WebM export ---
   const [isAnimating, setIsAnimating] = useState(false);

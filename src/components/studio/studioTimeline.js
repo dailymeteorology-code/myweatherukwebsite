@@ -28,22 +28,29 @@ export const shiftKey = (k, days) => { const t = keyMs(k); if (t == null || !day
 /** "Thu 21:00" */
 export const stampLabel = (ms) => new Date(ms).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).replace(',', '');
 
+/** `d` moved on by whole hours or days of the clock, not of elapsed time: across a clock change
+    06:00 + 1 day is still 06:00, and 00:00 + 3 hours is 03:00 (four hours after, the night the
+    clocks go back). */
+const clockAdd = (d, { hours = 0, days = 0 }) => { const x = new Date(d); if (days) x.setDate(x.getDate() + days); if (hours) x.setHours(x.getHours() + hours); return x; };
+
 /** The usual outlook window: 06:00 on the day to 06:00 the next, 3-hourly. */
 export function defaultTimeline(day) {
   const a = parseLocal(`${day}T06:00`) || new Date();
-  return { v: 2, from: toLocalInput(a), to: toLocalInput(new Date(a.getTime() + 24 * HOUR)), gran: '3h', risk: {}, over: {} };
+  return { v: 2, from: toLocalInput(a), to: toLocalInput(clockAdd(a, { days: 1 })), gran: '3h', risk: {}, over: {} };
 }
 
 export const MAX_CELLS = 73;
 
-/** The window's stamp times, the end included (an end off the step gets its own last stamp). */
+/** The window's stamp times, the end included (an end off the step gets its own last stamp). The
+    stamps keep to the clock (00, 03, 06…) through a clock change; the hour the clocks go back
+    repeats is one hour of the timeline, as its marks are kept by the clock's hour. */
 function stampTimes(tl) {
   const a = parseLocal(tl?.from);
   let b = parseLocal(tl?.to);
   if (!a) return { times: [], step: HOUR };
-  if (!b || b <= a) b = new Date(a.getTime() + 24 * HOUR);
-  const step = stepHours(tl.gran) * HOUR, end = b.getTime(), times = [];
-  for (let t = a.getTime(); t < end && times.length < MAX_CELLS - 1; t += step) times.push(t);
+  if (!b || b <= a) b = clockAdd(a, { days: 1 });
+  const stepH = stepHours(tl.gran), step = stepH * HOUR, end = b.getTime(), times = [];
+  for (let d = a; d.getTime() < end && times.length < MAX_CELLS - 1; d = clockAdd(d, { hours: stepH })) times.push(d.getTime());
   if (hourKey(end) !== hourKey(times[times.length - 1])) times.push(end);
   return { times, step };
 }
@@ -171,9 +178,9 @@ export function savedTimeline(s, fallbackDay, severity = {}) {
   const [sh, sm] = startHH.split(':').map(Number), [eh, em] = endHH.split(':').map(Number);
   let span = (eh * 60 + em) - (sh * 60 + sm);
   if (span <= 0) span += 1440;
-  const step = stepHours(gran) * HOUR;
-  const n = Math.floor((span * 60e3) / step) + 1;
-  const tl = { v: 2, from: toLocalInput(a), to: toLocalInput(new Date(a.getTime() + Math.max(1, n - 1) * step)), gran, risk: {}, over: {} };
+  const stepH = stepHours(gran);
+  const n = Math.floor(span / 60 / stepH) + 1;                       // the slots, by the clock
+  const tl = { v: 2, from: toLocalInput(a), to: toLocalInput(clockAdd(a, { hours: Math.max(1, n - 1) * stepH })), gran, risk: {}, over: {} };
   const cells = buildCells(tl);
   tl.risk = marksFromStamps(cells, cells.map((_, i) => s?.stampRisks?.[i] || null), severity);
   tl.over = marksFromStamps(cells, cells.map((_, i) => s?.stampOverlays?.[i] || null), severity);

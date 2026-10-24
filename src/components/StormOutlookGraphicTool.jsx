@@ -1331,7 +1331,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
         </span>
         <Btn sm icon={RefreshCw} disabled={loadingStrikes} onClick={refreshLightning} title="Re-pull today's strikes and merge any new ones">Refresh</Btn>
         <span className="sg-note"><b>{lightningStats.count.toLocaleString()}</b> UK &amp; Ireland strikes {lightningWindow ? 'in the window' : 'today'}
-          {lightningStats.count > 0 && lightningStats.peakHour != null ? <> · peak <b>{fmtHour(lightningStats.peakHour)}–{fmtHour((lightningStats.peakHour + 1) % 24)} {tzAbbr}</b></> : ''}</span>
+          {lightningStats.count > 0 && lightningStats.peakHour != null ? <> · peak <b>{fmtHour(lightningStats.peakHour)}–{fmtHour((lightningStats.peakHour + 1) % 24)} {lightningStats.peakZone}</b></> : ''}</span>
       </div>
       {lightningError && <p className="sg-note" style={{ color: 'var(--sg-amber)' }}>{lightningError}</p>}
       {lightningStats.count > 0 && (
@@ -2062,7 +2062,7 @@ export default function StormOutlookGraphicTool({ myWeatherLogoUrl = '', basic =
                         {fmtHour(lightningStats.peakHour)}–{fmtHour((lightningStats.peakHour + 1) % 24)}
                       </span>
                       <span style={{ fontSize: 7.5, fontWeight: 700, color: 'rgba(148,163,184,0.95)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                        Peak{tzAbbr ? ` · ${tzAbbr}` : ''} · {lightningStats.peakCount.toLocaleString()}
+                        Peak{lightningStats.peakZone ? ` · ${lightningStats.peakZone}` : ''} · {lightningStats.peakCount.toLocaleString()}
                       </span>
                     </div>
                   )}

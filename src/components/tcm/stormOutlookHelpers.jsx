@@ -3,6 +3,7 @@
 // graphic's map layers, levels and styles) lives in the graphic and studio/ now.
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { MAP_BBOX } from '@/components/studio/studioGeo';
+import { ukZone } from '@/lib/ukZone';
 
 function strikeTimeMs(t) {
   if (t == null) return NaN;
@@ -29,6 +30,9 @@ function strikeTimeMs(t) {
 // and window settings stay theirs (saved with the graphic) and are passed in.
 const LIGHTNING_POLL_MS = 60_000;
 const ukDayKey = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+
+/** 'BST' or 'GMT' at a moment (ms). */
+const ukZoneAt = (ms) => ukZone(ms);
 
 export function useStormLightning({
   lightningWindow, setLightningWindow, windowMinutes, setWindowMinutes,
@@ -161,19 +165,17 @@ export function useStormLightning({
   const lightningStats = useMemo(() => {
     const list = Array.isArray(strikes) ? strikes : [];
     if (!list.length) return { count: 0, peakHour: null, peakCount: 0 };
-    const buckets = new Array(24).fill(0);
-    for (const s of list) { const h = new Date(s.t ?? s.time).getHours(); if (h >= 0 && h < 24) buckets[h]++; }
-    let peakHour = 0, peakCount = -1;
-    buckets.forEach((c, h) => { if (c > peakCount) { peakCount = c; peakHour = h; } });
-    return { count: list.length, peakHour, peakCount };
+    /* by the hour itself rather than the clock's hour: the night the clocks go back has two
+       01:00s, each its own hour, with its own BST or GMT */
+    const buckets = new Map();
+    for (const s of list) { const k = Math.floor(new Date(s.t ?? s.time).getTime() / 3600e3); if (Number.isFinite(k)) buckets.set(k, (buckets.get(k) || 0) + 1); }
+    let peakK = null, peakCount = -1;
+    for (const [k, c] of buckets) if (c > peakCount || (c === peakCount && k < peakK)) { peakCount = c; peakK = k; }
+    const peakMs = peakK * 3600e3;
+    return { count: list.length, peakHour: new Date(peakMs).getHours(), peakCount, peakMs, peakZone: ukZoneAt(peakMs) };
   }, [strikes]);
 
-  const tzAbbr = useMemo(() => {
-    try {
-      const parts = new Intl.DateTimeFormat('en-GB', { timeZoneName: 'short' }).formatToParts(new Date());
-      return parts.find(p => p.type === 'timeZoneName')?.value || '';
-    } catch { return ''; }
-  }, []);
+  const tzAbbr = ukZoneAt(Date.now());   // the UK's clock now, worked out each render (it follows a clock change)
   const fmtHour = (h) => `${String(h).padStart(2, '0')}:00`;
 
   return {

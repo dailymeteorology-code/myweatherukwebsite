@@ -13,6 +13,7 @@
  * export left out the basemap, which was map tiles the canvas never drew).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ukZone } from '@/lib/ukZone';
 import { Thermometer, RefreshCw, Download, Loader2, Clock, CalendarClock, Sun, Moon, Type, Map as MapIcon, ChevronLeft, ChevronRight, Maximize, ZoomIn, ZoomOut } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { StudioLayout, Section, Btn, Seg, Field } from '@/components/studio/StudioUI';
@@ -82,7 +83,7 @@ const D = Math.PI / 180;
 const mercY = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * D) / 2));
 const invMercY = (y) => Math.atan(Math.sinh(y)) / D;
 const LONDON = (iso, o) => new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/London', ...o });
-const tzName = (iso) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', timeZoneName: 'short' }).formatToParts(new Date(iso)).find((p) => p.type === 'timeZoneName')?.value || '';
+const tzName = (iso) => ukZone(iso);   // BST or GMT at that time (lib/ukZone)
 const authHeaders = () => { try { const t = localStorage.getItem('base44_access_token'); return t ? { Authorization: `Bearer ${t}` } : {}; } catch { return {}; } };
 
 /* ── Leaflet (pan and zoom only) ───────────────────────────────────────────────────────────── */

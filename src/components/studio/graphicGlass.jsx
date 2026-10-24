@@ -17,6 +17,7 @@
    glass(extra, mode): mode false (on screen), 'backdrop' (export with the blurred picture) or
    true (flat fallback). */
 import React, { createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
+import { ukZone } from '@/lib/ukZone';
 import { toCanvas } from 'html-to-image';
 
 export const GlassBackdropContext = createContext(null);
@@ -109,6 +110,10 @@ export async function captureBackdrop(node, { width, height, backgroundColor }) 
 /** The bottom of the graphic: the logo and handle in the bottom-left corner, and in the
     bottom-right, straight on the graphic (no glass round it), the caption, one compact issue /
     valid / issued line and the notice (or, on the radar, the live status). */
+export { ukZone };
+
+/* `tzAbbr` is no longer used: each time carries the UK's zone at that moment, so a graphic made on
+   the evening the clocks go back says BST for its issue time and GMT for an expiry the next day */
 export function GraphicFooter({
   logoUrl, FallbackIcon, handle, version, radar = false, caption, forecastLabel, update = false,
   validDate, validUntil, tzAbbr, regionLabel, madeWith = false,
@@ -150,16 +155,16 @@ export function GraphicFooter({
               <>
                 <span style={{ ...seg, color: '#fecaca' }}>{dot('#f87171')}Live</span>{bar}
                 <span style={{ ...seg, color: 'rgba(186,230,253,0.95)' }}>{regionLabel}</span>{bar}
-                <span style={seg}>Updated {fmt(new Date(), { hour: '2-digit', minute: '2-digit' })} {tzAbbr}</span>
+                <span style={seg}>Updated {fmt(new Date(), { hour: '2-digit', minute: '2-digit' })} {ukZone()}</span>
               </>
             ) : (
               <>
                 <span style={{ ...seg, color: update ? 'rgba(186,230,253,0.98)' : 'rgba(187,247,208,0.98)' }}>{dot(update ? '#38bdf8' : '#4ade80')}{forecastLabel}</span>{bar}
                 <span style={seg}>Valid {new Date(`${validDate}T12:00:00`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>{bar}
-                <span style={{ ...seg, color: 'rgba(199,210,254,0.98)' }}>Issued {fmt(new Date(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} {tzAbbr}</span>
+                <span style={{ ...seg, color: 'rgba(199,210,254,0.98)' }}>Issued {fmt(new Date(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} {ukZone()}</span>
                 {until && !Number.isNaN(until.getTime()) && (
                   <>{bar}<span style={{ ...seg, color: expired ? 'rgba(254,202,202,0.98)' : 'rgba(254,240,138,0.98)' }}>
-                    {expired ? 'Expired' : 'Until'} {until.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })} {tzAbbr}
+                    {expired ? 'Expired' : 'Until'} {fmt(until, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} {ukZone(until)}
                   </span></>
                 )}
               </>

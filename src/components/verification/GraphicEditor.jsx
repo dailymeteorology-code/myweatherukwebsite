@@ -45,6 +45,7 @@ const pan = (k, du, dv) => ({ x0: k.x0 - du * (k.x1 - k.x0), x1: k.x1 - du * (k.
 
 const localInput = (ms) => { const d = new Date(ms); return new Date(d.getTime() - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16); };
 const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const startOfTomorrow = () => { const d = new Date(); d.setHours(24, 0, 0, 0); return d.getTime(); };   // 25 hours on, the night the clocks go back
 const ukWhen = (ms) => new Date(ms).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '');
 const savedWhen = (iso) => new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '');
 
@@ -139,7 +140,7 @@ export default function GraphicEditor({ item = null, onSaved, onCancel }) {
   const [box, setBox] = useState(item ? toBox(item.bounds) : null);
   const [title, setTitle] = useState(item?.title || '');
   const [from, setFrom] = useState(localInput(item ? Date.parse(item.valid_from) : startOfToday()));
-  const [to, setTo] = useState(localInput(item ? Date.parse(item.valid_to) : startOfToday() + 86400e3));
+  const [to, setTo] = useState(localInput(item ? Date.parse(item.valid_to) : startOfTomorrow()));
   const [notes, setNotes] = useState(item?.notes || '');
   const [stretch, setStretch] = useState(false);
   const [busy, setBusy] = useState(null);

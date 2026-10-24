@@ -9,6 +9,7 @@
    ticked. Drawn straight onto a canvas rather than photographed from the page, so it comes out
    the same on every screen.
    ════════════════════════════════════════════════════════════════════════════ */
+import { ukZone } from '@/lib/ukZone';
 import { LIKELIHOOD, IMPACT, SEV_HEX, sevInkOn, insideGeometries } from './MetOfficeWarning';
 
 const W = 1920, H = 1080;
@@ -64,7 +65,7 @@ const font = (size, weight = 500) => `${weight} ${size}px ${FONT}`;
 
 const dayFmt = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 const hmFmt = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
-const zoneOf = (d) => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, timeZoneName: 'short' }).formatToParts(d).find((p) => p.type === 'timeZoneName')?.value || '';
+const zoneOf = (d) => ukZone(d);   // BST or GMT at that time (lib/ukZone; browsers name winter differently)
 const durationText = (ms) => {
   const h = Math.round(ms / 36e5);
   if (!(h > 0)) return '';

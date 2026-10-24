@@ -127,8 +127,10 @@ function Plot({ width, x0, x1, nowMs, left, right, items, range, tip, band = 0 }
     setHover(clampT(next));
   };
   const hx = hover != null ? X(hover) : null;
+  /* every third hour of the clock, read from the time itself: the day the clocks go back has 25
+     hours (and the day they go forward 23), so counting from midnight would mislabel them */
   const xTicks = [];
-  for (let h = 0; h <= 24; h += 3) xTicks.push(x0 + h * 36e5);
+  for (let t = x0; t <= x1; t += 36e5) if (hourOf(t) % 3 === 0) xTicks.push(t);
   return (
     <div className="lw-chart" ref={box} tabIndex={0} role="group" aria-label="Chart. Move along it, or use the left and right arrow keys, to read the values."
       onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => setHover(null)} onKeyDown={onKey} onBlur={() => setHover(null)}>
@@ -143,7 +145,7 @@ function Plot({ width, x0, x1, nowMs, left, right, items, range, tip, band = 0 }
         ))}
         {right && right.ticks.map((v) => <text key={`r${v}`} x={PL + iw + 6} y={Y(v, right) + 4}>{right.fmt(v)}</text>)}
         {xTicks.map((t, i) => (
-          <text key={t} x={X(t)} y={H - 6} textAnchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'}>{String((i * 3) % 24).padStart(2, '0')}</text>
+          <text key={t} x={X(t)} y={H - 6} textAnchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'}>{String(hourOf(t)).padStart(2, '0')}</text>
         ))}
         <g clipPath={`url(#${clip})`}>
           {items.map((it, k) => {
