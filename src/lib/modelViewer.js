@@ -8,7 +8,7 @@
    the rain values before colouring (smoothCanvas) and blends other fields on screen. */
 import { ukZone } from '@/lib/ukZone';
 import { GRIDS, projection } from '@/lib/modelGrids';
-import { contours as d3contours } from 'd3-contour';
+import { CALC } from '@/lib/modelCalc';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 
 export const API = '/api/modeldata';
@@ -458,135 +458,117 @@ function coarseCanvas(frame, varKey, cache) {
   return cv;
 }
 
-/* contour lines (grid coordinates), on a lightly smoothed half-resolution field */
-export function frameContours(frame, varKey, resKm, cache) {
-  const sc = scaleFor(varKey);
-  if (!sc.contours || !onGrid(frame)) return null;
-  if (cache?.has(frame)) return cache.get(frame);
-  if (frame.nx) {                                       // coarse (probability) grid: contour it directly
-    const { nx, ny } = frame, K = frame.k || 8;
-    let vals = new Float64Array(nx * ny);
-    for (let i = 0; i < vals.length; i++) { const v = frame.table[frame.q[i]]; vals[i] = Number.isNaN(v) ? 0 : v; }
-    vals = boxBlur(vals, nx, ny, 1);
-    const line = sc.line || 'rgba(8,14,24,0.8)';
-    const out = d3contours().size([nx, ny]).smooth(true).thresholds(sc.contours)(Array.from(vals))
-      .map((c) => ({ value: c.value, rings: c.coordinates.flatMap((p) => p).filter((r) => r.length >= 8).map((r) => r.map(([x, y]) => [x * K, y * K])), line, pct: !!sc.pct }));
-    if (cache) cache.set(frame, out);
+/* ── the heavy sums (lib/modelCalc): contour lines, isobars, highs and lows ──
+   On screen they run in a few workers, off the main thread: a layer asks for its frame's lines,
+   gets them if they are ready, or null with the sum queued and `onReady` called when it is done
+   (the page redraws). The steps ahead are queued the same way, behind anything for the map on
+   screen, which takes the next free worker (the newest first). Exports ask for them directly
+   and get them at once. Every answer is kept in the page's cache: Map(frame -> { key: answer }). */
+const POOL = Math.max(1, Math.min(3, ((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4) - 1));
+let pool = null;                                        // [{ w, job }], or false without workers
+const jobs = [];                                        // waiting: { kind, args, cache, frame, key, pend, max, urgent }
+const AHEAD_MAX = 48;                                   // steps-ahead sums kept waiting at most
+function getPool() {
+  if (pool === null) {
+    try {
+      pool = Array.from({ length: POOL }, () => {
+        const p = { w: new Worker(new URL('./modelCalc.js', import.meta.url), { type: 'module' }), job: null };
+        p.w.onmessage = (e) => { const j = p.job; p.job = null; if (j && e.data.id === j.id) finish(j, e.data.out); pump(); };
+        p.w.onerror = () => { const j = p.job; p.job = null; if (j) finish(j, CALC[j.kind](j.args(false))); pump(); };
+        return p;
+      });
+    } catch { pool = false; }
+  }
+  return pool || null;
+}
+let calcSeq = 0;
+function pump() {
+  for (const p of pool || []) {
+    if (p.job) continue;
+    const j = jobs.shift();
+    if (!j) return;
+    if (j.cache.get(j.frame)?.[j.key] !== j.pend) { pump(); return; }   // let go meanwhile
+    j.id = ++calcSeq;
+    p.job = j;
+    const a = j.args(true);                             // the frame's values copied only now, for the worker
+    p.w.postMessage({ id: j.id, kind: j.kind, args: a }, [a.q.buffer, a.table.buffer]);
+  }
+}
+const isPending = (v) => !!v && typeof v === 'object' && Array.isArray(v.waiters);
+function keep(cache, frame, key, value, max) {
+  cache.set(frame, { ...(cache.get(frame) || {}), [key]: value });
+  if (cache.size > max) cache.delete(cache.keys().next().value);
+}
+function finish(j, out) {
+  const was = j.cache.get(j.frame)?.[j.key];
+  if (was !== j.pend) return;                           // answered already, or the frame was let go
+  keep(j.cache, j.frame, j.key, out, j.max);
+  was.waiters.forEach((fn) => fn());
+}
+/* the sum's arguments: with `copy`, the frame's values copied (the copy goes to a worker) */
+const fieldOf = (frame, copy) => ({ q: copy ? frame.q.slice() : frame.q, table: copy ? Float32Array.from(frame.table) : frame.table, W: frame.nx || NX, H: frame.ny || NY });
+function calc(cache, frame, key, kind, args, { onReady, urgent = true, max = 40, sync = false } = {}) {
+  const v = cache.get(frame)?.[key];
+  if (v !== undefined && !isPending(v)) return v;
+  if (sync || !getPool()) {
+    const out = CALC[kind](args(false));
+    if (isPending(v)) finish(v.job, out); else keep(cache, frame, key, out, max);
     return out;
   }
-  const S = 2, w = Math.floor(NX / S), h = Math.floor(NY / S);
-  let vals = new Float64Array(w * h);
-  let lo = Infinity, hi = -Infinity;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const v = frame.table[frame.q[(y * S) * NX + x * S]];
-      vals[y * w + x] = Number.isNaN(v) ? -9999 : v;
-      if (!Number.isNaN(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  if (isPending(v)) {
+    if (onReady && !v.waiters.includes(onReady)) v.waiters.push(onReady);
+    if (urgent && !v.job.urgent) {                      // now wanted on screen: to the front of the queue
+      const i = jobs.indexOf(v.job);
+      if (i >= 0) { jobs.splice(i, 1); jobs.unshift(v.job); }
+      v.job.urgent = true;
+    }
+    return null;
+  }
+  const pend = { waiters: onReady ? [onReady] : [] };
+  const j = { kind, args, cache, frame, key, pend, max, urgent };
+  pend.job = j;
+  keep(cache, frame, key, pend, max);
+  if (urgent) jobs.unshift(j);
+  else {
+    jobs.push(j);
+    const ahead = jobs.filter((x) => !x.urgent);
+    if (ahead.length > AHEAD_MAX) {                     // the oldest of the steps ahead give way
+      const old = ahead[0];
+      jobs.splice(jobs.indexOf(old), 1);
+      const e = { ...old.cache.get(old.frame) };
+      if (e[old.key] === old.pend) { delete e[old.key]; old.cache.set(old.frame, e); }
     }
   }
-  const r = Math.max(1, Math.round((resKm || 2) / (2 * S)));        // smooth over about one model cell
-  vals = boxBlur(vals, w, h, r);
-  let th = sc.contours;
-  if (th === 'every4') th = range(Math.ceil(lo / 4) * 4, hi, 4);
-  if (th === 'every6') th = range(Math.ceil(lo / 6) * 6, hi, 6);
-  const gen = d3contours().size([w, h]).smooth(true).thresholds(th);
-  /* rings shorter than ~25 points are 2 km speckle: drawn, they bury the map in tiny loops */
-  const line = sc.line || 'rgba(8,14,24,0.8)';
-  const out = gen(Array.from(vals)).map((c) => ({ value: c.value, rings: c.coordinates.flatMap((poly) => poly).filter((ring) => ring.length >= 25).map((ring) => ring.map(([x, y]) => [x * S, y * S])), line }));
-  if (cache) {
-    cache.set(frame, out);
-    if (cache.size > 40) cache.delete(cache.keys().next().value);
-  }
-  return out;
+  pump();
+  return null;
 }
 
-const range = (a, b, s) => { const o = []; for (let v = a; v <= b; v += s) o.push(v); return o; };
+/** Contour lines (grid coordinates), on a lightly smoothed half-resolution field. With `opts`
+    { onReady, urgent } from the screen, worked out in the worker (null until ready). */
+export function frameContours(frame, varKey, resKm, cache, opts) {
+  const sc = scaleFor(varKey);
+  if (!sc.contours || !onGrid(frame)) return null;
+  const args = (copy) => ({
+    ...fieldOf(frame, copy), coarse: frame.nx ? { nx: frame.nx, ny: frame.ny, K: frame.k || 8 } : null,
+    thresholds: sc.contours, resKm, line: sc.line || 'rgba(8,14,24,0.8)', pct: !!sc.pct,
+  });
+  return calc(cache, frame, `c:${varKey}`, 'contours', args, { ...(opts || { sync: true }), max: 40 });
+}
 
 /* ── sea-level pressure over any layer: isobars, H and L symbols, the centres' pressures ──
    From the model's own MSLP frame (or the layer itself when it is MSLP). */
-const FULL = (frame) => ({ W: frame.nx || NX, H: frame.ny || NY });
 /** Isobars every `every` hPa (grid coordinates), on a lightly smoothed half-resolution field. */
-export function pressureLines(frame, every, resKm, cache) {
+export function pressureLines(frame, every, resKm, cache, opts) {
   if (!frame || !onGrid(frame) || frame.nx) return null;
-  const key = `${every}`;
-  const c0 = cache?.get(frame);
-  if (c0?.[key]) return c0[key];
-  const { W, H } = FULL(frame), S = 2, w = Math.floor(W / S), h = Math.floor(H / S);
-  let vals = new Float64Array(w * h);
-  let lo = Infinity, hi = -Infinity;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const v = frame.table[frame.q[(y * S) * W + x * S]];
-      vals[y * w + x] = Number.isNaN(v) ? -9999 : v;
-      if (!Number.isNaN(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
-    }
-  }
-  if (!(hi > lo)) return null;
-  const cellKm = (GRID.dx / 1000) * S;
-  vals = boxBlur(vals, w, h, Math.max(1, Math.round(Math.max(resKm || 2, 2 * cellKm) / (2 * cellKm))));
-  const th = range(Math.ceil(lo / every) * every, hi, every);
-  const out = d3contours().size([w, h]).smooth(true).thresholds(th)(Array.from(vals))
-    .map((c) => ({ value: c.value, rings: c.coordinates.flatMap((p) => p).filter((r) => r.length >= 12).map((r) => r.map(([x, y]) => [x * S, y * S])) }));
-  if (cache) { cache.set(frame, { ...(c0 || {}), [key]: out }); if (cache.size > 40) cache.delete(cache.keys().next().value); }
-  return out;
+  const args = (copy) => ({ ...fieldOf(frame, copy), every, resKm, dx: GRID.dx });
+  return calc(cache, frame, `p:${every}`, 'isobars', args, { ...(opts || { sync: true }), max: 40 });
 }
 
-/** The lows and highs: [{ gx, gy, kind: 'L' | 'H', p }]. A centre is the lowest (highest) point
-    within about 600 km on a smoothed ~40 km copy, standing out from its surroundings by 1.5 hPa
-    or more; its place and pressure are then read from the full field around it. */
-export function pressureCentres(frame, cache) {
+/** The lows and highs: [{ gx, gy, kind: 'L' | 'H', p }] (lib/modelCalc calcCentres). */
+export function pressureCentres(frame, cache, opts) {
   if (!frame || !onGrid(frame) || frame.nx) return [];
-  if (cache?.has(frame)) return cache.get(frame);
-  const { W, H } = FULL(frame);
-  const S = Math.max(1, Math.round(40 / (GRID.dx / 1000)));
-  const w = Math.floor(W / S), h = Math.floor(H / S);
-  let v = new Float64Array(w * h);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const t = frame.table[frame.q[Math.min(H - 1, y * S + (S >> 1)) * W + Math.min(W - 1, x * S + (S >> 1))]];
-      v[y * w + x] = Number.isNaN(t) ? -9999 : t;
-    }
-  }
-  v = boxBlur(v, w, h, 1);
-  const R = Math.max(3, Math.round(600 / ((S * GRID.dx) / 1000)));          // ~600 km in coarse cells
-  const out = [];
-  for (let y = 2; y < h - 2; y++) {
-    for (let x = 2; x < w - 2; x++) {
-      const i = y * w + x, c = v[i];
-      if (c < -9000) continue;
-      let isMin = true, isMax = true, sum = 0, n = 0;
-      for (let dy = -R; dy <= R && (isMin || isMax); dy++) {
-        const yy = y + dy;
-        if (yy < 0 || yy >= h) continue;
-        for (let dx = -R; dx <= R; dx++) {
-          if (dx * dx + dy * dy > R * R) continue;
-          const xx = x + dx;
-          if (xx < 0 || xx >= w) continue;
-          const j = yy * w + xx, val = v[j];
-          if (val < -9000 || j === i) continue;
-          if (val < c || (val === c && j < i)) isMin = false;
-          if (val > c || (val === c && j < i)) isMax = false;
-          sum += val; n++;
-        }
-      }
-      if (!n || !(isMin || isMax)) continue;
-      const mean = sum / n, prom = isMin ? mean - c : c - mean;
-      if (prom < 1.5) continue;
-      /* the exact place and value from the full field near it */
-      let best = null;
-      for (let yy = Math.max(0, (y - 1) * S); yy < Math.min(H, (y + 2) * S); yy++) {
-        for (let xx = Math.max(0, (x - 1) * S); xx < Math.min(W, (x + 2) * S); xx++) {
-          const t = frame.table[frame.q[yy * W + xx]];
-          if (Number.isNaN(t)) continue;
-          if (!best || (isMin ? t < best.p : t > best.p)) best = { gx: xx + 0.5, gy: yy + 0.5, p: t };
-        }
-      }
-      if (best) out.push({ ...best, kind: isMin ? 'L' : 'H', prom });
-    }
-  }
-  const res = out.sort((a, b) => b.prom - a.prom).slice(0, 16);
-  if (cache) { cache.set(frame, res); if (cache.size > 40) cache.delete(cache.keys().next().value); }
-  return res;
+  const args = (copy) => ({ ...fieldOf(frame, copy), dx: GRID.dx });
+  return calc(cache, frame, 'hl', 'centres', args, { ...(opts || { sync: true }), max: 40 });
 }
 
 function drawPressure(ctx, P, X, Y, R, u, st) {
@@ -631,25 +613,6 @@ function drawPressure(ctx, P, X, Y, R, u, st) {
     }
   }
   ctx.restore();
-}
-
-function boxBlur(a, w, h, r) {
-  const t = new Float64Array(a.length), o = new Float64Array(a.length);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let s = 0, n = 0;
-      for (let k = -r; k <= r; k++) { const xx = x + k; if (xx >= 0 && xx < w && a[y * w + xx] > -9000) { s += a[y * w + xx]; n++; } }
-      t[y * w + x] = n ? s / n : -9999;
-    }
-  }
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let s = 0, n = 0;
-      for (let k = -r; k <= r; k++) { const yy = y + k; if (yy >= 0 && yy < h && t[yy * w + x] > -9000) { s += t[yy * w + x]; n++; } }
-      o[y * w + x] = n ? s / n : -9999;
-    }
-  }
-  return o;
 }
 
 /* ── map styles ──────────────────────────────────────────────────────────── */
@@ -853,6 +816,7 @@ export const FONT = '"Inter", -apple-system, "SF Pro Display", "Segoe UI", syste
    (u = 1 at a 1080 px short side), so a PNG at any size is the preview, enlarged. */
 export function drawScene(ctx, rect, view, L, opts = {}) {
   const { cx, cy, s } = view;
+  glassCheap = !!L.interacting;
   const u = Math.min(rect.w, rect.h) / 1080;
   const ox = rect.x + rect.w / 2, oy = rect.y + rect.h / 2;
   const X = (gx) => (gx - cx) * s + ox;
@@ -888,46 +852,62 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   /* the zoom as screen px per 2 km (the UK grid's cell), so roads and places come and go at the
      same map scale on either grid */
   const zk = (s / u) * (2000 / GRID.dx);
-  if (L.roads) cachedRoads(ctx, L.roads, clip, view, X, Y, gx0, gy0, gx1, gy1, zk, u, st, ox, oy, L.interacting);
+  /* Everything over the data. On screen (opts.cache) it is kept as pictures: roads and
+     coastlines for the view, contours and the overlays for the view and what they show, so a
+     redraw that changes neither copies them, and while the map is dragged or zoomed the last
+     pictures move and scale with it (drawn afresh once it settles). Exports draw it all. */
+  const layer = (name, deps, draw) => (opts.cache ? cachedLayer(ctx, name, deps, clip, view, ox, oy, st, L.interacting, draw) : draw(ctx));
+  if (L.roads) layer('roads', [L.roads], (c) => drawRoads(c, L.roads, X, Y, gx0, gy0, gx1, gy1, zk, u, st));
   if (L.contours) {
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 1.7 * u;
-    for (const c of L.contours) {
-      ctx.beginPath();
-      for (const ring of c.rings) ring.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
-      ctx.strokeStyle = L.style === 'light' && c.line.startsWith('rgba(236') ? 'rgba(30,42,58,0.7)' : c.line;
-      ctx.stroke();
-    }
+    layer('contours', [L.contours, L.style], (c) => {
+      c.lineJoin = 'round';
+      c.lineWidth = 1.7 * u;
+      for (const k of L.contours) {
+        c.beginPath();
+        for (const ring of k.rings) ring.forEach(([x, y], i) => (i ? c.lineTo(X(x), Y(y)) : c.moveTo(X(x), Y(y))));
+        c.strokeStyle = L.style === 'light' && k.line.startsWith('rgba(236') ? 'rgba(30,42,58,0.7)' : k.line;
+        c.stroke();
+      }
+    });
   }
   if (L.lines) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(X(0), Y(0), NX * s, NY * s);                // the model domain only
-    ctx.clip();
-    ctx.lineWidth = 1.5 * u;
-    ctx.strokeStyle = st.coast;
-    strokeLines(ctx, L.lines.coast, X, Y);
-    ctx.setLineDash([6 * u, 4 * u]);
-    ctx.strokeStyle = st.border;
-    strokeLines(ctx, L.lines.border, X, Y);
-    ctx.setLineDash([]);
-    ctx.restore();
+    layer('lines', [L.lines, L.style], (c) => {
+      c.save();
+      c.beginPath();
+      c.rect(X(0), Y(0), NX * s, NY * s);                // the model domain only
+      c.clip();
+      c.lineWidth = 1.5 * u;
+      c.strokeStyle = st.coast;
+      strokeLines(c, L.lines.coast, X, Y);
+      c.setLineDash([6 * u, 4 * u]);
+      c.strokeStyle = st.border;
+      strokeLines(c, L.lines.border, X, Y);
+      c.restore();
+    });
   }
   edgeFade(ctx, X(0), Y(0), NX * s, NY * s, 36 * s, st.bg);
   const box = [Math.max(0, gx0), Math.max(0, gy0), Math.min(gx1, NX), Math.min(gy1, NY)];
-  if (L.grid?.frame) drawValueGrid(ctx, L.grid, X, Y, ...box, s, u, st);
-  if (L.arrows?.frame) drawArrows(ctx, L.arrows, X, Y, ...box, s, u, st);
-  if (L.risk?.areas?.length) drawRisk(ctx, L.risk, X, Y, u);
-  if (L.strikes?.length) drawStrikes(ctx, L.strikes, X, Y, u, L.strikesDaily, L.strikeStyle);
-  if (L.contours && L.contourLabels) drawContourLabels(ctx, L.contours, X, Y, rect, u, st);
-  if (L.pressure) drawPressure(ctx, L.pressure, X, Y, rect, u, st);
-  if (L.cities) drawCities(ctx, L.cities, X, Y, rect, zk, u, st, L.chrome ? 150 * u : 0, L.wx);
-  if (L.star) {
-    /* the highest value in view, kept clear of the title card and the key */
-    const top = L.chrome ? 150 * u : 20 * u, bot = L.chrome ? 104 * u : 20 * u;
-    const m = L.star.at || frameMax(L.star.frame, (rect.x + 20 * u - ox) / s + cx, (rect.y + top - oy) / s + cy,
-      (rect.x + rect.w - 20 * u - ox) / s + cx, (rect.y + rect.h - bot - oy) / s + cy);
-    if (m && !(L.star.floor != null && m.v < L.star.floor)) drawStar(ctx, X(m.gx), Y(m.gy), u, st, `${fmtValue(m.v, L.star.unit)}${m.place ? ` · ${m.place}` : ''}`, rect);
+  const G = L.grid, A = L.arrows, K = L.risk, P = L.pressure, T = L.star, Wx = L.wx;
+  const labels = L.contours && L.contourLabels ? L.contours : null;
+  if (G?.frame || A?.frame || K?.areas?.length || L.strikes?.length || labels || P || L.cities || T) {
+    layer('over', [G?.frame, G?.varKey, G?.unit, A?.frame, K?.areas, K?.alpha, L.strikes, L.strikesDaily, L.strikeStyle, labels,
+      P?.lines, P?.list, P?.symbols, P?.centres, L.cities, Wx?.frame, Wx?.utcMs, T?.frame, T?.unit, T?.floor,
+      T?.at?.gx, T?.at?.gy, T?.at?.v, T?.at?.place, !!L.chrome, L.style], (c) => {
+      if (G?.frame) drawValueGrid(c, G, X, Y, ...box, s, u, st);
+      if (A?.frame) drawArrows(c, A, X, Y, ...box, s, u, st);
+      if (K?.areas?.length) drawRisk(c, K, X, Y, u);
+      if (L.strikes?.length) drawStrikes(c, L.strikes, X, Y, u, L.strikesDaily, L.strikeStyle);
+      if (labels) drawContourLabels(c, labels, X, Y, rect, u, st);
+      if (P) drawPressure(c, P, X, Y, rect, u, st);
+      if (L.cities) drawCities(c, L.cities, X, Y, rect, zk, u, st, L.chrome ? 150 * u : 0, Wx);
+      if (T) {
+        /* the highest value in view, kept clear of the title card and the key */
+        const top = L.chrome ? 150 * u : 20 * u, bot = L.chrome ? 104 * u : 20 * u;
+        const m = T.at || frameMax(T.frame, (rect.x + 20 * u - ox) / s + cx, (rect.y + top - oy) / s + cy,
+          (rect.x + rect.w - 20 * u - ox) / s + cx, (rect.y + rect.h - bot - oy) / s + cy);
+        if (m && !(T.floor != null && m.v < T.floor)) drawStar(c, X(m.gx), Y(m.gy), u, st, `${fmtValue(m.v, T.unit)}${m.place ? ` · ${m.place}` : ''}`, rect);
+      }
+    });
   }
   if (L.chrome) drawChrome(ctx, rect, u, L.chrome, st);
   ctx.restore();
@@ -985,11 +965,13 @@ function drawRisk(ctx, risk, X, Y, u) {
     if (ar.hatch) {
       ctx.save();
       ctx.clip('evenodd');
-      const b = ctx.canvas;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const ring of ar.rings) for (const [gx, gy] of ring) { const x = X(gx), y = Y(gy); x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+      const hh = y1 - y0;
       ctx.strokeStyle = `rgba(${c},${0.55 * a})`;
       ctx.lineWidth = 1.6 * u;
       ctx.beginPath();
-      for (let d = -b.height; d < b.width; d += 9 * u) { ctx.moveTo(d, b.height); ctx.lineTo(d + b.height, 0); }
+      for (let d = x0 - hh; d < x1; d += 9 * u) { ctx.moveTo(d, y1); ctx.lineTo(d + hh, y0); }
       ctx.stroke();
       ctx.restore();
       ctx.beginPath();
@@ -1048,35 +1030,36 @@ const ROAD_STYLE = {
   trunk: { color: '#C9A57E', inZ: [2.2, 4.4], width: [0.75, 3.2], alpha: 0.62, casing: 0.8 },
   primary: { color: '#C9A57E', inZ: [7.5, 15], width: [0.75, 2.9], alpha: 0.62, casing: 0 },
 };
-/* the road layer for one view, kept: playback, toggles and GIF frames redraw the same roads.
-   While the map is being dragged or zoomed, the last layer is moved and scaled with it, and the
-   roads are drawn afresh once it settles. */
-const roadCache = [];
-function cachedRoads(ctx, roads, clip, view, X, Y, gx0, gy0, gx1, gy1, z, u, st, ox, oy, interacting) {
-  const frameKey = [clip.x, clip.y, clip.w, clip.h, ox, oy, st.glass, ctx.canvas.width].join(',');
-  const key = [view.cx, view.cy, view.s, frameKey].join(',');
-  let hit = roadCache.find((c) => c.key === key && c.roads === roads);
-  if (!hit && interacting) {
-    const near = roadCache.find((c) => c.frameKey === frameKey && c.roads === roads);
-    if (near) {
-      const k = view.s / near.view.s;
-      const dx = (clip.x - ox) * k + ox + (near.view.cx - view.cx) * view.s;
-      const dy = (clip.y - oy) * k + oy + (near.view.cy - view.cy) * view.s;
-      ctx.drawImage(near.cv, dx, dy, near.cv.width * k, near.cv.height * k);
-      return;
-    }
+/* The on-screen map's layers kept as pictures (drawScene's opts.cache), one for each layer and
+   frame on the canvas: copied while the view and what the layer shows are unchanged; while the
+   map is being dragged or zoomed the last picture is moved and scaled with it instead, and it is
+   drawn afresh once the map settles. `deps` are compared by identity. */
+const layerCache = new Map();
+function cachedLayer(ctx, name, deps, clip, view, ox, oy, st, interacting, draw) {
+  const slot = [name, clip.x, clip.y, clip.w, clip.h, ox, oy, st.glass, ctx.canvas.width].join(',');
+  const key = `${view.cx},${view.cy},${view.s}`;
+  const hit = layerCache.get(slot);
+  const same = hit && hit.deps.length === deps.length && hit.deps.every((d, i) => d === deps[i]);
+  if (same && hit.key === key) { ctx.drawImage(hit.cv, clip.x, clip.y); return; }
+  if (same && interacting) {
+    const k = view.s / hit.view.s;
+    const dx = (clip.x - ox) * k + ox + (hit.view.cx - view.cx) * view.s;
+    const dy = (clip.y - oy) * k + oy + (hit.view.cy - view.cy) * view.s;
+    ctx.drawImage(hit.cv, dx, dy, hit.cv.width * k, hit.cv.height * k);
+    return;
   }
-  if (!hit) {
-    const cv = document.createElement('canvas');
-    cv.width = Math.max(1, Math.ceil(clip.w)); cv.height = Math.max(1, Math.ceil(clip.h));
-    const rc = cv.getContext('2d');
-    rc.translate(-clip.x, -clip.y);
-    drawRoads(rc, roads, X, Y, gx0, gy0, gx1, gy1, z, u, st);
-    hit = { key, frameKey, view: { ...view }, roads, cv };
-    roadCache.unshift(hit);
-    roadCache.length = Math.min(roadCache.length, 3);
-  }
-  ctx.drawImage(hit.cv, clip.x, clip.y);
+  const W = Math.max(1, Math.ceil(clip.w)), H = Math.max(1, Math.ceil(clip.h));
+  const cv = hit && hit.cv.width === W && hit.cv.height === H ? hit.cv : document.createElement('canvas');
+  if (cv !== hit?.cv) { cv.width = W; cv.height = H; }
+  const c = cv.getContext('2d');
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.clearRect(0, 0, W, H);
+  c.translate(-clip.x, -clip.y);
+  draw(c);
+  layerCache.delete(slot);
+  layerCache.set(slot, { key, deps, view: { ...view }, cv });
+  if (layerCache.size > 10) layerCache.delete(layerCache.keys().next().value);
+  ctx.drawImage(cv, clip.x, clip.y);
 }
 function drawRoads(ctx, roads, X, Y, gx0, gy0, gx1, gy1, z, u, st) {
   const light = st.glass === 'light';
@@ -1486,17 +1469,19 @@ function drawCities(ctx, cities, X, Y, R, cellPx, u, st, footer, wx) {
 /* frosted glass inside a canvas: the scene under the panel, blurred, then a tint, a top
    highlight and a hairline edge (Safari without canvas filters gets a stronger tint) */
 const FILTER_OK = typeof document !== 'undefined' && 'filter' in (document.createElement('canvas').getContext('2d') || {});
+let glassCheap = false;                                  // drawScene: the map is being dragged or zoomed
 function glassPanel(ctx, x, y, w, h, r, u, theme) {
   const light = theme === 'light';
+  const blur = FILTER_OK && !glassCheap;
   ctx.save();
   roundRect(ctx, x, y, w, h, r);
   ctx.clip();
-  if (FILTER_OK) {
+  if (blur) {
     ctx.filter = `blur(${Math.round(18 * u)}px) saturate(160%)`;
     ctx.drawImage(ctx.canvas, x, y, w, h, x, y, w, h);
     ctx.filter = 'none';
   }
-  ctx.fillStyle = light ? `rgba(255,255,255,${FILTER_OK ? 0.5 : 0.78})` : `rgba(14,20,32,${FILTER_OK ? 0.42 : 0.72})`;
+  ctx.fillStyle = light ? `rgba(255,255,255,${blur ? 0.5 : 0.78})` : `rgba(14,20,32,${blur ? 0.42 : 0.72})`;
   ctx.fillRect(x, y, w, h);
   const g = ctx.createLinearGradient(0, y, 0, y + h);
   g.addColorStop(0, light ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.16)');

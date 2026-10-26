@@ -899,10 +899,15 @@ export default function ModelData() {
 
   const disp = useCallback((f) => (isProb && f ? probFrame(f, thr, dir) : f), [isProb, thr, dir]);
   /* strikes in the hour up to a frame's time, with their age in minutes */
+  const strikesMemo = useRef({ ms: null, of: null, out: null });
   const strikesAt = useCallback((ms) => {
+    const m = strikesMemo.current;
+    if (m.ms === ms && m.of === strikes) return m.out;
     const out = [];
     for (const [t, gx, gy] of strikes || []) if (t <= ms && t > ms - 3600e3) out.push([gx, gy, (ms - t) / 60e3]);
-    return out.sort((a, b) => b[2] - a[2]);
+    out.sort((a, b) => b[2] - a[2]);
+    strikesMemo.current = { ms, of: strikes, out };
+    return out;
   }, [strikes]);
   /* companions: wind arrows, weather symbols and cloud, from the same run (forecast) or the
      nearest time (live) */
@@ -941,6 +946,14 @@ export default function ModelData() {
   const lvMsl = useLiveCompanion(liveCat, 'now_mslp', isLive && mslOn && !ownMsl);
   const pressureCache = useRef(new Map());
   const centreCache = useRef(new Map());
+  /* contour lines, isobars and highs and lows are worked out in a worker (lib/modelViewer): when
+     the one on screen is ready the map redraws, at most once a frame */
+  const [calcTick, setCalcTick] = useState(0);
+  const bumpRaf = useRef(0);
+  const bump = useCallback(() => {
+    if (bumpRaf.current) return;
+    bumpRaf.current = requestAnimationFrame(() => { bumpRaf.current = 0; setCalcTick((n) => n + 1); });
+  }, []);
   const smoothCache = useRef(new Map());
   const overlayCache = useRef(new Map());
   const credit = !model ? '' : isObs
@@ -959,8 +972,10 @@ export default function ModelData() {
       : isLive ? `${liveItem.src.startsWith('now_') ? 'UKV + METAR + radar analysis' : liveProd?.source || ''} · ${new Date(f.head.valid).toISOString().slice(11, 16)} UTC · ${liveItem.src.startsWith('now_') ? 'now' : 'observed'}` : null,
   } : null), [model, vmeta, run, scaleKey, statics, credit, isLive, isObs, obsKey, liveItem, liveProd, underMeta, underVar]);
 
-  const layersFor = useCallback((raw) => {
+  /* the layers of one frame; `sync` (exports) works the sums out at once instead of in the worker */
+  const layersFor = useCallback((raw, sync = false) => {
     const f = disp(raw);
+    const later = sync ? undefined : { onReady: bump };
     const sc = scaleFor(scaleKey);
     const smoothRain = smooth && sc.discrete && f?.q && !f.prob && RAINY.has(scaleKey);
     const arrowsF = !arrowsOn || !raw ? null : selfArrows ? f : companionOf(isLive ? lvArrows : fcArrows, raw, isLive, 16);
@@ -979,7 +994,7 @@ export default function ModelData() {
       grid: showGrid && canGrid && f?.q ? { frame: f, varKey: scaleKey, unit: vmeta?.unit } : null,
       arrows: arrowsF ? { frame: arrowsF } : null,
       wx: wxF ? { frame: wxF, utcMs: Date.parse(raw.head.valid) } : null,
-      contours: f && showContours && canContours ? frameContours(f, scaleKey, model?.res_km, contourCache.current) : null,
+      contours: f && showContours && canContours ? frameContours(f, scaleKey, model?.res_km, contourCache.current, later) : null,
       contourLabels: true, chrome: chromeFor(raw),
       star: isObs && showStar && ext?.value != null ? { at: { gx: ext.gx, gy: ext.gy, v: ext.value, place: ext.place }, unit: vmeta?.unit }
         : showStar && canStar && f?.q && !isObs ? { frame: f, unit: vmeta?.unit, floor: sc.floor } : null,
@@ -987,15 +1002,35 @@ export default function ModelData() {
       strikesDaily: isObs, strikeStyle,
       risk: raw ? riskFor(Date.parse(raw.head.valid)) : null,
       pressure: mslF ? {
-        lines: msl.isobars ? pressureLines(mslF, msl.every, model?.res_km, pressureCache.current) : null,
-        list: msl.symbols || msl.centres ? pressureCentres(mslF, centreCache.current) : null, symbols: msl.symbols, centres: msl.centres,
+        lines: msl.isobars ? pressureLines(mslF, msl.every, model?.res_km, pressureCache.current, later) : null,
+        list: msl.symbols || msl.centres ? pressureCentres(mslF, centreCache.current, later) : null, symbols: msl.symbols, centres: msl.centres,
       } : null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disp, style, basemapFor, statics, showCities, scaleKey, smooth, showContours, model, chromeFor, fontsOk, showStar, vmeta, isLive, isObs, showLightning, strikes,
     arrowsOn, wxOn, cloudsOn, lvArrows, fcArrows, lvWx, fcWx, lvCloud, fcCloud, showRoads, roads, showGrid, timeSteps, obsSummary, obsKey, obsStrikes,
-    selfArrows, ownWx, canGrid, canStar, canContours, underMeta, underVar, fcUnder, strikeStyle, riskFor, mslOn, ownMsl, msl, fcMsl, lvMsl]);
+    selfArrows, ownWx, canGrid, canStar, canContours, underMeta, underVar, fcUnder, strikeStyle, riskFor, mslOn, ownMsl, msl, fcMsl, lvMsl, bump, calcTick]);
   useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); smoothCache.current.clear(); }, [thr, dir, scaleKey]);
+
+  /* the contour lines and isobars, highs and lows of the steps ahead (and just behind), worked
+     out in the worker while this one is looked at, so stepping and playback find them ready */
+  useEffect(() => {
+    const lines = showContours && canContours;
+    if ((!lines && !mslOn) || !steps.length) return undefined;
+    const t = setTimeout(() => {
+      const ahead = { urgent: false };
+      for (const k of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, -1, -2]) {
+        const raw = frames[steps[(idx + k + steps.length) % steps.length]];
+        if (!raw) continue;
+        const f = disp(raw);
+        if (lines && f) frameContours(f, scaleKey, model?.res_km, contourCache.current, ahead);
+        const mslF = !mslOn ? null : ownMsl ? raw : companionOf(isLive ? lvMsl : fcMsl, raw, isLive, 30);
+        if (mslF && msl.isobars) pressureLines(mslF, msl.every, model?.res_km, pressureCache.current, ahead);
+        if (mslF && (msl.symbols || msl.centres)) pressureCentres(mslF, centreCache.current, ahead);
+      }
+    }, 150);
+    return () => clearTimeout(t);
+  }, [idx, steps, frames, disp, showContours, canContours, mslOn, ownMsl, msl, isLive, lvMsl, fcMsl, scaleKey, model]);
 
   /* draw: the map everywhere, dimmed outside the frame, the finished graphic inside it */
   useEffect(() => {
@@ -1005,9 +1040,10 @@ export default function ModelData() {
     const full = { x: 0, y: 0, w: c.width, h: c.height };
     const L = layersFor(frame);
     ctx.clearRect(0, 0, c.width, c.height);
-    // the dimmed map around the frame: map and data only (roads, grid, arrows and symbols are
-    // for the graphic itself, and drawing them twice doubled the cost of every pan)
-    drawScene(ctx, R, view, { ...L, chrome: null, cities: null, contours: null, roads: null, grid: null, arrows: null, wx: null, star: null }, { clip: full, coarse: true });
+    // the dimmed map around the frame: map, data and coastlines only (the overlays are for the
+    // graphic itself, and drawing them twice doubled the cost of every pan)
+    drawScene(ctx, R, view, { ...L, chrome: null, cities: null, contours: null, roads: null, grid: null, arrows: null, wx: null, star: null,
+      pressure: null, risk: null, strikes: null, interacting }, { clip: full, coarse: true, cache: true });
     ctx.save();
     ctx.fillStyle = 'rgba(3,6,12,0.62)';
     ctx.beginPath();
@@ -1016,7 +1052,7 @@ export default function ModelData() {
     ctx.roundRect ? ctx.roundRect(R.x, R.y, R.w, R.h, r) : ctx.rect(R.x, R.y, R.w, R.h);
     ctx.fill('evenodd');
     ctx.restore();
-    drawScene(ctx, R, view, { ...L, interacting }, { round: r });
+    drawScene(ctx, R, view, { ...L, interacting }, { round: r, cache: true });
     ctx.save();
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = 1;
@@ -1150,7 +1186,7 @@ export default function ModelData() {
   const renderAt = useCallback((f, ctx, W, H) => {
     const R = frameRect();
     const k = W / R.w;
-    drawScene(ctx, { x: 0, y: 0, w: W, h: H }, { cx: view.cx, cy: view.cy, s: view.s * k }, layersFor(f));
+    drawScene(ctx, { x: 0, y: 0, w: W, h: H }, { cx: view.cx, cy: view.cy, s: view.s * k }, layersFor(f, true));
   }, [view, layersFor, frameRect]);
   const stamp = (s) => (isObs ? dayOf(s) : isLive ? new Date(s).toISOString().slice(0, 16).replace(/[-:]/g, '') : `T${s}`);
   const fileBase = () => (isObs ? `MyWeatherUK_observed_${obsKey}_${frameKey}` : isLive ? `MyWeatherUK_live_${liveKey}_${frameKey}`
