@@ -11,7 +11,7 @@
    once its step is ready, which for an ensemble can take a few minutes the first time. */
 import { contours } from 'd3-contour';
 import { API, loadFrame, runTag } from '@/lib/modelViewer';
-import { laeaInverse } from '@/lib/ukRadar';
+import { GRIDS, projection } from '@/lib/modelGrids';
 import { SHAPES } from '@/lib/novaOutlook';
 import { coarsenMax, detectEvents, timeRing } from '@/lib/areaEvents';
 
@@ -94,7 +94,15 @@ export const decode = (f, m = 0) => {
   for (let i = 0; i < n; i++) { const q = f.q[o + i]; out[i] = q === 255 ? NaN : f.table[q]; }
   return out;
 };
-const gridOf = (f) => ({ nx: f.head.nx, ny: f.head.ny, k: f.head.k || 1 });
+/* a field's size, its coarsening (k display cells a cell) and its display grid: the ensembles are on
+   the wide 8 km grid since 26 Oct 2026 (lib/modelGrids), the UKV on its own 2 km one */
+const gridOf = (f) => ({ nx: f.head.nx, ny: f.head.ny, k: f.head.k || 1, grid: f.head.grid || 'uk' });
+/* lon/lat of a field's cell (i, j), fractional cells allowed */
+const cellLonLat = (f, i, j) => {
+  const G = GRIDS[f.grid || 'uk'], k = f.k || 1;
+  return projection(G).inv(G.x0 + (i * k + (k - 1) / 2) * G.dx, G.yTop - (j * k + (k - 1) / 2) * G.dx);
+};
+const cellKmOf = (f) => (GRIDS[f.grid || 'uk'].dx / 1000) * (f.k || 1);
 
 /** Chance (0..1) that the pooled members of the ensembles pass `thr` at each valid time, then
     the peak ('peak') or the average ('mean') of those chances. */
@@ -243,9 +251,9 @@ export function blur(f, r) {
 /** 1 for the cells whose centre is inside a lon/lat box (none: every cell). */
 export function boxMaskOf(f, box) {
   if (!box) return null;
-  const m = new Uint8Array(f.nx * f.ny), k = f.k || 1;
+  const m = new Uint8Array(f.nx * f.ny);
   for (let j = 0; j < f.ny; j++) for (let i = 0; i < f.nx; i++) {
-    const [lon, lat] = laeaInverse(FINE.x0 + (i * k + (k - 1) / 2) * FINE.dx, FINE.yTop - (j * k + (k - 1) / 2) * FINE.dx);
+    const [lon, lat] = cellLonLat(f, i, j);
     if (lon >= box.lonMin && lon <= box.lonMax && lat >= box.latMin && lat <= box.latMax) m[j * f.nx + i] = 1;
   }
   return m;
@@ -279,7 +287,7 @@ function simplify(ring, tol) {
     spells share is cut in two (lib/areaEvents); `timing.thr(i, min)` is the threshold that makes
     level i "on" in the timing frames. */
 export function contourField(f, levels, mask = null, shape = 'detailed', timing = null) {
-  const sh = SHAPES[shape] || SHAPES.detailed, k = f.k || 1, cellKm = (FINE.dx / 1000) * k;
+  const sh = SHAPES[shape] || SHAPES.detailed, cellKm = cellKmOf(f);
   const r = (km) => Math.round(km / cellKm / 2);
   let g = f;
   if (r(sh.grow) >= 1) g = maxWithin(g, r(sh.grow));
@@ -304,7 +312,7 @@ export function contourField(f, levels, mask = null, shape = 'detailed', timing 
       for (const p of parts) {
         areas.push({
           ring: simplify(p.ring, tol).map(([x, y]) => {
-            const [lon, lat] = laeaInverse(FINE.x0 + ((x - 0.5) * k + (k - 1) / 2) * FINE.dx, FINE.yTop - ((y - 0.5) * k + (k - 1) / 2) * FINE.dx);
+            const [lon, lat] = cellLonLat(f, x - 0.5, y - 0.5);
             return [lat, lon];
           }),
           from: p.from, to: p.to,
@@ -317,7 +325,8 @@ export function contourField(f, levels, mask = null, shape = 'detailed', timing 
 }
 
 /* ── timing: frames through the span on the field's grid coarsened to about 8 km ──────────── */
-const timingGrid = (into) => { const k = into.k || 1, c = Math.max(1, Math.round(4 / k)); return { c, w: Math.ceil(into.nx / c), h: Math.ceil(into.ny / c), f: c * k }; };
+/* coarsened to about 8 km (4 UKV cells; a wide-grid or ensemble cell is already that or more) */
+const timingGrid = (into) => { const k = into.k || 1, c = Math.max(1, Math.round(8 / cellKmOf(into))); return { c, w: Math.ceil(into.nx / c), h: Math.ceil(into.ny / c), f: c * k }; };
 
 /** The UKV's hourly frames of `v` through [from, to] for timing the areas of a field (`into`):
     null when no UKV run reaches that far or it has fewer than two of them. */

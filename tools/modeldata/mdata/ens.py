@@ -31,13 +31,15 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
-from .common import DATA, DX, NX, NY, PROJ, X0, Y_TOP, smooth_sample, write_json
+from .common import DATA, DX, FRAMES, GRID, NX, NY, PROJ, X0, Y_TOP, smooth_sample, write_json
 from .models import MPH, _utc
 from nova.io_aws import decode_grib, ecmwf_index, exists, fetch_ranges, get   # noqa: E402
 
-C = 8
+# members are kept on every C-th display cell: 16 km on the UK grid, 24 km on the wide one (the
+# ensembles themselves are ~18-50 km, and 51 members a step must stay a quick download)
+C = 8 if GRID == 'uk' else 3
 CNX, CNY = -(-NX // C), -(-NY // C)
-ENS_FRAMES = DATA / 'frames' / 'ens'
+ENS_FRAMES = FRAMES / 'ens'
 
 FIELDS = {
     'gust':       dict(label='Wind gust', unit='mph', lo=0, hi=150),
@@ -384,7 +386,7 @@ def main(model, run_s, f, first=None):
         except Exception as e:
             return h, e
         head = json.dumps({'model': model, 'run': run.isoformat(), 'field': f, 'step': h, 'valid': (run + timedelta(hours=h)).isoformat(),
-                           'nx': CNX, 'ny': CNY, 'k': C, 'members': int(a.shape[0]), 'lo': enc['lo'], 'hi': enc['hi'],
+                           'grid': GRID, 'nx': CNX, 'ny': CNY, 'k': C, 'members': int(a.shape[0]), 'lo': enc['lo'], 'hi': enc['hi'],
                            'scale': enc.get('scale', 'lin')}).encode()
         raw = struct.pack('<I', len(head)) + head + encode_members(a, enc).tobytes()
         tmp = out.with_suffix('.tmp')

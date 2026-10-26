@@ -1,10 +1,15 @@
-"""Model Data viewer: the display grid, frame encoding and file locations.
+"""Model Data viewer: the display grids, frame encoding and file locations.
 
-The display grid IS the Met Office UKV grid: Lambert azimuthal equal-area on the WGS84
-ellipsoid, centred 54.9 N 2.5 W, 1042 x 970 cells at exactly 2 km. UKV is therefore shown
-cell for cell, with no resampling at all. Every other model is put on the same grid by
-nearest neighbour, so its own (coarser) cells stay visible as blocks: nothing is
-interpolated to look finer than the model really is.
+Two display grids, both Lambert azimuthal equal-area on the WGS84 ellipsoid:
+  uk  the Met Office UKV grid itself: centred 54.9 N 2.5 W, 1042 x 970 cells at exactly 2 km.
+      UKV is shown cell for cell, with no resampling at all; the live radar, satellite and the
+      current-conditions analysis are on it too.
+  eu  the global models' grid (Met Office Global, ECMWF IFS/AIFS/ENS, NOAA GFS/GEFS): centred
+      50 N 12 W, 1083 x 708 cells at 8 km, from the US east coast across the Atlantic to the
+      Volga, and from Svalbard's latitude down into the Sahara (26 Oct 2026, at the user's
+      request: the whole of Europe, most of the Atlantic and part of North Africa).
+A process works on one grid, chosen by MDATA_GRID (the server sets it per model; `uk` when
+unset). Each grid has its own frames and static layers, so a model's frames never mix grids.
 
 Frames are one byte per cell (0..254 = value, 255 = no data), quantised linearly or on a
 square-root scale per variable, with the scale in a small JSON header, then gzip-compressed.
@@ -31,15 +36,37 @@ DATA = Path(os.environ.get('MODELDATA_DIR', _EXT if Path('D:/').exists() else RE
 FRAMES = DATA / 'frames'
 STATIC = DATA / 'static'
 
-PROJ = '+proj=laea +lat_0=54.9 +lon_0=-2.5 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs'
-NX, NY, DX = 1042, 970, 2000.0
-X0 = -1158000.0                                       # centre of the westernmost column
-Y_TOP = 902000.0                                      # centre of the northernmost row (row 0 = north)
+GRIDS = {
+    'uk': dict(lat0=54.9, lon0=-2.5, nx=1042, ny=970, dx=2000.0, x0=-1158000.0, y_top=902000.0),
+    'eu': dict(lat0=50.0, lon0=-12.0, nx=1083, ny=708, dx=8000.0, x0=-4428000.0, y_top=2924000.0),
+}
+# every model's grid: the UKV (and everything live and observed) on its own, the rest on the wide one
+MODEL_GRID = {'ukv': 'uk'}
+grid_of = lambda model: MODEL_GRID.get(model, 'eu')   # noqa: E731
+GRID = os.environ.get('MDATA_GRID', 'uk')
+if GRID not in GRIDS:
+    GRID = 'uk'
+_G = GRIDS[GRID]
+PROJ = f"+proj=laea +lat_0={_G['lat0']} +lon_0={_G['lon0']} +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+NX, NY, DX = _G['nx'], _G['ny'], _G['dx']
+X0 = _G['x0']                                         # centre of the westernmost column
+Y_TOP = _G['y_top']                                   # centre of the northernmost row (row 0 = north)
+# each grid keeps its own frames and static layers ('uk' where they always were)
+if GRID != 'uk':
+    FRAMES = DATA / f'frames_{GRID}'
+    STATIC = STATIC / GRID
 NC_LOCK = threading.Lock()                            # netCDF4/HDF5 is not thread-safe
 
 
-def grid_meta():
-    return {'proj': PROJ, 'nx': NX, 'ny': NY, 'dx': DX, 'x0': X0, 'y_top': Y_TOP}
+def grid_meta(name=None):
+    g = GRIDS[name or GRID]
+    return {'name': name or GRID, 'proj': f"+proj=laea +lat_0={g['lat0']} +lon_0={g['lon0']} +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs",
+            'lat0': g['lat0'], 'lon0': g['lon0'], 'nx': g['nx'], 'ny': g['ny'], 'dx': g['dx'], 'x0': g['x0'], 'y_top': g['y_top']}
+
+
+def frames_root(name):
+    """Where a grid's frames are kept."""
+    return DATA / 'frames' if name == 'uk' else DATA / f'frames_{name}'
 
 
 _LL = {}
@@ -172,7 +199,9 @@ def encode(a, enc):
 
 
 def _replace(tmp, path):
-    """os.replace, retried: Windows refuses while another process (the server) has the target open."""
+    """os.replace, retried: Windows refuses while another process (the server) has the target open.
+    Still refused, the file is written in place: a reader holds it open for reading only, which a
+    rename cannot get past but a write can."""
     import time
     for i in range(8):
         try:
@@ -180,7 +209,11 @@ def _replace(tmp, path):
             return
         except PermissionError:
             time.sleep(0.15 * (i + 1))
-    os.replace(tmp, path)
+    Path(path).write_bytes(Path(tmp).read_bytes())
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
 
 
 def read_frame(path: Path):
@@ -200,7 +233,7 @@ def read_frame(path: Path):
 def write_frame(path: Path, a, enc, meta):
     path.parent.mkdir(parents=True, exist_ok=True)
     ny, nx = np.shape(a)
-    head = json.dumps(dict(meta, nx=nx, ny=ny, lo=enc['lo'], hi=enc['hi'], scale=enc.get('scale', 'lin'))).encode()
+    head = json.dumps(dict(meta, grid=GRID, nx=nx, ny=ny, lo=enc['lo'], hi=enc['hi'], scale=enc.get('scale', 'lin'))).encode()
     raw = struct.pack('<I', len(head)) + head + encode(a, enc).tobytes()
     tmp = path.with_suffix(f'.{os.getpid()}.{threading.get_ident()}.tmp')   # own name: two writers never share one
     tmp.write_bytes(gzip.compress(raw, 6))

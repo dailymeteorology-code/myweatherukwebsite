@@ -1,4 +1,4 @@
-"""Weather Patterns: three scenarios for each of the next two weeks, from ECMWF and GFS blended.
+"""Weather Patterns: the likeliest weather patterns for each of the next two weeks, from ECMWF and GFS blended.
 
 Started once a day at 12:00 UK time by server/patterns/index.js (or by an admin from the page):
 
@@ -26,12 +26,16 @@ THE BLEND: every run gets a weight, so a model counts for its own share however 
 ECMWF leads because it verifies best in the medium range; the main runs count for less in week 2,
 where a single run has little skill left.
 
-SCENARIOS: each run's week is its chart of mean sea-level pressure at 12 UTC on all seven days,
-over the UK and its approaches, side by side. A weighted k-means splits the runs into the three
-ways the week could go (many seeded restarts, the tightest split kept, and no scenario of fewer
-than five runs). A scenario's chance is the summed weight of its runs.
+PATTERNS: each of a run's seven 12 UTC charts of mean sea-level pressure is named: Atlantic
+westerlies, a Scandinavian high, northern blocking, a mid-Atlantic ridge, a high over the UK or
+over the continent, a trough over the UK, lows to the south, or plainly by its flow (classify).
+The run's week is the pattern on most of its days (week_pattern). The runs are grouped by pattern;
+each week shows up to three, the likeliest first, and a pattern's chance is the summed weight of
+its runs. Every pattern found is listed with its chance. It is all told week by week: the page
+shows no single day.
 
-For each scenario: its daily mean pressure chart with its highs and lows; the day's weather type
+For each scenario: its pattern chart (its runs on the days with the pattern) with its highs and
+lows; each day's weather type
 (Jenkinson-Collison objective Lamb type, centred on the UK); and from its runs the UK's daily
 maximum and minimum temperature, rainfall, frost and wintriness, sampled at ~550 points over UK
 land and compared, district by district, with the 1991-2020 normals (Met Office HadUK-Grid); wind
@@ -74,8 +78,8 @@ LATS, LONS = S + G * np.arange(NY), W + G * np.arange(NX)
 # the maps on the page: every 2nd point of the shared grid (1°)
 MAP = {'lon0': -28.0, 'lat0': 43.0, 'd': 1.0, 'nx': 53, 'ny': 27}
 LAND = {'lon0': -28.0, 'lat0': 43.0, 'd': 0.25, 'nx': 209, 'ny': 105}
-# the box the runs are grouped on: the UK and its approaches
-CLUSTER_BOX = (45.0, 62.0, -22.0, 10.0)
+# the box a scenario's day-to-day spread is measured on: the UK and its approaches
+SPREAD_BOX = (45.0, 62.0, -22.0, 10.0)
 UK = (54.5, -3.5)
 WEEKS = 2
 KEEP_ISSUES = 30
@@ -619,32 +623,95 @@ def main_centre(cs, t):
     return max(pool, key=lambda c: c['p'] - 0.008 * km((c['lat'], c['lon']), UK))
 
 
+# ── named patterns ───────────────────────────────────────────────────────────
+# A run's week is named from its average chart over the seven days: where the high and the low
+# sit around the UK and the flow they make, in the terms forecasters use for the North Atlantic
+# and European patterns (Atlantic westerlies, blocking highs to the north or over Scandinavia, a
+# mid-Atlantic ridge, a high over the UK or the continent, a trough over the UK).
+
+def box(f, la0, la1, lo0, lo1):
+    j0, j1 = int(round((la0 - S) / G)), int(round((la1 - S) / G)) + 1
+    i0, i1 = int(round((lo0 - W) / G)), int(round((lo1 - W) / G)) + 1
+    return float(f[j0:j1, i0:i1].mean())
+
+
+PATTERNS = {
+    'stormy_westerlies': ('Stormy westerlies', 'A deep low near Iceland and high pressure to the south drive a strong westerly jet straight at the UK: one low after another.'),
+    'westerlies': ('Atlantic westerlies', 'Low pressure to the north-west and high pressure to the south set up a westerly flow off the Atlantic: weather systems move through in turn.'),
+    'uk_trough': ('Trough over the UK', 'Low pressure sits over or close to the UK for much of the week, so the weather stays unsettled.'),
+    'scandi_high': ('Scandinavian high', 'A blocking high over Scandinavia holds the Atlantic at bay and turns the flow easterly or south-easterly.'),
+    'northern_block': ('Northern blocking', 'High pressure to the north, around Iceland and the Norwegian Sea, with lows pushed south: a northerly or easterly flow.'),
+    'atlantic_ridge': ('Mid-Atlantic ridge', 'High pressure out in the Atlantic, west of the UK, with lower pressure over Scandinavia: a northerly or north-westerly flow.'),
+    'uk_high': ('High over the UK', 'High pressure is centred over or right next to the UK, so the week is mostly settled.'),
+    'euro_high': ('High over the continent', 'High pressure over central Europe holds weather fronts out to the west: a southerly or south-westerly flow.'),
+    'southern_track': ('Lows to the south', 'Lows take a southern track towards France and Iberia, with higher pressure to the north.'),
+    'westerly': ('Westerly flow', 'A westerly flow, without strong highs or lows close by.'),
+    'northwesterly': ('North-westerly flow', 'A north-westerly flow brings cooler air down from the north-west.'),
+    'northerly': ('Northerly flow', 'A northerly flow brings cold air down from the Arctic.'),
+    'easterly': ('Easterly flow', 'An easterly flow brings air in from the continent.'),
+    'southerly': ('Southerly flow', 'A southerly flow brings air up from the south.'),
+    'southwesterly': ('South-westerly flow', 'A south-westerly flow brings mild air in from the Atlantic.'),
+    'slack': ('Slack pattern', 'No strong highs or lows near the UK and little flow: light winds, the weather decided locally.'),
+}
+# patterns counted together when the runs are grouped (a stormy week and a plain westerly flow are
+# both the westerly pattern; the scenario is called stormy when most of its weight is)
+FAMILY = {'stormy_westerlies': 'westerlies', 'westerly': 'westerlies'}
+
+
+def classify(f):
+    """The named pattern of an average chart (hPa on the shared grid) -> {'key', 'name', ...}."""
+    pI = box(f, 62, 68, -28, -12)        # Iceland
+    pA = box(f, 42, 46, -30, -12)        # the northern flank of the Azores high
+    pS = box(f, 58, 68, 8, 30)           # Scandinavia
+    pN = box(f, 64, 72, -10, 12)         # the Norwegian Sea
+    pM = box(f, 46, 60, -30, -17)        # the Atlantic west of Ireland
+    pU = box(f, 50, 59, -8, 2)           # the UK
+    pC = box(f, 45, 54, 6, 22)           # central Europe
+    pB = box(f, 42, 48, -12, 2)          # Biscay and northern Iberia
+    jc = weather_type(f)
+    d, F, Z = jc['dir'], jc['F'], jc['Z']
+    nao = pA - pI                        # an Azores-Iceland pressure difference, as the NAO
+    north = max(pI, pN)
+    if pS >= 1020 and pS - pM >= 5 and pS >= pU + 2 and d in ('E', 'SE', 'S', 'NE'):
+        key = 'scandi_high'
+    elif north >= 1016 and north - pB >= 5 and nao < 4:
+        key = 'northern_block'
+    elif pU >= 1021 and pU >= max(pS, pM, pC) - 1.5 and Z < 0:
+        key = 'uk_high'
+    elif pM >= 1020 and pM - pS >= 6 and pM >= pU + 2 and d in ('N', 'NW', 'NE', 'W'):
+        key = 'atlantic_ridge'
+    elif pC >= 1020 and pC - pU >= 3 and pC - pM >= 3 and d in ('S', 'SW', 'SE'):
+        key = 'euro_high'
+    elif pU <= 1006 and (Z >= 6 or jc['type'].startswith('C')):
+        key = 'uk_trough'
+    elif nao >= 14 and d in ('W', 'SW', 'NW') and F >= 8:
+        key = 'stormy_westerlies' if (F >= 18 or (pI <= 992 and nao >= 24)) else 'westerlies'
+    elif pB <= pU - 4 and pB <= north - 6 and d in ('E', 'NE', 'SE', 'N'):
+        key = 'southern_track'
+    elif F < 5 and abs(Z) < 6:
+        key = 'slack'
+    else:
+        key = {'W': 'westerly', 'NW': 'northwesterly', 'N': 'northerly', 'NE': 'easterly', 'E': 'easterly',
+               'SE': 'southerly', 'S': 'southerly', 'SW': 'southwesterly'}[d]
+    return {'key': key, 'name': PATTERNS[key][0], 'nao': round(nao, 1), 'uk': round(pU, 1), 'dir': d, 'F': F, 'Z': Z,
+            'boxes': {k: round(v, 1) for k, v in dict(I=pI, A=pA, S=pS, N=pN, M=pM, U=pU, C=pC, B=pB).items()}}
+
+
+def week_pattern(msl):
+    """A run's pattern for the week: the one on most of its days (a stormy and a plain westerly day
+    count alike, and the week is stormy when at least half of those days are). A tie goes to the one
+    the week settles into, the later. -> (pattern, each day's pattern family)"""
+    keys = [classify(f)['key'] for f in msl]
+    fams = [FAMILY.get(k, k) for k in keys]
+    n = {k: fams.count(k) for k in fams}
+    best = [k for k in n if n[k] == max(n.values())]
+    top = max(best, key=lambda k: max(i for i, x in enumerate(fams) if x == k))
+    if top == 'westerlies' and 2 * keys.count('stormy_westerlies') >= n[top]:
+        return 'stormy_westerlies', fams
+    return top, fams
+
+
 # ── grouping the runs ────────────────────────────────────────────────────────
-
-def weighted_kmeans(X, w, k=3, restarts=60, iters=100, min_size=5, seed=20261021):
-    rng = np.random.default_rng(seed)
-    p0 = w / w.sum()
-    best, best_any = None, None
-    for _ in range(restarts):
-        c = [X[rng.choice(len(X), p=p0)]]
-        for _ in range(k - 1):                               # weighted k-means++ seeding
-            d = np.min([((X - ci) ** 2).sum(1) for ci in c], axis=0) * w
-            c.append(X[rng.choice(len(X), p=d / d.sum())] if d.sum() > 0 else X[rng.integers(len(X))])
-        c = np.array(c)
-        for _ in range(iters):
-            lab = np.argmin(((X[:, None, :] - c[None]) ** 2).sum(2), axis=1)
-            nc = np.array([np.average(X[lab == j], axis=0, weights=w[lab == j]) if (lab == j).any() else c[j] for j in range(k)])
-            if np.allclose(nc, c, atol=1e-3):
-                break
-            c = nc
-        sizes = np.bincount(lab, minlength=k)
-        inertia = float(sum((w[lab == j][:, None] * (X[lab == j] - c[j]) ** 2).sum() for j in range(k)))
-        if best_any is None or inertia < best_any[0]:
-            best_any = (inertia, lab)
-        if sizes.min() >= min_size and (best is None or inertia < best[0]):
-            best = (inertia, lab)
-    return (best or best_any)[1]
-
 
 # ── words ────────────────────────────────────────────────────────────────────
 
@@ -661,10 +728,6 @@ DIR_WORD = {'N': 'north', 'NE': 'north-east', 'E': 'east', 'SE': 'south-east', '
 
 def cap(s):
     return s[:1].upper() + s[1:] if s else s
-
-
-def dow(d):
-    return d.strftime('%A')
 
 
 def listing(xs):
@@ -707,126 +770,12 @@ def regime(day):
     return 'changeable'
 
 
-def phases(days):
-    """Runs of days with the same regime; a single odd day between two alike is folded in."""
-    regs = [d['regime'] for d in days]
-    for i in range(1, len(regs) - 1):
-        if regs[i - 1] == regs[i + 1] != regs[i]:
-            regs[i] = regs[i - 1]
-    out = []
-    for i, r in enumerate(regs):
-        if out and out[-1]['regime'] == r:
-            out[-1]['days'].append(i)
-        else:
-            out.append({'regime': r, 'days': [i]})
-    return out
-
-
-def dominant_dir(days, idx):
-    x = y = 0.0
-    for i in idx:
-        a = math.radians(days[i]['from'])
-        x += days[i]['F'] * math.sin(a)
-        y += days[i]['F'] * math.cos(a)
-    return COMPASS[int(((math.degrees(math.atan2(x, y)) + 360 + 22.5) % 360) // 45)]
-
-
-def phase_clause(ph, days, charts_c):
-    idx = ph['days']
-    rain = float(np.mean([days[i]['rain'] for i in idx]))
-    gmax = max(days[i]['G'] for i in idx)
-    if ph['regime'] == 'settled':
-        hs = [main_centre(charts_c[i], 'H') for i in idx]
-        hs = [h for h in hs if h]
-        loc = where(min(hs, key=lambda h: km((h['lat'], h['lon']), UK))) if hs else 'nearby'
-        calm = ', with light winds' if gmax < 14 else ''
-        return f'high pressure {loc} keeps things {"dry" if rain < 0.4 else "largely dry"} and settled{calm}'
-    if ph['regime'] == 'unsettled':
-        ls = [main_centre(charts_c[i], 'L') for i in idx]
-        ls = [l for l in ls if l]
-        loc = where(min(ls, key=lambda l: l['p'])) if ls else 'nearby'
-        wet = 'heavy rain at times' if rain >= 7 else 'spells of rain and showers' if rain >= 2.5 else 'showers and longer spells of rain at times'
-        wind = ' and strong winds' if gmax >= 28 else ''
-        return f'low pressure {loc} brings {wet}{wind}'
-    d = dominant_dir(days, idx)
-    flow = FLOW[d]
-    if rain < 0.8:
-        wx = {'N': 'cold, mostly dry air with a few showers near coasts', 'NE': 'cool, mostly dry air with showers near eastern coasts',
-              'E': 'dry but chilly air from the continent', 'SE': 'mostly dry weather', 'S': 'mostly dry, warmer air',
-              'SW': 'mostly dry, mild air, with drizzle on western hills', 'W': 'mostly dry weather with a few showers in the west',
-              'NW': 'a few showers, mainly in the north and west'}[d]
-    else:
-        wx = {'N': 'sunshine and showers, some wintry in the north', 'NE': 'cloud and showers, mainly near the east coast',
-              'E': 'showers drifting in from the North Sea', 'SE': 'showers or longer spells of rain spreading up from the south',
-              'S': 'humid air with showers, some heavy', 'SW': 'bands of rain between drier, brighter spells',
-              'W': 'a mix of rain bands and sunshine and showers', 'NW': 'sunshine and showers, the showers mainly in the north and west'}[d]
-    return f'a {flow} flow brings {wx}'
-
-
-def character(days, idx):
-    """How part of the week goes: stormy, wet, showery, settling, settled or quiet."""
-    idx = list(idx)
-    rain = float(np.mean([days[i]['rain'] for i in idx]))
-    regs = [days[i]['regime'] for i in idx]
-    end = days[idx[-1]]
-    if end['regime'] == 'settled' and end['G'] < 28 and regs.count('settled') < len(regs):
-        return 'settling'
-    if (max(days[i]['gale'] for i in idx) >= 0.5 or max(days[i]['G'] for i in idx) >= 32) and rain >= 1.5:
-        return 'stormy'
-    if rain >= 3:
-        return 'wet'
-    if regs.count('settled') == len(regs):
-        return 'settled'
-    if rain >= 1:
-        return 'showery'
-    return 'quiet'
-
-
-START_WORD = {'stormy': 'Stormy', 'wet': 'Wet', 'showery': 'Showery', 'settled': 'Settled', 'settling': 'Settling', 'quiet': 'Quiet'}
-END_WORD = {'stormy': 'turning stormy', 'wet': 'turning wet', 'showery': 'sunshine and showers', 'settled': 'settled',
-            'settling': 'settling down', 'quiet': 'quieter'}
-
-
-def severity(s):
-    return sum(d['gale'] for d in s['days']) + s['week']['rain'] / 20
-
-
-def distinct_titles(scen):
-    """Two scenarios with the same title: the rougher one says so."""
-    for a in range(len(scen)):
-        for b in range(a + 1, len(scen)):
-            if scen[a]['title'] != scen[b]['title']:
-                continue
-            hard = max((scen[a], scen[b]), key=severity)
-            soft = scen[b] if hard is scen[a] else scen[a]
-            t = hard['title']
-            if t.startswith(('Stormy', 'Wet')):
-                hard['title'] = 'Very ' + t[0].lower() + t[1:]
-            elif t.startswith(('Settled', 'Sunshine', 'Quiet')):
-                soft['title'] = t + ', calmest'
-            else:
-                hard['title'] = t + ', wetter'
-
-
 def describe(days, charts_c, normals, month_word, warm_season):
-    """Title, chips and the write-up for one scenario."""
+    """Chips and the write-up of one scenario's week, as a whole: no single day is named (the page
+    puts the pattern's own sentence first)."""
     for d in days:
         d['regime'] = regime(d)
-    phs = phases(days)
     n = len(days)
-
-    # what the pressure does
-    if len(phs) == 1:
-        s1 = cap(phase_clause(phs[0], days, charts_c)) + ' for much of the week.'
-    else:
-        first, last = phs[0], phs[-1]
-        s1 = cap(phase_clause(first, days, charts_c)) + ' at first'
-        if len(phs) > 2:
-            mid = max(phs[1:-1], key=lambda p: len(p['days']))
-            s1 += f'; from {dow(days[mid["days"][0]]["date"])}, {phase_clause(mid, days, charts_c)}'
-            s1 += f', before {phase_clause(last, days, charts_c)} by {dow(days[last["days"][0]]["date"])}.'
-        else:
-            s1 += f', then {phase_clause(last, days, charts_c)} from {dow(days[last["days"][0]]["date"])}.'
 
     # rain
     total = float(sum(d['rain'] for d in days))
@@ -842,11 +791,6 @@ def describe(days, charts_c, normals, month_word, warm_season):
         s2 = f'{word}: around {round(total)} mm through the week for most.'
     else:
         s2 = f'{word}, with {round(lo)}–{round(hi)} mm through the week, most in {REGION.get(wettest, wettest)}.'
-    wet_days = sorted([i for i in range(n) if days[i]['rain'] >= max(2.5, 0.6 * max(d['rain'] for d in days))],
-                      key=lambda i: -days[i]['rain'])[:2]
-    if wet_days and total >= 6:
-        s2 = s2[:-1] + f'; {"the wettest day looks like " if len(wet_days) == 1 else "the wettest days look like "}' \
-            f'{listing([dow(days[i]["date"]) for i in sorted(wet_days)])}.'
 
     # wind
     gi = max(range(n), key=lambda i: (days[i]['G'], days[i]['gale']))
@@ -857,9 +801,9 @@ def describe(days, charts_c, normals, month_word, warm_season):
     if gd['G'] >= 30 or gd['gale'] >= 0.4:
         low = main_centre(charts_c[gi], 'L')
         deep = f', as a deep low ({low["p"]} hPa) sits {where(low)}' if low and low['p'] <= 985 else ''
-        s3 = f'Gales are possible, especially {exposed}, around {dow(gd["date"])}{deep}.'
+        s3 = f'Gales are possible at times, especially {exposed}{deep}.'
     elif gd['G'] >= 22:
-        s3 = f'Windy at times, especially {exposed} on {dow(gd["date"])}.'
+        s3 = f'Windy at times, especially {exposed}.'
     elif gd['G'] >= 14:
         s3 = 'Breezy at times.'
     else:
@@ -900,34 +844,13 @@ def describe(days, charts_c, normals, month_word, warm_season):
     elif wint >= 0.04:
         s5 = 'Some showers could be wintry, mainly over northern hills.'
 
-    # title: how the week starts against how it ends (the start is often common to all three
-    # scenarios; the end is where they part)
-    e, l = character(days, range(0, 3)), character(days, range(n - 2, n))
-    if e == 'settled' and l == 'settling':
-        l = 'settled'
-    if e == l and abs(late - early) >= 3:
-        title = 'Turning colder' if late < early else ('Turning warmer' if warm_season else 'Turning milder')
-    elif e == l == 'settled':
-        title = 'Cold and settled' if amax <= -2 else (f'{cap(mild)} and settled' if amax >= 2 else 'Settled, high pressure in charge')
-    elif e == l == 'quiet':
-        d = dominant_dir(days, range(n))
-        title = {'N': 'Cold northerly flow', 'NE': 'Chilly north-easterly', 'E': 'Easterly flow', 'SE': 'South-easterly flow',
-                 'S': 'Warm southerly flow' if warm_season else 'Mild southerly flow', 'SW': 'Mild south-westerlies',
-                 'W': 'Changeable westerlies', 'NW': 'Showery north-westerlies'}[d]
-    elif e == l:
-        title = {'stormy': 'Stormy throughout', 'wet': 'Wet and unsettled', 'showery': 'Sunshine and showers', 'settling': 'Settling down'}[e]
-    elif e == 'settled' and l == 'quiet':
-        title = 'Settled, then more changeable'
-    else:
-        title = f'{START_WORD[e]}, then {END_WORD[l]}'
-
     chips = [
         'Very wet' if pct >= 200 else 'Wet' if pct >= 130 else 'Changeable' if pct >= 70 else 'Mostly dry' if pct >= 35 else 'Dry',
         'Gales' if (gd['G'] >= 30 or gd['gale'] >= 0.4) else 'Windy' if gd['G'] >= 22 else 'Breezy' if gd['G'] >= 14 else 'Light winds',
         (cap(mild) if amax >= 1.2 else 'Near normal' if amax > -1.2 else cap(coldw)) + (' · frosty nights' if frost >= 0.3 else ''),
     ]
-    text = ' '.join(x for x in (s1, s2, s3, s4, s5) if x)
-    return title, chips, text
+    text = ' '.join(x for x in (s2, s3, s4, s5) if x)
+    return chips, text
 
 
 def support_line(mix):
@@ -987,11 +910,22 @@ def build_week(wk, days, runs, cache, pts, base_pct, span_pct):
     w = np.array([share[x['model']] / tot / present[x['model']] for x in members])
 
     progress(stage='cluster', week=wk, pct=round(base_pct + span_pct, 1))
-    la0, la1, lo0, lo1 = CLUSTER_BOX
+    la0, la1, lo0, lo1 = SPREAD_BOX
     j0, j1 = int((la0 - S) / G), int((la1 - S) / G) + 1
     i0, i1 = int((lo0 - W) / G), int((lo1 - W) / G) + 1
     X = np.stack([x['msl'][:, j0:j1:2, i0:i1:2].reshape(-1) for x in members]).astype(np.float64)
-    lab = weighted_kmeans(X, w)
+
+    # every run's week named by the pattern on most of its days, and the runs grouped by pattern: up
+    # to three patterns with at least 8% of the weight and four runs, likeliest first; when only one
+    # pattern gets there, the next one (three runs or more) is shown beside it as the alternative
+    named, day_fams = zip(*[week_pattern(x['msl']) for x in members])
+    fam = np.array([FAMILY.get(k, k) for k in named])
+    weight_of = {k: float(w[fam == k].sum()) for k in sorted(set(fam.tolist()))}
+    order = sorted(weight_of, key=lambda k: -weight_of[k])
+    groups = [k for k in order if weight_of[k] >= 0.08 and (fam == k).sum() >= 4][:3]
+    if len(groups) < 2:
+        groups += [k for k in order if k not in groups and (fam == k).sum() >= 3][:2 - len(groups)]
+    groups = groups or order[:1]
 
     # normals at every point for every day
     nm = json.loads(NORMALS.read_text(encoding='utf-8'))['series']
@@ -1004,11 +938,11 @@ def build_week(wk, days, runs, cache, pts, base_pct, span_pct):
     warm_season = mid.month in (5, 6, 7, 8, 9)
 
     scen = []
-    for c in range(3):
-        idx = np.where(lab == c)[0]
-        if not len(idx):
-            continue
+    for key in groups:
+        idx = np.where(fam == key)[0]
         cw = w[idx] / w[idx].sum()
+        stormy = sum(c for c, i in zip(cw, idx) if named[i] == 'stormy_westerlies')
+        pkey = 'stormy_westerlies' if key == 'westerlies' and stormy >= 0.5 else key
         stack = lambda key: np.stack([members[i][key] for i in idx])
         msl, tmax, tmin, rain = stack('msl'), stack('tmax'), stack('tmin'), stack('rain')
         avg = lambda a: np.tensordot(cw, a, axes=1)
@@ -1025,13 +959,19 @@ def build_week(wk, days, runs, cache, pts, base_pct, span_pct):
             n_in = sum(1 for i in idx if members[i]['model'] == m)
             if n_all:
                 mix[m] = {'n': n_in, 'of': n_all, 'share': round(float(sum(w[i] for i in idx if members[i]['model'] == m) / w[idx].sum()), 3)}
+        # the pattern's own chart: its runs' charts on the days that have the pattern, averaged (the
+        # week's average would mix in the days before it sets in), and how many days it holds
+        on = np.array([[f == key for f in day_fams[i]] for i in idx], float)          # (runs, 7)
+        dw = cw[:, None] * on
+        week_chart = np.tensordot(dw.ravel(), msl.reshape(-1, *msl.shape[2:]), axes=1) / dw.sum()
+        week_cs = centres(week_chart)
+        held = float(cw @ on.sum(1))
         day_out, charts_c = [], []
         for d in range(len(days)):
             jc = weather_type(chart[d])
             g_runs = np.array([per_run[r][d]['G'] for r in range(len(idx))])
             cs = centres(chart[d])
             charts_c.append(cs)
-            disp = chart[d][2:2 + 2 * MAP['ny']:2, 4:4 + 2 * MAP['nx']:2]
             day_out.append({
                 'date': days[d], 'type': jc['type'], 'dir': jc['dir'], 'from': jc['from'], 'F': jc['F'], 'Z': jc['Z'],
                 'G': round(float(cw @ g_runs), 1), 'gale': round(float(cw @ (g_runs >= 30)), 2),
@@ -1039,7 +979,6 @@ def build_week(wk, days, runs, cache, pts, base_pct, span_pct):
                 'tmaxAnom': round(float((tmax_m[d] - nmax[d]) @ wpt), 1), 'tminAnom': round(float((tmin_m[d] - nmin[d]) @ wpt), 1),
                 'rain': round(float(rain_m[d] @ wpt), 1), 'cover': round(float(cover[d]), 2),
                 'frost': round(float(frost[d]), 2), 'wintry': round(float(wintry[d]), 2),
-                'msl': [round(float(v), 1) for v in disp.ravel()], 'centres': cs,
             })
         # district totals and highs for the week
         reg_rain, reg_high = {}, {}
@@ -1048,14 +987,15 @@ def build_week(wk, days, runs, cache, pts, base_pct, span_pct):
             reg_rain[names[k]] = float(rain_m[:, sel].sum(0).mean())
             reg_high[names[k]] = float(tmax_m[:, sel].mean())
         normals = {'rain': float((nrain @ wpt).sum()), 'regionRain': reg_rain, 'regionHigh': reg_high}
-        title, chips, text = describe(day_out, charts_c, normals, month_word, warm_season)
+        chips, text = describe(day_out, charts_c, normals, month_word, warm_season)
+        wdisp = week_chart[2:2 + 2 * MAP['ny']:2, 4:4 + 2 * MAP['nx']:2]
         for d in day_out:
-            d['icon'] = icon_of(d)
             d['date'] = d['date'].isoformat()
-        key = key_day(day_out)
         scen.append({
-            'weight': float(w[idx].sum()), 'runs': int(len(idx)), 'title': title, 'chips': chips, 'description': text,
-            'support': support_line(mix), 'mix': mix, 'spread': round(spread, 1), 'keyDay': key,
+            'weight': float(w[idx].sum()), 'runs': int(len(idx)), 'pattern': pkey, 'title': PATTERNS[pkey][0],
+            'about': PATTERNS[pkey][1], 'chips': chips, 'description': text,
+            'weekMsl': [round(float(v), 1) for v in wdisp.ravel()], 'weekCentres': week_cs, 'patternDays': round(held, 1),
+            'support': support_line(mix), 'mix': mix, 'spread': round(spread, 1),
             'week': {'rain': round(float(sum(d['rain'] for d in day_out)), 1),
                      'rainNormal': round(normals['rain'], 1),
                      'rainRegions': {k: round(v, 1) for k, v in reg_rain.items()},
@@ -1067,9 +1007,7 @@ def build_week(wk, days, runs, cache, pts, base_pct, span_pct):
             'days': day_out,
         })
     scen.sort(key=lambda s: -s['weight'])
-    distinct_titles(scen)
-    pct = [int(round(100 * s['weight'])) for s in scen]
-    pct[0] += 100 - sum(pct)                              # the chances add up to exactly 100
+    pct = [int(round(100 * s['weight'])) for s in scen]   # each pattern's own chance: the rest is in `patterns`
     for k, (s, p) in enumerate(zip(scen, pct)):
         s['rank'], s['chance'] = k + 1, p
         if k == 0:
@@ -1078,38 +1016,11 @@ def build_week(wk, days, runs, cache, pts, base_pct, span_pct):
             s['likelihood'] = 'Possible' if p >= 20 else 'Less likely'
         del s['weight']
     counts = {m: present.get(m, 0) for m in MODELS}
+    patterns = [{'key': k, 'name': PATTERNS[k][0], 'chance': round(100 * weight_of[k], 1), 'runs': int((fam == k).sum()),
+                 'shown': k in groups} for k in order]
     return {'n': wk, 'start': days[0].isoformat(), 'end': days[-1].isoformat(), 'runs': len(members),
             'models': {m: {'runs': counts[m], 'weight': round(share.get(m, 0) / tot, 3)} for m in MODELS if counts[m]},
-            'scenarios': scen}
-
-
-def icon_of(d):
-    """The day's symbol, from how much rain falls and how much of the UK it reaches (`cover`, the
-    share of the UK with 1 mm or more): an average of 2 mm all in the far north-west is not a wet day."""
-    rain, cover = d['rain'], d['cover']
-    if d['wintry'] >= 0.15:
-        return 'snow'
-    if (rain >= 6 and cover >= 0.7) or (rain >= 4.5 and cover >= 0.85):
-        return 'heavy'
-    if rain >= 2.5 and cover >= 0.5:
-        return 'rain'
-    if rain >= 0.8 and cover >= 0.3:
-        return 'showers'
-    if d['regime'] == 'settled' and d['type'].startswith('A'):
-        return 'sun'
-    return 'fair' if d['regime'] == 'settled' or cover < 0.15 else 'cloud'
-
-
-def key_day(days):
-    """The day the map opens on: the stormiest if there is a gale, else the wettest wet day, else
-    the middle of the week."""
-    g = max(range(len(days)), key=lambda i: days[i]['G'])
-    if days[g]['gale'] >= 0.3 or days[g]['G'] >= 28:
-        return g
-    r = max(range(len(days)), key=lambda i: days[i]['rain'])
-    if days[r]['rain'] >= 4:
-        return r
-    return len(days) // 2
+            'patterns': patterns, 'scenarios': scen}
 
 
 # ── output ───────────────────────────────────────────────────────────────────

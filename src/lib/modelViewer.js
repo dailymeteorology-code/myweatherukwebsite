@@ -7,16 +7,23 @@
    (2084 x 1940). "Pixels" draws the UKV and radar cells as they are; "Smooth" interpolates
    the rain values before colouring (smoothCanvas) and blends other fields on screen. */
 import { ukZone } from '@/lib/ukZone';
+import { GRIDS, projection } from '@/lib/modelGrids';
 import { contours as d3contours } from 'd3-contour';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 
 export const API = '/api/modeldata';
-/* bump when frames are re-made differently (v2: coarse models smooth, not blocks) */
-const FRAME_V = 2;
-export const NX = 1042;
-export const NY = 970;
+/* bump when frames are re-made differently (v2: coarse models smooth, not blocks; v3: the global
+   models moved to the wide grid, 26 Oct 2026, so their old UK-grid frames must not come from cache) */
+const FRAME_V = 3;
 
-export const REGIONS = {
+/* The display grid in use (lib/modelGrids): the UKV's 2 km grid or the global models' wide 8 km
+   one. NX, NY, GRID and REGIONS are live bindings: setGrid() switches them for every importer. */
+export let GRID = GRIDS.uk;
+export let NX = GRID.nx;
+export let NY = GRID.ny;
+
+const UK_REGIONS = {
+  ukv: { label: 'Whole UKV area', box: [0, 0, 1042, 970] },
   uk: { label: 'UK & Ireland', box: [273, 98, 756, 741] },
   england: { label: 'England & Wales', box: [457, 392, 738, 730] },
   scotland: { label: 'Scotland', box: [402, 112, 641, 468] },
@@ -26,6 +33,48 @@ export const REGIONS = {
   wales: { label: 'Wales', box: [478, 527, 580, 652] },
   europe: { label: 'North-west Europe', box: [212, 86, 1024, 946] },
 };
+/* the wide grid's regions, as lon/lat boxes [west, south, east, north] turned into grid boxes */
+const WIDE_REGIONS = {
+  all: ['Whole map', null],
+  europe: ['Europe', [-25, 34, 45, 71]],
+  atlantic: ['North Atlantic', [-72, 30, 5, 66]],
+  uk: ['UK & Ireland', [-11, 49.6, 2.2, 61]],
+  nw: ['North-west Europe', [-16, 43, 16, 62]],
+  scandinavia: ['Scandinavia & Iceland', [-25, 54, 32, 72]],
+  iberia: ['Iberia & France', [-12, 35.5, 9, 51.5]],
+  central: ['Central Europe', [2, 44, 26, 56]],
+  east: ['Eastern Europe', [18, 42, 50, 62]],
+  med: ['Mediterranean', [-7, 30, 36, 46.5]],
+  africa: ['North Africa', [-18, 24, 32, 38]],
+};
+function wideRegions() {
+  const p = projection('eu');
+  const out = {};
+  for (const [k, [label, ll]] of Object.entries(WIDE_REGIONS)) {
+    if (!ll) { out[k] = { label, box: [0, 0, GRIDS.eu.nx, GRIDS.eu.ny] }; continue; }
+    const [w, s, e, n] = ll;
+    const pts = [];
+    for (let i = 0; i <= 8; i++) for (const [lo, la] of [[w + (e - w) * (i / 8), s], [w + (e - w) * (i / 8), n], [w, s + (n - s) * (i / 8)], [e, s + (n - s) * (i / 8)]]) pts.push(p.toGrid(lo, la));
+    out[k] = { label, box: [Math.min(...pts.map((q) => q[0])), Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1]))] };
+  }
+  return out;
+}
+export let REGIONS = UK_REGIONS;
+/** The static layer's URL on the grid in use. */
+export const staticUrl = (file, grid = GRID.name) => `${API}/static/${grid === 'uk' ? '' : `${grid}/`}${file}`;
+
+/** Switch the display grid (by name); returns whether it changed. */
+export function setGrid(name) {
+  const g = GRIDS[name] || GRIDS.uk;
+  if (g === GRID) return false;
+  GRID = g; NX = g.nx; NY = g.ny;
+  REGIONS = g.name === 'uk' ? UK_REGIONS : wideRegions();
+  BW = NX * 2; BH = NY * 2;
+  COARSE = null; RT_STATIC = null; rtCache.clear(); roadsP = null;
+  return true;
+}
+/** Whether a frame is on the grid in use (frames made before the wide grid name none: the UK's). */
+export const onGrid = (f) => !f || (f.head?.grid || 'uk') === GRID.name;
 
 /* ── colour scales (our own) ──────────────────────────────────────────────── */
 /* The radar palette of the MyWeatherUK motion graphics (mwuk-graphics RADAR_STEPS), mm/h lower
@@ -147,6 +196,46 @@ const SCALES = {
   pm10: { stops: [[10, '#7cc8a0', 0], [20, '#a6cf3e', 140], [40, '#efd23a', 180], [60, '#f08b2c', 205], [100, '#dc3a3a', 225], [180, '#a52284', 240]], floor: 10, ticks: [20, 40, 60, 100, 180] },
   aod: { stops: [[0.05, '#e9e1c8', 0], [0.1, '#e9d9a8', 110], [0.2, '#e6c27a', 160], [0.4, '#d99a4a', 200], [0.7, '#b8662e', 225], [1.2, '#7a3a1c', 240]], floor: 0.05, ticks: [0.1, 0.2, 0.4, 0.7, 1.2] },
   pm25: { stops: [[5, '#7cc8a0', 0], [10, '#a6cf3e', 140], [20, '#efd23a', 180], [35, '#f08b2c', 205], [55, '#dc3a3a', 225], [100, '#a52284', 240]], floor: 5, ticks: [10, 20, 35, 55, 100] },
+  /* added 26 Oct 2026 with the further fields of each model */
+  rain_1h: RADAR_KEY,
+  hail_1h: { stops: RAIN, floor: 0.05, discrete: true, ticks: [0.1, 0.5, 1, 2, 4, 8, 16] },
+  conv_total: { stops: TOTAL, floor: 1, discrete: true, ticks: [1, 2, 5, 10, 15, 20, 30, 50, 75, 100], contours: [5, 10, 20, 50], label: true },
+  /* precipitation type, ECMWF's codes (GFS's yes/no types are turned into them) */
+  ptype: { stops: [[0.5, '#3fa34d', 215], [2, '#e2322e', 235], [4, '#f2f6ff', 235], [5.5, '#b9c8f2', 225], [6.5, '#9a7fe0', 225], [7.5, '#f2a93a', 235], [10, '#ff6fa8', 235]],
+    floor: 0.5, discrete: true, keySteps: [1, 3, 5, 6, 7, 8, 12], ticks: [1, 3, 5, 6, 7, 8, 12],
+    keyLabel: (v) => ({ 1: 'Rain', 3: 'Frz rain', 5: 'Snow', 6: 'Wet snow', 7: 'Sleet', 8: 'Ice pellets', 12: 'Frz drizzle' })[Math.round(v)] || '' },
+  frozen_pct: { stops: [[5, '#dfe9f5', 120], [25, '#b9c8f2', 170], [50, '#9a8fe0', 200], [75, '#8a7fe0', 220], [100, '#ffffff', 235]], floor: 5, ticks: [5, 25, 50, 75, 100] },
+  snow_acc: { stops: SNOW.map(([v, c, a]) => [v, c, a]), floor: 0.1, discrete: true, ticks: [0.1, 1, 3, 6, 12, 25, 50], contours: [1, 5, 10, 20], label: true },
+  t2max3: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
+  t2min3: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
+  t925: { stops: TEMP.map(([v, c, a]) => [v * 0.85 - 2, c, a]), ticks: [-20, -12, -6, -2, 0, 4, 8, 12, 16, 20], zero: true },
+  t700: { stops: TEMP.map(([v, c, a]) => [v * 0.9 - 14, c, a]), ticks: [-36, -28, -22, -16, -12, -8, -4, 0, 4] },
+  rh850: { stops: PCT_DRY, ticks: [0, 20, 40, 60, 80, 100] },
+  z850: { stops: [[120, '#5b2a86', 170], [130, '#3d5fd0', 160], [140, '#3d93d8', 150], [146, '#6cc04a', 150], [152, '#efd23a', 160], [158, '#f08b2c', 170], [164, '#dc3a3a', 180]],
+    ticks: [124, 130, 136, 142, 148, 154, 160], contours: 'every4', label: true, line: 'rgba(236,243,250,0.82)' },
+  /* 1000-500 hPa thickness: 528 dam is the old rule of thumb for snow, so the colours turn there */
+  thick: { stops: [[504, '#5b2a86', 175], [516, '#3d5fd0', 165], [522, '#3d93d8', 160], [528, '#bfe3f2', 150], [534, '#6cc04a', 150], [546, '#efd23a', 160],
+    [558, '#f08b2c', 170], [570, '#dc3a3a', 180]], ticks: [510, 516, 522, 528, 534, 546, 558, 570], contours: 'every6', label: true, line: 'rgba(236,243,250,0.82)' },
+  wind925: { stops: JET.map(([v, c, a]) => [v * 0.55, c, a]), ticks: [30, 40, 50, 60, 70, 80, 100] },
+  wind700: { stops: JET.map(([v, c, a]) => [v * 0.7, c, a]), ticks: [40, 56, 70, 84, 98, 112, 126, 147] },
+  wind300: { stops: JET, ticks: [80, 100, 120, 140, 160, 180, 210, 250] },
+  w700: { stops: [[-3, '#2b4fb3', 230], [-1.5, '#3d7fe0', 210], [-0.6, '#7fb6f0', 170], [-0.2, '#cfe3f7', 90], [0.2, '#ffffff', 0], [0.6, '#f6d3a3', 90], [1.5, '#f0a050', 170], [3, '#c2552a', 210]],
+    ticks: [-3, -1.5, -0.6, 0, 0.6, 1.5, 3] },
+  vort500: { stops: [[-20, '#2b4fb3', 170], [-8, '#7fb6f0', 110], [0, '#ffffff', 0], [6, '#f6d3a3', 120], [12, '#f0a050', 170], [20, '#dc3a3a', 205], [35, '#a52284', 230]],
+    ticks: [-20, -8, 0, 6, 12, 20, 35], contours: [10, 20, 30], line: 'rgba(236,243,250,0.7)' },
+  trop_t: { stops: TEMP.map(([v, c, a]) => [v * 0.7 - 58, c, a]), ticks: [-75, -68, -62, -56, -50, -44] },
+  /* K-index: above 20 thundery showers possible, above 30 likely, above 40 widespread */
+  kindex: { stops: [[15, '#cfe8f7', 0], [20, '#9fd3ef', 150], [25, '#6cc04a', 190], [30, '#efd23a', 215], [35, '#f08b2c', 230], [40, '#dc3a3a', 242], [45, '#a52284', 250]],
+    floor: 15, discrete: true, ticks: [15, 20, 25, 30, 35, 40, 45] },
+  cin_ml: { stops: [[-500, '#2a1f6b', 220], [-200, '#3d5fd0', 200], [-100, '#5aa7e8', 170], [-50, '#a9d8f7', 130], [-10, '#e8edf2', 0]], ticks: [-500, -200, -100, -50, -10] },
+  hpbl: { stops: [[100, '#2a3a5c', 120], [300, '#3d5fd0', 150], [600, '#3d93d8', 165], [1000, '#6cc04a', 180], [1500, '#efd23a', 195], [2200, '#f08b2c', 210], [3000, '#dc3a3a', 225]],
+    ticks: [100, 300, 600, 1000, 1500, 2200, 3000] },
+  conv_cloud: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
+  sw_direct: { stops: RAD, ticks: [0, 100, 300, 500, 700, 900] },
+  lhf: { stops: DIVERGE(-100, 500), ticks: [-100, -50, 0, 100, 250, 500] },
+  /* outgoing longwave: low values are cold, high cloud tops; drawn like an infrared picture */
+  olr: { stops: [[100, '#ffffff', 245], [150, '#e8edf4', 225], [190, '#c3ccd8', 195], [220, '#97a3b3', 150], [250, '#6f7b8b', 90], [280, '#4a5563', 30], [310, '#2a313a', 0]],
+    ticks: [100, 150, 190, 220, 250, 280, 310] },
   /* chance (%) from an ensemble: quiet below 5 %, warm from 50 % */
   prob: { stops: [[5, '#8fd0f5', 140], [10, '#56acec', 175], [20, '#2f80d8', 195], [30, '#1f9f8a', 205], [40, '#7cc243', 212],
     [50, '#efd23a', 222], [60, '#f3a43a', 230], [70, '#ea6a32', 236], [80, '#d93838', 242], [90, '#a3247e', 248]],
@@ -233,6 +322,7 @@ export function probFrame(ef, thr, dir) {
 
 /* the frame's colours as an NX x NY canvas (one pixel per grid cell) */
 export function frameCanvas(frame, varKey, cache) {
+  if (!onGrid(frame)) return null;                       // a frame from the other grid, still on its way out
   if (cache?.has(frame)) return cache.get(frame);
   if (frame.img) return imageCanvas(frame, varKey, cache);
   if (frame.nx && frame.k < 1) return fineCanvas(frame, varKey, cache);
@@ -371,7 +461,7 @@ function coarseCanvas(frame, varKey, cache) {
 /* contour lines (grid coordinates), on a lightly smoothed half-resolution field */
 export function frameContours(frame, varKey, resKm, cache) {
   const sc = scaleFor(varKey);
-  if (!sc.contours) return null;
+  if (!sc.contours || !onGrid(frame)) return null;
   if (cache?.has(frame)) return cache.get(frame);
   if (frame.nx) {                                       // coarse (probability) grid: contour it directly
     const { nx, ny } = frame, K = frame.k || 8;
@@ -411,6 +501,137 @@ export function frameContours(frame, varKey, resKm, cache) {
 }
 
 const range = (a, b, s) => { const o = []; for (let v = a; v <= b; v += s) o.push(v); return o; };
+
+/* ── sea-level pressure over any layer: isobars, H and L symbols, the centres' pressures ──
+   From the model's own MSLP frame (or the layer itself when it is MSLP). */
+const FULL = (frame) => ({ W: frame.nx || NX, H: frame.ny || NY });
+/** Isobars every `every` hPa (grid coordinates), on a lightly smoothed half-resolution field. */
+export function pressureLines(frame, every, resKm, cache) {
+  if (!frame || !onGrid(frame) || frame.nx) return null;
+  const key = `${every}`;
+  const c0 = cache?.get(frame);
+  if (c0?.[key]) return c0[key];
+  const { W, H } = FULL(frame), S = 2, w = Math.floor(W / S), h = Math.floor(H / S);
+  let vals = new Float64Array(w * h);
+  let lo = Infinity, hi = -Infinity;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const v = frame.table[frame.q[(y * S) * W + x * S]];
+      vals[y * w + x] = Number.isNaN(v) ? -9999 : v;
+      if (!Number.isNaN(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    }
+  }
+  if (!(hi > lo)) return null;
+  const cellKm = (GRID.dx / 1000) * S;
+  vals = boxBlur(vals, w, h, Math.max(1, Math.round(Math.max(resKm || 2, 2 * cellKm) / (2 * cellKm))));
+  const th = range(Math.ceil(lo / every) * every, hi, every);
+  const out = d3contours().size([w, h]).smooth(true).thresholds(th)(Array.from(vals))
+    .map((c) => ({ value: c.value, rings: c.coordinates.flatMap((p) => p).filter((r) => r.length >= 12).map((r) => r.map(([x, y]) => [x * S, y * S])) }));
+  if (cache) { cache.set(frame, { ...(c0 || {}), [key]: out }); if (cache.size > 40) cache.delete(cache.keys().next().value); }
+  return out;
+}
+
+/** The lows and highs: [{ gx, gy, kind: 'L' | 'H', p }]. A centre is the lowest (highest) point
+    within about 600 km on a smoothed ~40 km copy, standing out from its surroundings by 1.5 hPa
+    or more; its place and pressure are then read from the full field around it. */
+export function pressureCentres(frame, cache) {
+  if (!frame || !onGrid(frame) || frame.nx) return [];
+  if (cache?.has(frame)) return cache.get(frame);
+  const { W, H } = FULL(frame);
+  const S = Math.max(1, Math.round(40 / (GRID.dx / 1000)));
+  const w = Math.floor(W / S), h = Math.floor(H / S);
+  let v = new Float64Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const t = frame.table[frame.q[Math.min(H - 1, y * S + (S >> 1)) * W + Math.min(W - 1, x * S + (S >> 1))]];
+      v[y * w + x] = Number.isNaN(t) ? -9999 : t;
+    }
+  }
+  v = boxBlur(v, w, h, 1);
+  const R = Math.max(3, Math.round(600 / ((S * GRID.dx) / 1000)));          // ~600 km in coarse cells
+  const out = [];
+  for (let y = 2; y < h - 2; y++) {
+    for (let x = 2; x < w - 2; x++) {
+      const i = y * w + x, c = v[i];
+      if (c < -9000) continue;
+      let isMin = true, isMax = true, sum = 0, n = 0;
+      for (let dy = -R; dy <= R && (isMin || isMax); dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        for (let dx = -R; dx <= R; dx++) {
+          if (dx * dx + dy * dy > R * R) continue;
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          const j = yy * w + xx, val = v[j];
+          if (val < -9000 || j === i) continue;
+          if (val < c || (val === c && j < i)) isMin = false;
+          if (val > c || (val === c && j < i)) isMax = false;
+          sum += val; n++;
+        }
+      }
+      if (!n || !(isMin || isMax)) continue;
+      const mean = sum / n, prom = isMin ? mean - c : c - mean;
+      if (prom < 1.5) continue;
+      /* the exact place and value from the full field near it */
+      let best = null;
+      for (let yy = Math.max(0, (y - 1) * S); yy < Math.min(H, (y + 2) * S); yy++) {
+        for (let xx = Math.max(0, (x - 1) * S); xx < Math.min(W, (x + 2) * S); xx++) {
+          const t = frame.table[frame.q[yy * W + xx]];
+          if (Number.isNaN(t)) continue;
+          if (!best || (isMin ? t < best.p : t > best.p)) best = { gx: xx + 0.5, gy: yy + 0.5, p: t };
+        }
+      }
+      if (best) out.push({ ...best, kind: isMin ? 'L' : 'H', prom });
+    }
+  }
+  const res = out.sort((a, b) => b.prom - a.prom).slice(0, 16);
+  if (cache) { cache.set(frame, res); if (cache.size > 40) cache.delete(cache.keys().next().value); }
+  return res;
+}
+
+function drawPressure(ctx, P, X, Y, R, u, st) {
+  const light = st === MAP_STYLES.light;
+  if (P.lines) {
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 1.5 * u;
+    ctx.strokeStyle = light ? 'rgba(24,34,48,0.72)' : 'rgba(250,252,255,0.8)';
+    for (const c of P.lines) {
+      ctx.beginPath();
+      for (const ring of c.rings) ring.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
+      ctx.stroke();
+    }
+    ctx.restore();
+    drawContourLabels(ctx, P.lines, X, Y, R, u, st);
+  }
+  if (!P.symbols && !P.centres) return;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const c of P.list || []) {
+    const x = X(c.gx), y = Y(c.gy);
+    if (x < R.x + 20 * u || y < R.y + 20 * u || x > R.x + R.w - 20 * u || y > R.y + R.h - 20 * u) continue;
+    const col = c.kind === 'H' ? '#2f7cf6' : '#e5383b';
+    if (P.symbols) {
+      ctx.font = `900 ${34 * u}px ${FONT}`;
+      ctx.lineWidth = 5 * u;
+      ctx.strokeStyle = light ? 'rgba(255,255,255,0.92)' : 'rgba(6,10,18,0.85)';
+      ctx.strokeText(c.kind, x, y);
+      ctx.fillStyle = col;
+      ctx.fillText(c.kind, x, y);
+    }
+    if (P.centres) {
+      const dy = P.symbols ? 26 * u : 0;
+      if (!P.symbols) {                                  // just the centre: a small cross
+        ctx.strokeStyle = col; ctx.lineWidth = 2.4 * u;
+        ctx.beginPath(); ctx.moveTo(x - 6 * u, y - 6 * u); ctx.lineTo(x + 6 * u, y + 6 * u); ctx.moveTo(x + 6 * u, y - 6 * u); ctx.lineTo(x - 6 * u, y + 6 * u); ctx.stroke();
+      }
+      ctx.font = `800 ${14 * u}px ${FONT}`;
+      haloText(ctx, String(Math.round(c.p)), x, y + (P.symbols ? dy : 15 * u), st, 4 * u);
+    }
+  }
+  ctx.restore();
+}
 
 function boxBlur(a, w, h, r) {
   const t = new Float64Array(a.length), o = new Float64Array(a.length);
@@ -465,26 +686,18 @@ function sunAt(utcMs) {                      // NOAA solar position (as the moti
   return { dec: decl, subLon };
 }
 
-/* lon/lat of the basemap pixels (spherical inverse of the grid's LAEA: plenty for sunlight) */
-const LAT0 = 54.9 * DEG, LON0 = -2.5 * DEG, R = 6371007.2;
-function invLaea(x, y) {
-  const rho = Math.hypot(x, y);
-  if (rho < 1e-6) return [LON0 / DEG, LAT0 / DEG];
-  const c = 2 * Math.asin(Math.min(1, rho / (2 * R)));
-  const lat = Math.asin(Math.cos(c) * Math.sin(LAT0) + (y * Math.sin(c) * Math.cos(LAT0)) / rho);
-  const lon = LON0 + Math.atan2(x * Math.sin(c), rho * Math.cos(LAT0) * Math.cos(c) - y * Math.sin(LAT0) * Math.sin(c));
-  return [lon / DEG, lat / DEG];
-}
-const BW = NX * 2, BH = NY * 2, CS = 16;            // basemap pixels; sun sampled every 16 px
+/* lon/lat of the basemap pixels (two to a grid cell), for the sunlight */
+let BW = NX * 2, BH = NY * 2;                       // basemap pixels
+const CS = 16;                                       // sun sampled every 16 px
 let COARSE = null;
 function coarseLonLat() {
   if (COARSE) return COARSE;
   const cw = Math.ceil(BW / CS) + 1, ch = Math.ceil(BH / CS) + 1;
   const lon = new Float32Array(cw * ch), lat = new Float32Array(cw * ch);
+  const P = projection(GRID);
   for (let j = 0; j < ch; j++) {
     for (let i = 0; i < cw; i++) {
-      const x = -1159000 + (i * CS) * 1000, y = 903000 - (j * CS) * 1000;
-      const [lo, la] = invLaea(x, y);
+      const [lo, la] = P.fromGrid((i * CS) / 2, (j * CS) / 2);
       lon[j * cw + i] = lo; lat[j * cw + i] = la;
     }
   }
@@ -667,12 +880,15 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
   };
-  if (L.overlay) put(L.overlay.canvas, true, L.overlay.alpha ?? 1);   // cloud under the rain
+  if (L.overlay?.canvas) put(L.overlay.canvas, true, L.overlay.alpha ?? 1);   // cloud under the rain
   if (L.data) put(L.data, L.smooth);
   /* the grid box in view (2 km cells), for culling roads, grid and arrows */
   const gx0 = (clip.x - ox) / s + cx, gx1 = (clip.x + clip.w - ox) / s + cx;
   const gy0 = (clip.y - oy) / s + cy, gy1 = (clip.y + clip.h - oy) / s + cy;
-  if (L.roads) cachedRoads(ctx, L.roads, clip, view, X, Y, gx0, gy0, gx1, gy1, s / u, u, st, ox, oy, L.interacting);
+  /* the zoom as screen px per 2 km (the UK grid's cell), so roads and places come and go at the
+     same map scale on either grid */
+  const zk = (s / u) * (2000 / GRID.dx);
+  if (L.roads) cachedRoads(ctx, L.roads, clip, view, X, Y, gx0, gy0, gx1, gy1, zk, u, st, ox, oy, L.interacting);
   if (L.contours) {
     ctx.lineJoin = 'round';
     ctx.lineWidth = 1.7 * u;
@@ -704,7 +920,8 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   if (L.risk?.areas?.length) drawRisk(ctx, L.risk, X, Y, u);
   if (L.strikes?.length) drawStrikes(ctx, L.strikes, X, Y, u, L.strikesDaily, L.strikeStyle);
   if (L.contours && L.contourLabels) drawContourLabels(ctx, L.contours, X, Y, rect, u, st);
-  if (L.cities) drawCities(ctx, L.cities, X, Y, rect, s / u, u, st, L.chrome ? 150 * u : 0, L.wx);
+  if (L.pressure) drawPressure(ctx, L.pressure, X, Y, rect, u, st);
+  if (L.cities) drawCities(ctx, L.cities, X, Y, rect, zk, u, st, L.chrome ? 150 * u : 0, L.wx);
   if (L.star) {
     /* the highest value in view, kept clear of the title card and the key */
     const top = L.chrome ? 150 * u : 20 * u, bot = L.chrome ? 104 * u : 20 * u;
@@ -805,7 +1022,7 @@ function strokeLines(ctx, lines, X, Y) {
 let roadsP = null;
 export function loadRoads() {
   if (roadsP) return roadsP;
-  roadsP = Promise.all([fetch(`${API}/static/roads.json`).then((r) => r.json()), fetch(`${API}/static/roads.bin`).then((r) => r.arrayBuffer())])
+  roadsP = Promise.all([fetch(staticUrl('roads.json')).then((r) => r.json()), fetch(staticUrl('roads.bin')).then((r) => r.arrayBuffer())])
     .then(([idx, buf]) => {
       const out = {};
       for (const [k, e] of Object.entries(idx.classes)) {
@@ -910,6 +1127,7 @@ export function sampleFrame(f, gx, gy) {
    bands with smooth edges instead of blurring one colour into the next. Only the part of
    the grid that has data is upsampled. */
 export function smoothCanvas(frame, varKey, cache) {
+  if (!onGrid(frame)) return null;
   if (cache?.has(frame)) return cache.get(frame);
   const sc = scaleFor(varKey);
   const W = frame.nx || NX, H = frame.ny || NY, K = frame.nx ? frame.k || 1 : 1, q = frame.q;
@@ -964,6 +1182,7 @@ function gridLabel(v, varKey, unit) {
   if (v == null || Number.isNaN(v)) return null;
   const sc = scaleFor(varKey);
   if (varKey === 'wx') return ['Clear', 'Pt cloud', 'Cloudy', 'Dull', 'Fog', 'Drizzle', 'Lt rain', 'Rain', 'Heavy', 'Sleet', 'Lt snow', 'Snow', 'Hvy snow', 'Thunder', 'Hail'][Math.round(v)] ?? null;
+  if (varKey === 'ptype') return sc.keyLabel(v) || null;
   if (varKey === 'mwd' || varKey === 'wdir10') return ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(v / 22.5) % 16];
   if (sc.floor != null && v < sc.floor) return null;
   if (unit === '°C') return `${Math.round(v)}°`;
@@ -997,15 +1216,9 @@ function drawValueGrid(ctx, G, X, Y, gx0, gy0, gx1, gy1, s, u, st) {
 }
 
 /* ── wind arrows (direction the wind blows towards), turned for the grid's convergence ── */
-function gridLonLat(gx, gy) { return invLaea(-1159000 + gx * 2000, 903000 - gy * 2000); }
-/** lon/lat -> the display grid (2 km cells, gx east, gy south): the LAEA forward of invLaea. */
-export function lonLatToGrid(lon, lat) {
-  const la = lat * DEG, dl = lon * DEG - LON0;
-  const k = Math.sqrt(2 / (1 + Math.sin(LAT0) * Math.sin(la) + Math.cos(LAT0) * Math.cos(la) * Math.cos(dl)));
-  const x = R * k * Math.cos(la) * Math.sin(dl);
-  const y = R * k * (Math.cos(LAT0) * Math.sin(la) - Math.sin(LAT0) * Math.cos(la) * Math.cos(dl));
-  return [(x + 1159000) / 2000, (903000 - y) / 2000];
-}
+function gridLonLat(gx, gy) { return projection(GRID).fromGrid(gx, gy); }
+/** lon/lat -> the display grid in use (cells, gx east, gy south), as the frames are made. */
+export function lonLatToGrid(lon, lat) { return projection(GRID).toGrid(lon, lat); }
 function drawArrows(ctx, A, X, Y, gx0, gy0, gx1, gy1, s, u, st) {
   const f = A.frame;
   const g = NICE.find((n) => n >= 1 && n * s >= 58 * u) || 200;
@@ -1233,13 +1446,21 @@ function drawContourLabels(ctx, contours, X, Y, R, u, st) {
 /* place labels; with `wx` (a weather-type frame and its time) each place gets its symbol
    above the name, the sun or the moon by the real sun at that place */
 function drawCities(ctx, cities, X, Y, R, cellPx, u, st, footer, wx) {
-  const maxRank = cellPx > 3.2 ? 3 : cellPx > 1.5 ? 2 : 1;
+  /* by map scale (cellPx is screen px per 2 km on either grid), then the bigger places first
+     and no label over another: the wide map has far more places than fit when zoomed out */
+  const pxKm = cellPx / 2;
+  const maxRank = pxKm > 3 ? 4 : pxKm > 1.6 ? 3 : pxKm > 0.75 ? 2 : 1;
+  const placed = [];
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  for (const c of cities) {
+  ctx.font = `600 ${19 * u}px ${FONT}`;
+  for (const c of [...cities].sort((a, b) => a.rank - b.rank)) {
     if (c.rank > maxRank) continue;
     const x = X(c.x), y = Y(c.y);
     if (x < R.x + 10 * u || y < R.y + 170 * u || x > R.x + R.w - 120 * u || y > R.y + R.h - footer) continue;
+    const box = [x - 6 * u, y - (wx?.frame ? 46 : 13) * u, x + 14 * u + ctx.measureText(c.name).width, y + 13 * u];
+    if (placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) continue;
+    placed.push(box);
     const code = wx?.frame ? sampleFrame(wx.frame, c.x, c.y) : NaN;
     if (Number.isFinite(code) && code >= 0 && code < WX_NAMES.length) {
       const [lon, lat] = gridLonLat(c.x, c.y);

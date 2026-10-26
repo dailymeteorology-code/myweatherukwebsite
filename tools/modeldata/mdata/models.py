@@ -15,6 +15,8 @@ UKV IS the display grid and is never resampled.
 """
 from __future__ import annotations
 
+import concurrent.futures as cf
+import io
 import re
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -26,6 +28,103 @@ from .common import NC_LOCK, NX, NY, X0, DX, regular_frac, smooth_sample
 from nova.io_aws import decode_grib, ecmwf_index, exists, fetch_ranges, get, open_nc   # noqa: E402
 
 MPH = 2.236936
+
+
+class _HttpFile(io.RawIOBase):
+    """A read-only file over HTTP byte ranges, kept in whole blocks, so h5py can read one level of
+    a Met Office pressure-level file without the rest. Those files hold every level of the model
+    (MO Global's 158-210 MB a step); a level is ~4 MB of 128x128 chunks. Finding them walks the
+    chunk index, ~50 small reads scattered through the file one after another: those go over one
+    kept-open connection in small blocks; the level's data, found, comes in a few large pieces at
+    once (prefetch)."""
+    BLOCK = 1 << 16
+
+    def __init__(self, url):
+        import urllib.parse
+        u = urllib.parse.urlsplit(url)
+        self.url, self.host, self.path = url, u.netloc, u.path + (f'?{u.query}' if u.query else '')
+        self.pos, self.blocks, self.conn = 0, {}, None
+        self.size = int(self._request('HEAD')[1]['Content-Length'])
+
+    def _request(self, method, rng=None):
+        import http.client
+        import time
+        for i in range(4):
+            try:
+                if self.conn is None:
+                    self.conn = http.client.HTTPSConnection(self.host, timeout=60)
+                h = {'User-Agent': 'MyWeatherUK-modeldata/1.0'}
+                if rng:
+                    h['Range'] = f'bytes={rng[0]}-{rng[1]}'
+                self.conn.request(method, self.path, headers=h)
+                r = self.conn.getresponse()
+                data = r.read()
+                if r.status not in (200, 206):
+                    raise OSError(f'HTTP {r.status}')
+                return data, r.headers
+            except Exception:
+                if self.conn is not None:
+                    self.conn.close()
+                self.conn = None
+                if i == 3:
+                    raise
+                time.sleep(0.5 * (i + 1))
+
+    def close(self):
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
+        super().close()
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self.pos
+
+    def seek(self, off, whence=0):
+        self.pos = off if whence == 0 else self.pos + off if whence == 1 else self.size + off
+        return self.pos
+
+    def _block(self, i):
+        if i not in self.blocks:
+            self.blocks[i] = self._request('GET', (i * self.BLOCK, min(self.size, (i + 1) * self.BLOCK) - 1))[0]
+        return self.blocks[i]
+
+    def prefetch(self, spans):
+        """The blocks under [(offset, length)], fetched in pieces of up to 2 MB, in parallel."""
+        want = sorted({b for off, n in spans for b in range(off // self.BLOCK, (off + n - 1) // self.BLOCK + 1)} - set(self.blocks))
+        runs = []
+        for b in want:
+            if runs and b == runs[-1][1] + 1 and runs[-1][1] - runs[-1][0] < 31:
+                runs[-1][1] = b
+            else:
+                runs.append([b, b])
+
+        def one(r):
+            a, z = r
+            blob = get(self.url, (a * self.BLOCK, min(self.size, (z + 1) * self.BLOCK) - 1))
+            return {b: blob[(b - a) * self.BLOCK:(b - a + 1) * self.BLOCK] for b in range(a, z + 1)}
+        with cf.ThreadPoolExecutor(8) as ex:
+            for d in ex.map(one, runs):
+                self.blocks.update(d)
+
+    def readinto(self, buf):
+        n = min(len(buf), self.size - self.pos)
+        if n <= 0:
+            return 0
+        out = bytearray()
+        while len(out) < n:
+            p = self.pos + len(out)
+            i = p // self.BLOCK
+            out += self._block(i)[p - i * self.BLOCK:p - i * self.BLOCK + n - len(out)]
+        buf[:n] = out
+        self.pos += n
+        return n
+
 
 # ── variables: one definition shared by every model ─────────────────────────
 VARIABLES = {
@@ -109,6 +208,35 @@ VARIABLES = {
     'mwp':          dict(label='Wave period (mean)', unit='s', group='Sea & waves', lo=0, hi=25),
     'pp1d':         dict(label='Wave period (peak)', unit='s', group='Sea & waves', lo=0, hi=30),
     'mwd':          dict(label='Wave direction', unit='°', group='Sea & waves', lo=0, hi=360),
+    # added 26 Oct 2026: every further field each model publishes that makes a useful map
+    'rain_1h':      dict(label='Rain (past hour)', unit='mm', group='Precipitation', lo=0, hi=100, scale='sqrt'),
+    'hail_1h':      dict(label='Hail (past hour)', unit='mm', group='Precipitation', lo=0, hi=50, scale='sqrt'),
+    'conv_total':   dict(label='Convective precipitation (total)', unit='mm', group='Precipitation', lo=0, hi=300, scale='sqrt'),
+    # 0 none, 1 rain, 3 freezing rain, 5 snow, 6 wet snow, 7 rain and snow, 8 ice pellets, 12 freezing drizzle (ECMWF's codes)
+    'ptype':        dict(label='Precipitation type', unit='', group='Precipitation', lo=0, hi=12),
+    'frozen_pct':   dict(label='Share of precipitation falling frozen', unit='%', group='Snow & ice', lo=0, hi=100),
+    # snowfall as a depth, at the usual 10:1 ratio of fresh snow to water
+    'snow_acc':     dict(label='Snow accumulation (10:1)', unit='cm', group='Snow & ice', lo=0, hi=200, scale='sqrt'),
+    't2max3':       dict(label='Max temperature (past 3 h)', unit='°C', group='Temperature', lo=-35, hi=45),
+    't2min3':       dict(label='Min temperature (past 3 h)', unit='°C', group='Temperature', lo=-35, hi=45),
+    't925':         dict(label='Temperature 925 hPa', unit='°C', group='Upper air', lo=-35, hi=35),
+    't700':         dict(label='Temperature 700 hPa', unit='°C', group='Upper air', lo=-45, hi=20),
+    'rh850':        dict(label='Relative humidity 850 hPa', unit='%', group='Upper air', lo=0, hi=100),
+    'z850':         dict(label='850 hPa height', unit='dam', group='Upper air', lo=100, hi=170),
+    'thick':        dict(label='1000-500 hPa thickness', unit='dam', group='Upper air', lo=480, hi=590),
+    'wind925':      dict(label='Wind 925 hPa', unit='mph', group='Upper air', lo=0, hi=180),
+    'wind700':      dict(label='Wind 700 hPa', unit='mph', group='Upper air', lo=0, hi=200),
+    'wind300':      dict(label='Wind 300 hPa', unit='mph', group='Upper air', lo=0, hi=280),
+    'w700':         dict(label='Vertical motion 700 hPa (negative = rising)', unit='Pa/s', group='Upper air', lo=-4, hi=4),
+    'vort500':      dict(label='Relative vorticity 500 hPa', unit='10⁻⁵/s', group='Upper air', lo=-40, hi=60),
+    'trop_t':       dict(label='Tropopause temperature', unit='°C', group='Upper air', lo=-85, hi=-30),
+    'kindex':       dict(label='K-index (thunderstorm potential)', unit='°C', group='Convection', lo=-20, hi=50),
+    'cin_ml':       dict(label='CIN (mixed layer)', unit='J/kg', group='Convection', lo=-800, hi=0),
+    'hpbl':         dict(label='Boundary layer height', unit='m', group='Convection', lo=0, hi=4000, scale='sqrt'),
+    'conv_cloud':   dict(label='Convective cloud', unit='%', group='Cloud & visibility', lo=0, hi=100),
+    'sw_direct':    dict(label='Direct sunshine (radiation)', unit='W/m²', group='Radiation & surface', lo=0, hi=1100),
+    'lhf':          dict(label='Latent heat flux (evaporation)', unit='W/m²', group='Radiation & surface', lo=-100, hi=600),
+    'olr':          dict(label='Outgoing longwave (satellite-like cloud tops)', unit='W/m²', group='Radiation & surface', lo=80, hi=340),
     # air quality (NOAA GEFS-Aerosols)
     'aod':          dict(label='Aerosol optical depth (all, 550 nm)', unit='', group='Air quality', lo=0, hi=4, scale='sqrt'),
     'dust_aod':     dict(label='Saharan dust (optical depth)', unit='', group='Air quality', lo=0, hi=4, scale='sqrt'),
@@ -169,6 +297,28 @@ def _dewpoint(t, rh):
     """Dew point (C) from temperature (C) and relative humidity (%), Magnus."""
     g = np.log(np.clip(rh, 1, 100) / 100.0) + 17.625 * t / (243.04 + t)
     return 243.04 * g / (17.625 - g)
+
+
+def _rh_from_q(t, q, p_hpa):
+    """Relative humidity (%) from temperature (C) and specific humidity (kg/kg) at a pressure level."""
+    e = q * p_hpa / (0.622 + 0.378 * q)
+    return np.clip(100.0 * e / (6.112 * np.exp(17.67 * t / (t + 243.5))), 0, 100)
+
+
+def _kindex(t850, t700, t500, rh850, rh700):
+    """K-index (C): (T850 - T500) + Td850 - (T700 - Td700), from temperatures (C) and humidities (%)."""
+    return (t850 - t500) + _dewpoint(t850, rh850) - (t700 - _dewpoint(t700, rh700))
+
+
+def _pct(a):
+    """A fraction or a percentage, as a percentage."""
+    return a * 100.0 if np.nanmax(a) <= 1.6 else a
+
+
+def _coriolis():
+    """The Coriolis parameter (1/s) of every display cell."""
+    from .common import lonlat
+    return 2 * 7.2921e-5 * np.sin(np.radians(lonlat()[1]))
 
 
 # ── Met Office (UKV, Global) ────────────────────────────────────────────────
@@ -238,6 +388,37 @@ class MetOffice:
         a, units, geo = self._load(run, h, name, level)
         return self._to_display(a, geo), units
 
+    def _levels(self, run, h, name, levels):
+        """Some levels of a multi-level file, on the display grid: ([arrays], units). Only those
+        levels' chunks are fetched (h5py finds them, they come in parallel, h5py decodes them)."""
+        import h5py
+        f = _HttpFile(self.url(run, h, name))
+        with NC_LOCK:
+            hf = h5py.File(f, 'r')
+            ds = next(v for k, v in hf.items() if isinstance(v, h5py.Dataset) and v.ndim == 3 and k != 'flag')
+            levs = np.asarray(hf['pressure' if 'pressure' in hf else 'height'][:], float)
+            ks = [int(np.argmin(np.abs(levs - lv))) for lv in levels]
+            cz, cy, cx = ds.chunks
+            spans = []
+            for k in ks:
+                for j in range(0, ds.shape[1], cy):
+                    for i in range(0, ds.shape[2], cx):
+                        c = ds.id.get_chunk_info_by_coord((k - k % cz, j, i))
+                        spans.append((c.byte_offset, c.size))
+        f.prefetch(spans)
+        with NC_LOCK:
+            arrs = [np.asarray(ds[k], np.float32) for k in ks]
+            units = ds.attrs.get('units', b'')
+            units = units.decode() if isinstance(units, bytes) else str(units)
+            if 'projection_x_coordinate' in hf:
+                x, y = hf['projection_x_coordinate'][:], hf['projection_y_coordinate'][:]
+                geo = ('laea', float(x[0]), float(x[1] - x[0]), float(y[0]), float(y[1] - y[0]), len(x), len(y))
+            else:
+                geo = ('ll', np.asarray(hf['latitude'][:], float), np.asarray(hf['longitude'][:], float))
+            hf.close()
+        f.close()
+        return [self._to_display(a, geo) for a in arrs], units
+
     def _load(self, run, h, name, level=None):
         """The field on the model's own grid: (array, units, geometry)."""
         blob = get(self.url(run, h, name), tries=3, timeout=120)
@@ -286,6 +467,15 @@ class MetOffice:
                 return np.zeros((NY, NX), np.float32), 0
             # hourly accumulations to T+54, 3-hourly beyond (where only every third hour is published);
             # returns (mm, hours covered) so job.py can chain them into a running total
+            if stem == 'snowfall_accumulation' and self.id == 'mo_global':
+                # the Global publishes no snowfall amounts: the precipitation amount times the share
+                # falling as snow at the step (its snowfall rate over its precipitation rate)
+                amt, hours = self.field(run, h, var.replace('snow', 'precip'), prev_h)
+                sr, _ = self._read(run, h, F['snow_rate'])
+                pr, _ = self._read(run, h, F['precip_rate'])
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    frac = np.where(pr > 1e-7, np.clip(sr / np.maximum(pr, 1e-9), 0, 1), 0)
+                return (amt * frac).astype(np.float32), hours
             for hours in ((1,) if var.endswith('_1h') else (1, 3)):
                 try:
                     a, units = self._read(run, h, f'{stem}-PT{hours:02d}H')
@@ -309,10 +499,27 @@ class MetOffice:
             d, _, _ = self._load(run, h, 'wind_direction_at_10m')
             r = np.radians(d)
             return _wdir(self._to_display(-s * np.sin(r), geo), self._to_display(-s * np.cos(r), geo))
+        if var == 'thick':
+            (z5, z1), _ = self._levels(run, h, 'geopotential_height_on_pressure_levels', (50000.0, 100000.0))
+            return (z5 - z1) / 10.0
+        if var == 'kindex':
+            (t8, t7, t5), _ = self._levels(run, h, 'temperature_on_pressure_levels', (85000.0, 70000.0, 50000.0))
+            (r8, r7), _ = self._levels(run, h, 'relative_humidity_on_pressure_levels', (85000.0, 70000.0))
+            return _kindex(t8 - 273.15, t7 - 273.15, t5 - 273.15, _pct(r8), _pct(r7))
         if var in self.pl_files:
             name, level = self.pl_files[var]
-            a, _ = self._read(run, h, name, level)
-            return a - 273.15 if var == 'wbpt850' and np.nanmean(a) > 150 else a
+            (a,), units = self._levels(run, h, name, (level,))
+            if units == 'K' or (var == 'wbpt850' and np.nanmean(a) > 150):
+                return a - 273.15
+            if name.startswith('geopotential'):
+                return a / 10.0
+            if name.startswith('relative_humidity'):
+                return _pct(a)
+            if name.startswith('wind_speed'):
+                return a * MPH
+            if name.startswith('wind_vertical'):
+                return a * -8.86                   # m/s upward -> Pa/s (rising negative), at about 0.9 kg/m3
+            return a
         a, units = self._read(run, h, F[var])
         if units == 'K':
             return a - 273.15
@@ -322,15 +529,30 @@ class MetOffice:
             return a / 100.0
         if var in ('wind10', 'gust10', 'gust_max'):
             return a * MPH
-        if var in ('tcc', 'lcc', 'mcc', 'hcc', 'cloud_1000ft', 'fog', 'rh2'):
+        if var in ('tcc', 'lcc', 'mcc', 'hcc', 'cloud_1000ft', 'fog', 'rh2', 'conv_cloud'):
             return a * 100.0 if np.nanmax(a) <= 1.6 else a
         if var == 'vis':
             return a / 1000.0
         if var == 'lightning':
             return a * 1e6
-        if var == 'cin_sb' or var == 'cin_mu':
+        if var in ('cin_sb', 'cin_mu', 'cin_ml'):
             return -np.abs(a)
         return a
+
+
+# pressure-level fields both Met Office models publish: (file name, level in Pa)
+MO_PL = {
+    't925': ('temperature_on_pressure_levels', 92500.0), 't850': ('temperature_on_pressure_levels', 85000.0),
+    't700': ('temperature_on_pressure_levels', 70000.0), 't500': ('temperature_on_pressure_levels', 50000.0),
+    'z850': ('geopotential_height_on_pressure_levels', 85000.0), 'z500': ('geopotential_height_on_pressure_levels', 50000.0),
+    'rh850': ('relative_humidity_on_pressure_levels', 85000.0), 'rh700': ('relative_humidity_on_pressure_levels', 70000.0),
+    'wind925': ('wind_speed_on_pressure_levels', 92500.0), 'wind850': ('wind_speed_on_pressure_levels', 85000.0),
+    'wind700': ('wind_speed_on_pressure_levels', 70000.0), 'wind500': ('wind_speed_on_pressure_levels', 50000.0),
+    'wind300': ('wind_speed_on_pressure_levels', 30000.0), 'wind250': ('wind_speed_on_pressure_levels', 25000.0),
+    'wbpt850': ('wet_bulb_potential_temperature_on_pressure_levels', 85000.0),
+}
+MO_UPPER = ['t925', 't850', 't700', 't500', 'z850', 'z500', 'thick', 'rh850', 'rh700', 'wind925', 'wind850', 'wind700',
+            'wind500', 'wind300', 'wind250', 'wbpt850', 'kindex']
 
 
 class UKV(MetOffice):
@@ -350,10 +572,12 @@ class UKV(MetOffice):
         'wbfz': 'height_AGL_at_wet_bulb_freezing_level', 'snow_swe': 'snow_depth_water_equivalent',
         'sw_down': 'radiation_flux_in_shortwave_total_downward_at_surface',
         'lw_down': 'radiation_flux_in_longwave_downward_at_surface', 'uv_down': 'radiation_flux_in_uv_downward_at_surface',
-        'shf': 'sensible_heat_flux_at_surface',
+        'shf': 'sensible_heat_flux_at_surface', 'rain_1h': 'rainfall_accumulation-PT01H', 'hail_1h': 'hail_fall_accumulation-PT01H',
+        'sw_direct': 'radiation_flux_in_shortwave_direct_downward_at_surface',
     }
-    pl_files = {'wbpt850': ('wet_bulb_potential_temperature_on_pressure_levels', 85000.0)}
-    variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'feels', 'wbpt850', 'windchill', 'wdir10', 'wx', 'gust_peak']
+    pl_files = dict(MO_PL, wind100=('wind_speed_on_height_levels', 100.0))
+    variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'snow_acc', 'feels', 'windchill', 'wdir10', 'wx',
+                               'gust_peak', 'wind100'] + MO_UPPER
 
 
 class MOGlobal(MetOffice):
@@ -372,9 +596,13 @@ class MOGlobal(MetOffice):
         'cin_sb': 'CIN_surface', 'cin_mu': 'CIN_most_unstable_below_500hPa', 'snow_swe': 'snow_depth_water_equivalent',
         'sw_down': 'radiation_flux_in_shortwave_total_downward_at_surface',
         'lw_down': 'radiation_flux_in_longwave_downward_at_surface', 'uv_down': 'radiation_flux_in_uv_downward_at_surface',
-        'trop_p': 'pressure_at_tropopause',
+        'trop_p': 'pressure_at_tropopause', 'trop_t': 'temperature_at_tropopause', 'conv_cloud': 'cloud_amount_of_total_convective_cloud',
+        'cin_ml': 'CIN_mixed_layer_lowest_500m', 'lhf': 'latent_heat_flux_at_surface_mean-PT01H', 'rain_1h': 'rainfall_accumulation-PT01H',
+        'sw_direct': 'radiation_flux_in_shortwave_direct_downward_at_surface',
     }
-    variables = list(files) + ['precip_1h', 'precip_total', 'feels', 'windchill', 'wdir10', 'wx', 'gust_peak']
+    pl_files = dict(MO_PL, w700=('wind_vertical_velocity_on_pressure_levels', 70000.0))
+    variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'snow_acc', 'feels', 'windchill', 'wdir10', 'wx',
+                               'gust_peak', 'w700'] + MO_UPPER
 
 
 # ── ECMWF (IFS, AIFS) ───────────────────────────────────────────────────────
@@ -399,11 +627,22 @@ class ECMWF:
         'wdir10': [('sfc', '10u'), ('sfc', '10v')], 'windchill': [('sfc', '2t'), ('sfc', '10u'), ('sfc', '10v')],
         # the wave model (ECMWF WAM), a stream of its own beside the atmosphere
         'swh': [('sfc', 'swh')], 'mwp': [('sfc', 'mwp')], 'pp1d': [('sfc', 'pp1d')], 'mwd': [('sfc', 'mwd')],
+        # added 26 Oct 2026
+        'snow_swe': [('sfc', 'sd')], 'snow_depth': [('sfc', 'sd'), ('sfc', 'rsn')], 'ptype': [('sfc', 'ptype'), ('sfc', 'tp')],
+        't2max3': [('sfc', 'mx2t3')], 't2min3': [('sfc', 'mn2t3')], 'conv_total': [('sfc', 'cp')], 'olr': [('sfc', 'ttr')],
+        't925': [('pl', 't', 925)], 't700': [('pl', 't', 700)], 'rh850': [('pl', 'r', 850)], 'z850': [('pl', 'gh', 850)],
+        'thick': [('pl', 'gh', 500), ('pl', 'gh', 1000)],
+        'wind925': [('pl', 'u', 925), ('pl', 'v', 925)], 'wind700': [('pl', 'u', 700), ('pl', 'v', 700)],
+        'wind300': [('pl', 'u', 300), ('pl', 'v', 300)], 'w700': [('pl', 'w', 700)], 'vort500': [('pl', 'vo', 500)],
+        'kindex': [('pl', 't', 850), ('pl', 't', 700), ('pl', 't', 500), ('pl', 'r', 850), ('pl', 'r', 700)],
     }
     WAVE = {'swh', 'mwp', 'pp1d', 'mwd'}
-    variables = ['precip_rate', 'precip_total', 'snow_total', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10',
-                 'gust10', 'gust_peak', 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'cape_mu', 'pw', 't850', 't500', 'z500', 'rh700',
-                 'wind850', 'wind500', 'wind250', 'sw_down', 'lw_down', 'wx', 'swh', 'mwp', 'pp1d', 'mwd']
+    CATEGORY = {'ptype'}                 # codes, not amounts: sampled from the nearest cell, never blended
+    variables = ['precip_rate', 'precip_total', 'conv_total', 'ptype', 'snow_total', 'snow_acc', 'snow_swe', 'snow_depth', 't2', 't2max3',
+                 't2min3', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10', 'gust10', 'gust_peak', 'wind100', 'mslp', 'tcc',
+                 'lcc', 'mcc', 'hcc', 'cape_mu', 'kindex', 'pw', 't925', 't850', 't700', 't500', 'z850', 'z500', 'thick', 'rh850', 'rh700',
+                 'wind925', 'wind850', 'wind700', 'wind500', 'wind300', 'wind250', 'w700', 'vort500', 'sw_down', 'lw_down', 'olr', 'wx',
+                 'swh', 'mwp', 'pp1d', 'mwd']
 
     def __init__(self):
         self._idx, self._host, self._ix = {}, {}, None
@@ -481,10 +720,23 @@ class ECMWF:
                 r = np.radians(np.asarray(a, np.float32).reshape(meta['Nj'], meta['Ni']))
                 out.append(_wdir(-self._to_display(np.sin(r).ravel(), meta), -self._to_display(np.cos(r).ravel(), meta)))
                 continue
-            out.append(self._to_display(a, meta))
+            out.append(self._to_display(a, meta, nearest=names[i][1] in ('ptype',)))
         return out
 
-    def _to_display(self, a, meta):
+    def _nearest(self, a, meta):
+        """A categorical field (precipitation type) on the display grid from its nearest cell."""
+        from .common import regular_index
+        lat1, lon1 = meta['latitudeOfFirstGridPointInDegrees'], meta['longitudeOfFirstGridPointInDegrees']
+        dj, di = meta['jDirectionIncrementInDegrees'], meta['iDirectionIncrementInDegrees']
+        lats = lat1 + np.arange(meta['Nj']) * (dj if meta['latitudeOfLastGridPointInDegrees'] > lat1 else -dj)
+        lons = lon1 + np.arange(meta['Ni']) * di
+        j, i, ok = regular_index(lats, lons)
+        a = np.asarray(a, np.float32).reshape(meta['Nj'], meta['Ni'])
+        return np.where(ok, a[j, i], np.nan).astype(np.float32)
+
+    def _to_display(self, a, meta, nearest=False):
+        if nearest:
+            return ECMWF._nearest(self, a, meta)           # GFS borrows this method unbound
         key = (meta['Ni'], meta['Nj'], meta['latitudeOfFirstGridPointInDegrees'], meta['longitudeOfFirstGridPointInDegrees'])
         if self._ix is None or self._ix[0] != key:
             lat1, lon1 = meta['latitudeOfFirstGridPointInDegrees'], meta['longitudeOfFirstGridPointInDegrees']
@@ -501,14 +753,43 @@ class ECMWF:
         A = self._get(run, h, S, wave=var in self.WAVE)
         if var in self.WAVE:
             return _sea_only(A[0])
-        if var in ('t2', 'td2', 'tskin', 't850', 't500'):
+        if var in ('t2', 'td2', 'tskin', 't850', 't500', 't925', 't700', 't2max3', 't2min3'):
             return A[0] - 273.15
         if var == 'wdir10':
             return _wdir(A[0], A[1])
         if var == 'windchill':
             return _windchill(A[0] - 273.15, np.hypot(A[1], A[2]) * MPH)
-        if var in ('wind10', 'wind100', 'wind850', 'wind500', 'wind250'):
+        if var in ('wind10', 'wind100', 'wind925', 'wind850', 'wind700', 'wind500', 'wind300', 'wind250'):
             return np.hypot(A[0], A[1]) * MPH
+        if var in ('z850', 'thick'):
+            return (A[0] - A[1]) / 10.0 if var == 'thick' else A[0] / 10.0
+        if var == 'rh850':
+            return _rh_from_q(A[0] - 273.15, A[1], 850.0) if len(A) == 2 else A[0]
+        if var == 'kindex':
+            t8, t7, t5 = (x - 273.15 for x in A[:3])
+            r8, r7 = (_rh_from_q(t8, A[3], 850.0), _rh_from_q(t7, A[4], 700.0)) if S[3][1] == 'q' else (A[3], A[4])
+            return _kindex(t8, t7, t5, r8, r7)
+        if var == 'snow_swe':
+            return A[0] * 1000.0
+        if var == 'snow_depth':                    # metres of water / snow density (kg/m3) -> cm of snow
+            with np.errstate(invalid='ignore', divide='ignore'):
+                return np.where(A[0] > 0, A[0] * 1000.0 / np.maximum(A[1], 50.0) * 100.0, 0.0).astype(np.float32)
+        if var == 'conv_total':
+            return A[0] * 1000.0
+        if var == 'vort500':
+            return A[0] * 1e5
+        if var == 'olr':
+            return -A[0]                             # upward thermal radiation: job.py differences the accumulation
+        if var == 'ptype':
+            # the type is set wherever a trace falls: shown only where 0.1 mm/h or more fell since
+            # the step before (tp is the running total, in metres)
+            if not h or prev_h is None:
+                return np.zeros_like(A[0])
+            tp0 = self._get(run, prev_h, [('sfc', 'tp')])[0]
+            rate = np.nan_to_num(A[1] - tp0) * 1000.0 / (h - prev_h)
+            return np.where(rate >= 0.1, A[0], 0).astype(np.float32)
+        if var == 'w700':
+            return A[0]
         if var == 'gust10':
             return A[0] * MPH
         if var == 'mslp':
@@ -532,13 +813,16 @@ class ECMWF:
 class AIFS(ECMWF):
     id, label, res_km = 'aifs', 'ECMWF AIFS (AI)', 25.0
     path = 'aifs-single/0p25/oper'
+    # the AI model gives specific humidity on pressure levels, not relative humidity
+    SPEC = dict(ECMWF.SPEC, rh850=[('pl', 't', 850), ('pl', 'q', 850)],
+                kindex=[('pl', 't', 850), ('pl', 't', 700), ('pl', 't', 500), ('pl', 'q', 850), ('pl', 'q', 700)])
 
     def schedule(self, run):
         return list(range(0, 241, 6))
 
-    variables = ['precip_rate', 'precip_total', 'snow_total', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10',
-                 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'pw', 't850', 't500', 'z500', 'wind850', 'wind500', 'wind250',
-                 'sw_down', 'lw_down', 'wx']
+    variables = ['precip_rate', 'precip_total', 'conv_total', 'snow_total', 'snow_acc', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill',
+                 'wind10', 'wdir10', 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'kindex', 'pw', 't925', 't850', 't700', 't500', 'z850',
+                 'z500', 'thick', 'rh850', 'wind925', 'wind850', 'wind700', 'wind500', 'wind300', 'wind250', 'w700', 'sw_down', 'lw_down', 'wx']
 
 
 # ── NOAA GFS ────────────────────────────────────────────────────────────────
@@ -567,12 +851,29 @@ class GFS:
         'windchill': [('TMP', '2 m above ground'), ('UGRD', '10 m above ground'), ('VGRD', '10 m above ground')],
         # NOAA GFS-Wave (WAVEWATCH III), its own file beside the atmosphere
         'swh': [('HTSGW', 'surface')], 'pp1d': [('PERPW', 'surface')], 'mwd': [('DIRPW', 'surface')],
+        # added 26 Oct 2026
+        'ptype': [('CRAIN', 'surface'), ('CSNOW', 'surface'), ('CFRZR', 'surface'), ('CICEP', 'surface'), ('PRATE', 'surface')],
+        'frozen_pct': [('CPOFP', 'surface')], 'conv_total': [('ACPCP', 'surface')],
+        'snow_total': [('APCP', 'surface'), ('CPOFP', 'surface')],
+        'cape_mu': [('CAPE', '255-0 mb above ground')], 'cape_ml': [('CAPE', '90-0 mb above ground')],
+        'cin_mu': [('CIN', '255-0 mb above ground')], 'cin_ml': [('CIN', '90-0 mb above ground')],
+        'hpbl': [('HPBL', 'surface')], 'vort500': [('ABSV', '500 mb')], 'w700': [('VVEL', '700 mb')],
+        't925': [('TMP', '925 mb')], 't700': [('TMP', '700 mb')], 'rh850': [('RH', '850 mb')], 'z850': [('HGT', '850 mb')],
+        'thick': [('HGT', '500 mb'), ('HGT', '1000 mb')],
+        'wind925': [('UGRD', '925 mb'), ('VGRD', '925 mb')], 'wind700': [('UGRD', '700 mb'), ('VGRD', '700 mb')],
+        'wind300': [('UGRD', '300 mb'), ('VGRD', '300 mb')],
+        'kindex': [('TMP', '850 mb'), ('TMP', '700 mb'), ('TMP', '500 mb'), ('RH', '850 mb'), ('RH', '700 mb')],
+        'shf': [('SHTFL', 'surface')], 'lhf': [('LHTFL', 'surface')], 'lw_down': [('DLWRF', 'surface')],
+        'olr': [('ULWRF', 'top of atmosphere')],
     }
     WAVE = {'swh', 'pp1d', 'mwd'}
-    variables = ['precip_rate', 'precip_total', 'refc', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10', 'gust10',
-                 'gust_peak', 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'cape_sb', 'cin_sb', 'li', 'srh3', 'pw',
-                 'snow_depth', 'snow_swe', 'frz', 't850', 't500', 'z500', 'rh700', 'wind850', 'wind500', 'wind250',
-                 'trop_p', 'sw_down', 'wx', 'swh', 'pp1d', 'mwd']
+    CATEGORY = {'CRAIN', 'CSNOW', 'CFRZR', 'CICEP'}
+    variables = ['precip_rate', 'precip_total', 'conv_total', 'ptype', 'frozen_pct', 'refc', 'snow_total', 'snow_acc', 'snow_depth',
+                 'snow_swe', 'frz', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10', 'gust10', 'gust_peak', 'wind100',
+                 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'cape_sb', 'cape_ml', 'cape_mu', 'cin_sb', 'cin_ml', 'cin_mu', 'li', 'kindex',
+                 'srh3', 'pw', 'hpbl', 't925', 't850', 't700', 't500', 'z850', 'z500', 'thick', 'rh850', 'rh700', 'wind925', 'wind850',
+                 'wind700', 'wind500', 'wind300', 'wind250', 'w700', 'vort500', 'trop_p', 'sw_down', 'lw_down', 'olr', 'shf', 'lhf', 'wx',
+                 'swh', 'pp1d', 'mwd']
 
     def __init__(self):
         self._idx, self._ix = {}, None
@@ -625,9 +926,9 @@ class GFS:
         c = [r for r in recs if r['var'] == var and r['level'] == level]
         if not c:
             return None
-        if var == 'APCP':                                  # the running total from T+0
+        if var in ('APCP', 'ACPCP'):                       # the running total from T+0
             return next((r for r in c if r['desc'].startswith('0-')), c[-1])
-        if var in ('PRATE', 'DSWRF'):                      # instantaneous where published
+        if var in ('PRATE', 'DSWRF', 'DLWRF', 'ULWRF', 'SHTFL', 'LHTFL'):    # instantaneous where published
             return next((r for r in c if 'ave' not in r['desc']), c[-1])
         return c[0]
 
@@ -648,17 +949,37 @@ class GFS:
                 r = np.radians(np.asarray(a, np.float32))
                 A.append(_wdir(-ECMWF._to_display(self, np.sin(r), meta), -ECMWF._to_display(self, np.cos(r), meta)))
                 continue
-            A.append(ECMWF._to_display(self, a, meta))
+            A.append(ECMWF._to_display(self, a, meta, nearest=self.SPEC[var][i][0] in getattr(self, 'CATEGORY', ())))
         if wave:
             return _sea_only(A[0])
-        if var in ('t2', 'td2', 'tskin', 'feels', 't850', 't500'):
+        if var == 'ptype':                                 # GFS's yes/no types as ECMWF's codes
+            # the types are set wherever a trace falls: shown only where 0.1 mm/h or more does
+            rain, snow, frzr, icep = (np.nan_to_num(x) > 0.5 for x in A[:4])
+            code = np.select([snow & rain, snow, icep, frzr, rain], [7, 5, 8, 3, 1], 0)
+            return np.where(np.nan_to_num(A[4]) * 3600.0 >= 0.1, code, 0).astype(np.float32)
+        if var == 'frozen_pct':                            # -50 where nothing falls
+            return np.where(A[0] < 0, np.nan, A[0]).astype(np.float32)
+        if var == 'snow_total':                            # chained by job.py: each step's new precipitation times its frozen share
+            # only where most of it is frozen: CPOFP is noisy in light rain, and 10-30 % over a warm
+            # sea, step after step, adds up to snow that is not there
+            pct = np.clip(np.nan_to_num(A[1]), 0, 100)
+            return {'apcp': A[0] if h else np.zeros_like(A[0]), 'frac': np.where(pct >= 50, pct / 100.0, 0.0)}
+        if var in ('t2', 'td2', 'tskin', 'feels', 't850', 't500', 't925', 't700'):
             return A[0] - 273.15
         if var == 'wdir10':
             return _wdir(A[0], A[1])
         if var == 'windchill':
             return _windchill(A[0] - 273.15, np.hypot(A[1], A[2]) * MPH)
-        if var in ('wind10', 'wind100', 'wind850', 'wind500', 'wind250'):
+        if var in ('wind10', 'wind100', 'wind925', 'wind850', 'wind700', 'wind500', 'wind300', 'wind250'):
             return np.hypot(A[0], A[1]) * MPH
+        if var in ('z850', 'thick'):
+            return (A[0] - A[1]) / 10.0 if var == 'thick' else A[0] / 10.0
+        if var == 'kindex':
+            return _kindex(A[0] - 273.15, A[1] - 273.15, A[2] - 273.15, A[3], A[4])
+        if var == 'vort500':                               # absolute vorticity less the Coriolis parameter
+            return (A[0] - _coriolis()) * 1e5
+        if var == 'conv_total' and h == 0:
+            return np.zeros((NY, NX), np.float32)
         if var == 'gust10':
             return A[0] * MPH
         if var in ('mslp', 'trop_p'):
@@ -769,4 +1090,8 @@ SOURCES = {
 }
 # variables whose frames are differences of an accumulation between consecutive steps
 DIFFERENCED = {('ifs', 'precip_rate'), ('aifs', 'precip_rate'), ('ifs', 'sw_down'), ('aifs', 'sw_down'),
-               ('ifs', 'lw_down'), ('aifs', 'lw_down')}
+               ('ifs', 'lw_down'), ('aifs', 'lw_down'), ('ifs', 'olr')}
+# a running snowfall total built in job.py from a running precipitation total and the frozen share
+SNOW_CHAIN = {('gfs', 'snow_total')}
+# copies of another variable in other units: snow_acc is the snowfall total as cm of snow at 10:1
+ALIASES = {'snow_acc': 'snow_total'}

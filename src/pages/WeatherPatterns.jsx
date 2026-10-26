@@ -1,11 +1,13 @@
-/* Weather Patterns — the next two weeks, three ways each could go.
+/* Weather Patterns — the pattern most likely to run each of the next two weeks, and its rivals.
 
    Every day at 12:00 UK time the server blends the newest ECMWF and GFS runs, main runs and
-   ensembles (server/patterns/engine.py), groups them into the three most distinct ways each week
-   plays out and writes each one up. This page shows the result: a tab per week, and per week three
-   scenario cards, most likely first, each with its chance, a title and description, its pressure
-   chart day by day (play it, or pick a day on the strip under it), the week's rain, temperature
-   and wind against normal, and which models back it.
+   ensembles (server/patterns/engine.py), names each run's week by its dominant pattern (Atlantic
+   westerlies, a Scandinavian high, a high over the UK...) and groups the runs by pattern. This page
+   shows the result, week by week, not day by day: the two weeks' likeliest patterns at the top, a
+   tab per week with every pattern's chance, and up to three pattern cards, most likely first, each
+   with its chance, the pattern's chart, what it means for the week, the week's rain, temperature
+   and wind against normal, and which models back it. Issues from before 26 Oct 2026 had no named
+   patterns; picked from the list, they show their scenarios day by day as they were made.
 
    While the 12:00 run is going the page follows it: the new issue appears week by week as it is
    finished, its scenarios revealed one after another, and the week still being worked out shows
@@ -22,6 +24,13 @@ import PatternMap, { buildLand } from '@/components/patterns/patternMap';
 import PatternIcon, { GustIcon } from '@/components/patterns/PatternIcon';
 
 const ACCENTS = ['#ec5f86', '#9b6fe3', '#3d8ef0'];
+/* each named pattern's colour in the chance bars: highs warm, lows and westerlies blue, northerly
+   and blocking patterns cold */
+const PATTERN_COLOUR = {
+  stormy_westerlies: '#3f5be0', westerlies: '#3d8ef0', westerly: '#5aa7e8', uk_trough: '#7b61d9', southern_track: '#a678e8',
+  scandi_high: '#f2a93a', uk_high: '#f6c945', euro_high: '#f08b4c', atlantic_ridge: '#4fbf8a', northern_block: '#4fc3d9',
+  northwesterly: '#7fb0e0', northerly: '#9ad8f2', easterly: '#e6a0c0', southerly: '#f07a5a', southwesterly: '#e8b46a', slack: '#9aa7b8',
+};
 const MODEL_ORDER = ['ens', 'hres', 'gefs', 'gfs'];
 const MODEL_COLOUR = { ens: '#3b82f6', hres: '#93c5fd', gefs: '#f97316', gfs: '#fdba74' };
 const REGION = {
@@ -92,12 +101,12 @@ function weekRange(w) {
 }
 const windWord = (g) => (g >= 30 ? 'Gales' : g >= 22 ? 'Windy' : g >= 14 ? 'Breezy' : 'Light winds');
 const dayWind = (d) => (d.gale >= 0.4 || d.G >= 30 ? 'gales' : d.G >= 22 ? 'windy' : '');
-/** How sure the week is: how far the likeliest scenario stands out. */
+/** How sure the week is: how far the likeliest pattern stands out. */
 function confidence(w) {
   const top = w.scenarios[0]?.chance ?? 0;
-  if (top >= 55) return ['High', 'one outcome stands out'];
-  if (top >= 42) return ['Medium', 'one outcome is favoured, but the others are real possibilities'];
-  return ['Low', 'the three outcomes are close to equally likely'];
+  if (top >= 55) return ['High', 'one pattern stands out'];
+  if (top >= 42) return ['Medium', 'one pattern is favoured, but the others are real possibilities'];
+  return ['Low', 'no pattern stands out'];
 }
 
 /* ── pieces ─────────────────────────────────────────────────────────────── */
@@ -134,6 +143,47 @@ function ModelMix({ mix, info }) {
   );
 }
 
+function PatternChances({ list }) {
+  const shown = list.filter((p) => p.chance >= 1);
+  const rest = 100 - shown.reduce((a, p) => a + p.chance, 0);
+  return (
+    <div className="wp-pchances wp-glass">
+      <span className="wp-pchances-label">Every pattern the runs show this week</span>
+      <div className="wp-pbar2" role="img" aria-label={shown.map((p) => `${p.name} ${Math.round(p.chance)}%`).join(', ')}>
+        {shown.map((p) => <i key={p.key} style={{ flex: p.chance, background: PATTERN_COLOUR[p.key] || '#9aa7b8' }} title={`${p.name}: ${Math.round(p.chance)}%`} />)}
+        {rest > 0.5 && <i style={{ flex: rest, background: 'var(--glass-fill-strong)' }} />}
+      </div>
+      <div className="wp-pkey">
+        {shown.map((p) => (
+          <span key={p.key} className={p.shown ? 'wp-pkey-shown' : undefined}>
+            <i style={{ background: PATTERN_COLOUR[p.key] || '#9aa7b8' }} />{p.name}<b>{Math.round(p.chance)}%</b>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* the two weeks at a glance: each week's likeliest pattern and the one after it */
+function Outlook({ weeks, onPick }) {
+  const tops = weeks.map((w) => w.scenarios[0]).filter(Boolean);
+  if (!tops.length || !tops[0].pattern) return null;
+  return (
+    <div className="wp-outlook wp-glass">
+      {weeks.map((w, k) => {
+        const [a, b] = w.scenarios;
+        return (
+          <button key={w.n} type="button" className="wp-outlook-week" onClick={() => onPick(k)}>
+            <span className="wp-outlook-when">Week {w.n} · {weekRange(w)}</span>
+            <span className="wp-outlook-main"><i style={{ background: PATTERN_COLOUR[a.pattern] }} />{a.title}<b>{a.chance}%</b></span>
+            {b && <span className="wp-outlook-alt">Alternative: {b.title} ({b.chance}%)</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function DayStrip({ days, sel, onPick, accent }) {
   return (
     <div className="wp-days" role="tablist" aria-label="Days of the week">
@@ -152,6 +202,67 @@ function DayStrip({ days, sel, onPick, accent }) {
   );
 }
 
+/* the week's rain, temperature and wind against normal */
+function WeekFacts({ s, strongest }) {
+  const wk = s.week;
+  const rainPct = wk.rainNormal > 0 ? Math.round((100 * wk.rain) / wk.rainNormal) : null;
+  const regions = Object.entries(wk.rainRegions || {}).sort((a, b) => b[1] - a[1]);
+  const gMax = Math.max(...s.days.map((x) => x.G));
+  return (
+    <div className="wp-factbox"><div className="wp-facts">
+      <div className="wp-fact">
+        <span>Rain</span>
+        <b>{Math.round(wk.rain)} mm</b>
+        {rainPct != null && <em className={rainPct >= 130 ? 'wp-up' : rainPct < 70 ? 'wp-down' : undefined}>{rainPct}% of normal</em>}
+        {regions.length > 1 && <em>Most in {REGION[regions[0][0]] || regions[0][0]}</em>}
+      </div>
+      <div className="wp-fact">
+        <span>Temperature</span>
+        <b>{signed(wk.tmaxAnom)}°C</b>
+        <em>by day vs normal</em>
+        <em>{signed(wk.tminAnom)}°C at night{wk.frostNights ? ` · ${wk.frostNights} frosty` : ''}</em>
+      </div>
+      <div className="wp-fact">
+        <span>Wind</span>
+        <b>{wk.galeDays ? `${wk.galeDays} gale day${wk.galeDays > 1 ? 's' : ''}` : windWord(gMax)}</b>
+        <em>{strongest ? `Strongest on ${fmtDay(s.days.reduce((a, x) => (x.G > a.G ? x : a)).date, { weekday: 'long' })}` : 'at its strongest in the week'}</em>
+      </div>
+    </div></div>
+  );
+}
+
+/* one of the week's patterns: its chance, its chart (the average of its runs on the days that have
+   it), what it means for the week, and the week's facts */
+function PatternCard({ s, index, landPath, grid, info, uid }) {
+  const accent = ACCENTS[index] || ACCENTS[2];
+  return (
+    <article className="wp-card wp-card-week wp-glass" style={{ '--i': index, '--accent': accent }}>
+      <header className="wp-card-head">
+        <ChanceRing pct={s.chance} colour={accent} />
+        <div className="wp-card-heading">
+          <span className="wp-scn">Pattern {s.rank} · {s.likelihood}</span>
+          <h3>{s.title}</h3>
+        </div>
+      </header>
+      <div className="wp-chips">{s.chips.map((c) => <span key={c} className="wp-chip">{c}</span>)}</div>
+
+      <div className="wp-map">
+        <PatternMap landPath={landPath} msl={s.weekMsl} grid={grid} centres={s.weekCentres} uid={uid} />
+        <div className="wp-map-top"><span className="wp-map-day">The pattern’s chart · {weekRange({ start: s.days[0].date, end: s.days[s.days.length - 1].date })}</span></div>
+        {!landPath && <div className="wp-map-wait"><Loader2 size={16} className="wp-spin" /></div>}
+      </div>
+
+      <p className="wp-desc">{s.about} {s.description}</p>
+      <WeekFacts s={s} />
+      <div className="wp-support">
+        <ModelMix mix={s.mix} info={info} />
+        <p>{s.support}</p>
+      </div>
+    </article>
+  );
+}
+
+/* a scenario of an issue made before the patterns were named: its chart day by day */
 function ScenarioCard({ s, index, landPath, grid, info, uid }) {
   const accent = ACCENTS[index] || ACCENTS[2];
   const [day, setDay] = useState(s.keyDay ?? 3);
@@ -162,10 +273,6 @@ function ScenarioCard({ s, index, landPath, grid, info, uid }) {
     return () => clearInterval(t);
   }, [playing, s.days.length]);
   const d = s.days[day];
-  const wk = s.week;
-  const rainPct = wk.rainNormal > 0 ? Math.round((100 * wk.rain) / wk.rainNormal) : null;
-  const regions = Object.entries(wk.rainRegions || {}).sort((a, b) => b[1] - a[1]);
-  const gMax = Math.max(...s.days.map((x) => x.G));
   return (
     <article className="wp-card wp-glass" style={{ '--i': index, '--accent': accent }}>
       <header className="wp-card-head">
@@ -190,27 +297,7 @@ function ScenarioCard({ s, index, landPath, grid, info, uid }) {
       <DayStrip days={s.days} sel={day} onPick={(i) => { setPlaying(false); setDay(i); }} accent={accent} />
 
       <p className="wp-desc">{s.description}</p>
-
-      <div className="wp-factbox"><div className="wp-facts">
-        <div className="wp-fact">
-          <span>Rain</span>
-          <b>{Math.round(wk.rain)} mm</b>
-          {rainPct != null && <em className={rainPct >= 130 ? 'wp-up' : rainPct < 70 ? 'wp-down' : undefined}>{rainPct}% of normal</em>}
-          {regions.length > 1 && <em>Most in {REGION[regions[0][0]] || regions[0][0]}</em>}
-        </div>
-        <div className="wp-fact">
-          <span>Temperature</span>
-          <b>{signed(wk.tmaxAnom)}°C</b>
-          <em>by day vs normal</em>
-          <em>{signed(wk.tminAnom)}°C at night{wk.frostNights ? ` · ${wk.frostNights} frosty` : ''}</em>
-        </div>
-        <div className="wp-fact">
-          <span>Wind</span>
-          <b>{wk.galeDays ? `${wk.galeDays} gale day${wk.galeDays > 1 ? 's' : ''}` : windWord(gMax)}</b>
-          <em>Strongest on {fmtDay(s.days.reduce((a, x) => (x.G > a.G ? x : a)).date, { weekday: 'long' })}</em>
-        </div>
-      </div></div>
-
+      <WeekFacts s={s} strongest />
       <div className="wp-support">
         <ModelMix mix={s.mix} info={info} />
         <p>{s.support}</p>
@@ -225,7 +312,7 @@ function PendingCard({ index, pct }) {
       <header className="wp-card-head">
         <div className="wp-ring wp-ring-wait"><Loader2 size={20} className="wp-spin" /></div>
         <div className="wp-card-heading">
-          <span className="wp-scn">Scenario {index + 1}</span>
+          <span className="wp-scn">Pattern {index + 1}</span>
           <h3>Being worked out…</h3>
         </div>
       </header>
@@ -236,7 +323,7 @@ function PendingCard({ index, pct }) {
   );
 }
 
-const STAGE = { starting: 'Starting', runs: 'Finding the newest model runs', download: 'Downloading model data', cluster: 'Grouping the runs into scenarios', week: 'Writing up', done: 'Finished' };
+const STAGE = { starting: 'Starting', runs: 'Finding the newest model runs', download: 'Downloading model data', cluster: 'Naming each run’s pattern', week: 'Writing up', done: 'Finished' };
 
 function RunBanner({ status, issue }) {
   if (!status?.running) return null;
@@ -262,7 +349,7 @@ function HowItWorks({ issue }) {
   return (
     <section className="wp-how wp-glass">
       <button type="button" className="wp-how-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <Info size={16} /> <b>How these scenarios are made</b> <span>{open ? 'Hide' : 'Show'}</span>
+        <Info size={16} /> <b>How the patterns are worked out</b> <span>{open ? 'Hide' : 'Show'}</span>
       </button>
       {open && (
         <div className="wp-how-body">
@@ -278,8 +365,8 @@ function HowItWorks({ issue }) {
             </tbody>
           </table>
           <p>ECMWF counts for more because it has the better record at this range. The ECMWF main run only reaches ten days, so it sits out week 2, and the GFS main run counts for little there: a single run has little skill left that far ahead.</p>
-          <p>For each week, every run’s pressure pattern over the UK and its approaches at midday on all seven days is compared, and the runs are split into the three groups that differ most: the three ways the week could play out. A scenario’s chance is the weighted share of the runs in it.</p>
-          <p>Each scenario’s chart is the average of its runs. Its temperatures and rain come from the same runs at about 550 points over the UK, compared district by district with the 1991–2020 averages from the Met Office HadUK-Grid climate series. Wind comes from each run’s pressure gradient over the UK (the Jenkinson–Collison gale index), and the weather type from the same method’s objective Lamb classification. The description is written from all of this.</p>
+          <p>Each of a run’s seven midday pressure charts is named by where its highs and lows sit around the UK and the flow they make: Atlantic westerlies (stormy when the low near Iceland is deep and the flow strong), a Scandinavian high, northern blocking, a mid-Atlantic ridge, a high over the UK or over the continent, a trough over the UK, lows on a southern track, or simply the flow when there is no clear pattern. The run’s week is the pattern on most of its days; when two tie, the one the week settles into. A pattern’s chance is the weighted share of the runs that show it. Every pattern the runs show is listed with its chance; up to three are shown in full, the likeliest first.</p>
+          <p>A pattern’s chart is the average of its runs on the days that have it. Its temperatures and rain come from the same runs at about 550 points over the UK, compared district by district with the 1991–2020 averages from the Met Office HadUK-Grid climate series. Wind comes from each run’s pressure gradient over the UK (the Jenkinson–Collison gale index), and the weather type from the same method’s objective Lamb classification. The description is written from all of this.</p>
           <p className="wp-src">Data: ECMWF open data (© ECMWF, CC BY 4.0); NOAA GFS and GEFS (public domain); climate averages © Crown copyright, Met Office, Open Government Licence. Map coastlines from ECMWF’s land-sea mask.</p>
         </div>
       )}
@@ -332,8 +419,8 @@ export default function WeatherPatterns() {
         <header className="wp-hero">
           <Link to="/" className="wp-back"><ChevronLeft size={16} /> Home</Link>
           <p className="wp-eyebrow">Weather Patterns</p>
-          <h1 className="wp-title">The next two weeks, three ways</h1>
-          <p className="wp-sub">For each of the next two weeks, the three most likely ways the weather could play out, from the ECMWF and GFS models blended together. Updated every day at 12:00.</p>
+          <h1 className="wp-title">The next two weeks’ weather patterns</h1>
+          <p className="wp-sub">The weather pattern most likely to run each of the next two weeks, and the patterns that could take over instead, from the ECMWF and GFS models blended together. Updated every day at 12:00.</p>
           {issue && (
             <div className="wp-meta">
               <span className="wp-tag">Issued {fmtWhen(issue.issued)}</span>
@@ -369,6 +456,7 @@ export default function WeatherPatterns() {
 
         {issue && (
           <>
+            <Outlook weeks={weeks} onPick={setWeek} />
             <nav className="wp-weeks wp-glass" aria-label="Week">
               {Array.from({ length: totalWeeks }, (_, k) => (
                 <button key={k} type="button" aria-pressed={k === week} onClick={() => setWeek(k)}>
@@ -383,10 +471,12 @@ export default function WeatherPatterns() {
                   <span>{fmtDay(w.start, { weekday: 'long', day: 'numeric', month: 'long' })} to {fmtDay(w.end, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
                   <span className="wp-conf">Confidence <b>{confidence(w)[0]}</b>: {confidence(w)[1]} · {w.runs} model runs blended</span>
                 </div>
+                {w.patterns && <PatternChances list={w.patterns} />}
                 <div className={`wp-grid${fresh ? ' wp-reveal' : ''}`} key={`${issue.id}:${week}`}>
-                  {w.scenarios.map((s, i) => (
-                    <ScenarioCard key={`${issue.id}:${week}:${i}`} s={s} index={i} landPath={landPath} grid={issue.map} info={issue.modelInfo} uid={`${week}-${i}`} />
-                  ))}
+                  {w.scenarios.map((s, i) => {
+                    const Card = s.weekMsl ? PatternCard : ScenarioCard;
+                    return <Card key={`${issue.id}:${week}:${i}`} s={s} index={i} landPath={landPath} grid={issue.map} info={issue.modelInfo} uid={`${week}-${i}`} />;
+                  })}
                 </div>
               </>
             ) : (
@@ -469,6 +559,7 @@ button.wp-tag:disabled { opacity: .6; cursor: default; }
 @media (max-width: 1080px) { .wp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 720px) { .wp-grid { grid-template-columns: minmax(0, 1fr); } }
 .wp-card { display: grid; grid-row: span 7; grid-template-rows: subgrid; row-gap: 12px; align-content: start; padding: 16px; min-width: 0; overflow: hidden; isolation: isolate; }
+.wp-card.wp-card-week { grid-row: span 6; }
 @supports not (grid-template-rows: subgrid) { .wp-card { display: flex; flex-direction: column; gap: 12px; } .wp-support { margin-top: auto; } }
 /* the scenario's colour: a rim along the top, clipped to the card's curve, and a faint wash under it */
 .wp-card::before { content: ''; position: absolute; inset: 0 0 auto; height: 3px; background: var(--accent); }
@@ -508,6 +599,24 @@ button.wp-tag:disabled { opacity: .6; cursor: default; }
 .wp-play { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; cursor: pointer; }
 .wp-map-wait { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); }
 .wp-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.wp-outlook { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 6px; margin-bottom: 12px; border-radius: 22px; }
+@media (max-width: 720px) { .wp-outlook { grid-template-columns: minmax(0, 1fr); } }
+.wp-outlook-week { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 12px 16px; border: 0; border-radius: 16px; cursor: pointer; font: inherit; text-align: left; color: var(--ink-1); background: var(--glass-fill); }
+.wp-outlook-week:hover { background: var(--glass-fill-strong); }
+.wp-outlook-when { font-size: .7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.wp-outlook-main { display: flex; align-items: center; gap: 8px; font-size: 1.15rem; font-weight: 700; letter-spacing: -.02em; }
+.wp-outlook-main i { flex: 0 0 12px; height: 12px; border-radius: 4px; }
+.wp-outlook-main b { font-size: .9rem; font-weight: 700; color: var(--ink-2); }
+.wp-outlook-alt { font-size: .82rem; color: var(--ink-2); }
+.wp-pchances { padding: 12px 14px; margin: 0 0 14px; border-radius: 18px; }
+.wp-pchances-label { display: block; margin-bottom: 8px; font-size: .66rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.wp-pbar2 { display: flex; gap: 2px; height: 10px; border-radius: 99px; overflow: hidden; }
+.wp-pbar2 i { display: block; height: 100%; min-width: 3px; }
+.wp-pkey { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: .78rem; color: var(--ink-3); }
+.wp-pkey span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.wp-pkey span.wp-pkey-shown { color: var(--ink-1); font-weight: 650; }
+.wp-pkey i { flex: 0 0 9px; height: 9px; border-radius: 3px; }
+.wp-pkey b { font-weight: 700; font-variant-numeric: tabular-nums; }
 .wp-day { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 2px 6px; border-radius: 12px; cursor: pointer; font: inherit; color: var(--ink-1); background: var(--glass-fill); border: 1px solid transparent; transition: background .2s, border-color .2s; min-width: 0; }
 .wp-day:hover { background: var(--glass-fill-strong); }
 .wp-day[aria-selected='true'] { background: color-mix(in srgb, var(--sel) 18%, transparent); border-color: color-mix(in srgb, var(--sel) 55%, transparent); }

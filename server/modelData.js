@@ -1,11 +1,14 @@
-/* Model Data viewer API: AWS model fields on the UKV 2 km display grid.
+/* Model Data viewer API: AWS model fields on two display grids: the UKV's own 2 km grid (UKV,
+   and everything live and observed) and an 8 km grid from the US east coast to the Volga and
+   from Svalbard to the Sahara (the global models and their ensembles, 26 Oct 2026).
 
    The Python side (tools/modeldata/mdata) does the fetching and gridding; this module
    serves what it makes, runs its jobs (low priority, two at a time) and keeps the run
    catalogue fresh.
 
      GET /api/modeldata/catalog                         models, runs, steps, variables
-     GET /api/modeldata/static/:file                    basemap.png, lines.json, cities.json, grid.json
+     GET /api/modeldata/static/:file                    basemap.png, lines.json, cities.json, grid.json (UK grid)
+     GET /api/modeldata/static/eu/:file                 the same for the wide grid
      GET /api/modeldata/frames/:model/:run/:var/status  starts the job if needed; progress
      GET /api/modeldata/frames/:model/:run/:var/:step   one gzip frame (uint8 grid + JSON header)
 
@@ -27,6 +30,9 @@ export const MODELDATA_DIR = DATA;
 const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg', 'night_lights.png', 'lines.json', 'cities.json', 'grid.json', 'roads.json', 'roads.bin']);
 const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer']);
 const ENS_MODELS = new Set(['ecmwf_ens', 'aifs_ens', 'gefs']);
+/* each model's grid (mdata/common.py MODEL_GRID): its frames are kept apart, per grid */
+export const gridOf = (model) => (model === 'ukv' ? 'uk' : 'eu');
+const GRIDS = new Set(['uk', 'eu']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
 const MAX_USER_JOBS = 3;               // what someone is waiting for
@@ -39,9 +45,9 @@ const running = new Map();            // key -> { child, prefetch }
 const queue = [];                     // [{key, args, prefetch}]
 let catalogBusy = false;
 
-function python(args, onExit) {
+function python(args, onExit, extraEnv = {}) {
   const py = resolveEnsPython();
-  const env = { ...process.env, ...py.env, PYTHONIOENCODING: 'utf-8' };
+  const env = { ...process.env, ...py.env, PYTHONIOENCODING: 'utf-8', ...extraEnv };
   const child = spawn(py.cmd, ['-m', ...args], { cwd: TOOL, env, windowsHide: true });
   try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* not fatal */ }
   let err = '';
@@ -52,7 +58,8 @@ function python(args, onExit) {
 }
 
 const runIso = (tag) => `${tag.slice(0, 4)}-${tag.slice(4, 6)}-${tag.slice(6, 8)}T${tag.slice(9, 11)}:${tag.slice(11, 13)}Z`;
-const frameDir = (model, run, v) => (ENS_MODELS.has(model) ? path.join(DATA, 'frames', 'ens', model, run, v) : path.join(DATA, 'frames', model, run, v));
+const framesRoot = (model) => path.join(DATA, gridOf(model) === 'uk' ? 'frames' : `frames_${gridOf(model)}`);
+const frameDir = (model, run, v) => (ENS_MODELS.has(model) ? path.join(framesRoot(model), 'ens', model, run, v) : path.join(framesRoot(model), model, run, v));
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 
 function pump() {
@@ -66,7 +73,7 @@ function pump() {
       running.delete(job.key);
       if (code) console.warn(`[modeldata] job ${job.key} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
       pump();
-    });
+    }, { MDATA_GRID: gridOf(job.args[0]) });
     running.set(job.key, { child, prefetch: job.prefetch });
   }
 }
@@ -201,6 +208,9 @@ function refreshPoint(cat) {
 export function mountModelData(app) {
   fs.mkdirSync(DATA, { recursive: true });
   if (!fs.existsSync(path.join(DATA, 'static', 'sat_day.jpg'))) python(['mdata.static'], (c, e) => c && console.warn(`[modeldata] static build failed: ${e.slice(-300)}`));
+  if (!fs.existsSync(path.join(DATA, 'static', 'eu', 'sat_day.jpg'))) {
+    python(['mdata.static'], (c, e) => c && console.warn(`[modeldata] wide static build failed: ${e.slice(-300)}`), { MDATA_GRID: 'eu' });
+  }
   refreshCatalog();
   setInterval(refreshCatalog, 3 * 60 * 1000).unref();      // new runs and new steps within ~3 min of reaching AWS
   refreshLive('fast');
@@ -215,9 +225,10 @@ export function mountModelData(app) {
     res.sendFile(f);
   });
 
-  app.get('/api/modeldata/static/:file', (req, res) => {
-    if (!STATIC_FILES.has(req.params.file)) return res.status(404).end();
-    const f = path.join(DATA, 'static', req.params.file);
+  app.get(['/api/modeldata/static/:file', '/api/modeldata/static/:grid/:file'], (req, res) => {
+    const { grid, file } = req.params;
+    if (!STATIC_FILES.has(file) || (grid && !GRIDS.has(grid))) return res.status(404).end();
+    const f = path.join(DATA, 'static', ...(grid && grid !== 'uk' ? [grid] : []), file);
     if (!fs.existsSync(f)) return res.status(503).json({ error: 'map layers are being built' });
     res.set('Cache-Control', 'public, max-age=86400');
     res.sendFile(f);

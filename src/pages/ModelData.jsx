@@ -17,13 +17,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
   Waves, MapPin, Search, ChevronDown, X, Layers, Star, Minus, Plus, Zap, Route, Grid3x3, Navigation, CloudSun, Cloud,
-  Map as MapIcon, CloudLightning,
+  Map as MapIcon, CloudLightning, Gauge,
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, frameCanvas, frameContours, drawScene,
   realtimeBasemap, fmtValue, download, makeGif, probFrame, loadLive, loadRoads, smoothCanvas, loadObserved, WX_NAMES, sampleFrame,
-  lonLatToGrid, STRIKE_STYLE,
+  lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres,
 } from '@/lib/modelViewer';
+import { GRIDS, gridOfModel, projection } from '@/lib/modelGrids';
 import { useAuth } from '@/lib/AuthContext';
 import { novaRecentRuns, novaRun, runName, riskAreas, RISK_KEY, londonDay } from '@/lib/novaOutlook';
 import { listStudioGraphics } from '@/components/studio/studioSaves';
@@ -395,6 +396,9 @@ export default function ModelData() {
   const [showRoads, setShowRoads] = useState(!!prefs.showRoads);
   const [showGrid, setShowGrid] = useState(!!prefs.showGrid);
   const [showArrows, setShowArrows] = useState(!!prefs.showArrows);
+  /* sea-level pressure over any layer: isobars (every 2, 4 or 8 hPa), H and L, and the centres' pressures */
+  const [msl, setMsl] = useState(() => ({ on: false, isobars: true, symbols: true, centres: true, every: 4, ...(prefs.msl || {}) }));
+  const setMslK = (k, v) => setMsl((o) => ({ ...o, [k]: v }));
   const [showWx, setShowWx] = useState(!!prefs.showWx);
   const [showClouds, setShowClouds] = useState(!!prefs.showClouds);
   const [roads, setRoads] = useState(null);
@@ -450,13 +454,32 @@ export default function ModelData() {
   const [size, setSize] = useState(0);
   const [hover, setHover] = useState(null);
   const [imgs, setImgs] = useState({});
-  const [statics, setStatics] = useState(null);
+  const [staticsBy, setStaticsBy] = useState({});            // each grid's coastlines and places
   const [fontsOk, setFontsOk] = useState(0);
   const [varOpen, setVarOpen] = useState(false);
   const [q, setQ] = useState('');
   const [mapOpen, setMapOpen] = useState(false);              // the Layers panel
   const [regionsOpen, setRegionsOpen] = useState(false);
   const [pin, setPin] = useState(null);                     // a clicked point: its value through the steps
+  /* The display grid: the UKV's 2 km grid for the UKV, live and observed; the wide 8 km grid of
+     Europe, the Atlantic and North Africa for the global models and their ensembles. It is switched
+     here, during render, so every lon/lat conversion and frame below already uses it; the view
+     keeps the same place and map scale across a switch. */
+  const gridName = isLive || isObs ? 'uk' : gridOfModel(isProb ? ensId : modelId);
+  const gridRef = useRef(gridName);
+  if (GRID.name !== gridName) setGrid(gridName);
+  if (gridRef.current !== gridName) {
+    const from = GRIDS[gridRef.current], to = GRIDS[gridName];
+    gridRef.current = gridName;
+    if (view) {
+      const [lon, lat] = projection(from).fromGrid(view.cx, view.cy);
+      const [cx, cy] = projection(to).toGrid(lon, lat);
+      setView({ cx, cy, s: Math.max(0.3, Math.min(30, view.s * (to.dx / from.dx))) });
+    }
+    setPin(null);
+    setRoads(null);
+  }
+  const statics = staticsBy[gridName] || null;
   /* phone below 640 px wide, tablet to 1180 px, desktop beyond */
   const [vw, setVw] = useState(() => (typeof window === 'undefined' ? 1400 : window.innerWidth));
   useEffect(() => {
@@ -471,9 +494,9 @@ export default function ModelData() {
   useEffect(() => {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours,
-        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov }));
+        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov, msl }));
     } catch { /* private window: nothing to remember */ }
-  }, [mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours, showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning,
+  }, [mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours, showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, msl,
     strikeStyle, ov]);
 
   /* the overlay's runs (the last 48 hours), the newest Main Run chosen unless one already is */
@@ -518,7 +541,7 @@ export default function ModelData() {
       }
     })().catch((e) => live && setOvErr(e.message));
     return () => { live = false; };
-  }, [ovRun, ov.span, ov.from, ov.to, ov.look]);
+  }, [ovRun, ov.span, ov.from, ov.to, ov.look, gridName]);
   /* the outlooks saved in the Graphic Studio, newest first */
   useEffect(() => {
     if (!ovOn || ov.src !== 'outlook' || ovOutlooks) return;
@@ -528,7 +551,7 @@ export default function ModelData() {
     }).catch((e) => setOvErr(e.message));
   }, [ovOn, ov.src, ovOutlooks]); // eslint-disable-line react-hooks/exhaustive-deps
   const outlookShown = useMemo(() => (ov.src === 'outlook' && ovOutlooks ? outlookOverlay(ovOutlooks.find((g) => g.id === ov.outlook)?.state) : null),
-    [ov.src, ov.outlook, ovOutlooks]);
+    [ov.src, ov.outlook, ovOutlooks, gridName]);   // eslint-disable-line react-hooks/exhaustive-deps -- remade on a grid switch
   /** the overlay for a frame's time: the outlook, the span, or that London day's */
   const riskFor = useCallback((validMs) => {
     if (!ovOn) return null;
@@ -574,13 +597,20 @@ export default function ModelData() {
       .catch((e) => { if (!stop) { setErr(e.message); setTimeout(get, 15000); } });
     get();
     const t = setInterval(get, 2 * 60 * 1000);           // a new run shows up here within minutes of reaching AWS
-    const layers = () => Promise.all([fetch(`${API}/static/lines.json`).then((r) => r.json()), fetch(`${API}/static/cities.json`).then((r) => r.json()),
-      loadImage('/logo.png').catch(() => null)])
-      .then(([lines, cities, logo]) => !stop && setStatics({ lines, cities, logo }))
-      .catch(() => { if (!stop) setTimeout(layers, 5000); });
-    layers();
     return () => { stop = true; clearInterval(t); };
   }, []);
+  /* the grid's coastlines, borders and places, loaded once per grid */
+  useEffect(() => {
+    if (staticsBy[gridName]) return undefined;
+    let stop = false;
+    const g = gridName;
+    const layers = () => Promise.all([fetch(staticUrl('lines.json', g)).then((r) => r.json()), fetch(staticUrl('cities.json', g)).then((r) => r.json()),
+      loadImage('/logo.png').catch(() => null)])
+      .then(([lines, cities, logo]) => !stop && setStaticsBy((o) => ({ ...o, [g]: { lines, cities, logo } })))
+      .catch(() => { if (!stop) setTimeout(layers, 5000); });
+    layers();
+    return () => { stop = true; };
+  }, [gridName, staticsBy]);
 
   useEffect(() => {
     if (!isLive) return undefined;
@@ -597,9 +627,12 @@ export default function ModelData() {
   /* basemap images for the chosen style, loaded on demand */
   useEffect(() => {
     const need = style === 'realtime' ? ['sat_day.jpg', 'night_lights.png'] : [MAP_STYLES[style].base];
-    need.forEach((f) => !imgs[f] && loadImage(`${API}/static/${f}`).then((im) => setImgs((o) => ({ ...o, [f]: im })))
-      .catch(() => { delete imgCache[`${API}/static/${f}`]; setTimeout(() => setImgs((o) => ({ ...o })), 5000); }));
-  }, [style, imgs]);
+    need.forEach((f) => {
+      const k = `${gridName}/${f}`, url = staticUrl(f, gridName);
+      if (!imgs[k]) loadImage(url).then((im) => setImgs((o) => ({ ...o, [k]: im })))
+        .catch(() => { delete imgCache[url]; setTimeout(() => setImgs((o) => ({ ...o })), 5000); });
+    });
+  }, [style, imgs, gridName]);
 
   /* observed: the archive's days, and each day's summary (extremes, stations, lightning) */
   useEffect(() => {
@@ -858,11 +891,11 @@ export default function ModelData() {
 
   const basemapFor = useCallback((f) => {
     if (style === 'realtime') {
-      const d = imgs['sat_day.jpg'], n = imgs['night_lights.png'];
+      const d = imgs[`${gridName}/sat_day.jpg`], n = imgs[`${gridName}/night_lights.png`];
       return d && n && f ? realtimeBasemap(d, n, Date.parse(f.head.valid)) : d || null;
     }
-    return imgs[MAP_STYLES[style].base] || null;
-  }, [style, imgs]);
+    return imgs[`${gridName}/${MAP_STYLES[style].base}`] || null;
+  }, [style, imgs, gridName]);
 
   const disp = useCallback((f) => (isProb && f ? probFrame(f, thr, dir) : f), [isProb, thr, dir]);
   /* strikes in the hour up to a frame's time, with their age in minutes */
@@ -884,8 +917,12 @@ export default function ModelData() {
   const canWx = ownWx || isLive || (isForecast && hasVar('wx'));
   const canClouds = isLive ? liveItem.src === 'radar' : isForecast && hasVar('tcc') && RAINY.has(varKey);
   const canGrid = !isImg && !selfArrows;
-  const canStar = !isImg && !['wx', 'wdir10', 'mwd'].includes(scaleKey) && !(isLive && liveKey === 'now_wx');
-  const canContours = !isImg && !!scaleFor(scaleKey).contours;
+  const canStar = !isImg && !['wx', 'ptype', 'wdir10', 'mwd'].includes(scaleKey) && !(isLive && liveKey === 'now_wx');
+  /* MSLP as the layer itself: its lines, highs and lows are the pressure overlay's, under its switches */
+  const ownMsl = (isForecast && varKey === 'mslp') || (isLive && liveKey === 'now_mslp');
+  const canMsl = ownMsl || (isForecast && hasVar('mslp')) || (isLive && !isImg);
+  const mslOn = ownMsl || (msl.on && canMsl);
+  const canContours = !isImg && !!scaleFor(scaleKey).contours && !ownMsl;
   const canLightning = isLive || isObs;
   const arrowsOn = ownArrows || (showArrows && canArrows);
   const wxOn = ownWx || (showWx && canWx);
@@ -893,6 +930,7 @@ export default function ModelData() {
   const fcArrows = useCompanion(fcModel, run, 'wdir10', wantStep, arrowsOn && !selfArrows);
   const fcWx = useCompanion(fcModel, run, 'wx', wantStep, wxOn && !ownWx);
   const fcCloud = useCompanion(fcModel, run, 'tcc', wantStep, cloudsOn);
+  const fcMsl = useCompanion(fcModel, run, 'mslp', wantStep, mslOn && !ownMsl && isForecast);
   /* a direction has no colours of its own: what it moves goes underneath (wave height, wind speed) */
   const underVar = selfArrows ? (varKey === 'mwd' ? 'swh' : 'wind10') : null;
   const underMeta = underVar && hasVar(underVar) ? cat?.variables?.[underVar] : null;
@@ -900,6 +938,9 @@ export default function ModelData() {
   const lvArrows = useLiveCompanion(liveCat, 'now_wdir10', isLive && arrowsOn);
   const lvWx = useLiveCompanion(liveCat, 'now_wx', isLive && wxOn && liveKey !== 'now_wx');
   const lvCloud = useLiveCompanion(liveCat, 'sat_ir', isLive && cloudsOn);
+  const lvMsl = useLiveCompanion(liveCat, 'now_mslp', isLive && mslOn && !ownMsl);
+  const pressureCache = useRef(new Map());
+  const centreCache = useRef(new Map());
   const smoothCache = useRef(new Map());
   const overlayCache = useRef(new Map());
   const credit = !model ? '' : isObs
@@ -926,6 +967,7 @@ export default function ModelData() {
     const wxF = !wxOn || !raw ? null : ownWx ? f : companionOf(isLive ? lvWx : fcWx, raw, isLive, 16);
     const underF = underMeta && raw ? companionOf(fcUnder, raw, false) : null;
     const cloudF = cloudsOn && raw ? companionOf(isLive ? lvCloud : fcCloud, raw, isLive, 60) : null;   // satellite runs ~30-40 min behind the radar
+    const mslF = !mslOn || !raw ? null : ownMsl ? raw : companionOf(isLive ? lvMsl : fcMsl, raw, isLive, 30);
     const day = isObs && raw ? dayOf(Date.parse(raw.head.valid)) : null;
     const ext = day ? obsSummary[day]?.fields?.[obsKey] : null;
     return {
@@ -944,11 +986,15 @@ export default function ModelData() {
       strikes: !showLightning || !raw ? null : isLive ? (strikes ? strikesAt(Date.parse(raw.head.valid)) : null) : isObs ? obsStrikes[day] || null : null,
       strikesDaily: isObs, strikeStyle,
       risk: raw ? riskFor(Date.parse(raw.head.valid)) : null,
+      pressure: mslF ? {
+        lines: msl.isobars ? pressureLines(mslF, msl.every, model?.res_km, pressureCache.current) : null,
+        list: msl.symbols || msl.centres ? pressureCentres(mslF, centreCache.current) : null, symbols: msl.symbols, centres: msl.centres,
+      } : null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disp, style, basemapFor, statics, showCities, scaleKey, smooth, showContours, model, chromeFor, fontsOk, showStar, vmeta, isLive, isObs, showLightning, strikes,
     arrowsOn, wxOn, cloudsOn, lvArrows, fcArrows, lvWx, fcWx, lvCloud, fcCloud, showRoads, roads, showGrid, timeSteps, obsSummary, obsKey, obsStrikes,
-    selfArrows, ownWx, canGrid, canStar, canContours, underMeta, underVar, fcUnder, strikeStyle, riskFor]);
+    selfArrows, ownWx, canGrid, canStar, canContours, underMeta, underVar, fcUnder, strikeStyle, riskFor, mslOn, ownMsl, msl, fcMsl, lvMsl]);
   useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); smoothCache.current.clear(); }, [thr, dir, scaleKey]);
 
   /* draw: the map everywhere, dimmed outside the frame, the finished graphic inside it */
@@ -1182,6 +1228,7 @@ export default function ModelData() {
 
   /* one value, as this layer reads: a weather type, a direction, or a number with its unit */
   const fmtPoint = (v) => (!Number.isFinite(v) ? '—' : scaleKey === 'wx' ? WX_NAMES[Math.round(v)] ?? '—'
+    : scaleKey === 'ptype' ? scaleFor('ptype').keyLabel(v) || 'None'
     : scaleKey === 'wdir10' || scaleKey === 'mwd' ? `from the ${compass(v)} · ${Math.round(v)}°` : fmtValue(v, vmeta?.unit));
 
   /* panels: on a phone one at a time, as sheets from the bottom; elsewhere as cards */
@@ -1238,7 +1285,7 @@ export default function ModelData() {
   );
 
   const layerCount = [showCities || wxOn, wxOn, arrowsOn, cloudsOn, canLightning && showLightning, showRoads, canGrid && showGrid,
-    canContours && showContours, canStar && showStar, ovOn].filter(Boolean).length;
+    canContours && showContours, canStar && showStar, ovOn, mslOn && !ownMsl].filter(Boolean).length;
   const styleSeg = <Seg small items={Object.entries(MAP_STYLES).map(([k, s]) => [k, s.label])} value={style} onChange={setStyle} />;
   const frameSeg = <Seg small items={Object.entries(FRAMES).map(([k, f]) => [k, f.label])} value={frameKey} onChange={setFrameKey} />;
   const smoothPill = (
@@ -1251,6 +1298,23 @@ export default function ModelData() {
   const swatch = (value, onChange, title) => (
     <input type="color" value={value} onChange={(e) => onChange(e.target.value)} title={title} aria-label={title}
       style={{ width: 28, height: 22, padding: 0, border: `1px solid ${T.line}`, borderRadius: 7, background: 'none', cursor: 'pointer' }} />
+  );
+  const mslControls = (
+    <div style={{ display: 'grid', gap: 8, padding: '0 8px 10px 46px' }}>
+      <div style={{ ...subRow, gap: 12 }}>
+        {[['isobars', 'Isobars'], ['symbols', 'H and L'], ['centres', 'Centres']].map(([k, l]) => (
+          <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }} title={k === 'symbols' ? 'the pressure symbols: H for highs, L for lows' : k === 'centres' ? 'where each high and low is centred, with its pressure' : 'lines of equal pressure, labelled'}>
+            <input type="checkbox" checked={!!msl[k]} onChange={(e) => setMslK(k, e.target.checked)} /> {l}
+          </label>
+        ))}
+      </div>
+      {msl.isobars && (
+        <div style={subRow}>
+          <span style={{ fontWeight: 600 }}>Every</span>
+          <Seg small items={[[2, '2 hPa'], [4, '4 hPa'], [8, '8 hPa']]} value={msl.every} onChange={(v) => setMslK('every', v)} />
+        </div>
+      )}
+    </div>
   );
   const strikeControls = (
     <div style={{ display: 'grid', gap: 8, padding: '0 8px 10px 46px' }}>
@@ -1329,6 +1393,8 @@ export default function ModelData() {
       <LayerRow icon={<MapPin size={14} />} label="Places" note={wxOn ? 'shown with the weather symbols' : null} on={showCities || wxOn} locked={wxOn} onClick={() => setShowCities((x) => !x)} />
       {canWx && <LayerRow icon={<CloudSun size={14} />} label="Weather symbols" note={ownWx ? 'part of this layer' : 'above the places; sun or moon by the real sun'} on={wxOn} locked={ownWx} onClick={() => setShowWx((x) => !x)} />}
       {canArrows && <LayerRow icon={<Navigation size={14} />} label="Wind arrows" note={ownArrows ? 'part of this layer' : 'the way the wind is blowing'} on={arrowsOn} locked={ownArrows} onClick={() => setShowArrows((x) => !x)} />}
+      {canMsl && <LayerRow icon={<Gauge size={14} />} label="Sea-level pressure" note={ownMsl ? 'this layer: its isobars, highs and lows' : 'isobars, highs and lows over the layer'} on={mslOn} locked={ownMsl} onClick={() => setMslK('on', !msl.on)} />}
+      {canMsl && mslOn && mslControls}
       {canClouds && <LayerRow icon={<Cloud size={14} />} label="Cloud underneath" note={isLive ? 'satellite cloud under the radar' : 'the model’s cloud under its rain'} on={showClouds} onClick={() => setShowClouds((x) => !x)} />}
       {canLightning && <LayerRow icon={<Zap size={14} />} label="Lightning" note={isLive ? 'strikes in the hour before each frame' : 'every strike that day'} on={showLightning} onClick={() => setShowLightning((x) => !x)} />}
       {canLightning && showLightning && strikeControls}
@@ -1527,7 +1593,7 @@ export default function ModelData() {
   const pinCard = pin && (() => {
     const vals = steps.map((s) => (frames[s] ? sampleFrame(disp(frames[s]), pin.gx, pin.gy) : NaN));
     const at = Math.min(idx, Math.max(0, steps.length - 1));
-    const numeric = !['wx', 'wdir10', 'mwd'].includes(scaleKey);
+    const numeric = !['wx', 'ptype', 'wdir10', 'mwd'].includes(scaleKey);
     const fin = vals.filter(Number.isFinite);
     const c = (statics?.cities || []).reduce((b, x) => { const d = Math.hypot(x.x - pin.gx, x.y - pin.gy); return !b || d < b.d ? { d, n: x.name } : b; }, null);
     const km = c ? c.d * 2 : null;

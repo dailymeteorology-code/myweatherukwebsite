@@ -1,6 +1,7 @@
-"""Static layers for the viewer, all on the display grid (built once).
+"""Static layers for the viewer, all on the display grid (built once per grid).
 
-    python -m mdata.static
+    python -m mdata.static                     the UK grid
+    MDATA_GRID=eu python -m mdata.static       the wide grid of the global models
 
 basemap.png        2x the grid (2084 x 1940): dark map, land shaded by UKV's own 2 km orography
 basemap_light.png  the same relief as a light paper map
@@ -19,7 +20,7 @@ from PIL import Image, ImageDraw
 from pyproj import Transformer
 from scipy import ndimage
 
-from .common import DX, NX, NY, PROJ, REPO, STATIC, X0, Y_TOP, grid_meta, write_json
+from .common import DX, GRID, NX, NY, PROJ, REPO, STATIC, X0, Y_TOP, grid_meta, write_json
 from .models import UKV
 
 SS = 2                                                   # basemap supersampling
@@ -44,7 +45,32 @@ CITIES = [
     ('Fort William', 56.820, -5.105, 3), ('Penzance', 50.118, -5.537, 3), ('Brighton', 50.823, -0.137, 3),
 ]
 
+# the wide grid's places: capitals and big cities of Europe, North Africa and the Atlantic coasts,
+# rank 1 shown first; the UK and Irish ones above stay for when it is zoomed in
+CITIES_WIDE = CITIES + [
+    ('Madrid', 40.417, -3.704, 1), ('Lisbon', 38.722, -9.139, 1), ('Rome', 41.903, 12.496, 1), ('Berlin', 52.520, 13.405, 1),
+    ('Vienna', 48.208, 16.373, 1), ('Warsaw', 52.230, 21.012, 1), ('Stockholm', 59.329, 18.069, 1), ('Oslo', 59.914, 10.752, 1),
+    ('Copenhagen', 55.676, 12.568, 1), ('Helsinki', 60.170, 24.938, 1), ('Reykjavik', 64.147, -21.943, 1), ('Moscow', 55.756, 37.617, 1),
+    ('Kyiv', 50.450, 30.523, 1), ('Athens', 37.984, 23.728, 1), ('Istanbul', 41.008, 28.978, 1), ('Bucharest', 44.427, 26.103, 1),
+    ('Budapest', 47.498, 19.040, 1), ('Prague', 50.076, 14.438, 1), ('Algiers', 36.754, 3.059, 1), ('Tunis', 36.806, 10.181, 1),
+    ('Rabat', 34.021, -6.841, 1), ('Cairo', 30.044, 31.236, 1), ('New York', 40.713, -74.006, 1), ('St John\'s', 47.561, -52.713, 1),
+    ('Nuuk', 64.181, -51.694, 1), ('Ponta Delgada', 37.741, -25.676, 1), ('Las Palmas', 28.124, -15.436, 1),
+    ('Barcelona', 41.385, 2.173, 2), ('Marseille', 43.296, 5.370, 2), ('Milan', 45.464, 9.190, 2), ('Munich', 48.135, 11.582, 2),
+    ('Hamburg', 53.551, 9.994, 2), ('Zurich', 47.377, 8.542, 2), ('Lyon', 45.764, 4.836, 2), ('Bordeaux', 44.838, -0.579, 2),
+    ('Porto', 41.150, -8.611, 2), ('Seville', 37.389, -5.984, 2), ('Valencia', 39.470, -0.376, 2), ('Naples', 40.852, 14.268, 2),
+    ('Palermo', 38.116, 13.361, 2), ('Belgrade', 44.787, 20.457, 2), ('Sofia', 42.698, 23.322, 2), ('Riga', 56.950, 24.105, 2),
+    ('Vilnius', 54.687, 25.280, 2), ('Tallinn', 59.437, 24.754, 2), ('Minsk', 53.900, 27.559, 2), ('St Petersburg', 59.939, 30.316, 2),
+    ('Trondheim', 63.431, 10.395, 2), ('Tromso', 69.649, 18.956, 2), ('Torshavn', 62.009, -6.772, 2), ('Ankara', 39.934, 32.860, 2),
+    ('Casablanca', 33.573, -7.590, 2), ('Tripoli', 32.887, 13.191, 2), ('Halifax', 44.649, -63.575, 2), ('Boston', 42.360, -71.059, 2),
+    ('Funchal', 32.650, -16.908, 2), ('Valletta', 35.899, 14.514, 2), ('Gibraltar', 36.140, -5.354, 2), ('Kazan', 55.796, 49.106, 2),
+    ('Volgograd', 48.708, 44.513, 2), ('Krakow', 50.065, 19.945, 3), ('Gdansk', 54.352, 18.646, 3), ('Frankfurt', 50.110, 8.682, 3),
+    ('Cologne', 50.938, 6.960, 3), ('Toulouse', 43.605, 1.444, 3), ('Nantes', 47.218, -1.554, 3), ('Bilbao', 43.263, -2.935, 3),
+    ('Venice', 45.441, 12.316, 3), ('Florence', 43.770, 11.256, 3), ('Thessaloniki', 40.640, 22.944, 3), ('Odesa', 46.482, 30.723, 3),
+    ('Gothenburg', 57.709, 11.975, 3), ('Akureyri', 65.683, -18.088, 3), ('Marrakesh', 31.630, -7.981, 3),
+]
+
 _TR = Transformer.from_crs('EPSG:4326', PROJ, always_xy=True)
+_AREA = (-32, 32, 34, 76) if GRID == 'uk' else (-100, 75, 10, 86)        # lon/lat box worth drawing
 
 
 def to_px(lon, lat, scale=1.0):
@@ -72,7 +98,8 @@ def ring(arcs, idx):
 
 
 def in_area(ll):
-    return ((ll[:, 0] > -32) & (ll[:, 0] < 32) & (ll[:, 1] > 34) & (ll[:, 1] < 76)).any()
+    w, e, s_, n = _AREA
+    return ((ll[:, 0] > w) & (ll[:, 0] < e) & (ll[:, 1] > s_) & (ll[:, 1] < n)).any()
 
 
 def thin(px, py, tol=0.35):
@@ -176,7 +203,10 @@ def land_mask():
 
 
 def orography():
-    """UKV's own 2 km orography (any recent run carries it)."""
+    """UKV's own 2 km orography (any recent run carries it); on the wide grid, GFS's 0.25-degree
+    surface height (the UKV covers only the British Isles)."""
+    if GRID != 'uk':
+        return _gfs_orography()
     m = UKV()
     for r, steps in m.runs(n=2):
         try:
@@ -185,6 +215,20 @@ def orography():
         except Exception:
             continue
     raise RuntimeError('no UKV orography found')
+
+
+def _gfs_orography():
+    from .models import GFS, ECMWF
+    from nova.io_aws import decode_grib, fetch_ranges
+    g = GFS()
+    for r, _ in g.runs(n=2):
+        try:
+            rec = g._pick(g.index(r, 0), 'HGT', 'surface')
+            a, meta = decode_grib(fetch_ranges(g.url(r, 0), [(rec['start'], rec['end'], 0)], gap=0, workers=2)[0])
+            return np.nan_to_num(ECMWF._to_display(g, a, meta))
+        except Exception:
+            continue
+    raise RuntimeError('no GFS orography found')
 
 
 def basemap():
@@ -208,20 +252,23 @@ def basemap():
 
 
 NASA = REPO.parent / 'mwuk-graphics' / 'assets' / 'basemap'      # same NASA imagery as the motion graphics
-NASA_BOX = (-22.5, 40.5, 18.0, 67.5)                                # equirectangular, north-up
+# equirectangular, north-up (west, south, east, north); the wide grid's from GIBS at about 4 km
+NASA_BOX = (-22.5, 40.5, 18.0, 67.5) if GRID == 'uk' else (-100.0, 12.0, 76.0, 87.0)
+NASA_PX = (4608, 3072) if GRID == 'uk' else (4800, 2045)
 GIBS = ('https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0'
-        '&LAYERS={layer}&CRS=EPSG:4326&BBOX=40.5,-22.5,67.5,18&WIDTH=4608&HEIGHT=3072&FORMAT=image/jpeg')
+        '&LAYERS={layer}&CRS=EPSG:4326&BBOX={s},{w},{n},{e}&WIDTH={pw}&HEIGHT={ph}&FORMAT=image/jpeg')
 
 
 def _nasa(name, layer):
-    """NASA Blue Marble (day) / Black Marble (night) over NW Europe, from the motion-graphics
-    assets, or straight from NASA GIBS if they are not on this machine."""
-    f = NASA / name
+    """NASA Blue Marble (day) / Black Marble (night) over the grid's area, from the motion-graphics
+    assets (north-west Europe), or straight from NASA GIBS (the wide grid, or if they are missing)."""
+    f = NASA / name if GRID == 'uk' else STATIC / name.replace('europe', 'wide')
     if not f.exists():
         from nova.io_aws import get
         STATIC.mkdir(parents=True, exist_ok=True)
-        f = STATIC / name
-        f.write_bytes(get(GIBS.format(layer=layer), tries=3, timeout=180))
+        f = STATIC / f.name
+        w, s_, e, n = NASA_BOX
+        f.write_bytes(get(GIBS.format(layer=layer, w=w, s=s_, e=e, n=n, pw=NASA_PX[0], ph=NASA_PX[1]), tries=3, timeout=300))
     return np.asarray(Image.open(f).convert('RGB'), np.float32)
 
 
@@ -272,9 +319,10 @@ def main():
     STATIC.mkdir(parents=True, exist_ok=True)
     write_json(STATIC / 'grid.json', grid_meta())
     write_json(STATIC / 'lines.json', lines())
-    px, py = to_px([c[2] for c in CITIES], [c[1] for c in CITIES])
-    write_json(STATIC / 'cities.json', [{'name': c[0], 'x': round(float(x), 2), 'y': round(float(y), 2), 'rank': c[3]}
-                                        for c, x, y in zip(CITIES, px, py) if 0 <= x <= NX and 0 <= y <= NY])
+    places = CITIES if GRID == 'uk' else CITIES_WIDE
+    px, py = to_px([c[2] for c in places], [c[1] for c in places])
+    write_json(STATIC / 'cities.json', [{'name': c[0], 'x': round(float(x), 2), 'y': round(float(y), 2), 'rank': c[3] if GRID == 'uk' or c[3] == 1 or c not in CITIES else c[3] + 1}
+                                        for c, x, y in zip(places, px, py) if 0 <= x <= NX and 0 <= y <= NY])
     roads()
     basemap()
     styled_basemaps()

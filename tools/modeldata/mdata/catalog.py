@@ -11,7 +11,7 @@ import time
 import warnings
 from datetime import datetime, timezone
 
-from .common import DATA, FRAMES, grid_meta, write_json
+from .common import DATA, GRIDS, frames_root, grid_meta, grid_of, write_json
 from .models import MODELS, SOURCES, VARIABLES
 
 
@@ -20,7 +20,7 @@ def model_entry(m):
         runs = m.runs()
     except Exception as e:
         return {'id': m.id, 'error': str(e)[:200], 'runs': []}
-    return {'id': m.id, 'label': m.label, 'res_km': m.res_km, 'source': SOURCES[m.id], 'variables': m.variables,
+    return {'id': m.id, 'label': m.label, 'res_km': m.res_km, 'grid': grid_of(m.id), 'source': SOURCES[m.id], 'variables': m.variables,
             'runs': [dict({'run': r.isoformat(), 'steps': s}, **({'kept': True} if r in getattr(m, 'kept_runs', ()) else {}))
                      for r, s in runs]}
 
@@ -28,7 +28,10 @@ def model_entry(m):
 def prune(keep_hours=36):
     """Frames of runs older than `keep_hours` (relative to the newest run of that model)."""
     import shutil
-    model_dirs = [m for m in FRAMES.glob('*') if m.name != 'ens'] + list((FRAMES / 'ens').glob('*'))
+    model_dirs = []
+    for g in GRIDS:                                        # every grid keeps its own frames
+        root = frames_root(g)
+        model_dirs += [m for m in root.glob('*') if m.name != 'ens'] + list((root / 'ens').glob('*'))
     for md in model_dirs:
         runs = sorted(p for p in md.iterdir() if p.is_dir() and len(p.name) == 14)
         if not runs:
@@ -61,8 +64,9 @@ def main():
     except Exception:
         pass
     ensembles = [m if m['runs'] or m['id'] not in old_ens else dict(old_ens[m['id']], stale=True) for m in ensembles]
+    ensembles = [dict(m, grid=grid_of(m['id'])) for m in ensembles]
     write_json(DATA / 'catalog.json', {
-        'generated': datetime.now(timezone.utc).isoformat(), 'grid': grid_meta(),
+        'generated': datetime.now(timezone.utc).isoformat(), 'grid': grid_meta('uk'), 'grids': {g: grid_meta(g) for g in GRIDS},
         'variables': VARIABLES, 'models': models, 'ensembles': ensembles, 'ens_fields': ens.FIELDS})
     try:
         prune()

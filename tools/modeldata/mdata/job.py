@@ -19,7 +19,7 @@ from datetime import timedelta
 import numpy as np
 
 from .common import FRAMES, write_frame, write_json, DATA
-from .models import ACCUM, DIFFERENCED, MODELS, STEP_VARS, VARIABLES, _utc
+from .models import ACCUM, ALIASES, DIFFERENCED, MODELS, SNOW_CHAIN, STEP_VARS, VARIABLES, _utc
 
 
 def run_dir(model, run, var):
@@ -117,6 +117,53 @@ def peak(model, run_s, var, steps, d, status):
         write_json(d / 'status.json', status)
 
 
+def alias(model, run_s, var, steps, d, status):
+    """A copy of another variable's frames in its own units (snow_acc: the snowfall total, read as cm
+    of fresh snow at the usual 10:1, so its numbers are the same). When the source is not complete it
+    is made alongside, and each of its frames is copied as soon as it is written, so the map fills in
+    step by step rather than after the whole run."""
+    import json
+    import threading
+    from .common import read_frame
+    run = _utc(run_s)
+    src = ALIASES[var]
+    sdir = run_dir(model, run, src)
+    try:
+        done = json.loads((sdir / 'status.json').read_text()).get('state') == 'complete'
+    except Exception:
+        done = False
+    maker = None
+    if not done:
+        maker = threading.Thread(target=main, args=(model, run_s, src), daemon=True)
+        maker.start()
+    status['source'] = src
+    left = sorted(steps)
+
+    def copy_ready():
+        nonlocal left
+        rest = []
+        for h in left:
+            if (d / f'{h}.bin').exists():
+                status['done'].append(h)
+                continue
+            p = sdir / f'{h}.bin'
+            if not p.exists():
+                rest.append(h)
+                continue
+            vt = run + timedelta(hours=h)
+            write_frame(d / f'{h}.bin', read_frame(p)[0], VARIABLES[var],
+                        {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat(), 'source': src})
+            status['done'].append(h)
+            write_json(d / 'status.json', status)
+        left = rest
+
+    while maker is not None and maker.is_alive():
+        copy_ready()
+        maker.join(2.0)
+    copy_ready()
+    status['missing'].extend(left)
+
+
 def main(model, run_s, var, first=None):
     logging.disable(logging.WARNING)
     warnings.filterwarnings('ignore')
@@ -129,15 +176,16 @@ def main(model, run_s, var, first=None):
     status = {'model': model, 'run': run.isoformat(), 'var': var, 'steps': steps, 'done': [], 'missing': [],
               'state': 'running', 'started': time.time()}
     write_json(d / 'status.json', status)
-    if var in ('wx', 'gust_peak'):
-        (derived if var == 'wx' else peak)(model, run_s, var, steps, d, status)
+    if var in ('wx', 'gust_peak') or var in ALIASES:
+        (derived if var == 'wx' else peak if var == 'gust_peak' else alias)(model, run_s, var, steps, d, status)
         status['state'] = 'complete'
         status['seconds'] = round(time.time() - status['started'], 1)
         write_json(d / 'status.json', status)
         return
     accum = var in ACCUM and model in ('ukv', 'mo_global')
     diff = (model, var) in DIFFERENCED
-    need_all = accum or diff                       # these need every raw step, even if frames exist
+    chain = (model, var) in SNOW_CHAIN
+    need_all = accum or diff or chain              # these need every raw step, even if frames exist
     prev = {s: (steps[i - 1] if i else None) for i, s in enumerate(steps)}
     order = steps
     if first is not None and not need_all:          # the step on screen first, then outwards
@@ -164,6 +212,15 @@ def main(model, run_s, var, first=None):
                 status['missing'].append(h)        # not published at this step (a running total carries on)
                 if diff:
                     last_raw, last_h = None, None
+                write_json(d / 'status.json', status)
+                continue
+            if chain:                              # snowfall: each step's new precipitation times its frozen share
+                apcp, frac = a['apcp'], a['frac']
+                total = (total if total is not None else np.zeros_like(apcp)) + \
+                    np.maximum(apcp - (last_raw if last_raw is not None else 0.0), 0) * frac
+                last_raw = apcp
+                write_frame(d / f'{h}.bin', total, enc, meta)
+                status['done'].append(h)
                 write_json(d / 'status.json', status)
                 continue
             cov = None
