@@ -1,17 +1,19 @@
 /* Model Data viewer engine: frames, colour scales, contours, overlays, the drawn scene and
    exports.
 
-   Every model arrives on ONE display grid: the Met Office UKV grid (Lambert equal-area,
-   1042 x 970 cells of exactly 2 km). UKV is drawn cell for cell; coarser models arrive
-   interpolated smoothly on the server (clamped cubic), the live radar and satellite at 1 km
-   (2084 x 1940). "Pixels" draws the UKV and radar cells as they are; "Smooth" interpolates
-   the rain values before colouring (smoothCanvas) and blends other fields on screen.
+   Every model arrives on a display grid: the Met Office UKV grid (Lambert equal-area, 1042 x 970
+   cells of exactly 2 km), the wider 8 km grid of the global models, or the live radar and satellite
+   at 1 km (2084 x 1940). Layers are drawn from their values at the resolution of the screen, on the
+   graphics card (lib/modelGL), so they are as sharp at 4K as at any zoom. "Pixels" shows the real
+   cells of the UKV, radar and analysis as true squares; "Smooth" interpolates them. The global
+   models' 8 km cells are not their real cells, so those are always interpolated.
 
    A graphic can be two windows in one frame with a white line between them (splitFrame,
    drawPanes), each on its own grid if it needs to be (withGrid). */
 import { ukZone } from '@/lib/ukZone';
 import { GRIDS, projection } from '@/lib/modelGrids';
 import { CALC } from '@/lib/modelCalc';
+import { canDrawCells, drawCells, lutSize } from '@/lib/modelGL';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 
 export const API = '/api/modeldata';
@@ -116,7 +118,7 @@ const TOTAL = [[1, '#a9d8f7', 140], [2, '#5aa7e8', 190], [5, '#2f6fd4', 210], [1
   [20, '#efd23a', 235], [30, '#f08b2c', 240], [50, '#dc3a3a', 245], [75, '#a52284', 250], [100, '#5b2a86', 250], [200, '#f2e6ff', 255]];
 const TEMP = [[-25, '#2b1450'], [-15, '#3b2a8f'], [-8, '#3d5fd0'], [-3, '#3d93d8'], [0, '#7fd0e6'], [3, '#9fdfc6'],
   [6, '#b9e59a'], [10, '#e4e581'], [14, '#f4c45e'], [18, '#f19a48'], [22, '#e6683a'], [26, '#d03b34'], [30, '#a3163c'],
-  [35, '#6b0b33'], [42, '#f5d0e6']].map(([v, c]) => [v, c, 205]);
+  [35, '#6b0b33'], [42, '#f5d0e6']].map(([v, c]) => [v, c, 228]);
 const WIND = [[5, '#1f4e79', 0], [10, '#2a8c99', 150], [20, '#3fb07a', 185], [30, '#a6cf3e', 200], [40, '#f2cf3a', 215],
   [50, '#f29233', 225], [60, '#e2523a', 235], [70, '#c2245a', 240], [85, '#8b2fb8', 245], [100, '#e9d7ff', 250]];
 const CLOUD = [[5, '#ffffff', 0], [25, '#e9eef5', 70], [50, '#f4f7fb', 130], [75, '#fbfcfe', 185], [100, '#ffffff', 225]];
@@ -270,6 +272,16 @@ const SCALES = {
     [50, '#efd23a', 222], [60, '#f3a43a', 230], [70, '#ea6a32', 236], [80, '#d93838', 242], [90, '#a3247e', 248]],
   floor: 5, discrete: true, ticks: [5, 10, 20, 30, 40, 50, 60, 70, 80, 90], contours: [20, 50, 80], label: true, line: 'rgba(236,243,250,0.85)', pct: true },
 };
+/* Fields that vary smoothly over the whole map have no edges of their own, so as a smooth blend of
+   colours they look out of focus however finely they are drawn. Each is drawn in fine steps of its
+   colours instead, at sensible values (a degree, 5 mph, 2 hPa), so its shape reads as sharply as
+   the rain's. The values themselves are untouched: this is only how they are coloured. */
+const BANDS = { t2: 1, t2max: 1, t2min: 1, t2max3: 1, t2min3: 1, td2: 1, tskin: 1, feels: 1, windchill: 1, t925: 1, t850: 1, t700: 1, t500: 2, wbpt850: 1, trop_t: 2,
+  rh2: 5, rh700: 5, rh850: 5, wind10: 5, gust10: 5, gust_max: 5, gust_peak: 5, wind100: 5, wind925: 5, wind850: 10, wind700: 10, wind500: 10, wind300: 10, wind250: 10,
+  mslp: 2, z500: 4, z850: 2, thick: 3, trop_p: 25, tcc: 10, lcc: 10, mcc: 10, hcc: 10, cloud_1000ft: 10, conv_cloud: 10, pw: 2, frz: 100, wbfz: 100, hpbl: 100,
+  cape_mu: 100, cape_sb: 100, cape_ml: 100, cin_sb: 25, cin_mu: 25, cin_ml: 25, li: 1, srh3: 25, sw_down: 50, sw_direct: 50, lw_down: 10, uv_down: 0.1, shf: 25, lhf: 25,
+  olr: 10, vort500: 2, w700: 0.25, mwp: 1, pp1d: 1, frozen_pct: 10 };
+for (const [k, band] of Object.entries(BANDS)) SCALES[k].band = band;
 export const scaleFor = (key) => SCALES[key] || { stops: TEMP, ticks: [] };
 /** Does this scale paint the whole map nearly solid (temperature, wind, humidity…)? Rain and the like
     leave most of the map clear, and cloud and pressure are see-through already. */
@@ -284,6 +296,7 @@ const hex = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), pa
 
 export function colourAt(sc, v) {
   if (v == null || Number.isNaN(v)) return null;
+  if (sc.band) v = (Math.floor(v / sc.band) + 0.5) * sc.band;
   if (sc.floor != null && v < sc.floor) return null;
   const s = sc.stops;
   if (v <= s[0][0]) return [...hex(s[0][1]), s[0][2] ?? 210];
@@ -387,6 +400,28 @@ export function frameCanvas(frame, varKey, cache) {
   return cv;
 }
 
+/* the colours along a frame's bytes, for lib/modelGL: every step of the scale at its real value */
+function colourTable(frame, varKey) {
+  const sc = scaleFor(varKey), t = frame.table, out = new Uint8Array(lutSize * 4);
+  for (let i = 0; i < lutSize; i++) {
+    const b = (i / (lutSize - 1)) * 254, k = Math.min(253, Math.floor(b));
+    const c = colourAt(sc, t[k] + (t[k + 1] - t[k]) * (b - k));
+    if (c) out.set(c, i * 4);
+  }
+  return out;
+}
+const CODES = new Set(['wx', 'ptype']);                     // a code between two codes means nothing: never interpolated
+/** A frame as something drawScene can lay on the map: drawn from its values on the graphics card, or
+    (pictures, and browsers without WebGL 2) as a canvas, the frame's colours one pixel to a cell.
+    The UK grid's cells are real, so they can be shown as they are; the wide grid's are not. */
+export function fieldLayer(frame, varKey, smooth, colourCache, smoothCache, rainy) {
+  if (!frame || !onGrid(frame)) return null;
+  if (frame.q && !frame.mix && canDrawCells() && !(import.meta.env.DEV && window.__oldDraw)) {
+    return { gl: true, frame, key: varKey, soft: !!scaleFor(varKey).band, nearest: CODES.has(varKey) || (GRID.name === 'uk' && !frame.prob && !smooth) };
+  }
+  return smooth && rainy && scaleFor(varKey).discrete && frame.q && !frame.prob ? smoothCanvas(frame, varKey, smoothCache) : frameCanvas(frame, varKey, colourCache);
+}
+
 /* a picture part-way to the next one (lib/modelTween): the two dissolved exactly, each pixel a true
    mix of both (drawing one over the other would dim anything see-through mid-way) */
 const mixes = new Map();
@@ -409,7 +444,7 @@ function mixCanvas(frame, varKey, cache) {
   x.drawImage(B, 0, 0, cv.width, cv.height);
   x.globalCompositeOperation = 'source-over';
   x.globalAlpha = 1;
-  cv.dataK = A.dataK; cv.dataX0 = A.dataX0; cv.dataY0 = A.dataY0;
+  cv.dataK = A.dataK; cv.dataX0 = A.dataX0; cv.dataY0 = A.dataY0; cv.picture = A.picture;
   return cv;
 }
 
@@ -460,6 +495,7 @@ function imageCanvas(frame, varKey, cache) {
     ctx.putImageData(id, 0, 0);
   }
   cv.dataK = frame.k || 0.5;
+  cv.picture = true;
   if (cache) { cache.set(frame, cv); if (cache.size > 10) cache.delete(cache.keys().next().value); }
   return cv;
 }
@@ -904,11 +940,30 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   ctx.imageSmoothingQuality = 'high';
   if (L.basemap) drawPyramid(ctx, L.basemap, X(0), Y(0), NX * s, NY * s, opts.coarse);
   const put = (cv, smoothOn, alpha = 1) => {
+    if (cv.gl) {
+      const f = cv.frame, W = f.nx || f.head?.nx || NX, H = f.ny || f.head?.ny || NY, K = f.nx ? f.k || 1 : 1;
+      const x0 = Math.floor(Math.max(clip.x, X(0))), y0 = Math.floor(Math.max(clip.y, Y(0)));
+      const x1 = Math.ceil(Math.min(clip.x + clip.w, X(W * K))), y1 = Math.ceil(Math.min(clip.y + clip.h, Y(H * K)));
+      if (x1 <= x0 || y1 <= y0) return;
+      const w = x1 - x0, h = y1 - y0;
+      const out = drawCells({ frame: f, q: f.q, W, H, K, lutKey: `${cv.key}|${f.prob ? 'chance' : `${f.head?.lo}|${f.head?.hi}|${f.head?.scale}`}`, lut: () => colourTable(f, cv.key),
+        x: x0, y: y0, w, h, ox, oy, s, cx, cy, nearest: cv.nearest || opts.coarse, soft: cv.soft });
+      if (out) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(out, 0, 0, w, h, x0, y0, w, h);
+        ctx.globalAlpha = 1;
+        ctx.imageSmoothingEnabled = true;
+        return;
+      }
+      cv = frameCanvas(f, cv.key);                         // the graphics card went away: the old way
+      if (!cv) return;
+    }
     const dk = cv.dataK;
     const w = dk ? cv.width * dk * s : NX * s, h = dk ? cv.height * dk * s : NY * s;
-    ctx.imageSmoothingEnabled = dk && dk >= 1 ? true : !!smoothOn;      // coarse grids blend; 1 km and 2 km follow the toggle
+    ctx.imageSmoothingEnabled = (dk && dk >= 1) || cv.picture ? true : !!smoothOn;   // pictures always blend; cells follow the toggle
     // 'high' quality only where a big grid is shrunk a lot for an export-quality look; else cheap
-    ctx.imageSmoothingQuality = !opts.coarse && w < cv.width * 0.6 ? 'medium' : 'low';
+    ctx.imageSmoothingQuality = cv.picture && !opts.coarse ? 'high' : !opts.coarse && w < cv.width * 0.6 ? 'medium' : 'low';
     ctx.globalAlpha = alpha;
     ctx.drawImage(cv, X(cv.dataX0 || 0), Y(cv.dataY0 || 0), w, h);
     ctx.globalAlpha = 1;
@@ -1835,8 +1890,9 @@ function drawKey(ctx, R, u, C, st, foot, pad, ink, sub) {
       }
     } else {
       const g = ctx.createLinearGradient(bx2, 0, bx2 + bw2, 0);
-      for (let i = 0; i <= 24; i++) {
-        const f = i / 24, pos = f * n - 0.5, k = Math.max(0, Math.min(n - 1, Math.floor(pos)));
+      const fine = sc.band ? 240 : 24;
+      for (let i = 0; i <= fine; i++) {
+        const f = i / fine, pos = f * n - 0.5, k = Math.max(0, Math.min(n - 1, Math.floor(pos)));
         const t = Math.max(0, Math.min(1, pos - k));
         const v = k + 1 < n ? steps[k] + t * (steps[k + 1] - steps[k]) : steps[n - 1];
         const c = colourAt({ ...sc, floor: null }, v) || [80, 90, 100, 255];
@@ -1956,7 +2012,7 @@ export const canMakeVideo = () => typeof VideoEncoder !== 'undefined' && typeof 
 export async function makeVideo({ count, W, H, fps, render, same, onProgress, cancelled }) {
   if (!canMakeVideo()) throw new Error('This browser cannot make video files. Chrome, Edge, Safari and recent Firefox can.');
   const { Muxer, ArrayBufferTarget } = await import('mp4-muxer');
-  const bitrate = Math.round(Math.min(90e6, Math.max(6e6, W * H * fps * 0.22)));
+  const bitrate = Math.round(Math.min(120e6, Math.max(10e6, W * H * fps * 0.36)));
   const base = { width: W, height: H, bitrate, framerate: fps, latencyMode: 'quality' };
   let config = null, kind = 'avc';
   for (const codec of avcCodecs(W, H, fps)) {

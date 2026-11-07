@@ -25,8 +25,8 @@ import {
   Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard,
 } from 'lucide-react';
 import {
-  API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, frameCanvas, frameContours, drawScene,
-  realtimeBasemap, fmtValue, download, makeGif, makeVideo, canMakeVideo, probFrame, loadLive, loadRoads, smoothCanvas, loadObserved, WX_NAMES, sampleFrame,
+  API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, fieldLayer, frameContours, drawScene,
+  realtimeBasemap, fmtValue, download, makeGif, makeVideo, canMakeVideo, probFrame, loadLive, loadRoads, loadObserved, WX_NAMES, sampleFrame,
   lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres, splitFrame, drawPanes, withGrid, viewOnGrid, WARN_COLOURS,
   coversMap, SEE_THROUGH,
 } from '@/lib/modelViewer';
@@ -519,7 +519,7 @@ export default function ModelData() {
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(prefs.speed || 450);
-  const [smooth, setSmooth] = useState(!!prefs.smooth);
+  const [smooth, setSmooth] = useState(prefs.smooth ?? true);
   const [showContours, setShowContours] = useState(prefs.showContours ?? true);
   const [showCities, setShowCities] = useState(prefs.showCities ?? true);
   const [showStar, setShowStar] = useState(!!prefs.showStar);
@@ -1319,7 +1319,6 @@ export default function ModelData() {
     const f = tw ? tweenFrame(disp(tw.a), disp(tw.b), tw.t, P.scaleKey, cellBox(disp(tw.a), tw.box)) : disp(raw);
     const later = sync ? undefined : { onReady: bump };
     const sc = scaleFor(P.scaleKey);
-    const smoothRain = smooth && sc.discrete && f?.q && !f.prob && RAINY.has(P.scaleKey);
     const comp = (map, key, tol) => {
       if (!map || !raw) return null;
       const a = companionOf(map, tw ? tw.a : raw, P.live, tol);
@@ -1335,7 +1334,7 @@ export default function ModelData() {
       const a = x.prep(extraFrameOf(x.map, tw ? tw.a : raw, x.byTime));
       const b = tw ? x.prep(extraFrameOf(x.map, tw.b, x.byTime)) : null;
       const fr = tw && a && b ? tweenFrame(a, b, tw.t, x.scale, cellBox(a, tw.box)) : a || b;
-      const canvas = fr ? frameCanvas(fr, x.scale, x.cache) : null;
+      const canvas = fieldLayer(fr, x.scale, smooth, x.cache, x.cache, RAINY.has(x.scale));
       return canvas ? [{ canvas, alpha: x.alpha * (x.place === 'over' ? veil(x.scale) : 1), place: x.place, key: { variable: x.meta.label, unit: x.meta.unit, credit: x.place === 'over' ? 'Laid over' : 'Laid under', scale: NO_COLOURS.has(x.scale) ? {} : scaleFor(x.scale) } }] : [];
     });
     const shown = P.chrome(raw, ms);
@@ -1352,11 +1351,10 @@ export default function ModelData() {
     const ext = day ? obsSummary[day]?.fields?.[obsKey] : null;
     return {
       style, basemap: basemapFor(raw, P.grid, ms), lines: st?.lines, cities: showCities || wxF ? st?.cities : null,
-      data: underF ? frameCanvas(underF, P.underVar, C.colour)
-        : f ? (smoothRain ? smoothCanvas(f, P.scaleKey, C.smooth) : frameCanvas(f, P.scaleKey, C.colour)) : null, smooth,
+      data: underF ? fieldLayer(underF, P.underVar, smooth, C.colour, C.smooth, false) : fieldLayer(f, P.scaleKey, smooth, C.colour, C.smooth, RAINY.has(P.scaleKey)), smooth,
       dataAlpha: layerAlpha * veil(underF ? P.underVar : P.scaleKey) * (coversMap(P.scaleKey) && !picture && stacked.some((x) => x.place === 'under') ? 0.7 : 1), dataBlend: onEarth ? 'screen' : null,
       under: stacked.filter((x) => x.place === 'under'), over: stacked.filter((x) => x.place === 'over'),
-      overlay: cloudF ? { canvas: frameCanvas(cloudF, P.live ? 'sat_clouds' : 'tcc', C.overlay), alpha: P.live ? 0.92 : 0.7 } : null,
+      overlay: cloudF ? { canvas: fieldLayer(cloudF, P.live ? 'sat_clouds' : 'tcc', true, C.overlay, C.overlay, false), alpha: P.live ? 0.92 : 0.7 } : null,
       roads: showRoads ? roadsBy[P.grid] || null : null,
       grid: showGrid && P.canGrid && f?.q ? { frame: f, varKey: P.scaleKey, unit: P.meta?.unit } : null,
       arrows: arrowsF ? { frame: arrowsF } : null,
@@ -1843,7 +1841,8 @@ export default function ModelData() {
   const styleSeg = <Seg small items={Object.entries(MAP_STYLES).map(([k, s]) => [k, s.label])} value={style} onChange={setStyle} />;
   const frameSeg = <Seg small items={Object.entries(FRAMES).map(([k, f]) => [k, f.label])} value={frameKey} onChange={setFrameKey} />;
   const sectionTitle = (t) => <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '4px 4px 7px' }}>{t}</div>;
-  const smoothPill = (
+  /* only the UK grid's cells are the model's or radar's real cells: the wide grid's always interpolate */
+  const smoothPill = gridName === 'uk' && (
     <Pill on={smooth} title={smooth ? 'Smoothed: click to see the radar and model cells as they are' : 'Cells as they are: click to smooth'} onClick={() => setSmooth((x) => !x)}>
       {smooth ? 'Smooth' : 'Pixels'}
     </Pill>
