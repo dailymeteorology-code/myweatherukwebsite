@@ -11,19 +11,26 @@
    UKV is drawn cell for cell at its real 2 km.
 
    Layout: the map fills the page; the controls float over it as glass bars. The bright
-   frame in the middle IS the graphic: the same renderer draws it here and into a PNG or
-   GIF, so what you frame (screen, square, wide, vertical, 4:5) is what you download. */
+   frame in the middle IS the graphic: the same renderer draws it here and into a PNG, GIF or
+   video, so what you frame (screen, square, wide, vertical, 4:5) is what you download.
+
+   Met Office warnings go over any layer, any layer can be laid over or under any other, and the
+   frame can hold two windows with a white line between them: two runs, models or layers at the same
+   valid time, or the warnings beside a layer.
+   GIFs and videos are made smooth by working out the frames between the steps (lib/modelTween). */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
   Waves, MapPin, Search, ChevronDown, X, Layers, Star, Minus, Plus, Zap, Route, Grid3x3, Navigation, CloudSun, Cloud,
-  Map as MapIcon, CloudLightning, Gauge,
+  Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard,
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, frameCanvas, frameContours, drawScene,
-  realtimeBasemap, fmtValue, download, makeGif, probFrame, loadLive, loadRoads, smoothCanvas, loadObserved, WX_NAMES, sampleFrame,
-  lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres,
+  realtimeBasemap, fmtValue, download, makeGif, makeVideo, canMakeVideo, probFrame, loadLive, loadRoads, smoothCanvas, loadObserved, WX_NAMES, sampleFrame,
+  lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres, splitFrame, drawPanes, withGrid, viewOnGrid, WARN_COLOURS,
+  coversMap, SEE_THROUGH,
 } from '@/lib/modelViewer';
+import { tweenFrame } from '@/lib/modelTween';
 import { GRIDS, gridOfModel, projection } from '@/lib/modelGrids';
 import { useAuth } from '@/lib/AuthContext';
 import { novaRecentRuns, novaRun, runName, riskAreas, RISK_KEY, londonDay } from '@/lib/novaOutlook';
@@ -158,13 +165,89 @@ function outlookOverlay(state) {
 }
 const dayLabel = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
-/* frames of one more variable of the same model run (wind direction, weather type, cloud),
-   fetched the way the main layer is: made on demand, the step on screen first */
-function useCompanion(model, run, v, wantStep, on) {
+/* Met Office warnings on a display grid */
+const SEV_RANK = { Yellow: 0, Amber: 1, Red: 2 };
+const ringArea = (r) => { let a = 0; for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j][0] * r[i][1] - r[i][0] * r[j][1]; return Math.abs(a / 2); };
+/* a point inside a ring: the middle of its widest span along the row through its centre (a warning
+   area wraps round coasts and hills, so its centre of gravity may be outside it) */
+function pointInside(ring) {
+  let sx = 0, sy = 0;
+  for (const [x, y] of ring) { sx += x; sy += y; }
+  const cy = sy / ring.length, xs = [];
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [x0, y0] = ring[j], [x1, y1] = ring[i];
+    if ((y0 <= cy) !== (y1 <= cy)) xs.push(x0 + ((cy - y0) / (y1 - y0)) * (x1 - x0));
+  }
+  xs.sort((a, b) => a - b);
+  let bx = sx / ring.length, bw = -1;
+  for (let i = 0; i + 1 < xs.length; i += 2) if (xs[i + 1] - xs[i] > bw) { bw = xs[i + 1] - xs[i]; bx = (xs[i] + xs[i + 1]) / 2; }
+  return [bx, cy];
+}
+function pointInRings(x, y, rings) {
+  let inside = false;
+  for (const r of rings) {
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+      const [x0, y0] = r[j], [x1, y1] = r[i];
+      if ((y0 > y) !== (y1 > y) && x < x0 + ((y - y0) / (y1 - y0)) * (x1 - x0)) inside = !inside;
+    }
+  }
+  return inside;
+}
+/** A warning from /api/modeldata/warnings on a grid: its rings, in cells, and where its label goes. */
+function warningOnGrid(w, P) {
+  const polys = w.geometry.type === 'Polygon' ? [w.geometry.coordinates] : w.geometry.coordinates;
+  const rings = [];
+  let big = null, bigArea = 0;
+  for (const poly of polys) {
+    const rs = poly.map((ring) => ring.map(([lon, lat]) => P.toGrid(lon, lat)));
+    rings.push(...rs);
+    const a = ringArea(rs[0]);
+    if (a > bigArea) { bigArea = a; big = rs[0]; }
+  }
+  return { id: w.id, severity: w.severity, text: w.type, colour: WARN_COLOURS[w.severity], rings, label: big ? pointInside(big) : null,
+    fromMs: Date.parse(w.from), toMs: Date.parse(w.to) };
+}
+const londonClock = (ms) => new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' });
+const londonWeekday = (ms) => new Date(ms).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short' });
+const warnWhen = (w) => `${londonWeekday(w.fromMs)} ${londonClock(w.fromMs)} – ${londonDay(w.fromMs) === londonDay(w.toMs) ? '' : `${londonWeekday(w.toMs)} `}${londonClock(w.toMs)}`;
+
+/* The second window at a time. The steps of a run nearest a valid time, or null when the run does
+   not reach it. */
+function nearestStep(steps, runMs, ms) {
+  if (!steps.length) return null;
+  const h = (ms - runMs) / 3600e3;
+  if (h < steps[0] - 1.5 || h > steps[steps.length - 1] + 1.5) return null;
+  let best = steps[0];
+  for (const s of steps) if (Math.abs(s - h) < Math.abs(best - h)) best = s;
+  return best;
+}
+/* the run to set beside a run: for the same model the one before that reaches about as far (a UKV
+   hour between the long runs is not much of a comparison); for another model, its usual one */
+function runBeside(m, first, run) {
+  if (m.id !== first?.id) return defaultRun(m);
+  const t = run ? Date.parse(run.run) : Infinity;
+  const older = m.runs.filter((r) => Date.parse(r.run) < t);
+  return older.find((r) => r.steps.length >= 0.8 * (run?.steps.length || 0)) || older[0] || defaultRun(m);
+}
+/* a frame part-way between two frames of a run, for a smooth GIF or video: it stands in for a frame
+   (the time and T+ are its own) and lib/modelTween works out its values when its layers are made */
+const tweenRaw = (a, b, t, ms) => ({ ...a, head: { ...a.head, valid: new Date(ms).toISOString(), step: t < 0.5 ? a.head.step : b.head.step }, tween: { a, b, t, span: Date.parse(b.head.valid) - Date.parse(a.head.valid) } });
+const GIF_FPS = 25;                                         // 40 ms a frame: the smoothest every GIF viewer keeps to
+const WARN_FADE = 40 * 60e3;                                // how long a warning takes to ease on in a smooth export
+/* the display cells a window can see, as cells of a frame, with room for what is drawn from them */
+const cellBox = (f, b) => { const K = f.nx ? f.k || 1 : 1, m = 18; return b && [Math.floor(b[0] / K) - m, Math.floor(b[1] / K) - m, Math.ceil(b[2] / K) + m, Math.ceil(b[3] / K) + m]; };
+const boxOf = (rect, v) => [v.cx - rect.w / 2 / v.s, v.cy - rect.h / 2 / v.s, v.cx + rect.w / 2 / v.s, v.cy + rect.h / 2 / v.s];
+const EMPTY = {};
+const MAX_EXTRA = 3;                                        // layers laid over or under the main one
+const NO_COLOURS = new Set(['wdir10', 'mwd']);              // directions have no colours to lay over anything
+
+/* frames of a run's variable, made on demand on the server, the step on screen first */
+function useRunFrames(model, run, v, wantStep, on) {
   const [frames, setFrames] = useState({});
-  const key = on && model && run && model.variables?.includes(v) ? `${model.id}/${runTag(run.run)}/${v}` : null;
+  const [status, setStatus] = useState(null);
+  const key = on && model && run && (model.variables || model.fields)?.includes(v) ? `${model.id}/${runTag(run.run)}/${v}` : null;
   useEffect(() => {
-    setFrames({});
+    setFrames({}); setStatus(null);
     if (!key) return undefined;
     const [m, rt, vv] = key.split('/');
     const ac = new AbortController();
@@ -175,6 +258,7 @@ function useCompanion(model, run, v, wantStep, on) {
       try {
         const st = await fetch(`${API}/frames/${m}/${rt}/${vv}/status?first=${Math.max(0, wantStep.current || 0)}`, { signal: ac.signal }).then((r) => r.json());
         if (!alive) return;
+        setStatus((o) => (o && o.state === st.state && o.done?.length === st.done?.length && o.missing?.length === st.missing?.length ? o : st));
         const todo = (st.done || []).filter((s) => !want.has(s)).sort((a, b) => Math.abs(a - wantStep.current) - Math.abs(b - wantStep.current));
         const batch = todo.slice(0, 6);
         await Promise.all(batch.map(async (s) => {
@@ -188,8 +272,10 @@ function useCompanion(model, run, v, wantStep, on) {
     return () => { alive = false; ac.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return key ? frames : null;
+  return key ? { frames, status, key } : null;
 }
+/* frames of one more variable of the same model run (wind direction, weather type, cloud) */
+const useCompanion = (model, run, v, wantStep, on) => useRunFrames(model, run, v, wantStep, on)?.frames ?? null;
 
 /* a live product's frames by time (ms), for overlays: cloud under the radar, arrows, symbols */
 function useLiveCompanion(liveCat, product, on) {
@@ -216,6 +302,32 @@ function useLiveCompanion(liveCat, product, on) {
   }, [product, times]);
   return prod ? frames : null;
 }
+/* one observed field for every day on record, by the day's time (ms), for laying over or under the day's layer */
+function useObservedCompanion(days, name) {
+  const [frames, setFrames] = useState({});
+  const list = days?.join(',') || '';
+  useEffect(() => {
+    setFrames({});
+    if (!name || !list) return undefined;
+    const ac = new AbortController();
+    let alive = true;
+    (async () => {
+      const order = list.split(',').reverse();
+      for (let i = 0; i < order.length && alive; i += 4) {
+        await Promise.all(order.slice(i, i + 4).map(async (d) => {
+          try {
+            const f = await loadObserved(d, name, ac.signal);
+            f.head.valid = `${d}T12:00:00Z`;
+            if (alive) setFrames((o) => ({ ...o, [dayMs(d)]: f }));
+          } catch { /* that day has no such field */ }
+        }));
+      }
+    })();
+    return () => { alive = false; ac.abort(); };
+  }, [name, list]);
+  return name ? frames : null;
+}
+
 /* the companion frame for a main frame: same step, or the nearest time within `tolMin` */
 function companionOf(map, raw, live, tolMin = 10) {
   if (!map || !raw) return null;
@@ -225,6 +337,17 @@ function companionOf(map, raw, live, tolMin = 10) {
   for (const k of Object.keys(map)) { const d = Math.abs(Number(k) - ms); if (d < bd) { bd = d; best = map[k]; } }
   return best;
 }
+/* a layer laid over or under: the same step, or else the nearest within three hours (not every field
+   of a run has every step) */
+function extraFrameOf(map, raw, byTime) {
+  if (!map || !raw) return null;
+  if (byTime) return companionOf(map, raw, true, 20);
+  const at = raw.head.step;
+  if (map[at]) return map[at];
+  let best = null;
+  for (const k of Object.keys(map)) if (Math.abs(k - at) <= 3 && (best == null || Math.abs(k - at) < Math.abs(best - at))) best = Number(k);
+  return best == null ? null : map[best];
+}
 const fmtThr = (v) => (Math.abs(v) >= 10 || Number.isInteger(v) ? String(Math.round(v * 10) / 10) : v.toFixed(v < 1 ? 2 : 1));
 
 function defaultRun(m) {
@@ -233,6 +356,13 @@ function defaultRun(m) {
   return runs.find((r) => r.steps.length >= 0.6 * most) || runs[0] || m.runs[0];
 }
 const runLabel = (iso) => new Date(iso).toLocaleString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', hour: '2-digit' }).replace(',', '') + 'Z';
+/* what the key says about a frame: the model, the run and the lead time, and the shorter version
+   that a narrow window has room for */
+function creditOf(m, rn, lead) {
+  const when = rn ? ` · run ${runLabel(rn.run)}${lead != null ? ` · T+${lead}` : ''}` : '';
+  const who = m.members ? `${m.label} · ${m.members} members` : `${m.id === 'ukv' ? 'UKV' : m.label} ${MODEL_INFO[m.id]?.[1] || ''}`.trim();
+  return { credit: `${who}${when} · ${MODEL_INFO[m.id]?.[2] || 'open data'}`, creditShort: `${SHORT_NAMES[m.id] || m.label}${when}` };
+}
 const imgCache = {};
 const loadImage = (src) => (imgCache[src] ||= new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; }));
 
@@ -401,8 +531,7 @@ export default function ModelData() {
   const setMslK = (k, v) => setMsl((o) => ({ ...o, [k]: v }));
   const [showWx, setShowWx] = useState(!!prefs.showWx);
   const [showClouds, setShowClouds] = useState(!!prefs.showClouds);
-  const [roads, setRoads] = useState(null);
-  useEffect(() => { if (showRoads && !roads) loadRoads().then(setRoads).catch(() => setShowRoads(false)); }, [showRoads, roads]);
+  const [roadsBy, setRoadsBy] = useState({});                // each grid's road network
   const [obsDays, setObsDays] = useState(null);
   const [obsKey, setObsKey] = useState(OBS[prefs.obsKey] ? prefs.obsKey : 't2_max');
   const [obsSummary, setObsSummary] = useState({});
@@ -437,6 +566,17 @@ export default function ModelData() {
   const [ovOutlooks, setOvOutlooks] = useState(null);
   const [ovErr, setOvErr] = useState(null);
   const ovOn = isAdmin && ov.on;
+  /* Met Office warnings over any layer: those in force at the time on show */
+  const [wn, setWn] = useState(() => ({ on: false, look: 'fill', labels: true, alpha: 0.85, ...(prefs.wn || {}) }));
+  const setWnK = (k, v) => setWn((o) => ({ ...o, [k]: v }));
+  const [warnData, setWarnData] = useState(null);
+  /* any layer over or under the main one, per view: { v, place: 'over' | 'under', alpha } */
+  const [extrasBy, setExtrasBy] = useState(() => ({ forecast: [], prob: [], live: [], observed: [], ...(prefs.extras || {}) }));
+  const [layerAlpha, setLayerAlpha] = useState(prefs.layerAlpha ?? 1);   // how strongly the main layer itself is drawn
+  /* the second window: another run, model or layer at the same valid time, or the warnings */
+  const [cmp, setCmp] = useState(() => ({ on: false, kind: 'run', model: null, v: null, split: 'auto', swap: false, ...(prefs.cmp || {}), run: null }));
+  const setCmpK = (k, v) => setCmp((o) => ({ ...o, [k]: v }));
+  const [cmpOpen, setCmpOpen] = useState(false);
   const [newRun, setNewRun] = useState(null);
   const liveItem = LIVE[liveKey];
   const liveProd = liveCat?.products?.[liveItem.src];
@@ -477,7 +617,6 @@ export default function ModelData() {
       setView({ cx, cy, s: Math.max(0.3, Math.min(30, view.s * (to.dx / from.dx))) });
     }
     setPin(null);
-    setRoads(null);
   }
   const statics = staticsBy[gridName] || null;
   /* phone below 640 px wide, tablet to 1180 px, desktop beyond */
@@ -490,14 +629,14 @@ export default function ModelData() {
   const layout = vw < 640 ? 'phone' : vw < 1180 ? 'tablet' : 'desktop';
   const phone = layout === 'phone', narrow = layout !== 'desktop';
   const [modeOpen, setModeOpen] = useState(false);            // phones: the view menu
-  const [exp, setExp] = useState({ open: false, png: 1080, gif: 720, from: 0, to: null, busy: null });
+  const [exp, setExp] = useState({ open: false, png: 1080, gif: 720, video: 1080, fps: 60, smooth: true, from: 0, to: null, busy: null, job: null, err: null });
   useEffect(() => {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours,
-        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov, msl }));
+        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov, msl, wn, cmp, extras: extrasBy, layerAlpha }));
     } catch { /* private window: nothing to remember */ }
   }, [mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours, showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, msl,
-    strikeStyle, ov]);
+    strikeStyle, ov, wn, cmp, extrasBy, layerAlpha]);
 
   /* the overlay's runs (the last 48 hours), the newest Main Run chosen unless one already is */
   useEffect(() => {
@@ -599,19 +738,6 @@ export default function ModelData() {
     const t = setInterval(get, 2 * 60 * 1000);           // a new run shows up here within minutes of reaching AWS
     return () => { stop = true; clearInterval(t); };
   }, []);
-  /* the grid's coastlines, borders and places, loaded once per grid */
-  useEffect(() => {
-    if (staticsBy[gridName]) return undefined;
-    let stop = false;
-    const g = gridName;
-    const layers = () => Promise.all([fetch(staticUrl('lines.json', g)).then((r) => r.json()), fetch(staticUrl('cities.json', g)).then((r) => r.json()),
-      loadImage('/logo.png').catch(() => null)])
-      .then(([lines, cities, logo]) => !stop && setStaticsBy((o) => ({ ...o, [g]: { lines, cities, logo } })))
-      .catch(() => { if (!stop) setTimeout(layers, 5000); });
-    layers();
-    return () => { stop = true; };
-  }, [gridName, staticsBy]);
-
   useEffect(() => {
     if (!isLive) return undefined;
     let stop = false;
@@ -623,16 +749,6 @@ export default function ModelData() {
     const t = setInterval(get, 60 * 1000);
     return () => { stop = true; clearInterval(t); };
   }, [isLive]);
-
-  /* basemap images for the chosen style, loaded on demand */
-  useEffect(() => {
-    const need = style === 'realtime' ? ['sat_day.jpg', 'night_lights.png'] : [MAP_STYLES[style].base];
-    need.forEach((f) => {
-      const k = `${gridName}/${f}`, url = staticUrl(f, gridName);
-      if (!imgs[k]) loadImage(url).then((im) => setImgs((o) => ({ ...o, [k]: im })))
-        .catch(() => { delete imgCache[url]; setTimeout(() => setImgs((o) => ({ ...o })), 5000); });
-    });
-  }, [style, imgs, gridName]);
 
   /* observed: the archive's days, and each day's summary (extremes, stations, lightning) */
   useEffect(() => {
@@ -811,6 +927,125 @@ export default function ModelData() {
   const step = steps[Math.min(idx, Math.max(0, steps.length - 1))];
   const frame = frames[step];
   const loadedCount = steps.filter((s) => frames[s]).length;
+  const validMs = !run || step == null ? null : timeSteps ? step : Date.parse(run.run) + step * 3600e3;
+
+  /* The second window. Forecast and Probability can set any model, run or layer beside the first (a
+     chance keeps the first window's threshold); any view can have the warnings. It follows the first
+     window's time, so two runs are always compared at one valid time; a run with no step at that
+     exact time shows its nearest and says so. */
+  const kindB = cmp.on && model ? (timeSteps ? 'warnings' : cmp.kind) : null;
+  const optionsB = isProb ? cat?.ensembles : cat?.models;
+  const modelB = kindB === 'run' ? optionsB?.find((m) => m.id === cmp.model && m.runs?.length) || model : null;
+  const runB = !modelB ? null : modelB.runs.find((r) => r.run === cmp.run) || runBeside(modelB, model, run);
+  const varB = !modelB || isProb ? null : cmp.v && modelB.variables.includes(cmp.v) ? cmp.v
+    : modelB.variables.includes(varKey) ? varKey : modelB.variables.includes('precip_rate') ? 'precip_rate' : modelB.variables[0];
+  const fieldB = isProb ? preset.field : varB;
+  const scaleB = isProb ? 'prob' : varB;
+  const gridB = modelB ? gridOfModel(modelB.id) : gridName;
+  const wantStepB = useRef(0);
+  const dataB = useRunFrames(modelB, runB, fieldB, wantStepB, !!modelB);
+  const framesB = dataB?.frames || EMPTY, statusB = dataB?.status || null;
+  const stepsB = useMemo(() => {
+    if (!runB) return [];
+    const miss = new Set(statusB?.missing || []);
+    return runB.steps.filter((x) => !miss.has(x));
+  }, [runB, statusB]);
+  const runMsB = runB ? Date.parse(runB.run) : 0;
+  const stepB = runB && validMs != null ? nearestStep(stepsB, runMsB, validMs) : null;
+  useEffect(() => { if (stepB != null) wantStepB.current = stepB; }, [stepB]);
+  /* the second window's frame at a time: with `between`, part-way along if it falls between two steps */
+  const frameBAt = useCallback((ms, between) => {
+    if (!runB) return null;
+    if (between) {
+      for (let i = 0; i + 1 < stepsB.length; i++) {
+        const ta = runMsB + stepsB[i] * 3600e3, tb = runMsB + stepsB[i + 1] * 3600e3;
+        if (ms < ta || ms > tb) continue;
+        const a = framesB[stepsB[i]], b = framesB[stepsB[i + 1]];
+        if (!a || !b) break;
+        const t = (ms - ta) / (tb - ta);
+        return t <= 0 ? a : t >= 1 ? b : tweenRaw(a, b, t, ms);
+      }
+    }
+    const k = nearestStep(stepsB, runMsB, ms);
+    return k == null ? null : framesB[k] || null;
+  }, [runB, runMsB, stepsB, framesB]);
+  /* the nearest step that has arrived stands in until this one does, so playing never blinks */
+  const frameB = useMemo(() => {
+    if (stepB == null) return null;
+    if (framesB[stepB]) return framesB[stepB];
+    let best = null;
+    for (const k of Object.keys(framesB)) if (best == null || Math.abs(k - stepB) < Math.abs(best - stepB)) best = Number(k);
+    return best == null ? null : framesB[best];
+  }, [framesB, stepB]);
+  const spanMs = steps.length > 1 && validMs != null ? [steps[Math.min(exp.from, steps.length - 1)], steps[exp.to ?? steps.length - 1]].map((x) => (timeSteps ? x : Date.parse(run.run) + x * 3600e3)) : null;
+  const pendingB = !modelB || !spanMs ? 0 : stepsB.filter((x) => { const t = runMsB + x * 3600e3; return t >= spanMs[0] - 3 * 3600e3 && t <= spanMs[1] + 3 * 3600e3 && !framesB[x]; }).length;
+
+  /* the grids on show: their coastlines, places and basemap images, loaded once each */
+  const gridsInUse = useMemo(() => [...new Set([gridName, gridB])], [gridName, gridB]);
+  useEffect(() => {
+    let stop = false;
+    for (const g of gridsInUse) {
+      if (staticsBy[g]) continue;
+      const layers = () => Promise.all([fetch(staticUrl('lines.json', g)).then((r) => r.json()), fetch(staticUrl('cities.json', g)).then((r) => r.json()),
+        loadImage('/logo.png').catch(() => null)])
+        .then(([lines, cities, logo]) => !stop && setStaticsBy((o) => ({ ...o, [g]: { lines, cities, logo } })))
+        .catch(() => { if (!stop) setTimeout(layers, 5000); });
+      layers();
+    }
+    return () => { stop = true; };
+  }, [gridsInUse, staticsBy]);
+  useEffect(() => {
+    const need = style === 'realtime' ? ['sat_day.jpg', 'night_lights.png'] : [MAP_STYLES[style].base];
+    for (const g of gridsInUse) {
+      need.forEach((f) => {
+        const k = `${g}/${f}`, url = staticUrl(f, g);
+        if (!imgs[k]) loadImage(url).then((im) => setImgs((o) => ({ ...o, [k]: im })))
+          .catch(() => { delete imgCache[url]; setTimeout(() => setImgs((o) => ({ ...o })), 5000); });
+      });
+    }
+  }, [style, imgs, gridsInUse]);
+  useEffect(() => {
+    if (!showRoads) return;
+    for (const g of gridsInUse) if (!roadsBy[g]) loadRoads(g).then((r) => setRoadsBy((o) => (o[g] ? o : { ...o, [g]: r }))).catch(() => setShowRoads(false));
+  }, [showRoads, roadsBy, gridsInUse]);
+
+  /* the warnings: fetched while on, refreshed as the Met Office changes them */
+  const wantWarn = wn.on || kindB === 'warnings';
+  useEffect(() => {
+    if (!wantWarn) return undefined;
+    let stop = false;
+    const get = () => fetch(`${API}/warnings`).then((r) => (r.ok ? r.json() : null)).then((j) => { if (!stop && j) setWarnData(j); }).catch(() => {});
+    get();
+    const t = setInterval(get, 5 * 60 * 1000);
+    return () => { stop = true; clearInterval(t); };
+  }, [wantWarn]);
+  /* on each grid once, least severe first so the worst is drawn on top */
+  const warnShapes = useRef({ of: null, by: {} });
+  const warnMemo = useRef(new Map());
+  const shapesOn = useCallback((grid) => {
+    const m = warnShapes.current;
+    if (m.of !== warnData) { m.of = warnData; m.by = {}; warnMemo.current.clear(); }
+    if (!m.by[grid]) {
+      const P = projection(grid);
+      m.by[grid] = (warnData?.warnings || []).map((w) => warningOnGrid(w, P)).sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity]);
+    }
+    return m.by[grid];
+  }, [warnData]);
+  /* those in force at a time (a whole day, for an observed day), the same list for the same warnings
+     so the map only redraws them when they change. In a smooth export (`fade`, ms) they ease on over
+     that long before they begin and off after they end, so they never pop, and at every moment they
+     are in force they are at full strength */
+  const warningsAt = useCallback((ms, grid, wholeDay, fade = 0) => {
+    const from = wholeDay ? ms - 12 * 3600e3 : ms, to = wholeDay ? ms + 12 * 3600e3 : ms;
+    if (fade) {
+      return shapesOn(grid).filter((w) => w.fromMs - fade <= to && w.toMs + fade > from)
+        .map((w) => ({ ...w, fade: Math.max(0, Math.min(1, 1 + (ms - w.fromMs) / fade, 1 + (w.toMs - ms) / fade)) }));
+    }
+    const list = shapesOn(grid).filter((w) => w.fromMs <= to && w.toMs > from);
+    const key = `${grid}|${list.map((w) => w.id).join()}`;
+    if (!warnMemo.current.has(key)) warnMemo.current.set(key, list);
+    return warnMemo.current.get(key);
+  }, [shapesOn]);
   const atLatest = useRef(true);
   useEffect(() => {
     if (!timeSteps || !steps.length) return;
@@ -867,34 +1102,59 @@ export default function ModelData() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameKey, size, sidePanel]);
 
+  /* the two windows in a frame: side by side, or stacked where the frame is tall */
+  const splitOf = useCallback((R) => splitFrame(R, cmp.split === 'auto' ? (R.w / R.h >= 0.9 ? 'cols' : 'rows') : cmp.split, Math.min(R.w, R.h) / 1080), [cmp.split]);
+  /* where each window is: `a` the first, `b` the second (none with one window) */
+  const windowRects = useCallback(() => {
+    const R = frameRect();
+    if (!R) return null;
+    if (!kindB) return { R, a: R, b: null, sp: null };
+    const sp = splitOf(R);
+    return { R, sp, a: cmp.swap ? sp.b : sp.a, b: cmp.swap ? sp.a : sp.b };
+  }, [frameRect, kindB, splitOf, cmp.swap]);
+
   /* fit a grid box into the frame; `tight` fills it (a re-framing), otherwise leaves room
      for the title card and the key */
   const fit = useCallback((box, tight) => {
-    const R = frameRect();
+    const R = windowRects()?.a;
     if (!R) return;
     const [x0, y0, x1, y1] = box;
     const s = Math.min(R.w / (x1 - x0), (R.h * (tight ? 1 : 0.8)) / (y1 - y0));
     setView({ cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 - (tight ? 0 : (R.h * 0.02) / s), s });
-  }, [frameRect]);
+  }, [windowRects]);
   useEffect(() => { if (!view && size) fit(REGIONS.uk.box); }, [size, view, fit]);
   /* a new frame shape (or the side panel opening) keeps the same area in view */
   const lastRect = useRef(null);
   useEffect(() => {
-    const R = frameRect();
+    const R = windowRects()?.a;
     const old = lastRect.current;
-    lastRect.current = R;
+    lastRect.current = R ? { ...R, two: !!kindB } : null;
     if (!view || !R || !old || (old.w === R.w && old.h === R.h)) return;
+    /* going to or from two windows keeps the map's middle and about the same amount of map: the
+       UK is tall, so it sits well in half a square at a little under the old scale */
+    if (old.two !== !!kindB) {
+      setView({ ...view, s: Math.max(0.3, Math.min(30, view.s * Math.sqrt((R.w * R.h) / (old.w * old.h)))) });
+      return;
+    }
     const hw = old.w / 2 / view.s, hh = old.h / 2 / view.s;
     fit([view.cx - hw, view.cy - hh, view.cx + hw, view.cy + hh], true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frameKey, sidePanel, layout]);
+  }, [frameKey, sidePanel, layout, !!kindB, cmp.split]);
+  /* the stage settling or being resized is not a new shape to keep the view through, only news of
+     how big the frame is (the canvas has no real size at all when the page first draws) */
+  useEffect(() => {
+    const R = windowRects()?.a;
+    if (R) lastRect.current = { ...R, two: !!kindB };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size]);
 
-  const basemapFor = useCallback((f) => {
+  const basemapFor = useCallback((f, grid = gridName, ms = null) => {
     if (style === 'realtime') {
-      const d = imgs[`${gridName}/sat_day.jpg`], n = imgs[`${gridName}/night_lights.png`];
-      return d && n && f ? realtimeBasemap(d, n, Date.parse(f.head.valid)) : d || null;
+      const d = imgs[`${grid}/sat_day.jpg`], n = imgs[`${grid}/night_lights.png`];
+      const at = f ? Date.parse(f.head.valid) : ms;
+      return d && n && at != null ? realtimeBasemap(d, n, at) : d || null;
     }
-    return imgs[`${gridName}/${MAP_STYLES[style].base}`] || null;
+    return imgs[`${grid}/${MAP_STYLES[style].base}`] || null;
   }, [style, imgs, gridName]);
 
   const disp = useCallback((f) => (isProb && f ? probFrame(f, thr, dir) : f), [isProb, thr, dir]);
@@ -944,6 +1204,61 @@ export default function ModelData() {
   const lvWx = useLiveCompanion(liveCat, 'now_wx', isLive && wxOn && liveKey !== 'now_wx');
   const lvCloud = useLiveCompanion(liveCat, 'sat_ir', isLive && cloudsOn);
   const lvMsl = useLiveCompanion(liveCat, 'now_mslp', isLive && mslOn && !ownMsl);
+  /* the second window takes the same switches, for what its own model and layer have */
+  const fcB = isForecast && kindB === 'run' ? modelB : null;
+  const hasB = (v) => !!fcB?.variables?.includes(v);
+  const selfArrowsB = !!fcB && (varB === 'wdir10' || varB === 'mwd');
+  const ownWxB = !!fcB && varB === 'wx';
+  const ownMslB = !!fcB && varB === 'mslp';
+  const arrowsOnB = selfArrowsB || (showArrows && hasB('wdir10'));
+  const wxOnB = ownWxB || (showWx && hasB('wx'));
+  const cloudsOnB = showClouds && hasB('tcc') && RAINY.has(varB);
+  const mslOnB = ownMslB || (msl.on && hasB('mslp'));
+  const fcArrowsB = useCompanion(fcB, runB, 'wdir10', wantStepB, arrowsOnB && !selfArrowsB);
+  const fcWxB = useCompanion(fcB, runB, 'wx', wantStepB, wxOnB && !ownWxB);
+  const fcCloudB = useCompanion(fcB, runB, 'tcc', wantStepB, cloudsOnB);
+  const fcMslB = useCompanion(fcB, runB, 'mslp', wantStepB, mslOnB && !ownMslB);
+  const underVarB = selfArrowsB ? (varB === 'mwd' ? 'swh' : 'wind10') : null;
+  const underMetaB = underVarB && hasB(underVarB) ? cat?.variables?.[underVarB] : null;
+  const fcUnderB = useCompanion(fcB, runB, underVarB, wantStepB, !!underMetaB);
+
+  /* Layers laid over or under the main one, from the same run or the same live or observed record. A
+     fixed number of slots, as hooks must be. A chance is a preset at its usual threshold. The second
+     window lays the same layers over its own run, where its model has them. */
+  const extras = extrasBy[mode] || [];
+  const setExtraK = (i, k, v) => setExtrasBy((o) => ({ ...o, [mode]: o[mode].map((x, j) => (j === i ? { ...x, [k]: v } : x)) }));
+  const dropExtra = (i) => setExtrasBy((o) => ({ ...o, [mode]: o[mode].filter((x, j) => j !== i) }));
+  const addExtra = (v) => setExtrasBy((o) => (o[mode].length >= MAX_EXTRA ? o : { ...o, [mode]: [...o[mode], { v, place: coversMap(extraScale(v)) ? 'under' : 'over', alpha: coversMap(extraScale(v)) ? 1 : 0.8 }] }));
+  /* the field behind a layer's name in each view, its colours, and what its key says */
+  const extraField = (v) => (isProb ? PRESET[v]?.field : isLive ? LIVE[v]?.src : v);
+  const extraScale = (v) => (isObs ? OBS[v]?.scale : isLive ? LIVE[v]?.scale || (LIVE[v]?.src === 'radar' ? 'radar' : v) : isProb ? 'prob' : v);
+  const extraMeta = (v) => (isObs ? { label: OBS[v]?.label, unit: OBS[v]?.unit }
+    : isLive ? { label: LIVE[v]?.label, unit: LIVE[v]?.src === 'radar' ? 'mm/h' : NOW_UNITS[LIVE[v]?.src] ?? '' }
+    : isProb ? { label: `Chance of ${(PRESET[v]?.label || '').toLowerCase()} ${PRESET[v]?.dir === 'below' ? '≤' : '≥'} ${fmtThr(PRESET[v]?.thr ?? 0)}${cat?.ens_fields?.[PRESET[v]?.field]?.unit ? ` ${cat.ens_fields[PRESET[v].field].unit}` : ''}`, unit: '%' }
+    : cat?.variables?.[v] || { label: v, unit: '' });
+  const useModelExtra = (m, r, i, want) => useRunFrames(!timeSteps ? m : null, r, extras[i] ? extraField(extras[i].v) : null, want, !!extras[i]);
+  const x0 = useModelExtra(model, run, 0, wantStep), x1 = useModelExtra(model, run, 1, wantStep), x2 = useModelExtra(model, run, 2, wantStep);
+  const y0 = useRunFrames(!timeSteps ? modelB : null, runB, extras[0] ? extraField(extras[0].v) : null, wantStepB, !!extras[0]);
+  const y1 = useRunFrames(!timeSteps ? modelB : null, runB, extras[1] ? extraField(extras[1].v) : null, wantStepB, !!extras[1]);
+  const y2 = useRunFrames(!timeSteps ? modelB : null, runB, extras[2] ? extraField(extras[2].v) : null, wantStepB, !!extras[2]);
+  const lv0 = useLiveCompanion(liveCat, isLive && extras[0] ? LIVE[extras[0].v]?.src : null, true);
+  const lv1 = useLiveCompanion(liveCat, isLive && extras[1] ? LIVE[extras[1].v]?.src : null, true);
+  const lv2 = useLiveCompanion(liveCat, isLive && extras[2] ? LIVE[extras[2].v]?.src : null, true);
+  const ob0 = useObservedCompanion(isObs ? obsDays : null, isObs && extras[0] ? extras[0].v : null);
+  const ob1 = useObservedCompanion(isObs ? obsDays : null, isObs && extras[1] ? extras[1].v : null);
+  const ob2 = useObservedCompanion(isObs ? obsDays : null, isObs && extras[2] ? extras[2].v : null);
+  const extraCaches = useRef([new Map(), new Map(), new Map(), new Map(), new Map(), new Map()]);
+  /* a window's extras: what to read, how, and how to draw it */
+  const extraLayers = useCallback((maps, slot) => extras.map((x, i) => {
+    const p = isProb ? PRESET[x.v] : null;
+    return { ...x, map: maps[i]?.frames ?? maps[i], status: maps[i]?.status, byTime: timeSteps, scale: extraScale(x.v), meta: extraMeta(x.v), cache: extraCaches.current[slot + i],
+      prep: p ? (f) => (f ? probFrame(f, p.thr, p.dir) : f) : (f) => f };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [extras, isProb, timeSteps, isLive, isObs, cat]);
+  const stackA = useMemo(() => extraLayers(timeSteps ? (isLive ? [lv0, lv1, lv2] : [ob0, ob1, ob2]) : [x0, x1, x2], 0), [extraLayers, timeSteps, isLive, lv0, lv1, lv2, ob0, ob1, ob2, x0, x1, x2]);
+  const stackB = useMemo(() => (kindB === 'run' ? extraLayers([y0, y1, y2], 3) : []), [extraLayers, kindB, y0, y1, y2]);
+  /* frames of the extras still to come for an export */
+  const pendingX = stackA.reduce((n, x) => n + (x.status && x.status.state !== 'complete' ? 1 : 0), 0);
   const pressureCache = useRef(new Map());
   const centreCache = useRef(new Map());
   /* contour lines, isobars and highs and lows are worked out in a worker (lib/modelViewer): when
@@ -956,67 +1271,155 @@ export default function ModelData() {
   }, []);
   const smoothCache = useRef(new Map());
   const overlayCache = useRef(new Map());
-  const credit = !model ? '' : isObs
+  /* where the live and observed layers are from (a forecast's key names its model and run) */
+  const credit = !model || !timeSteps ? '' : isObs
     ? (['precip_total', 'rain_rate_max'].includes(obsKey) ? 'Met Office radar via AWS' : 'UKV analysis + METAR station reports')
-    : isLive
-    ? (liveItem.src === 'radar' ? 'Met Office radar via AWS' : liveItem.src.startsWith('now_') ? 'UKV + METAR + Met Office radar' : liveProd?.source?.startsWith('Meteosat') ? `${liveProd.source} · EUMETSAT` : 'EUMETSAT')
-    : isProb
-    ? `${model.label} · ${model.members} members · ${MODEL_INFO[model.id]?.[2] || 'open data'}`
-    : model.id === 'ukv' ? 'UKV 2 km native grid · Met Office via AWS' : `${model.label} · ${MODEL_INFO[model.id]?.[1] || ''} · ${MODEL_INFO[model.id]?.[2] || 'open data'}`;
+    : (liveItem.src === 'radar' ? 'Met Office radar via AWS' : liveItem.src.startsWith('now_') ? 'UKV + METAR + Met Office radar' : liveProd?.source?.startsWith('Meteosat') ? `${liveProd.source} · EUMETSAT` : 'EUMETSAT');
   const chromeFor = useCallback((f) => (f && model && vmeta ? {
     variable: underMeta ? `${vmeta.label} · colours: ${underMeta.label.toLowerCase()}` : vmeta.label, unit: underMeta ? underMeta.unit : vmeta.unit,
-    valid: f.head.valid, step: f.head.step, model: model.label, runLabel: run ? runLabel(run.run) : '', logo: statics?.logo, credit,
+    valid: f.head.valid, logo: statics?.logo, ...(timeSteps ? { credit } : creditOf(model, run, f.head.step)),
     scale: underMeta ? scaleFor(underVar) : (isLive && liveItem.src.startsWith('sat_')) || ['wdir10', 'mwd'].includes(scaleKey) ? {} : scaleFor(scaleKey),
     dayOnly: isObs,
-    metaLine: isObs ? `Observed · ${['precip_total', 'rain_rate_max'].includes(obsKey) ? 'Met Office radar' : 'UKV + station analysis'} · UK & Ireland`
-      : isLive ? `${liveItem.src.startsWith('now_') ? 'UKV + METAR + radar analysis' : liveProd?.source || ''} · ${new Date(f.head.valid).toISOString().slice(11, 16)} UTC · ${liveItem.src.startsWith('now_') ? 'now' : 'observed'}` : null,
-  } : null), [model, vmeta, run, scaleKey, statics, credit, isLive, isObs, obsKey, liveItem, liveProd, underMeta, underVar]);
+  } : null), [model, vmeta, run, scaleKey, statics, credit, isLive, isObs, liveItem, timeSteps, underMeta, underVar]);
+  const metaB = !modelB ? null : isProb ? vmeta : cat?.variables?.[varB];
+  /* the second window's: with nothing to show at this time, the time and a word saying why */
+  const chromeForB = useCallback((f, ms) => {
+    if (!modelB || !metaB || ms == null) return null;
+    const lacks = !(modelB.variables || modelB.fields)?.includes(fieldB);
+    const notice = lacks ? `${SHORT_NAMES[modelB.id] || modelB.label} has no ${(isProb ? preset.label : metaB.label).toLowerCase()}` : f ? null
+      : stepsB.length && nearestStep(stepsB, runMsB, ms) == null ? `The ${runLabel(runB.run)} run does not cover this time` : 'Fetching from AWS…';
+    return {
+      variable: underMetaB ? `${metaB.label} · colours: ${underMetaB.label.toLowerCase()}` : metaB.label, unit: underMetaB ? underMetaB.unit : metaB.unit,
+      valid: f ? f.head.valid : new Date(ms).toISOString(), logo: staticsBy[gridB]?.logo, ...creditOf(modelB, runB, f?.head.step), notice,
+      scale: underMetaB ? scaleFor(underVarB) : ['wdir10', 'mwd'].includes(scaleB) ? {} : scaleFor(scaleB),
+    };
+  }, [modelB, metaB, runB, runMsB, stepsB, fieldB, scaleB, isProb, preset, underMetaB, underVarB, staticsBy, gridB]);
 
-  /* the layers of one frame; `sync` (exports) works the sums out at once instead of in the worker */
-  const layersFor = useCallback((raw, sync = false) => {
-    const f = disp(raw);
+  /* what each window draws: its layer, what it has switched on, and the companions it can read them from */
+  const cachesA = useMemo(() => ({ colour: colourCache.current, contour: contourCache.current, smooth: smoothCache.current, overlay: overlayCache.current,
+    pressure: pressureCache.current, centre: centreCache.current }), []);
+  const cachesB = useMemo(() => ({ colour: new Map(), contour: new Map(), smooth: new Map(), overlay: new Map(), pressure: new Map(), centre: new Map() }), []);
+  const paneA = useMemo(() => ({ grid: gridName, scaleKey, meta: vmeta, resKm: model?.res_km, live: isLive, caches: cachesA, chrome: chromeFor,
+    arrowsOn, selfArrows, wxOn, ownWx, cloudsOn, mslOn, ownMsl, canGrid, canStar, canContours, underMeta, underVar,
+    arrows: isLive ? lvArrows : fcArrows, wx: isLive ? lvWx : fcWx, cloud: isLive ? lvCloud : fcCloud, msl: isLive ? lvMsl : fcMsl, under: fcUnder, stack: stackA }),
+  [gridName, scaleKey, vmeta, model, isLive, cachesA, chromeFor, arrowsOn, selfArrows, wxOn, ownWx, cloudsOn, mslOn, ownMsl, canGrid, canStar, canContours, underMeta, underVar,
+    lvArrows, fcArrows, lvWx, fcWx, lvCloud, fcCloud, lvMsl, fcMsl, fcUnder, stackA]);
+  const paneB = useMemo(() => ({ grid: gridB, scaleKey: scaleB, meta: metaB, resKm: modelB?.res_km, live: false, caches: cachesB, chrome: chromeForB,
+    arrowsOn: arrowsOnB, selfArrows: selfArrowsB, wxOn: wxOnB, ownWx: ownWxB, cloudsOn: cloudsOnB, mslOn: mslOnB, ownMsl: ownMslB, canGrid: !selfArrowsB,
+    canStar: !['wx', 'ptype', 'wdir10', 'mwd'].includes(scaleB), canContours: !!scaleB && !!scaleFor(scaleB).contours && !ownMslB, underMeta: underMetaB, underVar: underVarB,
+    arrows: fcArrowsB, wx: fcWxB, cloud: fcCloudB, msl: fcMslB, under: fcUnderB, stack: stackB }),
+  [gridB, scaleB, metaB, modelB, cachesB, chromeForB, arrowsOnB, selfArrowsB, wxOnB, ownWxB, cloudsOnB, mslOnB, ownMslB, underMetaB, underVarB, fcArrowsB, fcWxB, fcCloudB, fcMslB, fcUnderB, stackB]);
+
+  /* The layers of one frame of one window; `sync` (exports: true, or 'smooth') works the sums out at
+     once instead of in the worker, `ms` is the time for a window with no frame yet. A frame part-way between two steps
+     (raw.tween) is worked out here, its companion layers with it, and all that follows draws it as
+     it would any frame. */
+  const layersFor = useCallback((P, raw, sync = false, ms = null) => {
+    const tw = raw?.tween, C = P.caches, st = staticsBy[P.grid];
+    const f = tw ? tweenFrame(disp(tw.a), disp(tw.b), tw.t, P.scaleKey, cellBox(disp(tw.a), tw.box)) : disp(raw);
     const later = sync ? undefined : { onReady: bump };
-    const sc = scaleFor(scaleKey);
-    const smoothRain = smooth && sc.discrete && f?.q && !f.prob && RAINY.has(scaleKey);
-    const arrowsF = !arrowsOn || !raw ? null : selfArrows ? f : companionOf(isLive ? lvArrows : fcArrows, raw, isLive, 16);
-    const wxF = !wxOn || !raw ? null : ownWx ? f : companionOf(isLive ? lvWx : fcWx, raw, isLive, 16);
-    const underF = underMeta && raw ? companionOf(fcUnder, raw, false) : null;
-    const cloudF = cloudsOn && raw ? companionOf(isLive ? lvCloud : fcCloud, raw, isLive, 60) : null;   // satellite runs ~30-40 min behind the radar
-    const mslF = !mslOn || !raw ? null : ownMsl ? raw : companionOf(isLive ? lvMsl : fcMsl, raw, isLive, 30);
-    const day = isObs && raw ? dayOf(Date.parse(raw.head.valid)) : null;
+    const sc = scaleFor(P.scaleKey);
+    const smoothRain = smooth && sc.discrete && f?.q && !f.prob && RAINY.has(P.scaleKey);
+    const comp = (map, key, tol) => {
+      if (!map || !raw) return null;
+      const a = companionOf(map, tw ? tw.a : raw, P.live, tol);
+      if (!tw) return a;
+      const b = companionOf(map, tw.b, P.live, tol);
+      return a && b ? tweenFrame(a, b, tw.t, key, cellBox(a, tw.box)) : a || b;
+    };
+    /* the layers laid over and under this one, each at its own strength; a whole-map layer is drawn
+       see-through on the maps worth seeing, so what is under it shows */
+    const veil = (key) => (coversMap(key) ? SEE_THROUGH[style] ?? 1 : 1);
+    const stacked = P.stack.flatMap((x) => {
+      if (!raw) return [];
+      const a = x.prep(extraFrameOf(x.map, tw ? tw.a : raw, x.byTime));
+      const b = tw ? x.prep(extraFrameOf(x.map, tw.b, x.byTime)) : null;
+      const fr = tw && a && b ? tweenFrame(a, b, tw.t, x.scale, cellBox(a, tw.box)) : a || b;
+      const canvas = fr ? frameCanvas(fr, x.scale, x.cache) : null;
+      return canvas ? [{ canvas, alpha: x.alpha * (x.place === 'over' ? veil(x.scale) : 1), place: x.place, key: { variable: x.meta.label, unit: x.meta.unit, credit: x.place === 'over' ? 'Laid over' : 'Laid under', scale: NO_COLOURS.has(x.scale) ? {} : scaleFor(x.scale) } }] : [];
+    });
+    const shown = P.chrome(raw, ms);
+    /* satellite pictures over a map: the Satellite and Real-time maps show through their dark parts */
+    const picture = !!f?.img || !!f?.mix?.a?.img;
+    const onEarth = picture && SEE_THROUGH[style] != null && P.scaleKey !== 'sat_clouds';
+    const arrowsF = !P.arrowsOn || !raw ? null : P.selfArrows ? f : comp(P.arrows, 'wdir10', 16);
+    const wxF = !P.wxOn || !raw ? null : P.ownWx ? f : comp(P.wx, 'wx', 16);
+    const underF = P.underMeta && raw ? comp(P.under, P.underVar) : null;
+    const cloudF = P.cloudsOn && raw ? comp(P.cloud, P.live ? 'sat_clouds' : 'tcc', 60) : null;   // satellite runs ~30-40 min behind the radar
+    const mslF = !P.mslOn || !raw ? null : P.ownMsl ? f : comp(P.msl, 'mslp', 30);
+    const at = raw ? Date.parse(raw.head.valid) : ms;
+    const day = isObs && raw ? dayOf(at) : null;
     const ext = day ? obsSummary[day]?.fields?.[obsKey] : null;
     return {
-      style, basemap: basemapFor(raw), lines: statics?.lines, cities: showCities || wxF ? statics?.cities : null,
-      data: underF ? frameCanvas(underF, underVar, colourCache.current)
-        : f ? (smoothRain ? smoothCanvas(f, scaleKey, smoothCache.current) : frameCanvas(f, scaleKey, colourCache.current)) : null, smooth,
-      overlay: cloudF ? { canvas: frameCanvas(cloudF, isLive ? 'sat_clouds' : 'tcc', overlayCache.current), alpha: isLive ? 0.92 : 0.7 } : null,
-      roads: showRoads ? roads : null,
-      grid: showGrid && canGrid && f?.q ? { frame: f, varKey: scaleKey, unit: vmeta?.unit } : null,
+      style, basemap: basemapFor(raw, P.grid, ms), lines: st?.lines, cities: showCities || wxF ? st?.cities : null,
+      data: underF ? frameCanvas(underF, P.underVar, C.colour)
+        : f ? (smoothRain ? smoothCanvas(f, P.scaleKey, C.smooth) : frameCanvas(f, P.scaleKey, C.colour)) : null, smooth,
+      dataAlpha: layerAlpha * veil(underF ? P.underVar : P.scaleKey) * (coversMap(P.scaleKey) && !picture && stacked.some((x) => x.place === 'under') ? 0.7 : 1), dataBlend: onEarth ? 'screen' : null,
+      under: stacked.filter((x) => x.place === 'under'), over: stacked.filter((x) => x.place === 'over'),
+      overlay: cloudF ? { canvas: frameCanvas(cloudF, P.live ? 'sat_clouds' : 'tcc', C.overlay), alpha: P.live ? 0.92 : 0.7 } : null,
+      roads: showRoads ? roadsBy[P.grid] || null : null,
+      grid: showGrid && P.canGrid && f?.q ? { frame: f, varKey: P.scaleKey, unit: P.meta?.unit } : null,
       arrows: arrowsF ? { frame: arrowsF } : null,
-      wx: wxF ? { frame: wxF, utcMs: Date.parse(raw.head.valid) } : null,
-      contours: f && showContours && canContours ? frameContours(f, scaleKey, model?.res_km, contourCache.current, later) : null,
-      contourLabels: true, chrome: chromeFor(raw),
-      star: isObs && showStar && ext?.value != null ? { at: { gx: ext.gx, gy: ext.gy, v: ext.value, place: ext.place }, unit: vmeta?.unit }
-        : showStar && canStar && f?.q && !isObs ? { frame: f, unit: vmeta?.unit, floor: sc.floor } : null,
-      strikes: !showLightning || !raw ? null : isLive ? (strikes ? strikesAt(Date.parse(raw.head.valid)) : null) : isObs ? obsStrikes[day] || null : null,
+      wx: wxF ? { frame: wxF, utcMs: at } : null,
+      contours: f && showContours && P.canContours ? frameContours(f, P.scaleKey, P.resKm, C.contour, later) : null,
+      contourLabels: true, chrome: shown && stacked.length ? { ...shown, extras: stacked.map((x) => x.key) } : shown,
+      star: isObs && showStar && ext?.value != null ? { at: { gx: ext.gx, gy: ext.gy, v: ext.value, place: ext.place }, unit: P.meta?.unit }
+        : showStar && P.canStar && f?.q && !isObs ? { frame: f, unit: P.meta?.unit, floor: sc.floor } : null,
+      strikes: !showLightning || !raw ? null : isLive ? (strikes ? strikesAt(at) : null) : isObs ? obsStrikes[day] || null : null,
       strikesDaily: isObs, strikeStyle,
-      risk: raw ? riskFor(Date.parse(raw.head.valid)) : null,
+      risk: raw && P.grid === gridName ? riskFor(at) : null,              // its shapes are made for the first window's grid
+      warnings: wn.on && at != null ? { alpha: wn.alpha, look: wn.look, labels: wn.labels, areas: warningsAt(at, P.grid, isObs, sync === 'smooth' ? WARN_FADE : 0) } : null,
       pressure: mslF ? {
-        lines: msl.isobars ? pressureLines(mslF, msl.every, model?.res_km, pressureCache.current, later) : null,
-        list: msl.symbols || msl.centres ? pressureCentres(mslF, centreCache.current, later) : null, symbols: msl.symbols, centres: msl.centres,
+        lines: msl.isobars ? pressureLines(mslF, msl.every, P.resKm, C.pressure, later) : null,
+        list: msl.symbols || msl.centres ? pressureCentres(mslF, C.centre, later) : null, symbols: msl.symbols, centres: msl.centres,
       } : null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [disp, style, basemapFor, statics, showCities, scaleKey, smooth, showContours, model, chromeFor, fontsOk, showStar, vmeta, isLive, isObs, showLightning, strikes,
-    arrowsOn, wxOn, cloudsOn, lvArrows, fcArrows, lvWx, fcWx, lvCloud, fcCloud, showRoads, roads, showGrid, timeSteps, obsSummary, obsKey, obsStrikes,
-    selfArrows, ownWx, canGrid, canStar, canContours, underMeta, underVar, fcUnder, strikeStyle, riskFor, mslOn, ownMsl, msl, fcMsl, lvMsl, bump, calcTick]);
+  }, [disp, style, basemapFor, staticsBy, showCities, smooth, showContours, fontsOk, showStar, isObs, isLive, showLightning, strikes, showRoads, roadsBy, showGrid, obsSummary, obsKey,
+    obsStrikes, strikeStyle, riskFor, gridName, wn, warningsAt, msl, bump, calcTick, layerAlpha]);
   useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); smoothCache.current.clear(); }, [thr, dir, scaleKey]);
+  useEffect(() => { Object.values(cachesB).forEach((m) => m.clear()); }, [cachesB, dataB?.key, thr, dir, scaleB]);
+
+  /* a window of the Met Office warnings alone, in force at a time, with their list in the key */
+  const warningLayers = useCallback((raw, ms, sync) => {
+    const st = staticsBy[gridName];
+    const areas = ms == null ? [] : warningsAt(ms, gridName, isObs, sync === 'smooth' ? WARN_FADE : 0);
+    return {
+      style, basemap: basemapFor(raw, gridName, ms), lines: st?.lines, cities: showCities ? st?.cities : null, roads: showRoads ? roadsBy[gridName] || null : null, smooth,
+      warnings: { alpha: 1, look: 'fill', labels: true, areas },
+      chrome: ms == null ? null : { variable: 'Met Office warnings', valid: new Date(ms).toISOString(), logo: st?.logo, dayOnly: isObs, credit: isObs ? 'In force that day' : 'In force at this time',
+        warnList: warnData ? areas.filter((w) => (w.fade ?? 1) > 0.5).reverse().map((w) => ({ severity: w.severity, type: w.text, when: warnWhen(w) })) : [], notice: warnData ? null : 'Loading the warnings…' },
+    };
+  }, [staticsBy, gridName, warningsAt, isObs, style, basemapFor, showCities, showRoads, roadsBy, smooth, warnData]);
+  /* The two windows of a frame, at the time of the first window's frame `raw`: `mode` is false on
+     screen, 'exact' for an export of the steps as they are, 'smooth' for one with frames between. The
+     two share one time card and one logo: left and right or both on the top window, and the other
+     window shows a time of its own only if a run has no step at that time. */
+  const windowsFor = useCallback((raw, R, V, mode) => {
+    const sp = splitOf(R), sync = mode;
+    const vB = viewOnGrid(V, gridName, gridB);
+    const ms = raw ? Date.parse(raw.head.valid) : validMs;
+    const ra = cmp.swap ? sp.b : sp.a, rb = cmp.swap ? sp.a : sp.b;
+    const within = (f, rect, v) => { if (f?.tween) f.tween.box = boxOf(rect, v); return f; };
+    const LA = layersFor(paneA, within(raw, ra, V), sync);
+    const LB = withGrid(gridB, () => (kindB === 'warnings' ? warningLayers(raw, ms, sync)
+      : layersFor(paneB, within(mode ? frameBAt(ms, mode === 'smooth') : frameB, rb, vB), sync, ms)));
+    const differ = !!LA.chrome && !!LB.chrome && Math.abs(Date.parse(LA.chrome.valid) - Date.parse(LB.chrome.valid)) > 60e3;
+    const rows = sp.split === 'rows';
+    const mark = (L, time, brand) => (L.chrome ? { ...L, chrome: { ...L.chrome, time, brand } } : L);
+    const a = { view: V, grid: gridName }, b = { view: vB, grid: gridB };
+    const slots = cmp.swap ? [{ ...b, L: LB }, { ...a, L: LA }] : [{ ...a, L: LA }, { ...b, L: LB }];
+    return {
+      u: Math.min(R.w, R.h) / 1080, line: sp.line, split: sp.split,
+      panes: [{ ...slots[0], rect: sp.a, L: mark(slots[0].L, true, rows) }, { ...slots[1], rect: sp.b, L: mark(slots[1].L, differ, !rows) }],
+    };
+  }, [splitOf, gridName, gridB, validMs, cmp.swap, layersFor, paneA, paneB, kindB, warningLayers, frameBAt, frameB]);
 
   /* the contour lines and isobars, highs and lows of the steps ahead (and just behind), worked
      out in the worker while this one is looked at, so stepping and playback find them ready */
   useEffect(() => {
     const lines = showContours && canContours;
-    if ((!lines && !mslOn) || !steps.length) return undefined;
+    if ((!lines && !mslOn) || !steps.length || exp.busy != null) return undefined;
     const t = setTimeout(() => {
       const ahead = { urgent: false };
       for (const k of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, -1, -2]) {
@@ -1030,7 +1433,24 @@ export default function ModelData() {
       }
     }, 150);
     return () => clearTimeout(t);
-  }, [idx, steps, frames, disp, showContours, canContours, mslOn, ownMsl, msl, isLive, lvMsl, fcMsl, scaleKey, model]);
+  }, [idx, steps, frames, disp, showContours, canContours, mslOn, ownMsl, msl, isLive, lvMsl, fcMsl, scaleKey, model, exp.busy]);
+  useEffect(() => {
+    const lines = showContours && paneB.canContours;
+    if (kindB !== 'run' || (!lines && !mslOnB) || stepB == null || exp.busy != null) return undefined;
+    const t = setTimeout(() => withGrid(gridB, () => {
+      const ahead = { urgent: false }, at = stepsB.indexOf(stepB), n = stepsB.length;
+      for (const k of [1, 2, 3, 4, 5, 6, 7, 8, -1]) {
+        const raw = framesB[stepsB[(at + k + n) % n]];
+        if (!raw) continue;
+        const f = disp(raw);
+        if (lines && f) frameContours(f, scaleB, modelB?.res_km, cachesB.contour, ahead);
+        const mslF = !mslOnB ? null : ownMslB ? raw : companionOf(fcMslB, raw, false);
+        if (mslF && msl.isobars) pressureLines(mslF, msl.every, modelB?.res_km, cachesB.pressure, ahead);
+        if (mslF && (msl.symbols || msl.centres)) pressureCentres(mslF, cachesB.centre, ahead);
+      }
+    }), 200);
+    return () => clearTimeout(t);
+  }, [kindB, stepB, stepsB, framesB, disp, showContours, paneB, mslOnB, ownMslB, fcMslB, msl, gridB, scaleB, modelB, cachesB, exp.busy]);
 
   /* draw: the map everywhere, dimmed outside the frame, the finished graphic inside it */
   useEffect(() => {
@@ -1038,12 +1458,21 @@ export default function ModelData() {
     if (!c || !view || !R) return;
     const ctx = c.getContext('2d');
     const full = { x: 0, y: 0, w: c.width, h: c.height };
-    const L = layersFor(frame);
+    const S = kindB ? windowsFor(frame, R, view, false) : null;
+    const L = S ? null : layersFor(paneA, frame);
     ctx.clearRect(0, 0, c.width, c.height);
     // the dimmed map around the frame: map, data and coastlines only (the overlays are for the
     // graphic itself, and drawing them twice doubled the cost of every pan)
-    drawScene(ctx, R, view, { ...L, chrome: null, cities: null, contours: null, roads: null, grid: null, arrows: null, wx: null, star: null,
-      pressure: null, risk: null, strikes: null, interacting }, { clip: full, coarse: true, cache: true });
+    const plain = { chrome: null, cities: null, contours: null, roads: null, grid: null, arrows: null, wx: null, star: null,
+      pressure: null, risk: null, warnings: null, strikes: null, under: null, over: null, interacting };
+    if (S) {
+      /* each window's map runs on beyond the frame on its own side of the line */
+      const cut = S.split === 'rows' ? S.line.y : S.line.x;
+      S.panes.forEach((p, i) => {
+        const clip = S.split === 'rows' ? { x: 0, y: i ? cut : 0, w: c.width, h: i ? c.height - cut : cut } : { x: i ? cut : 0, y: 0, w: i ? c.width - cut : cut, h: c.height };
+        withGrid(p.grid, () => drawScene(ctx, p.rect, p.view, { ...p.L, ...plain }, { clip, coarse: true, cache: true, u: S.u }));
+      });
+    } else drawScene(ctx, R, view, { ...L, ...plain }, { clip: full, coarse: true, cache: true });
     ctx.save();
     ctx.fillStyle = 'rgba(3,6,12,0.62)';
     ctx.beginPath();
@@ -1052,7 +1481,8 @@ export default function ModelData() {
     ctx.roundRect ? ctx.roundRect(R.x, R.y, R.w, R.h, r) : ctx.rect(R.x, R.y, R.w, R.h);
     ctx.fill('evenodd');
     ctx.restore();
-    drawScene(ctx, R, view, { ...L, interacting }, { round: r, cache: true });
+    if (S) drawPanes(ctx, R, S, { round: r, cache: true, interacting });
+    else drawScene(ctx, R, view, { ...L, interacting }, { round: r, cache: true });
     ctx.save();
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = 1;
@@ -1061,14 +1491,18 @@ export default function ModelData() {
     ctx.stroke();
     if (pin) {
       const dpr = c.width / Math.max(1, stageRef.current.clientWidth);
-      const px = (pin.gx - view.cx) * view.s + R.x + R.w / 2, py = (pin.gy - view.cy) * view.s + R.y + R.h / 2;
-      ctx.beginPath(); ctx.arc(px, py, 9 * dpr, 0, Math.PI * 2);
-      ctx.lineWidth = 3 * dpr; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.stroke();
-      ctx.lineWidth = 2 * dpr; ctx.strokeStyle = '#ffd23f'; ctx.stroke();
-      ctx.beginPath(); ctx.arc(px, py, 2.5 * dpr, 0, Math.PI * 2); ctx.fillStyle = '#ffd23f'; ctx.fill();
+      for (const p of S ? S.panes : [{ rect: R, view, grid: gridName }]) {
+        const [gx, gy] = p.grid === gridName ? [pin.gx, pin.gy] : projection(p.grid).toGrid(...projection(gridName).fromGrid(pin.gx, pin.gy));
+        const px = (gx - p.view.cx) * p.view.s + p.rect.x + p.rect.w / 2, py = (gy - p.view.cy) * p.view.s + p.rect.y + p.rect.h / 2;
+        if (px < p.rect.x || py < p.rect.y || px > p.rect.x + p.rect.w || py > p.rect.y + p.rect.h) continue;
+        ctx.beginPath(); ctx.arc(px, py, 9 * dpr, 0, Math.PI * 2);
+        ctx.lineWidth = 3 * dpr; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.stroke();
+        ctx.lineWidth = 2 * dpr; ctx.strokeStyle = '#ffd23f'; ctx.stroke();
+        ctx.beginPath(); ctx.arc(px, py, 2.5 * dpr, 0, Math.PI * 2); ctx.fillStyle = '#ffd23f'; ctx.fill();
+      }
     }
     ctx.restore();
-  }, [view, frame, layersFor, frameRect, interacting, pin]);
+  }, [view, frame, layersFor, paneA, windowsFor, kindB, gridName, frameRect, interacting, pin]);
 
   /* playback */
   useEffect(() => {
@@ -1094,7 +1528,7 @@ export default function ModelData() {
       else if (e.key === ' ' && tag !== 'BUTTON') { e.preventDefault(); setPlaying((p) => !p); }
       else if (e.key === '+' || e.key === '=') z?.(1.35);
       else if (e.key === '-' || e.key === '_') z?.(1 / 1.35);
-      else if (e.key === 'Escape') { setPin(null); setVarOpen(false); setMapOpen(false); setRegionsOpen(false); setModeOpen(false); setExp((x) => ({ ...x, open: false })); }
+      else if (e.key === 'Escape') { setPin(null); setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setExp((x) => ({ ...x, open: false })); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -1110,11 +1544,27 @@ export default function ModelData() {
     clearTimeout(settle.current);
     settle.current = setTimeout(() => { interactingRef.current = false; setInteracting(false); }, 180);
   };
+  /* a point on the canvas in the window it is over. Both windows pan and zoom as one: their views
+     are the same but for the grid, so gx and gy hold for either as a place to zoom around */
   const toGrid = (clientX, clientY) => {
-    const c = canvasRef.current, rr = c.getBoundingClientRect(), R = frameRect();
+    const c = canvasRef.current, rr = c.getBoundingClientRect(), Wn = windowRects();
     const dpr = c.width / rr.width;
     const px = (clientX - rr.left) * dpr, py = (clientY - rr.top) * dpr;
-    return { px, py, R, gx: (px - (R.x + R.w / 2)) / view.s + view.cx, gy: (py - (R.y + R.h / 2)) / view.s + view.cy };
+    const second = !!Wn.sp && (Wn.sp.split === 'rows' ? py >= Wn.sp.line.y : px >= Wn.sp.line.x) !== !!cmp.swap;
+    const R = second ? Wn.b : Wn.a;
+    return { px, py, R, second, gx: (px - (R.x + R.w / 2)) / view.s + view.cx, gy: (py - (R.y + R.h / 2)) / view.s + view.cy };
+  };
+  /* that point on the second window's own grid */
+  const onGridB = ({ px, py, R }) => {
+    const v = viewOnGrid(view, gridName, gridB);
+    return [(px - (R.x + R.w / 2)) / v.s + v.cx, (py - (R.y + R.h / 2)) / v.s + v.cy];
+  };
+  /* the worst warning over a point, at the time on show */
+  const warningOver = (grid, gx, gy) => {
+    if (validMs == null) return null;
+    const list = warningsAt(validMs, grid, isObs);
+    for (let i = list.length - 1; i >= 0; i--) if (pointInRings(gx, gy, list[i].rings)) return list[i];
+    return null;
   };
   const zoomAt = (clientX, clientY, k) => {
     if (!view) return;
@@ -1158,16 +1608,23 @@ export default function ModelData() {
       setView({ ...g.v, cx: g.v.cx - ((e.clientX - g.x) * dpr) / g.v.s, cy: g.v.cy - ((e.clientY - g.y) * dpr) / g.v.s });
       return;
     }
-    const { gx, gy } = toGrid(e.clientX, e.clientY);
-    const v = sampleFrame(disp(frame), gx, gy);
-    if (!Number.isFinite(v)) { setHover(null); return; }
+    const at = toGrid(e.clientX, e.clientY);
     const r = e.currentTarget.getBoundingClientRect();
-    setHover({ x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, v });
+    const spot = { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width };
+    const [gx, gy] = at.second ? onGridB(at) : [at.gx, at.gy];
+    const w = (wn.on || (at.second && kindB === 'warnings')) ? warningOver(at.second ? gridB : gridName, gx, gy) : null;
+    const warn = w ? `${w.severity} warning · ${w.text}` : null;
+    if (at.second && kindB === 'warnings') { setHover(warn ? { ...spot, text: warn } : null); return; }
+    const v = at.second ? withGrid(gridB, () => sampleFrame(disp(frameB), gx, gy)) : sampleFrame(disp(frame), gx, gy);
+    if (!Number.isFinite(v) && !warn) { setHover(null); return; }
+    setHover({ ...spot, text: Number.isFinite(v) ? (at.second ? fmtPoint(v, scaleB, metaB) : fmtPoint(v)) : warn, warn: Number.isFinite(v) ? warn : null });
   };
   const onUp = (e) => {
     const p = pressAt.current;
     if (p && e.type === 'pointerup' && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 5 && view) {
-      const { gx, gy } = toGrid(e.clientX, e.clientY);
+      const at = toGrid(e.clientX, e.clientY);
+      /* a click in the second window is the same place, wherever it is on the first window's grid */
+      const [gx, gy] = at.second && gridB !== gridName ? projection(gridName).toGrid(...projection(gridB).fromGrid(...onGridB(at))) : [at.gx, at.gy];
       if (gx >= 0 && gy >= 0 && gx < NX && gy < NY) setPin({ gx, gy });
     }
     pressAt.current = null;
@@ -1183,14 +1640,19 @@ export default function ModelData() {
     const a = R.w / R.h;
     return a >= 1 ? [Math.round(short * a / 2) * 2, short] : [short, Math.round(short / a / 2) * 2];
   };
-  const renderAt = useCallback((f, ctx, W, H) => {
+  /* one frame of the graphic, at an export's size; the page's own grid, whatever has been clicked since */
+  const renderAt = useCallback((f, ctx, W, H, mode = 'exact') => withGrid(gridName, () => {
     const R = frameRect();
-    const k = W / R.w;
-    drawScene(ctx, { x: 0, y: 0, w: W, h: H }, { cx: view.cx, cy: view.cy, s: view.s * k }, layersFor(f, true));
-  }, [view, layersFor, frameRect]);
+    const v = { cx: view.cx, cy: view.cy, s: view.s * (W / R.w) };
+    const out = { x: 0, y: 0, w: W, h: H };
+    if (kindB) { drawPanes(ctx, out, windowsFor(f, out, v, mode)); return; }
+    if (f?.tween) f.tween.box = boxOf(out, v);
+    drawScene(ctx, out, v, layersFor(paneA, f, mode));
+  }), [view, layersFor, paneA, windowsFor, kindB, frameRect, gridName]);
   const stamp = (s) => (isObs ? dayOf(s) : isLive ? new Date(s).toISOString().slice(0, 16).replace(/[-:]/g, '') : `T${s}`);
-  const fileBase = () => (isObs ? `MyWeatherUK_observed_${obsKey}_${frameKey}` : isLive ? `MyWeatherUK_live_${liveKey}_${frameKey}`
-    : `MyWeatherUK_${model.id}_${runTag(run.run)}_${isProb ? `${presetKey}_${dir}${fmtThr(thr)}` : varKey}_${frameKey}`);
+  const secondName = () => (!kindB ? '' : kindB === 'warnings' ? '_with_warnings' : `_vs_${modelB.id}_${runTag(runB.run)}${isProb || varB === varKey ? '' : `_${varB}`}`);
+  const fileBase = () => (isObs ? `MyWeatherUK_observed_${obsKey}${secondName()}_${frameKey}` : isLive ? `MyWeatherUK_live_${liveKey}${secondName()}_${frameKey}`
+    : `MyWeatherUK_${model.id}_${runTag(run.run)}_${isProb ? `${presetKey}_${dir}${fmtThr(thr)}` : varKey}${secondName()}_${frameKey}`);
   const exportPng = () => {
     if (!frame) return;
     const [W, H] = exportSize(exp.png);
@@ -1201,24 +1663,79 @@ export default function ModelData() {
   };
   if (import.meta.env.DEV) window.__mdExport = (short = 1080) => { const [W, H] = exportSize(short); const cv = document.createElement('canvas'); cv.width = W; cv.height = H; renderAt(frame, cv.getContext('2d'), W, H); return cv.toDataURL('image/jpeg', 0.85); };
   const gifCancel = useRef(false);
-  const exportGif = async () => {
+  /* The frames of a GIF or video: each step for `speed` ms, as it is or, smooth, moving on to the next
+     all the way through at the file's frame rate. It ends on a short rest. A GIF goes round and round,
+     so a smooth one dissolves from its last frame back to its first. */
+  const motionPlan = (job, list) => {
+    const fps = job === 'gif' ? GIF_FPS : exp.fps, tick = 1000 / fps;
+    const smoothly = exp.smooth && list.length > 1;
+    const per = Math.max(1, Math.round(speed / tick));
+    const plan = [];
+    for (let i = 0; i + 1 < list.length; i++) {
+      if (job === 'gif' && !smoothly) { plan.push({ i, t: 0, delay: speed }); continue; }
+      for (let k = 0; k < per; k++) plan.push({ i, t: smoothly ? k / per : 0, same: !smoothly && k > 0, delay: tick });
+    }
+    const end = list.length - 1;
+    if (job === 'gif') {
+      plan.push({ i: end, t: 0, delay: Math.max(speed, 900) });
+      if (smoothly) for (let k = 1; k < per; k++) plan.push({ fade: k / per, delay: tick });
+    } else for (let k = 0; k < fps; k++) plan.push({ i: end, t: 0, same: k > 0, delay: tick });
+    return { plan, fps, smoothly };
+  };
+  const motionFrames = (job) => {
     const lo = exp.from, hi = exp.to ?? steps.length - 1;
-    const list = steps.slice(lo, hi + 1).filter((s) => frames[s]);
-    if (!list.length) return;
-    const [W, H] = exportSize(exp.gif);
+    return steps.slice(lo, hi + 1).filter((s) => frames[s]);
+  };
+  /* `keep` (tests) hands the file back instead of saving it */
+  const exportMotion = async (job, keep) => {
+    const list = motionFrames(job);
+    if (!list.length) return null;
+    const { plan, fps, smoothly } = motionPlan(job, list);
+    const [W, H] = exportSize(job === 'gif' ? exp.gif : exp.video);
+    const mode = smoothly ? 'smooth' : 'exact';
+    const rawOf = (p) => {
+      const a = frames[list[p.i]];
+      if (!p.t) return a;
+      const b = frames[list[p.i + 1]], ta = Date.parse(a.head.valid);
+      return tweenRaw(a, b, p.t, ta + (Date.parse(b.head.valid) - ta) * p.t);
+    };
+    /* the last frame and the first, kept for the dissolve from one to the other */
+    const ends = [];
+    const end = (i, p) => {
+      if (ends[i]) return ends[i];
+      const cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      renderAt(rawOf(p), cv.getContext('2d'), W, H, mode);
+      ends[i] = cv;
+      return cv;
+    };
+    const render = (i, ctx) => {
+      const p = plan[i];
+      if (p.fade == null) { renderAt(rawOf(p), ctx, W, H, mode); return; }
+      ctx.globalAlpha = 1;
+      ctx.drawImage(end(0, { i: list.length - 1, t: 0 }), 0, 0);
+      ctx.globalAlpha = p.fade;
+      ctx.drawImage(end(1, { i: 0, t: 0 }), 0, 0);
+      ctx.globalAlpha = 1;
+    };
     gifCancel.current = false;
-    setExp((e) => ({ ...e, busy: 0 }));
+    setExp((e) => ({ ...e, busy: 0, job, err: null }));
     try {
-      const blob = await makeGif({
-        count: list.length, W, H, delayMs: speed, cancelled: () => gifCancel.current,
-        render: (i, ctx) => renderAt(frames[list[i]], ctx, W, H),
-        onProgress: (p) => setExp((e) => ({ ...e, busy: p })),
+      const blob = await (job === 'gif' ? makeGif : makeVideo)({
+        count: plan.length, W, H, fps, render, cancelled: () => gifCancel.current,
+        delayOf: (i) => plan[i].delay, same: (i) => !!plan[i].same,
+        onProgress: (p) => { const q = Math.round(p * 100) / 100; setExp((e) => (e.busy === q ? e : { ...e, busy: q })); },
       });
-      if (blob) download(blob, `${fileBase()}_${stamp(list[0])}-${stamp(list[list.length - 1])}.gif`);
+      if (blob && !keep) download(blob, `${fileBase()}_${stamp(list[0])}-${stamp(list[list.length - 1])}.${job === 'gif' ? 'gif' : 'mp4'}`);
+      return blob;
+    } catch (e) {
+      setExp((x) => ({ ...x, err: e.message }));
+      return null;
     } finally {
       setExp((e) => ({ ...e, busy: null }));
     }
   };
+  if (import.meta.env.DEV) window.__mdMotion = exportMotion;
 
   const groups = useMemo(() => {
     if (!model || !cat) return [];
@@ -1263,14 +1780,14 @@ export default function ModelData() {
     : isLive ? new Date(s).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) : `T+${s}`);
 
   /* one value, as this layer reads: a weather type, a direction, or a number with its unit */
-  const fmtPoint = (v) => (!Number.isFinite(v) ? '—' : scaleKey === 'wx' ? WX_NAMES[Math.round(v)] ?? '—'
-    : scaleKey === 'ptype' ? scaleFor('ptype').keyLabel(v) || 'None'
-    : scaleKey === 'wdir10' || scaleKey === 'mwd' ? `from the ${compass(v)} · ${Math.round(v)}°` : fmtValue(v, vmeta?.unit));
+  const fmtPoint = (v, sk = scaleKey, meta = vmeta) => (!Number.isFinite(v) ? '—' : sk === 'wx' ? WX_NAMES[Math.round(v)] ?? '—'
+    : sk === 'ptype' ? scaleFor('ptype').keyLabel(v) || 'None'
+    : sk === 'wdir10' || sk === 'mwd' ? `from the ${compass(v)} · ${Math.round(v)}°` : fmtValue(v, meta?.unit));
 
   /* panels: on a phone one at a time, as sheets from the bottom; elsewhere as cards */
-  const panelOpen = { data: varOpen, layers: mapOpen, regions: regionsOpen, export: exp.open, summary: obsPanel && !sidePanel, mode: modeOpen };
+  const panelOpen = { data: varOpen, layers: mapOpen, compare: cmpOpen, regions: regionsOpen, export: exp.open, summary: obsPanel && !sidePanel, mode: modeOpen };
   const closePanels = () => {
-    setVarOpen(false); setMapOpen(false); setRegionsOpen(false); setModeOpen(false);
+    setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false);
     setExp((e) => (e.open ? { ...e, open: false } : e));
     if (!sidePanel) setObsPanel(false);
   };
@@ -1280,6 +1797,7 @@ export default function ModelData() {
     if (was) return;
     if (name === 'data') { setQ(''); setVarOpen(true); }
     if (name === 'layers') setMapOpen(true);
+    if (name === 'compare') setCmpOpen(true);
     if (name === 'regions') setRegionsOpen(true);
     if (name === 'export') setExp((e) => ({ ...e, open: true }));
     if (name === 'summary') setObsPanel(true);
@@ -1321,9 +1839,10 @@ export default function ModelData() {
   );
 
   const layerCount = [showCities || wxOn, wxOn, arrowsOn, cloudsOn, canLightning && showLightning, showRoads, canGrid && showGrid,
-    canContours && showContours, canStar && showStar, ovOn, mslOn && !ownMsl].filter(Boolean).length;
+    canContours && showContours, canStar && showStar, ovOn, mslOn && !ownMsl, wn.on].filter(Boolean).length + extras.length;
   const styleSeg = <Seg small items={Object.entries(MAP_STYLES).map(([k, s]) => [k, s.label])} value={style} onChange={setStyle} />;
   const frameSeg = <Seg small items={Object.entries(FRAMES).map(([k, f]) => [k, f.label])} value={frameKey} onChange={setFrameKey} />;
+  const sectionTitle = (t) => <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '4px 4px 7px' }}>{t}</div>;
   const smoothPill = (
     <Pill on={smooth} title={smooth ? 'Smoothed: click to see the radar and model cells as they are' : 'Cells as they are: click to smooth'} onClick={() => setSmooth((x) => !x)}>
       {smooth ? 'Smooth' : 'Pixels'}
@@ -1371,6 +1890,43 @@ export default function ModelData() {
           ))}
         </div>
       )}
+    </div>
+  );
+  /* under the Met Office warnings switch: their look, and what is in force at the time on show */
+  const goToMs = (ms) => {
+    setPlaying(false);
+    const msOf = (x) => (timeSteps ? x : Date.parse(run.run) + x * 3600e3);
+    let best = 0;
+    steps.forEach((x, i) => { if (Math.abs(msOf(x) - ms) < Math.abs(msOf(steps[best]) - ms)) best = i; });
+    setIdx(best);
+  };
+  const warnNow = wn.on && warnData && validMs != null ? [...warningsAt(validMs, gridName, isObs)].reverse() : [];
+  const warnNext = wn.on && warnData && validMs != null && !warnNow.length ? shapesOn(gridName).filter((w) => w.fromMs > validMs).sort((a, b) => a.fromMs - b.fromMs)[0] : null;
+  const warnFrom = warnData?.recordingSince ? Date.parse(warnData.recordingSince) : null;
+  const warnState = (
+    <div style={{ display: 'grid', gap: 3, fontSize: 11, color: T.ink2 }}>
+      {!warnData ? 'Loading the warnings…' : warnNow.length ? warnNow.map((w) => (
+        <span key={w.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <i style={{ width: 10, height: 10, borderRadius: 3, background: w.colour, flexShrink: 0 }} />{w.severity} · {w.text} · {warnWhen(w)}
+        </span>
+      )) : warnFrom && validMs < warnFrom ? `The record of warnings begins on ${dayLabel(londonDay(warnFrom))}.` : `None in force ${isObs ? 'that day' : 'at this time'}.`}
+      {warnNext && (
+        <button onClick={() => goToMs(warnNext.fromMs)} style={{ all: 'unset', cursor: 'pointer', color: T.ink3, fontWeight: 650 }}>
+          Next: {warnNext.severity.toLowerCase()} {warnNext.text.toLowerCase()}, {warnWhen(warnNext)} ›
+        </button>
+      )}
+    </div>
+  );
+  const warnControls = (
+    <div style={{ display: 'grid', gap: 8, padding: '0 8px 10px 46px' }}>
+      <div style={subRow}>
+        <Seg small items={[['fill', 'Filled'], ['line', 'Outline']]} value={wn.look} onChange={(v) => setWnK('look', v)} />
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+          <input type="checkbox" checked={wn.labels} onChange={(e) => setWnK('labels', e.target.checked)} /> Labels
+        </label>
+      </div>
+      <label style={subRow}>Strength <input type="range" min={0.3} max={1} step={0.05} value={wn.alpha} onChange={(e) => setWnK('alpha', Number(e.target.value))} style={{ flex: 1, minWidth: 90 }} /></label>
+      {warnState}
     </div>
   );
   /* the risk overlay's controls (admins) */
@@ -1424,14 +1980,60 @@ export default function ModelData() {
       {ovStatus && <div style={{ fontSize: 11, color: ovErr ? '#f59e0b' : T.ink2 }}>{ovStatus}</div>}
     </div>
   );
+  /* any layer over or under the one on show: everything this view has, grouped as in the picker */
+  const extraGroups = (() => {
+    if (!model) return [];
+    const taken = new Set([isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey, ...extras.map((x) => x.v)]);
+    const g = {};
+    const add = (grp, k, label) => { if (!taken.has(k) && !NO_COLOURS.has(k)) (g[grp] ||= []).push([k, label]); };
+    if (isObs) OBS_LIST.forEach((x) => add(x.group, x.key, x.label));
+    else if (isLive) LIVE_LIST.forEach((x) => add(x.group, x.key, x.label));
+    else if (isProb) PRESETS.filter((x) => model.fields?.includes(x.field)).forEach((x) => add(x.group, x.key, x.label));
+    else (model.variables || []).forEach((k) => cat?.variables?.[k] && add(cat.variables[k].group, k, cat.variables[k].label));
+    const order = isObs || isLive || isProb ? Object.keys(g) : GROUP_ORDER.filter((n) => g[n]);
+    return order.map((n) => [n, g[n]]);
+  })();
+  const extraLabel = (v) => (isObs ? OBS[v]?.label : isLive ? LIVE[v]?.label : isProb ? PRESET[v]?.label : cat?.variables?.[v]?.label) || v;
+  const stackControls = (
+    <div style={{ display: 'grid', gap: 6, padding: '2px 8px 8px' }}>
+      {sectionTitle('Layers over and under')}
+      <label style={subRow}>{layerLabel} <input type="range" min={0.2} max={1} step={0.05} value={layerAlpha} onChange={(e) => setLayerAlpha(Number(e.target.value))} style={{ flex: 1, minWidth: 70 }} aria-label="Strength of the main layer" /></label>
+      {extras.map((x, i) => (
+        <div key={`${x.v}${i}`} style={{ display: 'grid', gap: 5, padding: '7px 9px', borderRadius: 12, background: T.chip, boxShadow: T.chipShadow }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={extraLabel(x.v)}>{extraLabel(x.v)}</span>
+            <IconBtn title="Remove this layer" onClick={() => dropExtra(i)} style={{ width: 24, height: 24 }}><X size={12} /></IconBtn>
+          </div>
+          {!timeSteps && !(model?.variables || model?.fields)?.includes(extraField(x.v)) && <span style={{ fontSize: 11, color: '#f59e0b' }}>{SHORT_NAMES[model?.id] || 'This model'} does not have this layer.</span>}
+          <div style={subRow}>
+            <Seg small items={[['over', 'Over'], ['under', 'Under']]} value={x.place} onChange={(v) => setExtraK(i, 'place', v)} />
+            <input type="range" min={0.15} max={1} step={0.05} value={x.alpha} onChange={(e) => setExtraK(i, 'alpha', Number(e.target.value))} style={{ flex: 1, minWidth: 70 }} aria-label={`Strength of ${extraLabel(x.v)}`} />
+          </div>
+        </div>
+      ))}
+      {extras.length < MAX_EXTRA ? (
+        <div style={{ position: 'relative' }}>
+          <select value="" onChange={(e) => { if (e.target.value) addExtra(e.target.value); }} style={{ ...sel, width: '100%' }} aria-label="Add a layer over or under this one">
+            <option value="" style={{ color: '#111' }}>Add a layer…</option>
+            {extraGroups.map(([g, list]) => <optgroup key={g} label={g} style={{ color: '#111' }}>{list.map(([k, l]) => <option key={k} value={k} style={{ color: '#111' }}>{l}</option>)}</optgroup>)}
+          </select>
+          <ChevronDown style={{ position: 'absolute', right: 12, top: 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
+        </div>
+      ) : <span style={{ fontSize: 11, color: T.ink2 }}>Three layers is the most: remove one to add another.</span>}
+    </div>
+  );
   const layerRows = (
     <div style={{ display: 'grid', gap: 1 }}>
+      {stackControls}
+      <div style={{ height: 1, background: T.line, margin: '2px 4px 6px' }} />
       <LayerRow icon={<MapPin size={14} />} label="Places" note={wxOn ? 'shown with the weather symbols' : null} on={showCities || wxOn} locked={wxOn} onClick={() => setShowCities((x) => !x)} />
       {canWx && <LayerRow icon={<CloudSun size={14} />} label="Weather symbols" note={ownWx ? 'part of this layer' : 'above the places; sun or moon by the real sun'} on={wxOn} locked={ownWx} onClick={() => setShowWx((x) => !x)} />}
       {canArrows && <LayerRow icon={<Navigation size={14} />} label="Wind arrows" note={ownArrows ? 'part of this layer' : 'the way the wind is blowing'} on={arrowsOn} locked={ownArrows} onClick={() => setShowArrows((x) => !x)} />}
       {canMsl && <LayerRow icon={<Gauge size={14} />} label="Sea-level pressure" note={ownMsl ? 'this layer: its isobars, highs and lows' : 'isobars, highs and lows over the layer'} on={mslOn} locked={ownMsl} onClick={() => setMslK('on', !msl.on)} />}
       {canMsl && mslOn && mslControls}
       {canClouds && <LayerRow icon={<Cloud size={14} />} label="Cloud underneath" note={isLive ? 'satellite cloud under the radar' : 'the model’s cloud under its rain'} on={showClouds} onClick={() => setShowClouds((x) => !x)} />}
+      <LayerRow icon={<TriangleAlert size={14} />} label="Met Office warnings" note={isObs ? 'those in force that day' : 'those in force at the time on show'} on={wn.on} onClick={() => setWnK('on', !wn.on)} />
+      {wn.on && warnControls}
       {canLightning && <LayerRow icon={<Zap size={14} />} label="Lightning" note={isLive ? 'strikes in the hour before each frame' : 'every strike that day'} on={showLightning} onClick={() => setShowLightning((x) => !x)} />}
       {canLightning && showLightning && strikeControls}
       <LayerRow icon={<Route size={14} />} label="Roads" note="motorways; A roads as you zoom in" on={showRoads} onClick={() => setShowRoads((x) => !x)} />
@@ -1448,16 +2050,21 @@ export default function ModelData() {
     </div>
   );
   const layersBtn = (
-    <Pill on={mapOpen} title="Layers: places, symbols, arrows, roads, grid…" onClick={() => (narrow ? openPanel('layers') : setMapOpen((o) => !o))} icon={<Layers size={14} />}>
+    <Pill on={mapOpen} title="Layers: places, symbols, arrows, warnings, roads, grid…" onClick={() => { if (narrow) openPanel('layers'); else { setCmpOpen(false); setMapOpen((o) => !o); } }} icon={<Layers size={14} />}>
       Layers{layerCount ? ` · ${layerCount}` : ''}
+    </Pill>
+  );
+  const compareBtn = (
+    <Pill on={cmpOpen || cmp.on} title="Two windows: compare runs, or the warnings beside a layer" onClick={() => { if (narrow) openPanel('compare'); else { setMapOpen(false); setCmpOpen((o) => !o); } }} icon={<Columns2 size={14} />}>
+      Compare
     </Pill>
   );
   /* the models, grouped by who makes them: a picker on desktops, buttons on phones and tablets */
   const modelGroups = (list) => ['Met Office', 'ECMWF', 'NOAA'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
   const chooseModel = (id) => (isProb ? (setEnsId(id), setEnsRunIso(null)) : (setModelId(id), setRunIso(null)));
-  const modelPicker = (list, value, onChange) => (
+  const modelPicker = (list, value, onChange, wide) => (
     <div style={{ position: 'relative', flexShrink: 0 }}>
-      <select value={value} onChange={(e) => onChange(e.target.value)} style={{ ...sel, fontWeight: 700 }} title={model?.source || 'Model'} aria-label="Model">
+      <select value={value} onChange={(e) => onChange(e.target.value)} style={{ ...sel, fontWeight: 700, ...(wide ? { width: '100%' } : {}) }} title={model?.source || 'Model'} aria-label={wide ? "Second window's model" : 'Model'}>
         {modelGroups(list).map(([g, ms]) => (
           <optgroup key={g} label={g} style={{ color: '#111' }}>
             {ms.map((m) => <option key={m.id} value={m.id} style={{ color: '#111' }}>{SHORT_NAMES[m.id] || m.label} · {MODEL_INFO[m.id]?.[1] || ''}</option>)}
@@ -1476,13 +2083,57 @@ export default function ModelData() {
       <ChevronDown style={{ position: 'absolute', right: 12, top: narrow ? 12 : 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
     </div>
   );
+  const spec = (label, el) => (
+    <div style={{ display: 'grid', gap: 4 }}>
+      <span style={{ fontSize: 11, fontWeight: 650, color: T.ink2 }}>{label}</span>
+      {el}
+    </div>
+  );
+  const compareBody = (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <LayerRow icon={<Columns2 size={14} />} label="Two windows" note="in one frame, with a white line between them" on={cmp.on} onClick={() => setCmpK('on', !cmp.on)} />
+      {cmp.on && (
+        <div style={{ display: 'grid', gap: 10, padding: '0 8px 4px' }}>
+          {!timeSteps && spec('Second window', <Seg small items={[['run', isProb ? 'Another run' : 'Run or layer'], ['warnings', 'Warnings']]} value={cmp.kind} onChange={(v) => setCmpK('kind', v)} />)}
+          {kindB === 'warnings' && <div style={{ fontSize: 11.5, color: T.ink2, lineHeight: 1.4 }}>The Met Office warnings in force at the time on show, beside {layerLabel.toLowerCase()}.</div>}
+          {kindB === 'run' && modelB && (
+            <>
+              {spec('Model', modelPicker(optionsB, modelB.id, (id) => setCmp((o) => ({ ...o, model: id, run: null })), true))}
+              {spec('Run', (
+                <div style={{ position: 'relative' }}>
+                  <select value={runB?.run || ''} onChange={(e) => setCmpK('run', e.target.value)} style={{ ...sel, width: '100%' }} aria-label="Second window's run">
+                    {modelB.runs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runLabel(r.run)} · T+{r.steps[r.steps.length - 1]}</option>)}
+                  </select>
+                  <ChevronDown style={{ position: 'absolute', right: 12, top: 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
+                </div>
+              ))}
+              {!isProb && spec('Layer', (
+                <div style={{ position: 'relative' }}>
+                  <select value={cmp.v && modelB.variables.includes(cmp.v) ? cmp.v : ''} onChange={(e) => setCmpK('v', e.target.value || null)} style={{ ...sel, width: '100%' }} aria-label="Second window's layer">
+                    <option value="" style={{ color: '#111' }}>Same as the first window</option>
+                    {GROUP_ORDER.map((g) => {
+                      const vs = modelB.variables.filter((k) => cat.variables[k]?.group === g);
+                      return vs.length ? <optgroup key={g} label={g} style={{ color: '#111' }}>{vs.map((k) => <option key={k} value={k} style={{ color: '#111' }}>{cat.variables[k].label}</option>)}</optgroup> : null;
+                    })}
+                  </select>
+                  <ChevronDown style={{ position: 'absolute', right: 12, top: 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
+                </div>
+              ))}
+            </>
+          )}
+          {spec('Layout', <Seg small items={[['auto', 'Auto'], ['cols', 'Side by side'], ['rows', 'Stacked']]} value={cmp.split} onChange={(v) => setCmpK('split', v)} />)}
+          <button onClick={() => setCmpK('swap', !cmp.swap)} style={{ ...sel, justifySelf: 'start', padding: '7px 12px', display: 'flex', gap: 6, alignItems: 'center', background: T.btn }}><ArrowLeftRight size={13} />Swap the windows</button>
+          {kindB === 'run' && pendingB > 0 && <div style={{ fontSize: 11, color: T.ink2, display: 'flex', gap: 6, alignItems: 'center' }}><Loader2 className="animate-spin" style={{ width: 12, height: 12 }} />Fetching the second window from AWS · {pendingB} to go</div>}
+        </div>
+      )}
+    </div>
+  );
   const chip = (on) => ({
     border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: narrow ? 13 : 12.5, fontWeight: 600, padding: narrow ? '9px 14px' : '7px 12px', borderRadius: 999,
     color: on ? '#fff' : T.ink3,
     background: on ? (T.light ? 'linear-gradient(180deg, #4b95ff, #1f6fe0)' : 'linear-gradient(180deg, rgba(110,180,255,0.55), rgba(60,130,240,0.4))') : T.chip,
     boxShadow: on ? 'inset 0 1px 0 rgba(255,255,255,0.5)' : T.chipShadow,
   });
-  const sectionTitle = (t) => <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '4px 4px 7px' }}>{t}</div>;
   const isSel = (k) => k === (isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey);
   const pickVar = (k) => { if (isObs) setObsKey(k); else if (isLive) setLiveKey(k); else if (isProb) choosePreset(k); else setVarKey(k); setVarOpen(false); };
   const searchBox = (autoFocus) => (
@@ -1546,15 +2197,30 @@ export default function ModelData() {
   );
   const speedSelect = (
     <div style={{ position: 'relative' }}>
-      <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} style={{ ...sel, padding: '7px 26px 7px 10px' }} title="Playback and GIF speed" aria-label="Playback speed">
+      <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} style={{ ...sel, padding: '7px 26px 7px 10px' }} title="Playback, GIF and video speed" aria-label="Playback speed">
         {[120, 200, 300, 450, 650, 900, 1300, 2000].map((v) => <option key={v} value={v} style={{ color: '#111' }}>{(1000 / v).toFixed(v > 500 ? 1 : 0)} fps</option>)}
       </select>
       <ChevronDown style={{ position: 'absolute', right: 8, top: 9, width: 13, height: 13, pointerEvents: 'none', opacity: 0.7 }} />
     </div>
   );
-  const exportBody = (
+  const waiting = pending + pendingB + pendingX;
+  const lengthSec = (job) => {
+    const list = motionFrames(job);
+    return list.length ? Math.round(motionPlan(job, list).plan.reduce((n, x) => n + x.delay, 0) / 100) / 10 : 0;
+  };
+  const motionName = isObs ? 'the days' : isLive ? 'the last hours' : 'the run';
+  const motionBtn = (job, icon, label) => {
+    const off = waiting > 0 || (job === 'video' && !canMakeVideo());
+    return (
+      <button onClick={() => exportMotion(job)} disabled={off} style={{ ...sel, flex: 1, minWidth: 150, padding: '10px 14px', display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center',
+        color: off ? T.ink2 : '#fff', background: off ? T.chip : 'linear-gradient(180deg, rgba(110,180,255,0.75), rgba(60,130,240,0.65))' }}>
+        {icon}{label}
+      </button>
+    );
+  };
+  const exportBody = exp.open && (
     <div style={{ display: 'grid', gap: 12, fontSize: 12.5 }}>
-      <div style={{ color: T.ink2 }}>{FRAMES[frameKey].a ? FRAMES[frameKey].label : 'As framed'} · exactly as previewed</div>
+      <div style={{ color: T.ink2 }}>{FRAMES[frameKey].a ? FRAMES[frameKey].label : 'As framed'}{kindB ? ' · both windows' : ''} · exactly as previewed</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between', flexWrap: 'wrap' }}>
         <Seg small items={[[1080, '1080p'], [2160, '4K']]} value={exp.png} onChange={(v) => setExp((x) => ({ ...x, png: v }))} />
         <button onClick={exportPng} disabled={!frame} style={{ ...sel, padding: '9px 14px', display: 'flex', gap: 6, alignItems: 'center', background: T.btn }}><ImageIcon size={14} />PNG of this step</button>
@@ -1562,30 +2228,44 @@ export default function ModelData() {
       <div style={{ height: 1, background: T.line }} />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
         <span style={{ color: T.ink2 }}>From</span>
-        <select value={exp.from} onChange={(e) => setExp((x) => ({ ...x, from: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }} aria-label="GIF from">
+        <select value={exp.from} onChange={(e) => setExp((x) => ({ ...x, from: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }} aria-label="From">
           {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>{stepLabel(s)}</option>)}
         </select>
         <span style={{ color: T.ink2 }}>to</span>
-        <select value={exp.to ?? steps.length - 1} onChange={(e) => setExp((x) => ({ ...x, to: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }} aria-label="GIF to">
+        <select value={exp.to ?? steps.length - 1} onChange={(e) => setExp((x) => ({ ...x, to: Number(e.target.value) }))} style={{ ...sel, padding: '6px 10px' }} aria-label="To">
           {steps.map((s, i) => <option key={s} value={i} style={{ color: '#111' }}>{stepLabel(s)}</option>)}
         </select>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-        <span style={{ color: T.ink2 }}>Frame</span>
+        <span style={{ color: T.ink2 }}>Each step</span>
         <input type="number" min={40} max={5000} step={10} value={speed} onChange={(e) => setSpeed(Math.max(40, Math.min(5000, Number(e.target.value) || 450)))}
-          style={{ ...sel, width: 84, padding: '6px 10px', cursor: 'text' }} aria-label="Milliseconds per frame" />
+          style={{ ...sel, width: 84, padding: '6px 10px', cursor: 'text' }} aria-label="Milliseconds per step" />
         <span style={{ color: T.ink2 }}>ms</span>
-        <Seg small items={[[540, '540p'], [720, '720p'], [1080, '1080p']]} value={exp.gif} onChange={(v) => setExp((x) => ({ ...x, gif: v }))} />
       </div>
-      {exp.busy == null
-        ? <button onClick={exportGif} disabled={pending > 0} style={{ ...sel, justifySelf: 'stretch', padding: '11px 14px', display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', color: pending > 0 ? T.ink2 : '#fff', background: pending > 0 ? T.chip : 'linear-gradient(180deg, rgba(110,180,255,0.75), rgba(60,130,240,0.65))' }}>
-            <Film size={14} />{pending > 0 ? `GIF — waiting for ${pending} frames` : isObs ? 'GIF of the days' : isLive ? 'GIF of the last hours' : 'GIF of the run'}
-          </button>
-        : <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <LayerRow icon={<Waves size={14} />} label="Smooth transitions" note="the frames between the steps, worked out from how the weather moves" on={exp.smooth} onClick={() => setExp((x) => ({ ...x, smooth: !x.smooth }))} />
+      {exp.busy == null ? (
+        <>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            <Seg small items={[[540, '540p'], [720, '720p'], [1080, '1080p']]} value={exp.gif} onChange={(v) => setExp((x) => ({ ...x, gif: v }))} />
+            {motionBtn('gif', <Film size={14} />, `GIF of ${motionName}`)}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            <Seg small items={[[720, '720p'], [1080, '1080p'], [2160, '4K']]} value={exp.video} onChange={(v) => setExp((x) => ({ ...x, video: v }))} />
+            <Seg small items={[[30, '30 fps'], [60, '60 fps']]} value={exp.fps} onChange={(v) => setExp((x) => ({ ...x, fps: v }))} />
+            {motionBtn('video', <Clapperboard size={14} />, `Video of ${motionName}`)}
+          </div>
+          <div style={{ fontSize: 11, color: exp.err ? '#f59e0b' : T.ink2 }}>{exp.err || (waiting > 0 ? `Waiting for ${waiting} frames from AWS` : !canMakeVideo() ? 'This browser cannot make video files; Chrome, Edge, Safari and recent Firefox can.' : `Video ${lengthSec('video')} s · GIF ${lengthSec('gif')} s, ${GIF_FPS} frames a second`)}</div>
+        </>
+      ) : (
+        <div style={{ display: 'grid', gap: 6 }}>
+          <span style={{ color: T.ink2 }}>Making the {exp.job === 'gif' ? 'GIF' : 'video'}…</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ flex: 1, height: 6, borderRadius: 3, background: T.line, overflow: 'hidden' }}><div style={{ height: '100%', width: `${Math.round(exp.busy * 100)}%`, background: 'linear-gradient(90deg,#7cc8ff,#3d8bff)' }} /></div>
             {Math.round(exp.busy * 100)}%
             <button onClick={() => { gifCancel.current = true; }} style={{ ...sel, padding: '5px 10px' }}>Cancel</button>
-          </div>}
+          </div>
+        </div>
+      )}
     </div>
   );
   /* the observed day: its extremes, lightning and station reports */
@@ -1648,6 +2328,14 @@ export default function ModelData() {
               <div>
                 <div style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmtPoint(vals[at])}</div>
                 <div style={{ fontSize: 11.5, color: T.ink2 }}>{vmeta?.label} · {validLabel}</div>
+                {kindB === 'run' && frameB && (
+                  <div style={{ fontSize: 12, color: T.ink3, marginTop: 3 }}>
+                    Second window: <b>{fmtPoint(withGrid(gridB, () => {
+                      const [bx, by] = gridB === gridName ? [pin.gx, pin.gy] : projection(gridB).toGrid(...projection(gridName).fromGrid(pin.gx, pin.gy));
+                      return sampleFrame(disp(frameB), bx, by);
+                    }), scaleB, metaB)}</b>
+                  </div>
+                )}
               </div>
               {numeric && fin.length > 1 && (
                 <>
@@ -1669,7 +2357,7 @@ export default function ModelData() {
   /* a card floating over the map (desktops and tablets) */
   const card = (title, note, onClose, body, pos) => (
     <div role="dialog" aria-label={title} style={{ ...T.glass, borderRadius: 22, position: 'absolute', zIndex: 6, padding: '10px 12px 12px', overflowY: 'auto', overflowX: 'hidden',
-      maxHeight: `calc(100% - ${topH + botH + 10}px)`, ...pos }}>
+      scrollbarWidth: 'thin', scrollbarColor: `${T.line} transparent`, maxHeight: `calc(100% - ${topH + botH + 10}px)`, ...pos }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 0 8px 4px' }}>
         <span style={{ flex: 1, fontSize: 12.5, fontWeight: 800 }}>{title}</span>
         {note && <span style={{ color: T.ink2, fontSize: 11 }}>{note}</span>}
@@ -1756,12 +2444,13 @@ export default function ModelData() {
               )}
             </div>
             <div style={{ flex: 1 }} />
-            <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{styleSeg}{frameSeg}{smoothPill}{layersBtn}</div>
+            <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{styleSeg}{frameSeg}{smoothPill}{compareBtn}{layersBtn}</div>
           </>
         ) : (
           <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flex: 1, minWidth: 0 }}>
             {phone ? modeBtn : modeSeg}
             {dataChip}
+            {!phone && compareBtn}
             {!phone && layersBtn}
           </div>
         )}
@@ -1770,6 +2459,7 @@ export default function ModelData() {
 
       {/* desktop: the layer picker and the layers, as cards under the top bar */}
       {layout === 'desktop' && mapOpen && card('Layers', null, () => setMapOpen(false), layerRows, { right: 10, top: topH, width: 300 })}
+      {layout === 'desktop' && cmpOpen && card('Compare', null, () => setCmpOpen(false), compareBody, { right: 10, top: topH, width: 320 })}
       {layout === 'desktop' && varOpen && cat && !mapOpen && (
         <div style={{ ...T.glass, borderRadius: 24, position: 'absolute', left: 10, top: topH, width: 'min(560px, calc(100% - 20px))', maxHeight: '62%', overflowY: 'auto', padding: 14, zIndex: 5 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
@@ -1787,6 +2477,7 @@ export default function ModelData() {
           <div style={{ display: 'grid', gap: 8, justifyItems: 'start', paddingBottom: 8, borderBottom: `1px solid ${T.line}` }}>{styleSeg}{frameSeg}{smoothPill}</div>
           {layerRows}
         </div>, { right: 10, top: topH, width: 320 })}
+      {layout === 'tablet' && cmpOpen && card('Compare', null, closePanels, compareBody, { right: 10, top: topH, width: 320 })}
       {layout === 'tablet' && regionsOpen && card('Zoom to', null, closePanels, regionList, { right: 10, bottom: botH, width: 240 })}
       {layout === 'tablet' && exp.open && card('Export', null, closePanels, <>{exportBody}<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback</span>{speedSelect}</div></>,
         { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
@@ -1807,10 +2498,10 @@ export default function ModelData() {
         <div style={{ ...T.glass, borderRadius: 18, position: 'absolute', right: 58, top: '50%', transform: 'translateY(-50%)', padding: 6, zIndex: 6 }}>{regionList}</div>
       )}
 
-      {hover && vmeta && layout === 'desktop' && (
+      {hover && layout === 'desktop' && (
         <div style={{ ...T.capsule, position: 'absolute', left: hover.x, top: hover.y + 12, transform: hover.x > hover.w - 200 ? 'translateX(calc(-100% - 14px))' : 'translateX(14px)',
-          pointerEvents: 'none', padding: '5px 11px', fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap' }}>
-          {fmtPoint(hover.v)}
+          pointerEvents: 'none', padding: '5px 11px', fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap', borderRadius: hover.warn ? 14 : 999 }}>
+          {hover.text}{hover.warn && <div style={{ fontSize: 11.5, fontWeight: 650, color: T.ink2 }}>{hover.warn}</div>}
         </div>
       )}
       {newRun && (
@@ -1848,7 +2539,7 @@ export default function ModelData() {
         </div>
       )}
 
-      {!exp.open && !(phone && (varOpen || mapOpen || regionsOpen || obsPanel || modeOpen)) && pinCard}
+      {!exp.open && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || obsPanel || modeOpen)) && pinCard}
 
       {/* desktop: the export card above the timeline */}
       {layout === 'desktop' && exp.open && card('Export', null, () => setExp((e) => ({ ...e, open: false })), exportBody, { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
@@ -1864,7 +2555,7 @@ export default function ModelData() {
             {validLabel}<span style={{ color: T.ink2, fontWeight: 600 }}>{subLabel && !isObs ? ` · ${subLabel}` : ''}</span>
           </span>
           {speedSelect}
-          <IconBtn on={exp.open} title="Export PNG / GIF" onClick={() => setExp((e) => ({ ...e, open: !e.open }))} style={{ width: 38, height: 38 }}><Download size={16} /></IconBtn>
+          <IconBtn on={exp.open} title="Export a PNG, GIF or video" onClick={() => setExp((e) => ({ ...e, open: !e.open }))} style={{ width: 38, height: 38 }}><Download size={16} /></IconBtn>
         </div>
       ) : layout === 'tablet' ? (
         <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'calc(100% - 20px)', maxWidth: 1060, padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1878,7 +2569,7 @@ export default function ModelData() {
           </span>
           <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => openPanel('regions')} style={{ width: 38, height: 38 }}><MapIcon size={16} /></IconBtn>
           {isObs && <IconBtn on={obsPanel} title="The day's extremes" onClick={() => (sidePanel ? setObsPanel(false) : openPanel('summary'))} style={{ width: 38, height: 38 }}><Star size={16} /></IconBtn>}
-          <IconBtn on={exp.open} title="Export PNG / GIF" onClick={() => openPanel('export')} style={{ width: 38, height: 38 }}><Download size={16} /></IconBtn>
+          <IconBtn on={exp.open} title="Export a PNG, GIF or video" onClick={() => openPanel('export')} style={{ width: 38, height: 38 }}><Download size={16} /></IconBtn>
         </div>
       ) : (
         <div ref={botRef} style={{ ...T.glass, position: 'absolute', left: 8, right: 8, bottom: 22, borderRadius: 24, padding: '6px 6px 4px', display: 'grid', gap: 2 }}>
@@ -1894,6 +2585,7 @@ export default function ModelData() {
             {tool(<ChevronLeft size={18} />, 'Back', false, stepBack)}
             {tool(<ChevronRight size={18} />, 'Next', false, stepFwd)}
             {tool(<Layers size={18} />, 'Layers', mapOpen, () => openPanel('layers'), layerCount)}
+            {tool(<Columns2 size={18} />, 'Compare', cmpOpen || cmp.on, () => openPanel('compare'))}
             {tool(<MapIcon size={18} />, 'Regions', regionsOpen, () => openPanel('regions'))}
             {isObs && tool(<Star size={18} />, 'Day', obsPanel, () => openPanel('summary'))}
             {tool(<Download size={18} />, 'Export', exp.open, () => openPanel('export'))}
@@ -1925,6 +2617,7 @@ export default function ModelData() {
           </div>
         </Sheet>
       )}
+      {phone && cmpOpen && <Sheet title="Compare" onClose={closePanels} clear>{compareBody}</Sheet>}
       {phone && regionsOpen && <Sheet title="Zoom to" onClose={closePanels} clear>{regionList}</Sheet>}
       {phone && exp.open && (
         <Sheet title="Export" onClose={closePanels}>

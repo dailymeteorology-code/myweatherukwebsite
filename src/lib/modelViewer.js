@@ -5,7 +5,10 @@
    1042 x 970 cells of exactly 2 km). UKV is drawn cell for cell; coarser models arrive
    interpolated smoothly on the server (clamped cubic), the live radar and satellite at 1 km
    (2084 x 1940). "Pixels" draws the UKV and radar cells as they are; "Smooth" interpolates
-   the rain values before colouring (smoothCanvas) and blends other fields on screen. */
+   the rain values before colouring (smoothCanvas) and blends other fields on screen.
+
+   A graphic can be two windows in one frame with a white line between them (splitFrame,
+   drawPanes), each on its own grid if it needs to be (withGrid). */
 import { ukZone } from '@/lib/ukZone';
 import { GRIDS, projection } from '@/lib/modelGrids';
 import { CALC } from '@/lib/modelCalc';
@@ -63,15 +66,30 @@ export let REGIONS = UK_REGIONS;
 /** The static layer's URL on the grid in use. */
 export const staticUrl = (file, grid = GRID.name) => `${API}/static/${grid === 'uk' ? '' : `${grid}/`}${file}`;
 
-/** Switch the display grid (by name); returns whether it changed. */
+/** Switch the display grid (by name); returns whether it changed. Cheap: what is worked out per
+    grid is kept per grid, so two windows on two grids can take turns on every draw. */
+let wideCache = null;
 export function setGrid(name) {
   const g = GRIDS[name] || GRIDS.uk;
   if (g === GRID) return false;
   GRID = g; NX = g.nx; NY = g.ny;
-  REGIONS = g.name === 'uk' ? UK_REGIONS : wideRegions();
+  REGIONS = g.name === 'uk' ? UK_REGIONS : (wideCache ||= wideRegions());
   BW = NX * 2; BH = NY * 2;
-  COARSE = null; RT_STATIC = null; rtCache.clear(); roadsP = null;
   return true;
+}
+/** Run `fn` on another grid, and come back. */
+export function withGrid(name, fn) {
+  const was = GRID.name;
+  if (was === name) return fn();
+  setGrid(name);
+  try { return fn(); } finally { setGrid(was); }
+}
+/** The same place and map scale on another grid. */
+export function viewOnGrid(view, from, to) {
+  if (from === to || !view) return view;
+  const [lon, lat] = projection(from).fromGrid(view.cx, view.cy);
+  const [cx, cy] = projection(to).toGrid(lon, lat);
+  return { cx, cy, s: view.s * (GRIDS[to].dx / GRIDS[from].dx) };
 }
 /** Whether a frame is on the grid in use (frames made before the wide grid name none: the UK's). */
 export const onGrid = (f) => !f || (f.head?.grid || 'uk') === GRID.name;
@@ -109,7 +127,17 @@ const SNOW = [[0.1, '#dfe9f5', 120], [1, '#c3d3f2', 180], [3, '#9fb0ea', 210], [
   [25, '#e05cb4', 245], [50, '#ffffff', 255]];
 const HEIGHT = [[0, '#5b2a86', 210], [300, '#3d5fd0', 200], [600, '#3d93d8', 190], [1000, '#6cc04a', 185],
   [1500, '#efd23a', 190], [2200, '#f08b2c', 200], [3000, '#dc3a3a', 210], [4000, '#f2e6ff', 220]];
-const VIS = [[0.2, '#ffffff', 235], [1, '#e3e6ea', 200], [3, '#b8bec6', 150], [6, '#8a929c', 90], [10, '#6b737c', 0]];
+/* visibility: each band its own colour, thick fog the hottest, and the map clearing as it gets better */
+const VIS = [[0, '#7b1fa2', 248], [0.2, '#d6246e', 244], [0.5, '#e5383b', 238], [1, '#f2811d', 230], [2, '#f5c518', 218], [4, '#a9d13f', 200], [7, '#2fb8a6', 170],
+  [10, '#3b8fe0', 130], [20, '#7fb6ea', 90], [40, '#c5dcf0', 50]];
+/* the share of a grid box in fog: pale and cool where it is a small chance, through to hot where
+   fog is all but certain, in steps of ten so the map can be read off the key */
+const FOG_CHANCE = [[5, '#d3e4ee', 110], [10, '#aad6ec', 150], [20, '#6eb4e8', 185], [30, '#3b82da', 205], [40, '#17a08c', 214], [50, '#7cc243', 222],
+  [60, '#f0d43a', 228], [70, '#f4a43a', 234], [80, '#e9542f', 240], [90, '#b3246f', 248]];
+/* visibility inside the fog, each band its own colour: the thicker the fog the hotter. What the fog
+   areas don't cover is no data, and the top of the scale is clear, so fog thins away through these */
+const FOG_VIS = [[0, '#7b1fa2', 250], [50, '#c2185b', 248], [100, '#e5383b', 244], [150, '#f2621d', 240], [200, '#f2911d', 236], [300, '#f5c518', 232], [400, '#c5d63d', 228],
+  [500, '#7cc243', 222], [750, '#2fb8a6', 214], [1000, '#3b8fe0', 196], [2000, '#a9cdf0', 160], [5000, '#a9cdf0', 0]];
 const RAD = [[0, '#0b1a2b', 0], [50, '#2a3a5c', 140], [200, '#7a4d8c', 180], [400, '#d9643a', 205], [700, '#f2c43a', 225], [1000, '#fff6c2', 240]];
 const JET = [[60, '#5aa7e8', 0], [80, '#5aa7e8', 150], [100, '#2f6fd4', 190], [120, '#1d9f8e', 210], [140, '#efd23a', 225],
   [160, '#f08b2c', 235], [180, '#dc3a3a', 245], [210, '#a52284', 250], [250, '#f2e6ff', 255]];
@@ -158,10 +186,11 @@ const SCALES = {
   mcc: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
   hcc: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
   cloud_1000ft: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
-  fog: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
+  fog: { stops: FOG_CHANCE, floor: 5, discrete: true, ticks: [5, 10, 20, 30, 40, 50, 60, 70, 80, 90] },
+  fog_vis: { stops: FOG_VIS, discrete: true, keySteps: [0, 50, 100, 150, 200, 300, 400, 500, 750, 1000, 2000], ticks: [0, 50, 100, 150, 200, 300, 400, 500, 750, 1000, 2000] },
   cloud_base: { stops: [[0, '#ffffff', 230], [150, '#e3e6ea', 200], [300, '#b8c4d6', 170], [600, '#8aa0c0', 140], [1200, '#5a7aa8', 100], [2500, '#3d5fd0', 60], [5000, '#2a3a5c', 0]],
     ticks: [0, 150, 300, 600, 1200, 2500] },
-  vis: { stops: VIS, ticks: [0.2, 1, 3, 6, 10] },
+  vis: { stops: VIS, discrete: true, keySteps: [0, 0.2, 0.5, 1, 2, 4, 7, 10, 20, 40], ticks: [0, 0.2, 0.5, 1, 2, 4, 7, 10, 20, 40] },
   cape_mu: { stops: CAPE, floor: 50, ticks: [100, 300, 600, 1000, 1500, 2500, 4000] },
   cape_sb: { stops: CAPE, floor: 50, ticks: [100, 300, 600, 1000, 1500, 2500, 4000] },
   cape_ml: { stops: CAPE, floor: 50, ticks: [100, 300, 600, 1000, 1500, 2500, 4000] },
@@ -242,6 +271,14 @@ const SCALES = {
   floor: 5, discrete: true, ticks: [5, 10, 20, 30, 40, 50, 60, 70, 80, 90], contours: [20, 50, 80], label: true, line: 'rgba(236,243,250,0.85)', pct: true },
 };
 export const scaleFor = (key) => SCALES[key] || { stops: TEMP, ticks: [] };
+/** Does this scale paint the whole map nearly solid (temperature, wind, humidity…)? Rain and the like
+    leave most of the map clear, and cloud and pressure are see-through already. */
+export function coversMap(key) {
+  const sc = scaleFor(key);
+  return !sc.discrete && sc.stops.reduce((n, x) => n + (x[2] ?? 210), 0) / sc.stops.length >= 140;
+}
+/* the maps worth seeing through a layer: on these a whole-map layer is drawn this strong */
+export const SEE_THROUGH = { satellite: 0.58, realtime: 0.58 };
 
 const hex = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 
@@ -323,6 +360,7 @@ export function probFrame(ef, thr, dir) {
 /* the frame's colours as an NX x NY canvas (one pixel per grid cell) */
 export function frameCanvas(frame, varKey, cache) {
   if (!onGrid(frame)) return null;                       // a frame from the other grid, still on its way out
+  if (frame.mix) return mixCanvas(frame, varKey, cache);
   if (cache?.has(frame)) return cache.get(frame);
   if (frame.img) return imageCanvas(frame, varKey, cache);
   if (frame.nx && frame.k < 1) return fineCanvas(frame, varKey, cache);
@@ -346,6 +384,32 @@ export function frameCanvas(frame, varKey, cache) {
     cache.set(frame, cv);
     if (cache.size > 14) cache.delete(cache.keys().next().value);
   }
+  return cv;
+}
+
+/* a picture part-way to the next one (lib/modelTween): the two dissolved exactly, each pixel a true
+   mix of both (drawing one over the other would dim anything see-through mid-way) */
+const mixes = new Map();
+function mixCanvas(frame, varKey, cache) {
+  const { a, b, t } = frame.mix;
+  const A = frameCanvas(a, varKey, cache), B = frameCanvas(b, varKey, cache);
+  if (!A || !B) return A || B;
+  let cv = mixes.get(varKey);
+  if (!cv || cv.width !== A.width || cv.height !== A.height) {
+    cv = document.createElement('canvas');
+    cv.width = A.width; cv.height = A.height;
+    mixes.set(varKey, cv);
+  }
+  const x = cv.getContext('2d');
+  x.globalCompositeOperation = 'copy';
+  x.globalAlpha = 1 - t;
+  x.drawImage(A, 0, 0);
+  x.globalCompositeOperation = 'lighter';
+  x.globalAlpha = t;
+  x.drawImage(B, 0, 0, cv.width, cv.height);
+  x.globalCompositeOperation = 'source-over';
+  x.globalAlpha = 1;
+  cv.dataK = A.dataK; cv.dataX0 = A.dataX0; cv.dataY0 = A.dataY0;
   return cv;
 }
 
@@ -505,8 +569,11 @@ function finish(j, out) {
   keep(j.cache, j.frame, j.key, out, j.max);
   was.waiters.forEach((fn) => fn());
 }
-/* the sum's arguments: with `copy`, the frame's values copied (the copy goes to a worker) */
-const fieldOf = (frame, copy) => ({ q: copy ? frame.q.slice() : frame.q, table: copy ? Float32Array.from(frame.table) : frame.table, W: frame.nx || NX, H: frame.ny || NY });
+/* the sum's arguments: with `copy`, the frame's values copied (the copy goes to a worker). The size
+   is taken when the sum is asked for: by the time a worker is free the other window may be drawing
+   on the other grid */
+const sizeOf = (frame) => ({ W: frame.nx || NX, H: frame.ny || NY });
+const fieldOf = (frame, copy, size) => ({ q: copy ? frame.q.slice() : frame.q, table: copy ? Float32Array.from(frame.table) : frame.table, ...size });
 function calc(cache, frame, key, kind, args, { onReady, urgent = true, max = 40, sync = false } = {}) {
   const v = cache.get(frame)?.[key];
   if (v !== undefined && !isPending(v)) return v;
@@ -548,8 +615,9 @@ function calc(cache, frame, key, kind, args, { onReady, urgent = true, max = 40,
 export function frameContours(frame, varKey, resKm, cache, opts) {
   const sc = scaleFor(varKey);
   if (!sc.contours || !onGrid(frame)) return null;
+  const size = sizeOf(frame);
   const args = (copy) => ({
-    ...fieldOf(frame, copy), coarse: frame.nx ? { nx: frame.nx, ny: frame.ny, K: frame.k || 8 } : null,
+    ...fieldOf(frame, copy, size), coarse: frame.nx ? { nx: frame.nx, ny: frame.ny, K: frame.k || 8 } : null,
     thresholds: sc.contours, resKm, line: sc.line || 'rgba(8,14,24,0.8)', pct: !!sc.pct,
   });
   return calc(cache, frame, `c:${varKey}`, 'contours', args, { ...(opts || { sync: true }), max: 40 });
@@ -560,14 +628,16 @@ export function frameContours(frame, varKey, resKm, cache, opts) {
 /** Isobars every `every` hPa (grid coordinates), on a lightly smoothed half-resolution field. */
 export function pressureLines(frame, every, resKm, cache, opts) {
   if (!frame || !onGrid(frame) || frame.nx) return null;
-  const args = (copy) => ({ ...fieldOf(frame, copy), every, resKm, dx: GRID.dx });
+  const size = sizeOf(frame), { dx } = GRID;
+  const args = (copy) => ({ ...fieldOf(frame, copy, size), every, resKm, dx });
   return calc(cache, frame, `p:${every}`, 'isobars', args, { ...(opts || { sync: true }), max: 40 });
 }
 
 /** The lows and highs: [{ gx, gy, kind: 'L' | 'H', p }] (lib/modelCalc calcCentres). */
 export function pressureCentres(frame, cache, opts) {
   if (!frame || !onGrid(frame) || frame.nx) return [];
-  const args = (copy) => ({ ...fieldOf(frame, copy), dx: GRID.dx });
+  const size = sizeOf(frame), { dx } = GRID;
+  const args = (copy) => ({ ...fieldOf(frame, copy, size), dx });
   return calc(cache, frame, 'hl', 'centres', args, { ...(opts || { sync: true }), max: 40 });
 }
 
@@ -652,9 +722,9 @@ function sunAt(utcMs) {                      // NOAA solar position (as the moti
 /* lon/lat of the basemap pixels (two to a grid cell), for the sunlight */
 let BW = NX * 2, BH = NY * 2;                       // basemap pixels
 const CS = 16;                                       // sun sampled every 16 px
-let COARSE = null;
+const COARSE = {};
 function coarseLonLat() {
-  if (COARSE) return COARSE;
+  if (COARSE[GRID.name]) return COARSE[GRID.name];
   const cw = Math.ceil(BW / CS) + 1, ch = Math.ceil(BH / CS) + 1;
   const lon = new Float32Array(cw * ch), lat = new Float32Array(cw * ch);
   const P = projection(GRID);
@@ -664,8 +734,8 @@ function coarseLonLat() {
       lon[j * cw + i] = lo; lat[j * cw + i] = la;
     }
   }
-  COARSE = { cw, ch, lon, lat };
-  return COARSE;
+  COARSE[GRID.name] = { cw, ch, lon, lat };
+  return COARSE[GRID.name];
 }
 
 const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -707,9 +777,9 @@ function luts() {
    so each is a tiny canvas the GPU stretches over the map; the per-pixel parts that never
    change (the moonlit night ground and the sodium-gold city glow from Black Marble) are made
    once. It used to be one JavaScript loop over 4 million pixels per time step. */
-let RT_STATIC = null;
+const RT_STATIC = {};
 function rtStatic(night) {
-  if (RT_STATIC?.night === night) return RT_STATIC;
+  if (RT_STATIC[GRID.name]?.night === night) return RT_STATIC[GRID.name];
   const N = pixelsOf(night);
   const { C } = luts();
   const mk = () => { const c = document.createElement('canvas'); c.width = BW; c.height = BH; return c; };
@@ -724,11 +794,11 @@ function rtStatic(night) {
   base.getContext('2d').putImageData(bi, 0, 0);
   glow.getContext('2d').putImageData(gi, 0, 0);
   const tmp = mk();
-  return (RT_STATIC = { night, base, glow, tmp });
+  return (RT_STATIC[GRID.name] = { night, base, glow, tmp });
 }
 const rtCache = new Map();
 export function realtimeBasemap(day, night, utcMs) {
-  const key = Math.round(utcMs / 600000);
+  const key = `${GRID.name}:${Math.round(utcMs / 600000)}`;
   if (rtCache.has(key)) return rtCache.get(key);
   const { cw, ch, lon, lat } = coarseLonLat();
   const sun = sunAt(utcMs);
@@ -766,7 +836,7 @@ export function realtimeBasemap(day, night, utcMs) {
   o.drawImage(S.tmp, 0, 0);                                    // city lights, by darkness
   o.globalCompositeOperation = 'source-over'; t.globalCompositeOperation = 'source-over';
   rtCache.set(key, out);
-  if (rtCache.size > 8) rtCache.delete(rtCache.keys().next().value);
+  if (rtCache.size > 12) rtCache.delete(rtCache.keys().next().value);
   return out;
 }
 
@@ -813,11 +883,12 @@ export const FONT = '"Inter", -apple-system, "SF Pro Display", "Segoe UI", syste
 
 /* rect = the graphic's frame on this canvas; view = { cx, cy, s }: the grid point at the
    frame's centre and canvas px per grid cell. Everything else scales with the frame
-   (u = 1 at a 1080 px short side), so a PNG at any size is the preview, enlarged. */
+   (u = 1 at a 1080 px short side), so a PNG at any size is the preview, enlarged. A window of a
+   two-window graphic takes the whole graphic's size as opts.u, so its type stays the same size. */
 export function drawScene(ctx, rect, view, L, opts = {}) {
   const { cx, cy, s } = view;
   glassCheap = !!L.interacting;
-  const u = Math.min(rect.w, rect.h) / 1080;
+  const u = opts.u ?? Math.min(rect.w, rect.h) / 1080;
   const ox = rect.x + rect.w / 2, oy = rect.y + rect.h / 2;
   const X = (gx) => (gx - cx) * s + ox;
   const Y = (gy) => (gy - cy) * s + oy;
@@ -844,8 +915,16 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
   };
+  for (const e of L.under || []) put(e.canvas, L.smooth, e.alpha);          // the layers put under this one
   if (L.overlay?.canvas) put(L.overlay.canvas, true, L.overlay.alpha ?? 1);   // cloud under the rain
-  if (L.data) put(L.data, L.smooth);
+  if (L.data) {
+    /* a picture of the whole earth over a map of the earth: bright clouds on the map beneath, the
+       black of space gone (Screen), so satellite pictures sit on the Satellite and Real-time maps too */
+    if (L.dataBlend) ctx.globalCompositeOperation = L.dataBlend;
+    put(L.data, L.smooth, L.dataAlpha ?? 1);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  for (const e of L.over || []) put(e.canvas, L.smooth, e.alpha);           // the layers put over it
   /* the grid box in view (2 km cells), for culling roads, grid and arrows */
   const gx0 = (clip.x - ox) / s + cx, gx1 = (clip.x + clip.w - ox) / s + cx;
   const gy0 = (clip.y - oy) / s + cy, gy1 = (clip.y + clip.h - oy) / s + cy;
@@ -887,19 +966,21 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   }
   edgeFade(ctx, X(0), Y(0), NX * s, NY * s, 36 * s, st.bg);
   const box = [Math.max(0, gx0), Math.max(0, gy0), Math.min(gx1, NX), Math.min(gy1, NY)];
-  const G = L.grid, A = L.arrows, K = L.risk, P = L.pressure, T = L.star, Wx = L.wx;
+  const G = L.grid, A = L.arrows, K = L.risk, P = L.pressure, T = L.star, Wx = L.wx, Wn = L.warnings;
   const labels = L.contours && L.contourLabels ? L.contours : null;
-  if (G?.frame || A?.frame || K?.areas?.length || L.strikes?.length || labels || P || L.cities || T) {
-    layer('over', [G?.frame, G?.varKey, G?.unit, A?.frame, K?.areas, K?.alpha, L.strikes, L.strikesDaily, L.strikeStyle, labels,
+  if (G?.frame || A?.frame || K?.areas?.length || Wn?.areas?.length || L.strikes?.length || labels || P || L.cities || T) {
+    layer('over', [G?.frame, G?.varKey, G?.unit, A?.frame, K?.areas, K?.alpha, Wn?.areas, Wn?.alpha, Wn?.look, Wn?.labels, L.strikes, L.strikesDaily, L.strikeStyle, labels,
       P?.lines, P?.list, P?.symbols, P?.centres, L.cities, Wx?.frame, Wx?.utcMs, T?.frame, T?.unit, T?.floor,
       T?.at?.gx, T?.at?.gy, T?.at?.v, T?.at?.place, !!L.chrome, L.style], (c) => {
       if (G?.frame) drawValueGrid(c, G, X, Y, ...box, s, u, st);
       if (A?.frame) drawArrows(c, A, X, Y, ...box, s, u, st);
       if (K?.areas?.length) drawRisk(c, K, X, Y, u);
+      if (Wn?.areas?.length) drawWarnings(c, Wn, X, Y, u);
       if (L.strikes?.length) drawStrikes(c, L.strikes, X, Y, u, L.strikesDaily, L.strikeStyle);
       if (labels) drawContourLabels(c, labels, X, Y, rect, u, st);
       if (P) drawPressure(c, P, X, Y, rect, u, st);
       if (L.cities) drawCities(c, L.cities, X, Y, rect, zk, u, st, L.chrome ? 150 * u : 0, Wx);
+      if (Wn?.areas?.length && Wn.labels) drawWarningLabels(c, Wn, X, Y, rect, u);
       if (T) {
         /* the highest value in view, kept clear of the title card and the key */
         const top = L.chrome ? 150 * u : 20 * u, bot = L.chrome ? 104 * u : 20 * u;
@@ -910,6 +991,29 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
     });
   }
   if (L.chrome) drawChrome(ctx, rect, u, L.chrome, st);
+  ctx.restore();
+}
+
+/** A two-window graphic in the frame R: the two windows, side by side ('cols') or stacked ('rows'),
+    and the white line between them. */
+export function splitFrame(R, split, u) {
+  const t = Math.max(2, Math.round(4 * u));
+  if (split === 'rows') {
+    const y = Math.round(R.y + (R.h - t) / 2);
+    return { split, line: { x: R.x, y, w: R.w, h: t }, a: { x: R.x, y: R.y, w: R.w, h: y - R.y }, b: { x: R.x, y: y + t, w: R.w, h: R.y + R.h - y - t } };
+  }
+  const x = Math.round(R.x + (R.w - t) / 2);
+  return { split, line: { x, y: R.y, w: t, h: R.h }, a: { x: R.x, y: R.y, w: x - R.x, h: R.h }, b: { x: x + t, y: R.y, w: R.x + R.w - x - t, h: R.h } };
+}
+
+/** Both windows of a graphic: S = { u, line, panes: [{ rect, view, L, grid }] }, each drawn on its
+    own grid, the line over them. */
+export function drawPanes(ctx, R, S, opts = {}) {
+  ctx.save();
+  if (opts.round) { roundRect(ctx, R.x, R.y, R.w, R.h, opts.round); ctx.clip(); }
+  for (const p of S.panes) withGrid(p.grid, () => drawScene(ctx, p.rect, p.view, opts.interacting ? { ...p.L, interacting: true } : p.L, { cache: opts.cache, u: S.u }));
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(S.line.x, S.line.y, S.line.w, S.line.h);
   ctx.restore();
 }
 
@@ -989,6 +1093,68 @@ function drawRisk(ctx, risk, X, Y, u) {
   ctx.restore();
 }
 
+/* Met Office warnings: W = { alpha, look: 'fill' | 'line', labels, areas: [{ severity, colour, rings,
+   label: [gx, gy], text, fade? }] }, Yellow first so Red ends up on top. The site's own warning
+   colours; a dark line under the coloured one keeps the edge readable over any layer. */
+export const WARN_COLOURS = { Yellow: '#ffe629', Amber: '#ff9b00', Red: '#d1063b' };
+function drawWarnings(ctx, W, X, Y, u) {
+  ctx.save();
+  ctx.lineJoin = 'round';
+  for (const ar of W.areas) {
+    const a = (W.alpha ?? 0.85) * (ar.fade ?? 1);
+    const c = hex(ar.colour).join(',');
+    const path = new Path2D();
+    for (const ring of ar.rings) {
+      ring.forEach(([gx, gy], i) => (i ? path.lineTo(X(gx), Y(gy)) : path.moveTo(X(gx), Y(gy))));
+      path.closePath();
+    }
+    if (W.look !== 'line') {
+      ctx.fillStyle = `rgba(${c},${0.36 * a})`;
+      ctx.fill(path, 'evenodd');
+    }
+    ctx.strokeStyle = `rgba(4,8,14,${0.6 * (ar.fade ?? 1)})`;
+    ctx.lineWidth = 4.8 * u;
+    ctx.stroke(path);
+    ctx.strokeStyle = `rgba(${c},${Math.min(1, a + 0.15)})`;
+    ctx.lineWidth = 2.6 * u;
+    ctx.stroke(path);
+  }
+  ctx.restore();
+}
+/* what each area is, on the map: the Met Office's two-part tag */
+function drawWarningLabels(ctx, W, X, Y, R, u) {
+  ctx.save();
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.font = `800 ${14 * u}px ${FONT}`;
+  const placed = [];
+  const h = 26 * u, padX = 9 * u;
+  for (const ar of [...W.areas].reverse()) {             // the most severe first
+    if (!ar.label) continue;
+    const a = ar.severity, b = ar.text, wa = ctx.measureText(a).width + 2 * padX, wb = ctx.measureText(b).width + 2 * padX;
+    let x = X(ar.label[0]) - (wa + wb) / 2, y = Y(ar.label[1]) - h / 2;
+    if (x + wa + wb < R.x + 8 * u || x > R.x + R.w - 8 * u || y + h < R.y || y > R.y + R.h) continue;
+    x = Math.max(R.x + 8 * u, Math.min(R.x + R.w - wa - wb - 8 * u, x));
+    while (placed.some((p) => x < p[0] + p[2] && x + wa + wb > p[0] && y < p[1] + h + 4 * u && y + h + 4 * u > p[1])) y += h + 6 * u;
+    placed.push([x, y, wa + wb]);
+    ctx.save();
+    ctx.globalAlpha = ar.fade ?? 1;
+    ctx.shadowColor = 'rgba(0,0,0,0.45)';
+    ctx.shadowBlur = 8 * u;
+    ctx.fillStyle = ar.colour;
+    ctx.fillRect(x, y, wa, h);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#2b2111';
+    ctx.fillRect(x + wa, y, wb, h);
+    ctx.fillStyle = a === 'Red' ? '#ffffff' : '#111111';
+    ctx.fillText(a, x + padX, y + h / 2 + 1 * u);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(b, x + wa + padX, y + h / 2 + 1 * u);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 function strokeLines(ctx, lines, X, Y) {
   ctx.beginPath();
   for (const l of lines || []) {
@@ -1001,10 +1167,10 @@ function strokeLines(ctx, lines, X, Y) {
 /* ── roads: the motion graphics' network (OpenStreetMap) and its look — blue motorways with a
    dark casing, warm A roads — gaining detail as you zoom: motorways always, trunk roads from
    about 2x, primary roads close in (mwuk-graphics core/tokens ROADS) ── */
-let roadsP = null;
-export function loadRoads() {
-  if (roadsP) return roadsP;
-  roadsP = Promise.all([fetch(staticUrl('roads.json')).then((r) => r.json()), fetch(staticUrl('roads.bin')).then((r) => r.arrayBuffer())])
+const roadsP = {};
+export function loadRoads(grid = GRID.name) {
+  if (roadsP[grid]) return roadsP[grid];
+  roadsP[grid] = Promise.all([fetch(staticUrl('roads.json', grid)).then((r) => r.json()), fetch(staticUrl('roads.bin', grid)).then((r) => r.arrayBuffer())])
     .then(([idx, buf]) => {
       const out = {};
       for (const [k, e] of Object.entries(idx.classes)) {
@@ -1022,8 +1188,8 @@ export function loadRoads() {
       }
       return out;
     })
-    .catch((e) => { roadsP = null; throw e; });
-  return roadsP;
+    .catch((e) => { delete roadsP[grid]; throw e; });
+  return roadsP[grid];
 }
 const ROAD_STYLE = {
   motorway: { color: '#2F63D6', inZ: [0, 0], width: [1.5, 4.6], alpha: 0.95, casing: 1.1 },
@@ -1058,7 +1224,7 @@ function cachedLayer(ctx, name, deps, clip, view, ox, oy, st, interacting, draw)
   draw(c);
   layerCache.delete(slot);
   layerCache.set(slot, { key, deps, view: { ...view }, cv });
-  if (layerCache.size > 10) layerCache.delete(layerCache.keys().next().value);
+  if (layerCache.size > 24) layerCache.delete(layerCache.keys().next().value);
   ctx.drawImage(cv, clip.x, clip.y);
 }
 function drawRoads(ctx, roads, X, Y, gx0, gy0, gx1, gy1, z, u, st) {
@@ -1500,12 +1666,21 @@ function glassPanel(ctx, x, y, w, h, r, u, theme) {
   ctx.restore();
 }
 
-/* the graphic's furniture: a title card, a logo capsule and a compact key */
+/* text cut to a width, with an ellipsis */
+function fitText(ctx, t, w) {
+  if (ctx.measureText(t).width <= w) return t;
+  let n = t.length;
+  while (n > 1 && ctx.measureText(`${t.slice(0, n).trimEnd()}…`).width > w) n--;
+  return `${t.slice(0, n).trimEnd()}…`;
+}
+
+/* the graphic's furniture: the time, a logo capsule and a compact key. What the layer is and which
+   run it comes from live in the key; the time card is only the time. In a two-window graphic each
+   window is told which of them it carries (C.time, C.brand). */
 function drawChrome(ctx, R, u, C, st) {
   const light = st.glass === 'light';
   const ink = light ? '#0f1722' : '#ffffff';
   const sub = light ? 'rgba(15,23,34,0.62)' : 'rgba(255,255,255,0.74)';
-  const accent = light ? '#0a6fd1' : '#7cc8ff';
   const ukBlue = light ? '#1d6fc0' : '#3f8fdc';          // the "UK" of MyWeatherUK: a darker, light-ish blue
   const pad = 26 * u, gap = 14 * u;
   ctx.textBaseline = 'alphabetic';
@@ -1513,82 +1688,138 @@ function drawChrome(ctx, R, u, C, st) {
   if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
 
   // ── brand: a large logo and the MyWeatherUK wordmark, top right ──
-  const bh = 84 * u, logoD = bh - 14 * u;
-  ctx.font = `800 ${31 * u}px ${FONT}`;
-  const wMy = ctx.measureText('MyWeather').width, wUK = ctx.measureText('UK').width;
-  const bw = 7 * u + logoD + 14 * u + wMy + wUK + 26 * u;
-  const bx = R.x + R.w - pad - bw, by = R.y + pad;
-  glassPanel(ctx, bx, by, bw, bh, bh / 2, u, st.glass);
-  if (C.logo) {
+  const bh = 84 * u, logoD = bh - 14 * u, by = R.y + pad;
+  let bw = 0;
+  if (C.brand !== false) {
+    ctx.font = `800 ${31 * u}px ${FONT}`;
+    const wMy = ctx.measureText('MyWeather').width, wUK = ctx.measureText('UK').width;
+    bw = 7 * u + logoD + 14 * u + wMy + wUK + 26 * u;
+    const bx = R.x + R.w - pad - bw;
+    glassPanel(ctx, bx, by, bw, bh, bh / 2, u, st.glass);
+    if (C.logo) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(bx + 7 * u + logoD / 2, by + bh / 2, logoD / 2, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(C.logo, bx + 7 * u, by + 7 * u, logoD, logoD);
+      ctx.restore();
+    }
+    const tx0 = bx + 7 * u + logoD + 14 * u, ty0 = by + bh / 2 + 11 * u;
+    ctx.fillStyle = ink;
+    ctx.fillText('MyWeather', tx0, ty0);
+    ctx.fillStyle = ukBlue;
+    ctx.fillText('UK', tx0 + wMy, ty0);
+  }
+
+  // ── the time, top left (below the brand when the frame is too narrow for both) ──
+  if (C.time !== false) {
+    const day = timeFmt(C.valid, { weekday: 'short', day: 'numeric', month: 'short' });
+    const hour = C.dayOnly ? '' : `${timeFmt(C.valid, { hour: '2-digit', minute: '2-digit' })} ${ukZone(C.valid)}`;
+    ctx.font = `800 ${36 * u}px ${FONT}`;
+    const dw = ctx.measureText(hour ? `${day}  ` : day).width;
+    ctx.font = `400 ${36 * u}px ${FONT}`;
+    const hw = ctx.measureText(hour).width;
+    const want = dw + hw + 56 * u;
+    const room = R.w - 2 * pad - (bw ? bw + gap : 0);
+    const stacked = room < Math.min(want, 440 * u);
+    const tw = Math.min(stacked ? R.w - 2 * pad : room, want);
+    const tx = R.x + pad, ty = stacked && bw ? by + bh + gap : by;
+    glassPanel(ctx, tx, ty, tw, bh, bh / 2, u, st.glass);
+    const x = tx + 28 * u, y = ty + bh / 2 + 13 * u;
     ctx.save();
     ctx.beginPath();
-    ctx.arc(bx + 7 * u + logoD / 2, by + bh / 2, logoD / 2, 0, Math.PI * 2);
+    ctx.rect(tx, ty, tw - 12 * u, bh);
     ctx.clip();
-    ctx.drawImage(C.logo, bx + 7 * u, by + 7 * u, logoD, logoD);
+    ctx.fillStyle = ink;
+    ctx.font = `800 ${36 * u}px ${FONT}`;
+    ctx.fillText(day, x, y);
+    ctx.fillStyle = sub;
+    ctx.font = `400 ${36 * u}px ${FONT}`;
+    ctx.fillText(hour, x + dw, y);
     ctx.restore();
   }
-  const tx0 = bx + 7 * u + logoD + 14 * u, ty0 = by + bh / 2 + 11 * u;
-  ctx.fillStyle = ink;
-  ctx.fillText('MyWeather', tx0, ty0);
-  ctx.fillStyle = ukBlue;
-  ctx.fillText('UK', tx0 + wMy, ty0);
 
-  // ── title card, top left (below the brand when the frame is too narrow for both) ──
-  const day = timeFmt(C.valid, { weekday: 'short', day: 'numeric', month: 'short' });
-  const hour = C.dayOnly ? '' : `${timeFmt(C.valid, { hour: '2-digit', minute: '2-digit' })} ${ukZone(C.valid)}`;
-  const meta = C.metaLine || `${C.model} · run ${C.runLabel} · T+${C.step}`;
-  const vlab = C.variable.toUpperCase();
-  ctx.font = `800 ${36 * u}px ${FONT}`;
-  const dw = ctx.measureText(`${day}  `).width;
-  ctx.font = `400 ${36 * u}px ${FONT}`;
-  const hw = ctx.measureText(hour).width;
-  ctx.font = `600 ${15 * u}px ${FONT}`;
-  const mw = ctx.measureText(meta).width;
-  ctx.font = `800 ${13 * u}px ${FONT}`;
-  const vw = ctx.measureText(vlab).width + 1.4 * u * vlab.length;
-  const want = Math.max(dw + hw, mw, vw) + 48 * u;
-  const room = R.w - 2 * pad - bw - gap;
-  const stacked = room < Math.min(want, 440 * u);
-  const tw = Math.min(stacked ? R.w - 2 * pad : room, want);
-  const th = 124 * u;
-  const tx = R.x + pad, ty = stacked ? by + bh + gap : R.y + pad;
-  glassPanel(ctx, tx, ty, tw, th, 26 * u, u, st.glass);
-  const x = tx + 24 * u;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(tx, ty, tw - 12 * u, th);
-  ctx.clip();
-  ctx.fillStyle = accent;
-  ctx.font = `800 ${13 * u}px ${FONT}`;
-  if ('letterSpacing' in ctx) ctx.letterSpacing = `${1.4 * u}px`;
-  ctx.fillText(vlab, x, ty + 34 * u);
-  if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-  ctx.fillStyle = ink;
-  ctx.font = `800 ${36 * u}px ${FONT}`;
-  ctx.fillText(day, x, ty + 76 * u);
-  ctx.fillStyle = sub;
-  ctx.font = `400 ${36 * u}px ${FONT}`;
-  ctx.fillText(hour, x + dw, ty + 76 * u);
-  ctx.font = `600 ${15 * u}px ${FONT}`;
-  ctx.fillText(meta, x, ty + 104 * u);
-  ctx.restore();
+  // a word in the middle of a window with nothing to show yet, or nothing for this time
+  if (C.notice) {
+    ctx.font = `700 ${16 * u}px ${FONT}`;
+    const w = Math.min(R.w - 2 * pad, ctx.measureText(C.notice).width + 44 * u), h = 46 * u;
+    const x = R.x + (R.w - w) / 2, y = R.y + (R.h - h) / 2;
+    glassPanel(ctx, x, y, w, h, h / 2, u, st.glass);
+    ctx.fillStyle = ink;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(fitText(ctx, C.notice, w - 28 * u), x + w / 2, y + h / 2 + 1 * u);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
 
-  // ── key: one slim capsule along the foot ──
+  // ── a warnings window's key: what is in force, and when ──
+  if (C.warnList) {
+    const list = C.warnList, shown = list.slice(0, list.length > 5 ? 4 : 5), more = list.length - shown.length;
+    const rowH = 27 * u, rows = Math.max(1, shown.length) + (more ? 1 : 0);
+    const kw = Math.min(R.w - 2 * pad, 620 * u), kh = 42 * u + rows * rowH + 8 * u;
+    const kx = R.x + pad, ky = R.y + R.h - pad - kh;
+    glassPanel(ctx, kx, ky, kw, kh, 22 * u, u, st.glass);
+    ctx.font = `700 ${13 * u}px ${FONT}`;
+    ctx.fillStyle = sub;
+    ctx.fillText(C.variable, kx + 20 * u, ky + 26 * u);
+    ctx.textAlign = 'right';
+    ctx.fillText(C.credit || '', kx + kw - 20 * u, ky + 26 * u);
+    ctx.textAlign = 'left';
+    let y = ky + 42 * u;
+    if (!shown.length) {
+      ctx.font = `600 ${15 * u}px ${FONT}`;
+      ctx.fillStyle = ink;
+      ctx.fillText('No warnings in force at this time', kx + 20 * u, y + 18 * u);
+    }
+    for (const w of shown) {
+      ctx.fillStyle = WARN_COLOURS[w.severity];
+      roundRect(ctx, kx + 20 * u, y + 5 * u, 16 * u, 16 * u, 4 * u);
+      ctx.fill();
+      ctx.font = `800 ${15 * u}px ${FONT}`;
+      ctx.fillStyle = ink;
+      ctx.fillText(fitText(ctx, `${w.severity} · ${w.type}`, kw * 0.52), kx + 46 * u, y + 19 * u);
+      ctx.font = `600 ${13 * u}px ${FONT}`;
+      ctx.fillStyle = sub;
+      ctx.textAlign = 'right';
+      ctx.fillText(w.when, kx + kw - 20 * u, y + 19 * u);
+      ctx.textAlign = 'left';
+      y += rowH;
+    }
+    if (more) {
+      ctx.font = `600 ${13 * u}px ${FONT}`;
+      ctx.fillStyle = sub;
+      ctx.fillText(`and ${more} more`, kx + 46 * u, y + 19 * u);
+    }
+    return;
+  }
+
+  // ── key: one slim capsule along the foot, and one above it for each layer laid over or under ──
+  let foot = R.y + R.h - pad;
+  for (const K of [C, ...(C.extras || [])]) foot -= drawKey(ctx, R, u, K, st, foot, pad, ink, sub) + 8 * u;
+}
+
+/* one layer's key, its foot at `foot`; returns its height */
+function drawKey(ctx, R, u, C, st, foot, pad, ink, sub) {
   const sc = C.scale || {};
   const ticks = sc.ticks || [];
   const steps = sc.keySteps || ticks;
   const hasBar = steps.length > 1;
   const kh = hasBar ? 70 * u : 44 * u;
   ctx.font = `700 ${13 * u}px ${FONT}`;
-  const textW = ctx.measureText(`${C.variable}${C.unit ? ` · ${C.unit}` : ''}`).width + ctx.measureText(C.credit || '').width + 72 * u;
-  const kw = Math.min(R.w - 2 * pad, hasBar ? Math.max(480 * u, textW, Math.min(820 * u, steps.length * (sc.keySteps ? 30 : 74) * u + 40 * u)) : textW);
-  const kx = R.x + pad, ky = R.y + R.h - pad - kh;
+  const name = `${C.variable}${C.unit ? ` · ${C.unit}` : ''}`;
+  const wName = ctx.measureText(name).width, full = R.w - 2 * pad;
+  const credit = wName + ctx.measureText(C.credit || '').width + 72 * u <= full ? C.credit || '' : C.creditShort || C.credit || '';
+  const wCredit = ctx.measureText(credit).width;
+  const textW = wName + wCredit + 72 * u;
+  const kw = Math.min(full, hasBar ? Math.max(480 * u, textW, Math.min(820 * u, steps.length * (sc.keySteps ? 30 : 74) * u + 40 * u)) : textW);
+  const kx = R.x + pad, ky = foot - kh;
   glassPanel(ctx, kx, ky, kw, kh, 22 * u, u, st.glass);
   ctx.font = `700 ${13 * u}px ${FONT}`;
   ctx.fillStyle = sub;
-  ctx.fillText(`${C.variable}${C.unit ? ` · ${C.unit}` : ''}`, kx + 20 * u, ky + (hasBar ? 24 : 27) * u);
+  ctx.fillText(fitText(ctx, name, kw - wCredit - 56 * u), kx + 20 * u, ky + (hasBar ? 24 : 27) * u);
   ctx.textAlign = 'right';
-  ctx.fillText(C.credit || '', kx + kw - 20 * u, ky + (hasBar ? 24 : 27) * u);
+  ctx.fillText(credit, kx + kw - 20 * u, ky + (hasBar ? 24 : 27) * u);
   ctx.textAlign = 'left';
   if (hasBar) {
     const bx2 = kx + 20 * u, bw2 = kw - 40 * u, by2 = ky + 33 * u, bh2 = 10 * u, n = steps.length;
@@ -1630,6 +1861,7 @@ function drawChrome(ctx, R, u, C, st) {
       lastEnd = cx + w;
     }
   }
+  return kh;
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -1654,9 +1886,20 @@ export function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
-/* render(i, ctx, W, H) draws frame i; one shared palette (sampled from several frames) keeps
-   colours steady through the loop */
-export async function makeGif({ count, W, H, delayMs, render, onProgress, cancelled }) {
+/* a moment for the page between frames. Not a timer: those slow to one a second when the tab is in
+   the background, and a long export would then take hours */
+const breathe = () => new Promise((r) => {
+  const c = new MessageChannel();
+  c.port1.onmessage = () => { c.port1.close(); r(); };
+  c.port2.postMessage(0);
+});
+
+/* render(i, ctx, W, H) draws frame i; delayOf(i) is how long it shows, in ms. One shared palette
+   (sampled from several frames) keeps colours steady through the loop, and a pixel that has not
+   changed since the last frame is written as see-through, the last frame showing through it: a
+   map's coasts, places and key never change, which is most of the picture, so a smooth GIF of
+   hundreds of frames stays a fraction of the size it would be. */
+export async function makeGif({ count, W, H, delayOf, render, onProgress, cancelled }) {
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d', { willReadFrequently: true });
@@ -1673,16 +1916,82 @@ export async function makeGif({ count, W, H, delayMs, render, onProgress, cancel
   const all = new Uint8ClampedArray(parts.reduce((n, p) => n + p.length, 0));
   let o = 0;
   for (const p of parts) { all.set(p, o); o += p.length; }
-  const palette = quantize(all, 256);
+  const colours = quantize(all, 255);
+  const clear = colours.length;                          // the see-through entry
+  const palette = [...colours, [0, 0, 0]];
   const gif = GIFEncoder();
+  let last = null;
   for (let i = 0; i < count; i++) {
     if (cancelled?.()) return null;
     await render(i, ctx, W, H);
     const { data } = ctx.getImageData(0, 0, W, H);
-    gif.writeFrame(applyPalette(data, palette), W, H, { palette: i === 0 ? palette : undefined, delay: delayMs, repeat: 0 });
+    const now = applyPalette(data, colours);
+    let index = now;
+    if (last) {
+      index = new Uint8Array(now.length);
+      for (let p = 0; p < now.length; p++) index[p] = now[p] === last[p] ? clear : now[p];
+    }
+    gif.writeFrame(index, W, H, { palette: i === 0 ? palette : undefined, delay: delayOf(i), repeat: 0, transparent: i > 0, transparentIndex: clear, dispose: 1 });
+    last = now;
     onProgress?.((i + 1) / count);
-    await new Promise((r) => setTimeout(r, 0));
+    await breathe();
   }
   gif.finish();
   return new Blob([gif.bytes()], { type: 'image/gif' });
+}
+
+/* the H.264 level that holds a picture this size at this rate (each: macroblocks a frame and a second) */
+const AVC_LEVELS = [[0x1f, 3600, 108000], [0x20, 5120, 216000], [0x28, 8192, 245760], [0x2a, 8704, 522240], [0x32, 22080, 589824], [0x33, 36864, 983040], [0x34, 36864, 2073600], [0x3c, 139264, 4177920]];
+function avcCodecs(W, H, fps) {
+  const mbs = Math.ceil(W / 16) * Math.ceil(H / 16);
+  const lv = (AVC_LEVELS.find(([, f, r]) => mbs <= f && mbs * fps <= r) || AVC_LEVELS[AVC_LEVELS.length - 1])[0].toString(16).padStart(2, '0');
+  return [`avc1.6400${lv}`, `avc1.4d00${lv}`, `avc1.4200${lv}`];   // High, Main, Baseline
+}
+export const canMakeVideo = () => typeof VideoEncoder !== 'undefined' && typeof VideoFrame !== 'undefined';
+
+/* render(i, ctx, W, H) draws frame i of an MP4 at a steady `fps`: H.264 where the browser has it (it
+   plays everywhere), else VP9 in the same file. The encoder works on its own thread; the loop only
+   waits when it has fallen behind. `same(i)` says a frame repeats the one before, which is then
+   not drawn again. */
+export async function makeVideo({ count, W, H, fps, render, same, onProgress, cancelled }) {
+  if (!canMakeVideo()) throw new Error('This browser cannot make video files. Chrome, Edge, Safari and recent Firefox can.');
+  const { Muxer, ArrayBufferTarget } = await import('mp4-muxer');
+  const bitrate = Math.round(Math.min(90e6, Math.max(6e6, W * H * fps * 0.22)));
+  const base = { width: W, height: H, bitrate, framerate: fps, latencyMode: 'quality' };
+  let config = null, kind = 'avc';
+  for (const codec of avcCodecs(W, H, fps)) {
+    const c = { ...base, codec, avc: { format: 'avc' } };
+    if ((await VideoEncoder.isConfigSupported(c)).supported) { config = c; break; }
+  }
+  if (!config) {
+    const c = { ...base, codec: 'vp09.00.51.08' };
+    if ((await VideoEncoder.isConfigSupported(c)).supported) { config = c; kind = 'vp9'; }
+  }
+  if (!config) throw new Error(`This browser cannot encode video at ${W} x ${H}. Try a smaller size.`);
+  const target = new ArrayBufferTarget();
+  const muxer = new Muxer({ target, fastStart: 'in-memory', firstTimestampBehavior: 'offset', video: { codec: kind, width: W, height: H, frameRate: fps } });
+  let failed = null;
+  const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => { failed = e; } });
+  enc.configure(config);
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  const tick = 1e6 / fps;
+  for (let i = 0; i < count; i++) {
+    if (failed) throw failed;
+    if (cancelled?.()) { enc.close(); return null; }
+    if (!same?.(i)) await render(i, ctx, W, H);
+    const vf = new VideoFrame(cv, { timestamp: Math.round(i * tick), duration: Math.round(tick) });
+    enc.encode(vf, { keyFrame: i % (fps * 2) === 0 });
+    vf.close();
+    onProgress?.((i + 1) / count);
+    /* the encoder's own signal, not a timer, so a tab left in the background keeps its pace */
+    while (enc.encodeQueueSize > 6 && !failed) await new Promise((r) => { enc.addEventListener('dequeue', r, { once: true }); setTimeout(r, 1000); });
+    await breathe();
+  }
+  await enc.flush();
+  if (failed) throw failed;
+  enc.close();
+  muxer.finalize();
+  return new Blob([target.buffer], { type: 'video/mp4' });
 }

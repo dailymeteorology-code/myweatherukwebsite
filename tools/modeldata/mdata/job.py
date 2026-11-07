@@ -117,6 +117,55 @@ def peak(model, run_s, var, steps, d, status):
         write_json(d / 'status.json', status)
 
 
+def fog_area(model, run_s, var, steps, d, status, first=None):
+    """The visibility in the fog areas only (mdata/derived.py fog_visibility). Its two sources are
+    made side by side if they are not complete (the step on screen first), and each frame is written
+    as soon as both of its sources are there, so the map fills in step by step. A source that is
+    complete but shorter than the run (a run reaches AWS step by step) is topped up first."""
+    import json
+    import threading
+    from .common import read_frame
+    from .derived import fog_inputs, fog_visibility
+    run = _utc(run_s)
+    deps = fog_inputs(MODELS[model].variables)
+    makers = []
+    for v in deps:
+        try:
+            st = json.loads((run_dir(model, run, v) / 'status.json').read_text())
+            done = st.get('state') == 'complete' and len(st.get('steps', [])) >= len(steps)
+        except Exception:
+            done = False
+        if not done:
+            makers.append(threading.Thread(target=main, args=(model, run_s, v, first), daemon=True))
+            makers[-1].start()
+    status['source'] = deps
+    left = sorted(steps, key=lambda s: (abs(s - int(first)), s)) if first is not None else sorted(steps)
+
+    def combine_ready():
+        nonlocal left
+        rest = []
+        for h in left:
+            if (d / f'{h}.bin').exists():
+                status['done'].append(h)
+                continue
+            paths = {v: run_dir(model, run, v) / f'{h}.bin' for v in deps}
+            if not all(p.exists() for p in paths.values()):
+                rest.append(h)
+                continue
+            vt = run + timedelta(hours=h)
+            write_frame(d / f'{h}.bin', fog_visibility({v: read_frame(p)[0] for v, p in paths.items()}), VARIABLES[var],
+                        {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat()})
+            status['done'].append(h)
+            write_json(d / 'status.json', status)
+        left = rest
+
+    while any(t.is_alive() for t in makers):
+        combine_ready()
+        time.sleep(1.0)
+    combine_ready()
+    status['missing'].extend(left)
+
+
 def alias(model, run_s, var, steps, d, status):
     """A copy of another variable's frames in its own units (snow_acc: the snowfall total, read as cm
     of fresh snow at the usual 10:1, so its numbers are the same). When the source is not complete it
@@ -176,8 +225,11 @@ def main(model, run_s, var, first=None):
     status = {'model': model, 'run': run.isoformat(), 'var': var, 'steps': steps, 'done': [], 'missing': [],
               'state': 'running', 'started': time.time()}
     write_json(d / 'status.json', status)
-    if var in ('wx', 'gust_peak') or var in ALIASES:
-        (derived if var == 'wx' else peak if var == 'gust_peak' else alias)(model, run_s, var, steps, d, status)
+    if var in ('wx', 'gust_peak', 'fog_vis') or var in ALIASES:
+        if var == 'fog_vis':
+            fog_area(model, run_s, var, steps, d, status, first)
+        else:
+            (derived if var == 'wx' else peak if var == 'gust_peak' else alias)(model, run_s, var, steps, d, status)
         status['state'] = 'complete'
         status['seconds'] = round(time.time() - status['started'], 1)
         write_json(d / 'status.json', status)

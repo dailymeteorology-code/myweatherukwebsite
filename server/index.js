@@ -415,6 +415,51 @@ app.get('/api/warning-archive', (req, res) => {
   }
 });
 
+/* Met Office warnings for the Model Data page's overlay and warnings window, which show what is in
+ * force at a frame's time, so they need every recorded warning with its real shape rather than
+ * only today's. Each comes with the time it really ended: a warning that left the Met Office feed
+ * before its end was cancelled or replaced, and it stops at the last refresh that saw it (a
+ * cancelled warning would otherwise sit on tomorrow's frames). `?since=` is an ISO time, 60 days
+ * ago if left out. */
+app.get('/api/modeldata/warnings', (req, res) => {
+  try {
+    const since = Date.parse(req.query.since) || Date.now() - 60 * 864e5;
+    const fetchedAt = db.list('CachedWarnings')[0]?.fetched_at || null;
+    const fetched = Date.parse(fetchedAt) || 0;
+    const rows = db.list('WarningArchive') || [];
+    const warnings = [];
+    for (const r of rows) {
+      const g = r.geometry;
+      const from = Date.parse(r.valid_from);
+      if (!Number.isFinite(from) || !g || (g.type !== 'Polygon' && g.type !== 'MultiPolygon')) continue;
+      let to = Date.parse(r.valid_to);
+      if (!Number.isFinite(to) || to < from) to = from;     // an end typed before the start counts as none
+      const seen = Date.parse(r.last_seen);
+      if (Number.isFinite(seen) && seen < to && fetched > seen) to = seen;
+      if (to <= from || to < since) continue;               // withdrawn before it began, or long gone
+      const sv = String(r.severity || '').toLowerCase();
+      warnings.push({
+        id: r.warning_id || r.id,
+        type: r.type || 'Weather',
+        severity: sv === 'red' ? 'Red' : sv === 'amber' ? 'Amber' : 'Yellow',
+        from: new Date(from).toISOString(),
+        to: new Date(to).toISOString(),
+        headline: r.description || '',
+        geometry: g,
+      });
+    }
+    res.set('Cache-Control', 'no-cache');
+    res.json({
+      fetchedAt,
+      recordingSince: rows.reduce((min, r) => (r.first_seen && (!min || r.first_seen < min) ? r.first_seen : min), null),
+      warnings,
+    });
+  } catch (err) {
+    console.error('[modeldata/warnings]', err);
+    res.status(500).json({ error: 'Warnings unavailable' });
+  }
+});
+
 /* The home page's city cards: the UK ones read the UKV analysis (/api/location/now), the rest
    the Met Office global model through DataHub on the site's key (worldConditions.js, mounted
    below), cached so it costs a few dozen calls a day however many people visit. */

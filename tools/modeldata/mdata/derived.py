@@ -9,6 +9,8 @@ from what each model publishes: its precipitation rate, its snow rate (Met Offic
 wet-bulb temperature (the others) for rain/sleet/snow, total cloud, visibility for fog, and
 its lightning (UKV), hail (UKV) or CAPE with heavy precipitation for thunder. The client
 draws the same codes (src/lib/modelViewer.js WX_NAMES).
+
+fog_vis — the visibility in metres, in the fog areas only (nothing elsewhere).
 """
 from __future__ import annotations
 
@@ -69,3 +71,23 @@ def weather_type(f):
     if 'hail_rate' in f:
         code = np.where(np.nan_to_num(f['hail_rate']) >= 0.1, 14, code)
     return np.where(np.isfinite(f['precip_rate']) | (tcc is not None and np.isfinite(tcc)), code, np.nan).astype(np.float32)
+
+
+# A grid box is a fog area when at least half of it is in fog. On the UKV of 7 Nov 2026 nine in ten
+# boxes with visibility under 1 km had a fog fraction above 56%, while at 25-50% the median
+# visibility was still 5-7 km: below a half the model is not saying "fog" at that place.
+FOG_FRACTION = 50.0
+
+
+def fog_inputs(variables):
+    """The frames fog_vis is made from: the visibility, and the fog fraction where the model has one."""
+    return [v for v in ('vis', 'fog') if v in variables]
+
+
+def fog_visibility(f):
+    """f: {'vis': km, 'fog': %}. Visibility in metres where there is fog, NaN everywhere else. By the
+    model's fog fraction, so rain or snow cutting the visibility does not count as fog; a model with
+    no fog fraction (GFS) falls back on what fog means, visibility under 1 km."""
+    vis = f['vis']
+    foggy = np.nan_to_num(f['fog']) >= FOG_FRACTION if 'fog' in f else np.nan_to_num(vis, nan=99) < 1.0
+    return np.where(foggy & np.isfinite(vis), vis * 1000.0, np.nan).astype(np.float32)

@@ -41,6 +41,24 @@ function halve(q, table, W, H, S) {
   return { vals, w, h, lo, hi };
 }
 
+/* d3 closes every contour round the edge of the grid, which on the map is a line along the model's
+   border that means nothing: a line stops at the edge instead. In: a closed ring, the grid's size. */
+function openAtEdge(ring, w, h) {
+  const edge = ([x, y]) => x < 1 || y < 1 || x > w - 1 || y > h - 1;
+  const k = ring.findIndex(edge);
+  if (k < 0) return [ring];
+  const pts = [...ring.slice(k), ...ring.slice(1, k + 1)];     // from an edge point round to it, so no line is cut in two
+  const out = [];
+  let cur = [];
+  for (const p of pts) {
+    if (!edge(p)) { cur.push(p); continue; }
+    if (cur.length > 2) out.push(cur);
+    cur = [];
+  }
+  if (cur.length > 2) out.push(cur);
+  return out;
+}
+
 /** A layer's contour lines (grid coordinates), on a lightly smoothed half-resolution field; a
     coarse (probability) grid of nx x ny cells, K display cells each, is contoured directly.
     a = { q, table, W, H, coarse: { nx, ny, K } | null, thresholds (or 'every4' / 'every6'),
@@ -53,7 +71,7 @@ export function calcContours(a) {
     for (let i = 0; i < vals.length; i++) { const v = table[q[i]]; vals[i] = Number.isNaN(v) ? 0 : v; }
     vals = boxBlur(vals, nx, ny, 1);
     return d3contours().size([nx, ny]).smooth(true).thresholds(a.thresholds)(Array.from(vals))
-      .map((c) => ({ value: c.value, rings: c.coordinates.flatMap((p) => p).filter((r) => r.length >= 8).map((r) => r.map(([x, y]) => [x * K, y * K])), line, pct: !!pct }));
+      .map((c) => ({ value: c.value, rings: c.coordinates.flatMap((p) => p).filter((r) => r.length >= 8).flatMap((r) => openAtEdge(r, nx, ny)).map((r) => r.map(([x, y]) => [x * K, y * K])), line, pct: !!pct }));
   }
   const S = 2;
   const f = halve(q, table, a.W, a.H, S);
@@ -64,7 +82,7 @@ export function calcContours(a) {
   if (th === 'every6') th = range(Math.ceil(f.lo / 6) * 6, f.hi, 6);
   /* rings shorter than ~25 points are 2 km speckle: drawn, they bury the map in tiny loops */
   return d3contours().size([f.w, f.h]).smooth(true).thresholds(th)(Array.from(vals))
-    .map((c) => ({ value: c.value, rings: c.coordinates.flatMap((poly) => poly).filter((ring) => ring.length >= 25).map((ring) => ring.map(([x, y]) => [x * S, y * S])), line }));
+    .map((c) => ({ value: c.value, rings: c.coordinates.flatMap((poly) => poly).filter((ring) => ring.length >= 25).flatMap((ring) => openAtEdge(ring, f.w, f.h)).map((ring) => ring.map(([x, y]) => [x * S, y * S])), line }));
 }
 
 /** Isobars every `every` hPa (grid coordinates), on a field of ~8 km or coarser: pressure is smooth,
@@ -78,7 +96,7 @@ export function calcIsobars(a) {
   const vals = boxBlur(f.vals, f.w, f.h, Math.max(1, Math.round(Math.max(a.resKm || 2, 2 * cellKm) / (2 * cellKm))));
   const th = range(Math.ceil(f.lo / a.every) * a.every, f.hi, a.every);
   return d3contours().size([f.w, f.h]).smooth(true).thresholds(th)(Array.from(vals))
-    .map((c) => ({ value: c.value, rings: c.coordinates.flatMap((p) => p).filter((r) => r.length >= 12).map((r) => r.map(([x, y]) => [x * S, y * S])) }));
+    .map((c) => ({ value: c.value, rings: c.coordinates.flatMap((p) => p).filter((r) => r.length >= 12).flatMap((r) => openAtEdge(r, f.w, f.h)).map((r) => r.map(([x, y]) => [x * S, y * S])) }));
 }
 
 /** The lows and highs: [{ gx, gy, kind: 'L' | 'H', p }]. A centre is the lowest (highest) point

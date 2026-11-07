@@ -173,6 +173,8 @@ VARIABLES = {
     'cloud_base':   dict(label='Cloud base height', unit='m', group='Cloud & visibility', lo=0, hi=5000, scale='sqrt'),
     'vis':          dict(label='Visibility', unit='km', group='Cloud & visibility', lo=0, hi=60, scale='sqrt'),
     'fog':          dict(label='Fog probability', unit='%', group='Cloud & visibility', lo=0, hi=100),
+    # made from the two above (mdata/derived.py fog_visibility): the visibility, in the fog areas only
+    'fog_vis':      dict(label='Fog fraction: visibility in fog', unit='m', group='Cloud & visibility', lo=0, hi=5000, scale='sqrt'),
     # convection
     'cape_mu':      dict(label='CAPE (most unstable)', unit='J/kg', group='Convection', lo=0, hi=5000, scale='sqrt'),
     'cape_sb':      dict(label='CAPE (surface)', unit='J/kg', group='Convection', lo=0, hi=5000, scale='sqrt'),
@@ -577,7 +579,7 @@ class UKV(MetOffice):
     }
     pl_files = dict(MO_PL, wind100=('wind_speed_on_height_levels', 100.0))
     variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'snow_acc', 'feels', 'windchill', 'wdir10', 'wx',
-                               'gust_peak', 'wind100'] + MO_UPPER
+                               'fog_vis', 'gust_peak', 'wind100'] + MO_UPPER
 
 
 class MOGlobal(MetOffice):
@@ -602,7 +604,7 @@ class MOGlobal(MetOffice):
     }
     pl_files = dict(MO_PL, w700=('wind_vertical_velocity_on_pressure_levels', 70000.0))
     variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'snow_acc', 'feels', 'windchill', 'wdir10', 'wx',
-                               'gust_peak', 'w700'] + MO_UPPER
+                               'fog_vis', 'gust_peak', 'w700'] + MO_UPPER
 
 
 # ── ECMWF (IFS, AIFS) ───────────────────────────────────────────────────────
@@ -870,7 +872,7 @@ class GFS:
     CATEGORY = {'CRAIN', 'CSNOW', 'CFRZR', 'CICEP'}
     variables = ['precip_rate', 'precip_total', 'conv_total', 'ptype', 'frozen_pct', 'refc', 'snow_total', 'snow_acc', 'snow_depth',
                  'snow_swe', 'frz', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10', 'gust10', 'gust_peak', 'wind100',
-                 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'cape_sb', 'cape_ml', 'cape_mu', 'cin_sb', 'cin_ml', 'cin_mu', 'li', 'kindex',
+                 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'fog_vis', 'cape_sb', 'cape_ml', 'cape_mu', 'cin_sb', 'cin_ml', 'cin_mu', 'li', 'kindex',
                  'srh3', 'pw', 'hpbl', 't925', 't850', 't700', 't500', 'z850', 'z500', 'thick', 'rh850', 'rh700', 'wind925', 'wind850',
                  'wind700', 'wind500', 'wind300', 'wind250', 'w700', 'vort500', 'trop_p', 'sw_down', 'lw_down', 'olr', 'shf', 'lhf', 'wx',
                  'swh', 'pp1d', 'mwd']
