@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '@/components/ThemeContext';
 import { useLogo } from '@/components/MobileHeaderLogo';
+import BannerMarks from '@/components/nav/BannerMarks';
 
 /**
  * Site-wide navigation: a grouped top bar with mega-menu panels on desktop,
@@ -282,6 +283,7 @@ function DesktopBar({ roles, siteName, logoUrl }) {
           >
             {siteName}
           </span>
+          <BannerMarks />
         </Link>
 
         {groups.map((group) => {

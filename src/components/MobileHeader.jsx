@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import { useLogo } from '@/components/MobileHeaderLogo';
+import BannerMarks from '@/components/nav/BannerMarks';
 
 const ROOT_PATHS = new Set(['/', '/Home', '/Lightning', '/TCMOutlooks', '/WeatherPatterns', '/Settings', '/AdminSettings', '/News']);
 
@@ -25,7 +26,8 @@ export default function MobileHeader({ siteSettings }) {
         height: 'calc(48px + env(safe-area-inset-top))'
       }}>
       
-      {/* Left: logo or back */}
+      {/* Left: logo or back, then the marks of remembrance */}
+      <div className="flex items-center gap-2 min-w-0">
       {isRoot ?
       <Link to="/" className="flex items-center gap-2 min-w-0">
           {logoUrl &&
@@ -44,6 +46,8 @@ export default function MobileHeader({ siteSettings }) {
           <span className="text-sm font-medium">Back</span>
         </button>
       }
+      <BannerMarks height={30} />
+      </div>
 
       {/* the right is kept clear for the floating menu button */}
       <div className="w-8" />
