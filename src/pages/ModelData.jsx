@@ -28,7 +28,7 @@ import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, fieldLayer, frameContours, drawScene,
   realtimeBasemap, fmtValue, download, makeGif, makeVideo, canMakeVideo, probFrame, loadLive, loadRoads, loadObserved, WX_NAMES, sampleFrame,
   lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres, splitFrame, drawPanes, withGrid, viewOnGrid, WARN_COLOURS,
-  coversMap, SEE_THROUGH,
+  coversMap, SEE_THROUGH, setPalette, scaleSwatch, radarTypeOf, RADAR_FAMILIES,
 } from '@/lib/modelViewer';
 import { tweenFrame } from '@/lib/modelTween';
 import { GRIDS, gridOfModel, projection } from '@/lib/modelGrids';
@@ -111,6 +111,7 @@ const LIVE_LIST = [
   ['Now: observed + UKV', 'now_mslp', 'Pressure', 'now_mslp', 'mslp'],
   ['Now: observed + UKV', 'now_tcc', 'Cloud cover', 'now_tcc', 'tcc'],
   ['Radar & lightning', 'radar', 'Rain radar', 'radar'],
+  ['Radar & lightning', 'radar_type', 'Rain radar: precipitation type', 'radar_type', 'radar_type'],
   ['Satellite', 'sat_clouds', 'Clouds over the map', 'sat_ir'],
   ['Satellite', 'sat_ir', 'Infrared', 'sat_ir'],
   ['Satellite', 'sat_ir_enh', 'Infrared: cloud-top colours', 'sat_ir'],
@@ -124,6 +125,8 @@ const LIVE_LIST = [
   ['Satellite RGB', 'sat_fog', 'Fog & low cloud', 'sat_fog'],
 ].map(([group, key, label, src, scale]) => ({ group, key, label, src, scale }));
 const LIVE = Object.fromEntries(LIVE_LIST.map((x) => [x.key, x]));
+/* the live layers that are the radar (in mm/h, with clouds beneath if wanted) */
+const RADARS = new Set(['radar', 'radar_type']);
 const NOW_UNITS = { now_t2: '°C', now_feels: '°C', now_windchill: '°C', now_td2: '°C', now_rh2: '%', now_wind10: 'mph', now_gust10: 'mph', now_mslp: 'hPa', now_tcc: '%', now_wx: '' };
 
 /* Observed: each day's extremes (mdata/now.py), kept from 20 Oct 2026 onwards. [group, key, label, scale, unit] */
@@ -573,6 +576,11 @@ export default function ModelData() {
   /* any layer over or under the main one, per view: { v, place: 'over' | 'under', alpha } */
   const [extrasBy, setExtrasBy] = useState(() => ({ forecast: [], prob: [], live: [], observed: [], ...(prefs.extras || {}) }));
   const [layerAlpha, setLayerAlpha] = useState(prefs.layerAlpha ?? 1);   // how strongly the main layer itself is drawn
+  /* the layers' colours as designed, or pale: set here, during render, like the grid, so every draw
+     below already uses them; put back when the page closes, as other pages use the same scales */
+  const [palette, setPaletteChoice] = useState(prefs.palette === 'pale' ? 'pale' : 'normal');
+  setPalette(palette);
+  useEffect(() => () => setPalette('normal'), []);
   /* the second window: another run, model or layer at the same valid time, or the warnings */
   const [cmp, setCmp] = useState(() => ({ on: false, kind: 'run', model: null, v: null, split: 'auto', swap: false, ...(prefs.cmp || {}), run: null }));
   const setCmpK = (k, v) => setCmp((o) => ({ ...o, [k]: v }));
@@ -633,10 +641,10 @@ export default function ModelData() {
   useEffect(() => {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours,
-        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov, msl, wn, cmp, extras: extrasBy, layerAlpha }));
+        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov, msl, wn, cmp, extras: extrasBy, layerAlpha, palette }));
     } catch { /* private window: nothing to remember */ }
   }, [mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours, showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, msl,
-    strikeStyle, ov, wn, cmp, extrasBy, layerAlpha]);
+    strikeStyle, ov, wn, cmp, extrasBy, layerAlpha, palette]);
 
   /* the overlay's runs (the last 48 hours), the newest Main Run chosen unless one already is */
   useEffect(() => {
@@ -783,7 +791,7 @@ export default function ModelData() {
   const fieldKey = isProb ? preset.field : varKey;
   const fmeta = isProb ? cat?.ens_fields?.[preset.field] : null;
   const vmeta = useMemo(() => (isObs ? { label: obsItem.label, unit: obsItem.unit }
-    : isLive ? { label: liveItem.label, unit: liveItem.src === 'radar' ? 'mm/h' : NOW_UNITS[liveItem.src] ?? '' }
+    : isLive ? { label: liveItem.label, unit: RADARS.has(liveItem.src) ? 'mm/h' : NOW_UNITS[liveItem.src] ?? '' }
     : isProb
       ? { label: `Chance of ${preset.label.toLowerCase()} ${dir === 'below' ? '≤' : '≥'} ${fmtThr(thr)}${fmeta?.unit ? ` ${fmeta.unit}` : ''}`, unit: '%', group: preset.group }
       : cat?.variables?.[varKey]), [isObs, obsItem, isLive, liveItem, isProb, preset, dir, thr, fmeta, cat, varKey]);
@@ -1180,9 +1188,9 @@ export default function ModelData() {
   const ownWx = (isForecast && varKey === 'wx') || (isLive && liveKey === 'now_wx');
   const canArrows = ownArrows || isLive || (isForecast && hasVar('wdir10'));
   const canWx = ownWx || isLive || (isForecast && hasVar('wx'));
-  const canClouds = isLive ? liveItem.src === 'radar' : isForecast && hasVar('tcc') && RAINY.has(varKey);
+  const canClouds = isLive ? RADARS.has(liveItem.src) : isForecast && hasVar('tcc') && RAINY.has(varKey);
   const canGrid = !isImg && !selfArrows;
-  const canStar = !isImg && !['wx', 'ptype', 'wdir10', 'mwd'].includes(scaleKey) && !(isLive && liveKey === 'now_wx');
+  const canStar = !isImg && !['wx', 'ptype', 'radar_type', 'wdir10', 'mwd'].includes(scaleKey) && !(isLive && liveKey === 'now_wx');
   /* MSLP as the layer itself: its lines, highs and lows are the pressure overlay's, under its switches */
   const ownMsl = (isForecast && varKey === 'mslp') || (isLive && liveKey === 'now_mslp');
   const canMsl = ownMsl || (isForecast && hasVar('mslp')) || (isLive && !isImg);
@@ -1233,7 +1241,7 @@ export default function ModelData() {
   const extraField = (v) => (isProb ? PRESET[v]?.field : isLive ? LIVE[v]?.src : v);
   const extraScale = (v) => (isObs ? OBS[v]?.scale : isLive ? LIVE[v]?.scale || (LIVE[v]?.src === 'radar' ? 'radar' : v) : isProb ? 'prob' : v);
   const extraMeta = (v) => (isObs ? { label: OBS[v]?.label, unit: OBS[v]?.unit }
-    : isLive ? { label: LIVE[v]?.label, unit: LIVE[v]?.src === 'radar' ? 'mm/h' : NOW_UNITS[LIVE[v]?.src] ?? '' }
+    : isLive ? { label: LIVE[v]?.label, unit: RADARS.has(LIVE[v]?.src) ? 'mm/h' : NOW_UNITS[LIVE[v]?.src] ?? '' }
     : isProb ? { label: `Chance of ${(PRESET[v]?.label || '').toLowerCase()} ${PRESET[v]?.dir === 'below' ? '≤' : '≥'} ${fmtThr(PRESET[v]?.thr ?? 0)}${cat?.ens_fields?.[PRESET[v]?.field]?.unit ? ` ${cat.ens_fields[PRESET[v].field].unit}` : ''}`, unit: '%' }
     : cat?.variables?.[v] || { label: v, unit: '' });
   const useModelExtra = (m, r, i, want) => useRunFrames(!timeSteps ? m : null, r, extras[i] ? extraField(extras[i].v) : null, want, !!extras[i]);
@@ -1274,7 +1282,7 @@ export default function ModelData() {
   /* where the live and observed layers are from (a forecast's key names its model and run) */
   const credit = !model || !timeSteps ? '' : isObs
     ? (['precip_total', 'rain_rate_max'].includes(obsKey) ? 'Met Office radar via AWS' : 'UKV analysis + METAR station reports')
-    : (liveItem.src === 'radar' ? 'Met Office radar via AWS' : liveItem.src.startsWith('now_') ? 'UKV + METAR + Met Office radar' : liveProd?.source?.startsWith('Meteosat') ? `${liveProd.source} · EUMETSAT` : 'EUMETSAT');
+    : (liveItem.src === 'radar' ? 'Met Office radar via AWS' : liveItem.src === 'radar_type' ? 'Met Office radar via AWS · type from UKV + METAR' : liveItem.src.startsWith('now_') ? 'UKV + METAR + Met Office radar' : liveProd?.source?.startsWith('Meteosat') ? `${liveProd.source} · EUMETSAT` : 'EUMETSAT');
   const chromeFor = useCallback((f) => (f && model && vmeta ? {
     variable: underMeta ? `${vmeta.label} · colours: ${underMeta.label.toLowerCase()}` : vmeta.label, unit: underMeta ? underMeta.unit : vmeta.unit,
     valid: f.head.valid, logo: statics?.logo, ...(timeSteps ? { credit } : creditOf(model, run, f.head.step)),
@@ -1374,7 +1382,7 @@ export default function ModelData() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disp, style, basemapFor, staticsBy, showCities, smooth, showContours, fontsOk, showStar, isObs, isLive, showLightning, strikes, showRoads, roadsBy, showGrid, obsSummary, obsKey,
-    obsStrikes, strikeStyle, riskFor, gridName, wn, warningsAt, msl, bump, calcTick, layerAlpha]);
+    obsStrikes, strikeStyle, riskFor, gridName, wn, warningsAt, msl, bump, calcTick, layerAlpha, palette]);
   useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); smoothCache.current.clear(); }, [thr, dir, scaleKey]);
   useEffect(() => { Object.values(cachesB).forEach((m) => m.clear()); }, [cachesB, dataB?.key, thr, dir, scaleB]);
 
@@ -1779,7 +1787,7 @@ export default function ModelData() {
 
   /* one value, as this layer reads: a weather type, a direction, or a number with its unit */
   const fmtPoint = (v, sk = scaleKey, meta = vmeta) => (!Number.isFinite(v) ? '—' : sk === 'wx' ? WX_NAMES[Math.round(v)] ?? '—'
-    : sk === 'ptype' ? scaleFor('ptype').keyLabel(v) || 'None'
+    : sk === 'ptype' || sk === 'radar_type' ? (() => { const t = radarTypeOf(v); return t ? `${RADAR_FAMILIES[t.family].name} · ${fmtValue(t.rate, 'mm/h')}` : 'Dry'; })()
     : sk === 'wdir10' || sk === 'mwd' ? `from the ${compass(v)} · ${Math.round(v)}°` : fmtValue(v, meta?.unit));
 
   /* panels: on a phone one at a time, as sheets from the bottom; elsewhere as cards */
@@ -1993,6 +2001,18 @@ export default function ModelData() {
     return order.map((n) => [n, g[n]]);
   })();
   const extraLabel = (v) => (isObs ? OBS[v]?.label : isLive ? LIVE[v]?.label : isProb ? PRESET[v]?.label : cat?.variables?.[v]?.label) || v;
+  /* the colours: as designed, or pale; each choice shows the layer on show in it */
+  const swatchOf = (pale) => {
+    const g = scaleSwatch(scaleKey, pale);
+    return g ? <i style={{ width: 30, height: 8, borderRadius: 4, background: g, boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.15)', flexShrink: 0 }} /> : null;
+  };
+  const colourControls = (
+    <div style={{ display: 'grid', gap: 6, padding: '2px 8px 8px' }}>
+      {sectionTitle('Colours')}
+      <Seg small items={[['normal', <span key="n" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>{swatchOf(false)}Normal</span>],
+        ['pale', <span key="p" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>{swatchOf(true)}Pale</span>]]} value={palette} onChange={setPaletteChoice} />
+    </div>
+  );
   const stackControls = (
     <div style={{ display: 'grid', gap: 6, padding: '2px 8px 8px' }}>
       {sectionTitle('Layers over and under')}
@@ -2023,6 +2043,7 @@ export default function ModelData() {
   );
   const layerRows = (
     <div style={{ display: 'grid', gap: 1 }}>
+      {colourControls}
       {stackControls}
       <div style={{ height: 1, background: T.line, margin: '2px 4px 6px' }} />
       <LayerRow icon={<MapPin size={14} />} label="Places" note={wxOn ? 'shown with the weather symbols' : null} on={showCities || wxOn} locked={wxOn} onClick={() => setShowCities((x) => !x)} />

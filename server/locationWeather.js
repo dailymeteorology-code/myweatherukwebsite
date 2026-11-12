@@ -65,24 +65,38 @@ const r2 = (v) => (v == null ? null : Math.round(v * 100) / 100);
 
 /* ── whole frames (now analysis, observed day, radar, UKV rain), decoded once and kept ── */
 const frameCache = new Map();
+/* the radar loops alone ask for ~40 frames (the rain and its type, past and next hours) */
+const FRAME_CACHE = 64;
+function parseFrame(raw) {
+  const n = raw.readUInt32LE(0);
+  const head = JSON.parse(raw.subarray(4, 4 + n).toString('utf8'));
+  const dec = decoder(head);
+  const lut = Float32Array.from({ length: 256 }, (_, q) => (q === 255 ? NaN : dec(q)));
+  return { head, q: raw.subarray(4 + n, 4 + n + head.nx * head.ny), nx: head.nx, ny: head.ny, dx: 2000 * (head.k ?? 1), dec, lut };
+}
+function keep(key, f) {
+  frameCache.set(key, f);
+  while (frameCache.size > FRAME_CACHE) frameCache.delete(frameCache.keys().next().value);
+  return f;
+}
 function frameAt(file) {
   let st;
   try { st = fs.statSync(file); } catch { return null; }
   const key = `${file}|${st.mtimeMs}`;
   const hit = frameCache.get(key);
   if (hit) { frameCache.delete(key); frameCache.set(key, hit); return hit; }
-  let f;
-  try {
-    const raw = zlib.gunzipSync(fs.readFileSync(file));
-    const n = raw.readUInt32LE(0);
-    const head = JSON.parse(raw.subarray(4, 4 + n).toString('utf8'));
-    const dec = decoder(head);
-    const lut = Float32Array.from({ length: 256 }, (_, q) => (q === 255 ? NaN : dec(q)));
-    f = { head, q: raw.subarray(4 + n, 4 + n + head.nx * head.ny), nx: head.nx, ny: head.ny, dx: 2000 * (head.k ?? 1), dec, lut };
-  } catch { return null; }
-  frameCache.set(key, f);
-  while (frameCache.size > 24) frameCache.delete(frameCache.keys().next().value);
-  return f;
+  try { return keep(key, parseFrame(zlib.gunzipSync(fs.readFileSync(file)))); } catch { return null; }
+}
+/* The same without holding up the site: the frames are on an external drive that can take most of a
+   second a file when busy, and a page's radar loop asks for dozens of them at once. */
+const gunzip = (buf) => new Promise((ok, no) => zlib.gunzip(buf, (e, r) => (e ? no(e) : ok(r))));
+async function frameAtAsync(file) {
+  let st;
+  try { st = await fs.promises.stat(file); } catch { return null; }
+  const key = `${file}|${st.mtimeMs}`;
+  const hit = frameCache.get(key);
+  if (hit) { frameCache.delete(key); frameCache.set(key, hit); return hit; }
+  try { return keep(key, parseFrame(await gunzip(await fs.promises.readFile(file)))); } catch { return null; }
 }
 function sample(f, lon, lat) {
   if (!f) return null;
@@ -434,24 +448,26 @@ const UK_VIEW = { lat: 54.8, lon: -4.0, halfKm: 700, km: 2 };
 function radarIndex() {
   const radar = readJson(path.join(LIVE, 'radar', 'index.json'))?.times || [];
   const past = radar.slice(-12);                                             // the last three hours, every 15 min
+  /* which of them have their precipitation type (mdata/now.py now_ptype) */
+  const typed = new Set(readJson(path.join(LIVE, 'now_ptype', 'index.json'))?.times || []);
   const list = cubes();
   const future = [];
   if (list.length) {
     const c = list[0];
     const st = readJson(path.join(FRAMES, 'ukv', c.tag, 'precip_rate', 'status.json'));
     const done = new Set(st?.done || []);
+    const types = new Set(readJson(path.join(FRAMES, 'ukv', c.tag, 'ptype', 'status.json'))?.done || []);
     const from = past.length ? Date.parse(past[past.length - 1]) : Date.now();
     for (const h of c.man.steps) {
       const t = c.runMs + h * 3600e3;
-      if (t > from && t <= from + 9 * 3600e3 && done.has(h)) future.push({ run: c.tag, h, valid: new Date(t).toISOString() });
+      if (t > from && t <= from + 9 * 3600e3 && done.has(h)) future.push({ run: c.tag, h, valid: new Date(t).toISOString(), typed: types.has(h) });
     }
   }
-  return { past, future };
+  return { past, pastTyped: past.filter((t) => typed.has(t)), future };
 }
 /* A square of a frame round a point, optionally coarsened: each `step` x `step` block keeps its
    strongest value (so a small heavy shower survives), and 255 (no data) only where all of it is. */
-function crop(file, lat, lon, halfKm = HALF_KM, step = 1) {
-  const f = frameAt(file);
+function cropFrame(f, lat, lon, halfKm = HALF_KM, step = 1) {
   if (!f) return null;
   const half = Math.round((halfKm * 1000) / f.dx);
   const [row, col] = cellOf(lon, lat, f.dx);
@@ -553,18 +569,22 @@ export function mountLocationWeather(app) {
     res.json(radarIndex());
   });
 
-  app.get('/api/location/radar/frame', (req, res) => {
+  /* kind=type: the precipitation type at the same time (2 km ECMWF codes): the analysis's for the
+     radar (now_ptype), the UKV's own for its rain (ptype) */
+  app.get('/api/location/radar/frame', async (req, res) => {
     const lat = Number(req.query.lat), lon = Number(req.query.lon);
     if (req.query.scope !== 'uk' && (!Number.isFinite(lat) || !Number.isFinite(lon))) return res.status(400).end();
+    const type = req.query.kind === 'type';
     let file;
-    if (req.query.src === 'radar' && /^\d{8}T\d{4}$/.test(String(req.query.t))) file = path.join(LIVE, 'radar', `${req.query.t}.bin`);
+    if (req.query.src === 'radar' && /^\d{8}T\d{4}$/.test(String(req.query.t))) file = path.join(LIVE, type ? 'now_ptype' : 'radar', `${req.query.t}.bin`);
     else if (req.query.src === 'ukv' && RUN_RE.test(String(req.query.run)) && /^\d{1,3}$/.test(String(req.query.h))) {
-      file = path.join(FRAMES, 'ukv', String(req.query.run), 'precip_rate', `${req.query.h}.bin`);
+      file = path.join(FRAMES, 'ukv', String(req.query.run), type ? 'ptype' : 'precip_rate', `${req.query.h}.bin`);
     } else return res.status(400).end();
     const uk = req.query.scope === 'uk';
+    const f = await frameAtAsync(file);
     const body = uk
-      ? crop(file, UK_VIEW.lat, UK_VIEW.lon, UK_VIEW.halfKm, Math.max(1, Math.round((UK_VIEW.km * 1000) / (frameAt(file)?.dx || 2000))))
-      : crop(file, lat, lon);
+      ? cropFrame(f, UK_VIEW.lat, UK_VIEW.lon, UK_VIEW.halfKm, Math.max(1, Math.round((UK_VIEW.km * 1000) / (f?.dx || 2000))))
+      : cropFrame(f, lat, lon);
     if (!body) return res.status(404).end();
     res.set({ 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip', 'Cache-Control': 'public, max-age=86400, immutable' });
     res.end(body);

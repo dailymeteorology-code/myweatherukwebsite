@@ -61,6 +61,10 @@ const runIso = (tag) => `${tag.slice(0, 4)}-${tag.slice(4, 6)}-${tag.slice(6, 8)
 const framesRoot = (model) => path.join(DATA, gridOf(model) === 'uk' ? 'frames' : `frames_${gridOf(model)}`);
 const frameDir = (model, run, v) => (ENS_MODELS.has(model) ? path.join(framesRoot(model), 'ens', model, run, v) : path.join(framesRoot(model), model, run, v));
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+/* The frames sit on an external hard drive that can take most of a second a file when it is busy;
+   where files are read in bulk (every catalogue refresh reads ~30 status files) they are read
+   without holding up the site (a bulk synchronous read froze it for 2 s on 12 Nov 2026). */
+const readJsonAsync = async (f) => { try { return JSON.parse(await fs.promises.readFile(f, 'utf8')); } catch { return null; } };
 
 function pump() {
   const count = (p) => [...running.values()].filter((r) => r.prefetch === p).length;
@@ -78,7 +82,8 @@ function pump() {
   }
 }
 
-function ensureJob(model, run, v, prefetch = false, first = null) {
+/* `known`: the frames' status.json when the caller has already read it (null for none) */
+function ensureJob(model, run, v, prefetch = false, first = null, known = undefined) {
   const key = `${model}/${run}/${v}`;
   if (running.has(key)) return;
   const queued = queue.find((q) => q.key === key);
@@ -93,17 +98,32 @@ function ensureJob(model, run, v, prefetch = false, first = null) {
     }
     return;
   }
-  const st = readJson(path.join(frameDir(model, run, v), 'status.json'));
+  const st = known !== undefined ? known : readJson(path.join(frameDir(model, run, v), 'status.json'));
   if (st?.state === 'complete' && !grown(model, run, st)) return;
   queue.push({ key, args: [model, runIso(run), v, ...(first != null ? [String(first)] : [])], prefetch });
   pump();
 }
 
+/** ensureJob, reading the status file in the background first. */
+async function ensureJobAsync(model, run, v, prefetch = false, first = null) {
+  const key = `${model}/${run}/${v}`;
+  if (running.has(key) || queue.some((q) => q.key === key)) return ensureJob(model, run, v, prefetch, first);
+  const st = await readJsonAsync(path.join(frameDir(model, run, v), 'status.json'));
+  return ensureJob(model, run, v, prefetch, first, st);
+}
+
 /* has the run published more steps since this variable's frames were made? (a run reaches AWS
    step by step, so the first job of a fresh run is partial; it is topped up as steps arrive) */
 let catCache = { at: 0, cat: null };
+let catLoading = false;
 function catalogNow() {
-  if (Date.now() - catCache.at > 30000) catCache = { at: Date.now(), cat: readJson(path.join(DATA, 'catalog.json')) };
+  if (Date.now() - catCache.at > 30000 && !catLoading) {
+    if (!catCache.cat) catCache = { at: Date.now(), cat: readJson(path.join(DATA, 'catalog.json')) };   // the first time: wait for it
+    else {                                                                                                // after that: refreshed in the background
+      catLoading = true;
+      readJsonAsync(path.join(DATA, 'catalog.json')).then((cat) => { if (cat) catCache = { at: Date.now(), cat }; }).finally(() => { catLoading = false; });
+    }
+  }
   return catCache.cat;
 }
 function grown(model, run, st) {
@@ -142,17 +162,22 @@ function refreshLive(lane) {
 function refreshCatalog() {
   if (catalogBusy) return;
   catalogBusy = true;
-  python(['mdata.catalog'], (code, err) => {
+  python(['mdata.catalog'], async (code, err) => {
     catalogBusy = false;
     if (code) { console.warn(`[modeldata] catalogue failed: ${err.slice(-300)}`); return; }
-    const cat = readJson(path.join(DATA, 'catalog.json'));
-    for (const m of cat?.models || []) {
-      const r = m.runs?.length ? defaultRun(m) : null;
-      if (!r) continue;
-      const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';
-      for (const v of PREFETCH.filter((x) => m.variables?.includes(x)).slice(0, PREFETCH_LIMIT[m.id] ?? 99)) ensureJob(m.id, tag, v, true);
+    try {
+      const cat = await readJsonAsync(path.join(DATA, 'catalog.json'));
+      if (cat) catCache = { at: Date.now(), cat };
+      for (const m of cat?.models || []) {
+        const r = m.runs?.length ? defaultRun(m) : null;
+        if (!r) continue;
+        const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';
+        for (const v of PREFETCH.filter((x) => m.variables?.includes(x)).slice(0, PREFETCH_LIMIT[m.id] ?? 99)) await ensureJobAsync(m.id, tag, v, true);
+      }
+      await refreshPoint(cat);
+    } catch (e) {
+      console.warn(`[modeldata] after the catalogue: ${e.message}`);
     }
-    refreshPoint(cat);
   });
 }
 
@@ -167,17 +192,23 @@ const tagMs = (t) => Date.UTC(+t.slice(0, 4), +t.slice(4, 6) - 1, +t.slice(6, 8)
 export function builtCubes() {
   try { return fs.readdirSync(POINT_DIR).filter((t) => RUN_RE.test(t) && fs.existsSync(path.join(POINT_DIR, t, 'manifest.json'))).sort(); } catch { return []; }
 }
+async function builtCubesAsync() {
+  try {
+    const names = (await fs.promises.readdir(POINT_DIR)).filter((t) => RUN_RE.test(t));
+    const have = await Promise.all(names.map((t) => fs.promises.access(path.join(POINT_DIR, t, 'manifest.json')).then(() => true, () => false)));
+    return names.filter((_, i) => have[i]).sort();
+  } catch { return []; }
+}
 
 /* Which UKV runs to cube: the newest that reaches T+120 (03Z and 15Z), and the newest that reaches
    T+54 once it is three hours newer than both that and every cube already built. A place's first two
    days then come from a run at most about six hours old (every long run, in practice). */
-function pointTargets(cat) {
+function pointTargets(cat, built) {
   const m = cat?.models?.find((x) => x.id === 'ukv');
   if (!m?.runs?.length) return [];
   const top = (r) => Math.max(...r.steps);
   const long = m.runs.find((r) => top(r) >= 120);
   const short = m.runs.find((r) => top(r) >= 54);
-  const built = builtCubes();
   const ref = Math.max(built.length ? tagMs(built[built.length - 1]) : 0, long ? tagMs(runTag(long.run)) : 0);
   const out = long ? [long] : [];
   if (short && short !== long && tagMs(runTag(short.run)) - ref >= 3 * 3600e3) out.unshift(short);
@@ -185,16 +216,17 @@ function pointTargets(cat) {
 }
 
 let pointBusy = false;
-function refreshPoint(cat) {
-  for (const r of pointTargets(cat)) {
+async function refreshPoint(cat) {
+  for (const r of pointTargets(cat, await builtCubesAsync())) {
     const tag = runTag(r.run);
-    const man = readJson(path.join(POINT_DIR, tag, 'manifest.json'));
+    const man = await readJsonAsync(path.join(POINT_DIR, tag, 'manifest.json'));
+    /* a built cube's run: its precipitation type too, for the radar's next hours on the home and
+       Location pages (made from frames the cube already needed, so quick) */
+    if (man) await ensureJobAsync('ukv', tag, 'ptype', true);
     if (man && man.steps.length >= r.steps.length) continue;            // built, and the run has not grown since
-    const ready = POINT_VARS.every((v) => {
-      const st = readJson(path.join(frameDir('ukv', tag, v), 'status.json'));
-      return st?.state === 'complete' && !grown('ukv', tag, st);
-    });
-    if (!ready) { POINT_VARS.forEach((v) => ensureJob('ukv', tag, v, 'point')); continue; }
+    const sts = await Promise.all(POINT_VARS.map((v) => readJsonAsync(path.join(frameDir('ukv', tag, v), 'status.json'))));
+    const ready = sts.every((st) => st?.state === 'complete' && !grown('ukv', tag, st));
+    if (!ready) { POINT_VARS.forEach((v, i) => ensureJob('ukv', tag, v, 'point', null, sts[i])); continue; }
     if (pointBusy) return;
     pointBusy = true;
     python(['mdata.point', 'cube', runIso(tag)], (code, err) => {
@@ -236,13 +268,13 @@ export function mountModelData(app) {
 
   const valid = (p) => (MODELS.has(p.model) || ENS_MODELS.has(p.model)) && RUN_RE.test(p.run) && VAR_RE.test(p.v);
 
-  app.get('/api/modeldata/frames/:model/:run/:v/status', (req, res) => {
+  app.get('/api/modeldata/frames/:model/:run/:v/status', async (req, res) => {
     if (!valid(req.params)) return res.status(400).json({ error: 'bad request' });
     const { model, run, v } = req.params;
-    const st = readJson(path.join(frameDir(model, run, v), 'status.json'));
+    const st = await readJsonAsync(path.join(frameDir(model, run, v), 'status.json'));
     const key = `${model}/${run}/${v}`;
     const first = /^\d{1,3}$/.test(String(req.query.first || '')) ? Number(req.query.first) : null;
-    if (!st || (!running.has(key) && (st.state !== 'complete' || grown(model, run, st)))) ensureJob(model, run, v, false, first);
+    if (!st || (!running.has(key) && (st.state !== 'complete' || grown(model, run, st)))) ensureJob(model, run, v, false, first, st);
     else if (first != null && st.state !== 'complete' && ENS_MODELS.has(model)) {
       /* a running ensemble job builds around where the viewer is now */
       fs.promises.writeFile(path.join(frameDir(model, run, v), 'focus.json'), JSON.stringify({ step: first })).catch(() => {});
@@ -253,7 +285,8 @@ export function mountModelData(app) {
 
   /* live layers: satellite images, radar frames, lightning */
   const LIVE_PRODUCTS = new Set(['sat_ir', 'sat_vis', 'sat_geo', 'sat_true', 'sat_fog', 'sat_wv', 'sat_airmass', 'sat_conv', 'sat_cth', 'radar',
-    'now_t2', 'now_td2', 'now_rh2', 'now_wind10', 'now_wdir10', 'now_gust10', 'now_mslp', 'now_windchill', 'now_feels', 'now_tcc', 'now_wx']);
+    'now_t2', 'now_td2', 'now_rh2', 'now_wind10', 'now_wdir10', 'now_gust10', 'now_mslp', 'now_windchill', 'now_feels', 'now_tcc', 'now_wx',
+    'now_ptype', 'radar_type']);
 
   /* observed days (mdata/now.py): each day's extremes, rainfall total and lightning, kept for good */
   const OBS_DIR = path.join(DATA, 'observed');

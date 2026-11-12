@@ -1,6 +1,9 @@
 /* Met Office rain radar: the 1 km composite from the AWS bucket for the past three hours (the
    same radar and the same colours as the Model Data page), then the UKV model's rain for the
    next hours, played as one loop, with the Met Office's LEELA lightning on top if wanted.
+   Each frame is coloured by what is falling, rain, snow, sleet or ice, each kind with its own
+   colours from light to heavy (the radar's type from the current-conditions analysis, the
+   forecast's from the UKV itself), and a key row for each.
 
      scope="point"  round a searched place (the Location page): a 400 km square at 1 km
      scope="uk"     the UK and Ireland (the home page): the radar coarsened to 2 km, keeping each
@@ -15,8 +18,9 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Pause, Play, Radar, Zap } from 'lucide-react';
 import {
-  laeaInverse, mercHeight, paintRadarCrop, parseRadarCrop, RADAR_BANDS, radarBox, radarCropMapping, radarStamp, UK_RADAR_VIEW,
+  laeaInverse, mercHeight, paintRadarCrop, parseRadarCrop, radarBox, radarCropMapping, radarStamp, UK_RADAR_VIEW,
 } from '@/lib/ukRadar';
+import { familyColour, KIND_ORDER, RADAR_FAMILIES } from '@/lib/modelViewer';
 import { hhmm } from '@/lib/ukvLocation';
 import './location.css';
 
@@ -35,6 +39,10 @@ const BASEMAP = {
   dark: [`${ESRI}/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}`, `${ESRI}/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}`],
   light: [`${ESRI}/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}`, `${ESRI}/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}`],
 };
+
+/* the key: each kind's colours at these rates (mm/h), light to heavy */
+const rgb = (c) => (c ? `rgb(${c[0]},${c[1]},${c[2]})` : 'transparent');
+const STRENGTHS = [0.1, 0.4, 1, 2, 4, 8];
 
 const pinIcon = L.divIcon({ className: 'lw-pin', html: '<span class="lw-pin-dot"></span><span class="lw-pin-ring"></span>', iconSize: [22, 22], iconAnchor: [11, 11] });
 
@@ -115,9 +123,16 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
       try {
         const index = await fetch('/api/location/radar', { signal: ac.signal }).then((r) => r.json());
         const at = uk ? 'scope=uk' : `lat=${cLat.toFixed(3)}&lon=${cLon.toFixed(3)}`;
+        const typed = new Set(index.pastTyped || []);
         const list = [
-          ...index.past.map((t) => ({ kind: 'radar', valid: t, url: `/api/location/radar/frame?src=radar&t=${radarStamp(t)}&${at}` })),
-          ...index.future.map((f) => ({ kind: 'ukv', valid: f.valid, url: `/api/location/radar/frame?src=ukv&run=${f.run}&h=${f.h}&${at}` })),
+          ...index.past.map((t) => ({
+            kind: 'radar', valid: t, url: `/api/location/radar/frame?src=radar&t=${radarStamp(t)}&${at}`,
+            typeUrl: typed.has(t) ? `/api/location/radar/frame?src=radar&t=${radarStamp(t)}&kind=type&${at}` : null,
+          })),
+          ...index.future.map((f) => ({
+            kind: 'ukv', valid: f.valid, url: `/api/location/radar/frame?src=ukv&run=${f.run}&h=${f.h}&${at}`,
+            typeUrl: f.typed ? `/api/location/radar/frame?src=ukv&run=${f.run}&h=${f.h}&kind=type&${at}` : null,
+          })),
         ];
         if (!list.length) { if (!layers.current.length) setState('none'); return; }
         const W = V.outW;
@@ -131,12 +146,17 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
           while (next < order.length && alive) {
             const k = order[next++];
             try {
-              const buf = await fetch(list[k].url, { signal: ac.signal }).then((r) => (r.ok ? r.arrayBuffer() : null));
+              const get = (u) => fetch(u, { signal: ac.signal }).then((r) => (r.ok ? r.arrayBuffer() : null));
+              const [buf, tbuf] = await Promise.all([get(list[k].url), list[k].typeUrl ? get(list[k].typeUrl).catch(() => null) : null]);
               if (!buf || !alive) continue;
+              const mapFor = (c) => {
+                const key = `${c.head.x0}|${c.head.y0}|${c.head.dx}|${c.head.nx}|${c.head.ny}`;
+                maps[key] = maps[key] || radarCropMapping(c.head, box, W, H);
+                return maps[key];
+              };
               const crop = parseRadarCrop(buf);
-              const key = `${crop.head.x0}|${crop.head.y0}|${crop.head.dx}|${crop.head.nx}|${crop.head.ny}`;
-              maps[key] = maps[key] || radarCropMapping(crop.head, box, W, H);
-              const url = await paintRadarCrop(crop, maps[key], W, H);
+              const tcrop = tbuf ? parseRadarCrop(tbuf) : null;
+              const url = await paintRadarCrop(crop, mapFor(crop), W, H, tcrop ? { crop: tcrop, map: mapFor(tcrop) } : null);
               urls.push(url);
               out[k] = { ...list[k], img: url };
               if (k === newest && alive && map.current && !layers.current.length) {
@@ -264,10 +284,17 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
         </div>
         <div className="lw-radar-key">
           <Radar size={12} />
-          {RADAR_BANDS.slice(0, 8).map((b) => <span key={b.id}><i style={{ background: b.color }} />{b.short.toLowerCase()}</span>)}
+          {KIND_ORDER.map((k) => (
+            <span key={k} className="lw-kind">
+              <b>{RADAR_FAMILIES[k].name}</b>
+              {STRENGTHS.map((r) => <i key={r} style={{ background: rgb(familyColour(k, r)) }} title={`${RADAR_FAMILIES[k].name}, ${r} mm/h`} />)}
+            </span>
+          ))}
+          <span className="lw-kind-note">light → heavy</span>
         </div>
         <div className="lw-radar-split">
           {lastPast >= 0 && lastPast < frames.length - 1 ? 'Grey steps: Met Office radar, every 15 minutes · blue steps: UKV forecast rain.' : 'Met Office radar, every 15 minutes.'}
+          {' Rain, snow, sleet and ice each in their own colours (the type from the UKV and the station temperatures).'}
           {bolts && strikes && (strikes.length ? ' Lightning (Met Office): white is new, red is three hours old.' : ' No lightning in the last three hours.')}
         </div>
       </div>

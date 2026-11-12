@@ -236,6 +236,11 @@
 .lw-radar-split { margin-top: 6px; font-size: 11px; color: rgba(255, 255, 255, 0.5); }
 .lw-radar-key span { display: inline-flex; align-items: center; gap: 3px; }
 .lw-radar-key i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; }
+/* the four kinds, each a row of strengths */
+.lw-radar-key .lw-kind { gap: 2px; }
+.lw-radar-key .lw-kind b { font-weight: 600; margin-right: 4px; }
+.lw-radar-key .lw-kind i { width: 13px; border-radius: 2px; }
+.lw-radar-key .lw-kind-note { opacity: 0.7; }
 /* light: on a light page the radar is light too (the home page passes `light`); same rain colours */
 .lw-radar.is-light { color: #0f172a; background: #f5f6f9; border-color: rgba(15, 23, 42, 0.08); }
 .lw-radar.is-light .lw-radar-box, .lw-radar.is-light .lw-radar-map.leaflet-container { background: #d0cfd3; }

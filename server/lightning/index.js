@@ -501,11 +501,16 @@ export function createLightning({ ingest } = {}) {
     try { uptime = JSON.parse(fs.readFileSync(UPTIME_FILE, 'utf8')); } catch { uptime = []; }
     const now = Date.now();
     uptime.push([now, now]);
+    /* written in the background: on the external drive a write can take most of a second, and a
+       synchronous one holds up the whole site meanwhile */
+    let writing = false;
     const beat = () => {
       uptime[uptime.length - 1][1] = Date.now();
       const cut = Date.now() - 50 * 86400e3;
       uptime = uptime.filter((iv) => iv[1] >= cut);
-      try { fs.writeFileSync(UPTIME_FILE, JSON.stringify(uptime)); } catch { /* next minute */ }
+      if (writing) return;                                   // still writing the last one: the next minute carries this
+      writing = true;
+      fs.promises.writeFile(UPTIME_FILE, JSON.stringify(uptime)).catch(() => { /* next minute */ }).finally(() => { writing = false; });
     };
     beat();
     setInterval(beat, 60e3).unref?.();

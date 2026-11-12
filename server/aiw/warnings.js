@@ -247,11 +247,18 @@ function pushAnnouncement(kind, w, ev, facts, prevSeverity, now) {
   return a;
 }
 
+/* Appended in the background, one after another so the lines stay in order: the archive folder is
+   under OneDrive, where even making sure the folder exists has taken over a second (12 Nov 2026),
+   and a synchronous call holds up the whole site meanwhile. */
+let logChain = Promise.resolve();
+let logDirMade = false;
 function appendLog(kind, obj) {
-  try {
-    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
-    fs.appendFileSync(path.join(ARCHIVE_DIR, `${kind}-${new Date(obj.at).toISOString().slice(0, 7)}.ndjson`), JSON.stringify(obj) + '\n');
-  } catch (err) { console.error('[aiw] log append failed', err.code || err.message); }
+  const file = path.join(ARCHIVE_DIR, `${kind}-${new Date(obj.at).toISOString().slice(0, 7)}.ndjson`);
+  const line = JSON.stringify(obj) + '\n';
+  logChain = logChain.then(async () => {
+    if (!logDirMade) { await fs.promises.mkdir(ARCHIVE_DIR, { recursive: true }); logDirMade = true; }
+    await fs.promises.appendFile(file, line);
+  }).catch((err) => console.error('[aiw] log append failed', err.code || err.message));
 }
 
 /** The fact sheet text generation works from. Only measured/computed values. */

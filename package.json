@@ -9,7 +9,7 @@
     "dev:api": "node --env-file-if-exists=.env server/index.js",
     "dev:web": "vite",
     "build": "vite build",
-    "start": "cross-env NODE_ENV=production node --env-file-if-exists=.env server/index.js",
+    "start": "cross-env UV_THREADPOOL_SIZE=24 NODE_ENV=production node --env-file-if-exists=.env server/index.js",
     "preview": "vite preview",
     "warnings:refresh": "node --env-file-if-exists=.env server/refresh-warnings.js",
     "sync": "node --env-file-if-exists=.env server/sync-from-live.js",

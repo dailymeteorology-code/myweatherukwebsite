@@ -52,6 +52,10 @@ export const KEEP = {
 };
 
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+/* The pass reads without blocking: the runs sit on an external hard drive that can take seconds a file
+   when it is busy, and a synchronous read holds up every page of the site meanwhile (one pass of
+   synchronous reads froze the site for 49 s on 12 Nov 2026). */
+const readJsonAsync = async (f) => { try { return JSON.parse(await fs.promises.readFile(f, 'utf8')); } catch { return null; } };
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] !== undefined).map((k) => [k, o[k]]));
 
 /* ── London calendar days ── */
@@ -80,9 +84,9 @@ export function londonDayBounds(day) {
 /* ── the archive on disk ── */
 
 /** What identifies the published version of a source run (a re-run is published under the same id). */
-function sourceStamp(dir) {
-  try { return fs.readFileSync(path.join(dir, '.release-asset'), 'utf8'); } catch { /* a local run */ }
-  try { return `local|${fs.statSync(path.join(dir, 'manifest.json')).mtimeMs}`; } catch { return null; }
+async function sourceStamp(dir) {
+  try { return await fs.promises.readFile(path.join(dir, '.release-asset'), 'utf8'); } catch { /* a local run */ }
+  try { return `local|${(await fs.promises.stat(path.join(dir, 'manifest.json'))).mtimeMs}`; } catch { return null; }
 }
 
 /** Hard-link `from` to `to` (a copy where links are not possible); false when `from` is missing. */
@@ -109,14 +113,17 @@ function trimManifest(m, keep, stamp) {
   };
 }
 
+/** Keeps run `id` if it is published and not yet kept in this version; its trimmed manifest when it was. */
 async function archiveRun(product, id) {
   const src = path.join(NOVA, product, id);
-  const m = readJson(path.join(src, 'manifest.json'));
-  if (!m || !['published', 'degraded'].includes(m.status) || m.run_id !== id) return false;
-  const stamp = sourceStamp(src);
-  if (!stamp) return false;
+  /* the stamp first: a few bytes where a manifest is ~300 kB, and most passes find nothing new */
+  const stamp = await sourceStamp(src);
+  if (!stamp || stamps[product].get(id) === stamp) return null;
+  const m = await readJsonAsync(path.join(src, 'manifest.json'));
+  if (!m || !['published', 'degraded'].includes(m.status) || m.run_id !== id) return null;
   const dst = path.join(ROOT, product, id);
-  if (readJson(path.join(dst, 'manifest.json'))?.archive?.stamp === stamp) return false;
+  const kept = await readJsonAsync(path.join(dst, 'manifest.json'));
+  if (kept?.archive?.stamp === stamp) { remember(product, id, kept); return null; }
 
   const keep = KEEP[product].filter((f) => m.fields?.[f]);
   const tmp = path.join(ROOT, product, `.tmp-${id}`);
@@ -132,15 +139,19 @@ async function archiveRun(product, id) {
   }
   for (const field of keep) await place(path.join(src, 'summary', `max_${field}.bin`), path.join(tmp, 'summary', `max_${field}.bin`));
   /* the mirror swaps a re-published run in whole; if that happened while we were reading, try again next time */
-  if (sourceStamp(src) !== stamp) { await fs.promises.rm(tmp, { recursive: true, force: true }); return false; }
-  fs.writeFileSync(path.join(tmp, 'manifest.json'), JSON.stringify(trimManifest(m, keep, stamp)));
+  if ((await sourceStamp(src)) !== stamp) { await fs.promises.rm(tmp, { recursive: true, force: true }); return null; }
+  const trimmed = trimManifest(m, keep, stamp);
+  await fs.promises.writeFile(path.join(tmp, 'manifest.json'), JSON.stringify(trimmed));
   await fs.promises.rm(dst, { recursive: true, force: true });
   await fs.promises.rename(tmp, dst);
-  return true;
+  return trimmed;
 }
 
 /* ── the index: one line per archived run, kept in memory ── */
 const index = { main: new Map(), hyper: new Map() };
+/* which published version of each run is kept, so a pass need not read a manifest to know */
+const stamps = { main: new Map(), hyper: new Map() };
+let indexReady = Promise.resolve();
 
 function summarise(m) {
   const peak = (f) => Math.max(0, ...(m.frames || []).map((x) => x.stats?.[f]?.max ?? 0));
@@ -151,16 +162,21 @@ function summarise(m) {
     days: (m.days || []).map((d) => ({ date: d.date, complete: d.complete !== false, p_thunder: d.stats?.p_thunder?.max ?? null, p_lightning: d.stats?.p_lightning?.max ?? null, has_lightning: (d.fields || []).includes('p_lightning') })),
   };
 }
-function indexRun(product, id) {
-  const m = readJson(path.join(ROOT, product, id, 'manifest.json'));
-  if (m) index[product].set(id, summarise(m)); else index[product].delete(id);
+/** Puts a kept run's manifest in the index (or takes the run out of it, for null). */
+function remember(product, id, m) {
+  if (m) { index[product].set(id, summarise(m)); stamps[product].set(id, m.archive?.stamp ?? null); }
+  else { index[product].delete(id); stamps[product].delete(id); }
 }
-function loadIndex() {
+/* read in the background at start: the lists fill in over the first seconds */
+async function loadIndex() {
   for (const product of PRODUCTS) {
     index[product].clear();
+    stamps[product].clear();
     let names = [];
-    try { names = fs.readdirSync(path.join(ROOT, product)); } catch { /* nothing yet */ }
-    for (const n of names) if (SAFE_ID.test(n) && n.startsWith(`${product}-`)) indexRun(product, n);
+    try { names = await fs.promises.readdir(path.join(ROOT, product)); } catch { /* nothing yet */ }
+    for (const n of names) {
+      if (SAFE_ID.test(n) && n.startsWith(`${product}-`)) remember(product, n, await readJsonAsync(path.join(ROOT, product, n, 'manifest.json')));
+    }
   }
 }
 const isOld = (r, now = Date.now()) => now - Date.parse(r.init_utc) >= ARCHIVE_AGE_MS;
@@ -193,7 +209,7 @@ async function makeRoom() {
       const r = oldest.shift();
       if (Date.now() - Date.parse(r.init_utc) < 30 * 86400e3) break;          // never the last month
       await fs.promises.rm(path.join(ROOT, product, r.run_id), { recursive: true, force: true });
-      index[product].delete(r.run_id);
+      remember(product, r.run_id, null);
       console.warn(`[tcm-archive] drive low: removed ${r.run_id}`);
       try { const s = await fs.promises.statfs(ROOT); free = s.bavail * s.bsize; } catch { return; }
     }
@@ -206,14 +222,16 @@ async function pass(verifier) {
   state.running = true;
   let added = 0;
   try {
+    await indexReady;
     for (const product of PRODUCTS) {
-      fs.mkdirSync(path.join(ROOT, product), { recursive: true });
+      await fs.promises.mkdir(path.join(ROOT, product), { recursive: true });
       let names = [];
-      try { names = fs.readdirSync(path.join(NOVA, product)); } catch { continue; }
+      try { names = await fs.promises.readdir(path.join(NOVA, product)); } catch { continue; }
       for (const id of names.filter((n) => SAFE_ID.test(n) && n.startsWith(`${product}-`)).sort()) {
-        if (await archiveRun(product, id)) { indexRun(product, id); added += 1; }
+        const kept = await archiveRun(product, id);
+        if (kept) { remember(product, id, kept); added += 1; }
       }
-      for (const n of fs.readdirSync(path.join(ROOT, product))) {
+      for (const n of await fs.promises.readdir(path.join(ROOT, product))) {
         if (n.startsWith('.tmp-')) await fs.promises.rm(path.join(ROOT, product, n), { recursive: true, force: true });
       }
     }
@@ -237,7 +255,7 @@ function sendBin(res, file, dtype) {
 
 export function mountTcmArchive(app, { lightning, schedule = true } = {}) {
   fs.mkdirSync(ROOT, { recursive: true });
-  loadIndex();
+  indexReady = loadIndex().catch((e) => console.warn(`[tcm-archive] could not read the archive: ${e.message}`));
   const verifier = createVerifier({ root: ROOT, lightning, dayAheadRun, archivedRuns, archivedManifest, londonDayBounds });
   const isAdmin = (req) => userFromRequest(req)?.role === 'admin';
   /* a run a visitor may open: a day old, or anything for an admin */
@@ -328,7 +346,7 @@ export function mountTcmArchive(app, { lightning, schedule = true } = {}) {
   if (schedule) {
     setTimeout(() => runPass(verifier), 20e3);
     setInterval(() => runPass(verifier), PASS_MS);
-    console.log(`[tcm-archive] keeping TCM NOVA runs in ${ROOT} (${index.main.size} Main, ${index.hyper.size} Hyper-Short so far)`);
+    indexReady.then(() => console.log(`[tcm-archive] keeping TCM NOVA runs in ${ROOT} (${index.main.size} Main, ${index.hyper.size} Hyper-Short so far)`));
   }
   return { pass: () => runPass(verifier) };
 }

@@ -20,6 +20,8 @@ export const API = '/api/modeldata';
 /* bump when frames are re-made differently (v2: coarse models smooth, not blocks; v3: the global
    models moved to the wide grid, 26 Oct 2026, so their old UK-grid frames must not come from cache) */
 const FRAME_V = 3;
+/* and per layer, when one layer's frames change: ptype v2 (12 Nov 2026) carries its kind and strength */
+const VAR_V = { ptype: 2 };
 
 /* The display grid in use (lib/modelGrids): the UKV's 2 km grid or the global models' wide 8 km
    one. NX, NY, GRID and REGIONS are live bindings: setGrid() switches them for every importer. */
@@ -110,6 +112,38 @@ const RADAR_STEPS = [
 const RADAR_STOPS = RADAR_STEPS.map(([v, c]) => [v, c, Math.round(255 * (v < 0.2 ? 0.78 : v < 0.6 ? 0.865 : 0.95))]);
 const RADAR_KEY = { stops: RADAR_STOPS, floor: 0.05, discrete: true, keySteps: RADAR_STEPS.map(([v]) => v),
   ticks: [0.2, 0.6, 1, 1.4, 2.2, 3, 4, 6, 8, 10, 14, 20, 30] };
+/* Precipitation by type and strength (tools/modeldata/mdata/derived.py typed_rate): every model's ptype
+   and the radar's radar_type, one byte a cell: 0 dry, else 1 + 63 x kind + level; kind 0 rain, 1 sleet,
+   2 snow, 3 ice, and level 0-62 the rate on a log scale from 0.05 to 128 mm/h. Four kinds, each with
+   its own colours from light to heavy: rain the radar's, sleet purples, snow white to slate, ice reds,
+   chosen apart from the rain colours they could be mistaken for at the rates each falls at. */
+const RT_LO = 0.05, RT_HI = 128, RT_LEVELS = 62;
+/** A radar_type value as { family, rate } (null when dry). */
+export function radarTypeOf(v) {
+  const c = Math.round(v);
+  if (!(c >= 1 && c <= 252)) return null;
+  return { family: Math.floor((c - 1) / 63), rate: RT_LO * (RT_HI / RT_LO) ** (((c - 1) % 63) / RT_LEVELS) };
+}
+const rtAlpha = (v) => Math.round(255 * (v < 0.2 ? 0.8 : v < 0.6 ? 0.88 : 0.95));
+const family = (steps) => ({ stops: steps.map(([v, c]) => [v, c, rtAlpha(v)]), floor: 0.05, discrete: true });
+export const RADAR_FAMILIES = [
+  { name: 'Rain', short: 'rain', scale: RADAR_KEY },
+  { name: 'Sleet', short: 'sleet', scale: family([[0.05, '#F1EBFC'], [0.2, '#E2D6F9'], [0.6, '#CDB9F3'], [1.2, '#B49AEB'], [2.5, '#9A7FE0'], [4, '#7F5FD0'], [8, '#6644B8']]) },
+  { name: 'Snow', short: 'snow', scale: family([[0.05, '#FFFFFF'], [0.2, '#F4F6FA'], [0.5, '#E3E8F0'], [1, '#CDD5E2'], [2, '#B4BFD1'], [4, '#98A5BD'], [8, '#7D8BA6']]) },
+  { name: 'Ice', short: 'ice', scale: family([[0.05, '#FFD3C4'], [0.2, '#FFAF96'], [0.6, '#FF8664'], [1.2, '#F55B3A'], [2.5, '#DB3622'], [5, '#B51A12']]) },
+];
+/** The kinds in the order the keys list them. */
+export const KIND_ORDER = [0, 2, 1, 3];                        // rain, snow, sleet, ice
+/* ECMWF's type codes (now_ptype) to the kinds, as derived.py KIND_OF: wet snow is snow, rain and
+   snow together sleet; freezing rain, ice pellets, freezing drizzle and hail ice */
+export const PTYPE_FAMILY = { 1: 0, 11: 0, 7: 1, 5: 2, 6: 2, 3: 3, 8: 3, 10: 3, 12: 3 };
+/** A rate's colour in a family (normal or pale, as the page has chosen). */
+export const familyColour = (f, rate) => colourAt(RADAR_FAMILIES[f]?.scale || RADAR_KEY, rate);
+const RADAR_TYPE = {
+  stops: RADAR_STOPS, floor: 0.5, discrete: true, ticks: [], families: RADAR_FAMILIES, order: KIND_ORDER,
+  swatch: [25, 88, 151, 214],                                   // each family at 1 mm/h, for the colours' preview
+  code: (v) => { const t = radarTypeOf(v); return t ? baseColour(RADAR_FAMILIES[t.family].scale, t.rate) : null; },
+};
 /* the same colours for simulated reflectivity: each rain rate as dBZ (Marshall-Palmer, Z = 200 R^1.6) */
 const DBZ = (r) => Math.round(10 * Math.log10(200 * r ** 1.6) * 10) / 10;
 const RAIN = [[0.1, '#a9d8f7', 150], [0.5, '#5aa7e8', 200], [1, '#2f6fd4', 215], [2, '#1d9f8e', 225], [4, '#6cc04a', 230],
@@ -155,6 +189,7 @@ const SCALES = {
   refc: { stops: RADAR_STOPS.map(([v, c, a]) => [DBZ(v), c, a]), floor: DBZ(0.05), discrete: true,
     keySteps: RADAR_STEPS.map(([v]) => DBZ(v)), ticks: [0.2, 1, 3, 6, 10, 20, 40].map(DBZ) },
   radar: RADAR_KEY,
+  radar_type: RADAR_TYPE,
   snow_rate: { stops: SNOW, floor: 0.1, discrete: true, ticks: [0.1, 1, 3, 6, 12, 25] },
   snow_1h: { stops: SNOW, floor: 0.1, discrete: true, ticks: [0.1, 1, 3, 6, 12, 25] },
   snow_total: { stops: SNOW, floor: 0.1, discrete: true, ticks: [0.1, 1, 3, 6, 12, 25, 50] },
@@ -231,10 +266,8 @@ const SCALES = {
   rain_1h: RADAR_KEY,
   hail_1h: { stops: RAIN, floor: 0.05, discrete: true, ticks: [0.1, 0.5, 1, 2, 4, 8, 16] },
   conv_total: { stops: TOTAL, floor: 1, discrete: true, ticks: [1, 2, 5, 10, 15, 20, 30, 50, 75, 100], contours: [5, 10, 20, 50], label: true },
-  /* precipitation type, ECMWF's codes (GFS's yes/no types are turned into them) */
-  ptype: { stops: [[0.5, '#3fa34d', 215], [2, '#e2322e', 235], [4, '#f2f6ff', 235], [5.5, '#b9c8f2', 225], [6.5, '#9a7fe0', 225], [7.5, '#f2a93a', 235], [10, '#ff6fa8', 235]],
-    floor: 0.5, discrete: true, keySteps: [1, 3, 5, 6, 7, 8, 12], ticks: [1, 3, 5, 6, 7, 8, 12],
-    keyLabel: (v) => ({ 1: 'Rain', 3: 'Frz rain', 5: 'Snow', 6: 'Wet snow', 7: 'Sleet', 8: 'Ice pellets', 12: 'Frz drizzle' })[Math.round(v)] || '' },
+  /* precipitation type and strength, every model's (GFS's yes/no types and ECMWF's codes are turned into the four kinds) */
+  ptype: RADAR_TYPE,
   frozen_pct: { stops: [[5, '#dfe9f5', 120], [25, '#b9c8f2', 170], [50, '#9a8fe0', 200], [75, '#8a7fe0', 220], [100, '#ffffff', 235]], floor: 5, ticks: [5, 25, 50, 75, 100] },
   snow_acc: { stops: SNOW.map(([v, c, a]) => [v, c, a]), floor: 0.1, discrete: true, ticks: [0.1, 1, 3, 6, 12, 25, 50], contours: [1, 5, 10, 20], label: true },
   t2max3: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
@@ -294,8 +327,35 @@ export const SEE_THROUGH = { satellite: 0.58, realtime: 0.58 };
 
 const hex = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 
+/* Pale colours: every colour of every scale taken part of the way to white, for a softer chart,
+   the steps between them kept. The Model Data page sets the choice while it is open and puts it back
+   to normal when it closes, since other pages draw with these scales too. */
+const PALE_MIX = 0.45;
+let PALETTE = 'normal';
+/** 'normal' or 'pale'. */
+export function setPalette(p) { PALETTE = p === 'pale' ? 'pale' : 'normal'; }
+const paled = (c) => [Math.round(c[0] + (255 - c[0]) * PALE_MIX), Math.round(c[1] + (255 - c[1]) * PALE_MIX), Math.round(c[2] + (255 - c[2]) * PALE_MIX), c[3]];
+/** A layer's colours as a CSS gradient, normal or pale, for previews. */
+export function scaleSwatch(key, pale) {
+  const sc = scaleFor(key), steps = sc.swatch || sc.keySteps || sc.ticks || [];
+  if (steps.length < 2) return null;
+  const parts = steps.map((v, i) => {
+    let c = baseColour({ ...sc, floor: null }, v);
+    if (!c) return null;
+    if (pale) c = paled(c);
+    return `rgb(${c[0]},${c[1]},${c[2]}) ${((i / (steps.length - 1)) * 100).toFixed(1)}%`;
+  }).filter(Boolean);
+  return parts.length > 1 ? `linear-gradient(90deg, ${parts.join(', ')})` : null;
+}
+/** A value's colour on a scale, in the colours chosen (null for none). */
 export function colourAt(sc, v) {
+  const c = baseColour(sc, v);
+  return c && PALETTE === 'pale' ? paled(c) : c;
+}
+
+function baseColour(sc, v) {
   if (v == null || Number.isNaN(v)) return null;
+  if (sc.code) return sc.code(v);                           // a coded layer reads its own values
   if (sc.band) v = (Math.floor(v / sc.band) + 0.5) * sc.band;
   if (sc.floor != null && v < sc.floor) return null;
   const s = sc.stops;
@@ -327,7 +387,7 @@ function decodeTable(h) {
 }
 
 export async function loadFrame(model, runTag, v, step, signal) {
-  const r = await fetch(`${API}/frames/${model}/${runTag}/${v}/${step}?v=${FRAME_V}`, { signal });
+  const r = await fetch(`${API}/frames/${model}/${runTag}/${v}/${step}?v=${FRAME_V}${VAR_V[v] ? `.${VAR_V[v]}` : ''}`, { signal });
   if (!r.ok) throw new Error(`frame ${step}: ${r.status}`);
   const buf = await r.arrayBuffer();
   const n = new DataView(buf).getUint32(0, true);
@@ -374,7 +434,8 @@ export function probFrame(ef, thr, dir) {
 export function frameCanvas(frame, varKey, cache) {
   if (!onGrid(frame)) return null;                       // a frame from the other grid, still on its way out
   if (frame.mix) return mixCanvas(frame, varKey, cache);
-  if (cache?.has(frame)) return cache.get(frame);
+  const hit = cache?.get(frame);
+  if (hit && hit.palette === PALETTE) return hit;
   if (frame.img) return imageCanvas(frame, varKey, cache);
   if (frame.nx && frame.k < 1) return fineCanvas(frame, varKey, cache);
   if (frame.nx) return coarseCanvas(frame, varKey, cache);
@@ -393,6 +454,7 @@ export function frameCanvas(frame, varKey, cache) {
   const q = frame.q;
   for (let i = 0; i < q.length; i++) d[i] = l32[q[i]];
   ctx.putImageData(img, 0, 0);
+  cv.palette = PALETTE;
   if (cache) {
     cache.set(frame, cv);
     if (cache.size > 14) cache.delete(cache.keys().next().value);
@@ -410,7 +472,7 @@ function colourTable(frame, varKey) {
   }
   return out;
 }
-const CODES = new Set(['wx', 'ptype']);                     // a code between two codes means nothing: never interpolated
+const CODES = new Set(['wx', 'ptype', 'radar_type']);                     // a code between two codes means nothing: never interpolated
 /** A frame as something drawScene can lay on the map: drawn from its values on the graphics card, or
     (pictures, and browsers without WebGL 2) as a canvas, the frame's colours one pixel to a cell.
     The UK grid's cells are real, so they can be shown as they are; the wide grid's are not. */
@@ -419,7 +481,7 @@ export function fieldLayer(frame, varKey, smooth, colourCache, smoothCache, rain
   if (frame.q && !frame.mix && canDrawCells() && !(import.meta.env.DEV && window.__oldDraw)) {
     return { gl: true, frame, key: varKey, soft: !!scaleFor(varKey).band, nearest: CODES.has(varKey) || (GRID.name === 'uk' && !frame.prob && !smooth) };
   }
-  return smooth && rainy && scaleFor(varKey).discrete && frame.q && !frame.prob ? smoothCanvas(frame, varKey, smoothCache) : frameCanvas(frame, varKey, colourCache);
+  return smooth && rainy && !CODES.has(varKey) && scaleFor(varKey).discrete && frame.q && !frame.prob ? smoothCanvas(frame, varKey, smoothCache) : frameCanvas(frame, varKey, colourCache);
 }
 
 /* a picture part-way to the next one (lib/modelTween): the two dissolved exactly, each pixel a true
@@ -464,6 +526,7 @@ function fineCanvas(frame, varKey, cache) {
   for (let i = 0; i < d.length; i++) d[i] = lut[frame.q[i]];
   ctx.putImageData(img, 0, 0);
   cv.dataK = frame.k;
+  cv.palette = PALETTE;
   if (cache) { cache.set(frame, cv); if (cache.size > 14) cache.delete(cache.keys().next().value); }
   return cv;
 }
@@ -496,6 +559,7 @@ function imageCanvas(frame, varKey, cache) {
   }
   cv.dataK = frame.k || 0.5;
   cv.picture = true;
+  cv.palette = PALETTE;
   if (cache) { cache.set(frame, cv); if (cache.size > 10) cache.delete(cache.keys().next().value); }
   return cv;
 }
@@ -551,6 +615,7 @@ function coarseCanvas(frame, varKey, cache) {
   }
   ctx.putImageData(img, 0, 0);
   cv.dataK = (frame.k || 8) / UP;                       // display cells per canvas pixel
+  cv.palette = PALETTE;
   if (cache) {
     cache.set(frame, cv);
     if (cache.size > 14) cache.delete(cache.keys().next().value);
@@ -946,7 +1011,7 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
       const x1 = Math.ceil(Math.min(clip.x + clip.w, X(W * K))), y1 = Math.ceil(Math.min(clip.y + clip.h, Y(H * K)));
       if (x1 <= x0 || y1 <= y0) return;
       const w = x1 - x0, h = y1 - y0;
-      const out = drawCells({ frame: f, q: f.q, W, H, K, lutKey: `${cv.key}|${f.prob ? 'chance' : `${f.head?.lo}|${f.head?.hi}|${f.head?.scale}`}`, lut: () => colourTable(f, cv.key),
+      const out = drawCells({ frame: f, q: f.q, W, H, K, lutKey: `${cv.key}|${PALETTE}|${f.prob ? 'chance' : `${f.head?.lo}|${f.head?.hi}|${f.head?.scale}`}`, lut: () => colourTable(f, cv.key),
         x: x0, y: y0, w, h, ox, oy, s, cx, cy, nearest: cv.nearest || opts.coarse, soft: cv.soft });
       if (out) {
         ctx.imageSmoothingEnabled = false;
@@ -1332,7 +1397,8 @@ export function sampleFrame(f, gx, gy) {
    the grid that has data is upsampled. */
 export function smoothCanvas(frame, varKey, cache) {
   if (!onGrid(frame)) return null;
-  if (cache?.has(frame)) return cache.get(frame);
+  const hit = cache?.get(frame);
+  if (hit && hit.palette === PALETTE) return hit;
   const sc = scaleFor(varKey);
   const W = frame.nx || NX, H = frame.ny || NY, K = frame.nx ? frame.k || 1 : 1, q = frame.q;
   const lut = new Uint32Array(256);
@@ -1346,7 +1412,7 @@ export function smoothCanvas(frame, varKey, cache) {
     for (let i = 0; i < W; i++) if (lut[q[row + i]]) { if (i < x0) x0 = i; if (i > x1) x1 = i; if (j < y0) y0 = j; if (j > y1) y1 = j; }
   }
   const cv = document.createElement('canvas');
-  if (x1 < 0) { cv.width = 1; cv.height = 1; cv.dataK = K; cv.dataX0 = 0; cv.dataY0 = 0; return cv; }
+  if (x1 < 0) { cv.width = 1; cv.height = 1; cv.dataK = K; cv.dataX0 = 0; cv.dataY0 = 0; cv.palette = PALETTE; return cv; }
   x0 = Math.max(0, x0 - 3); y0 = Math.max(0, y0 - 3); x1 = Math.min(W - 1, x1 + 3); y1 = Math.min(H - 1, y1 + 3);
   const bw = x1 - x0 + 1, bh = y1 - y0 + 1, F = K < 1 ? 2 : 3;
   // values in the encoded domain (monotonic in the value; no-data counts as dry), blurred [1 2 1]
@@ -1374,19 +1440,19 @@ export function smoothCanvas(frame, varKey, cache) {
     }
   }
   ctx.putImageData(img, 0, 0);
-  cv.dataK = K / F; cv.dataX0 = x0 * K; cv.dataY0 = y0 * K;
+  cv.dataK = K / F; cv.dataX0 = x0 * K; cv.dataY0 = y0 * K; cv.palette = PALETTE;
   if (cache) { cache.set(frame, cv); if (cache.size > 6) cache.delete(cache.keys().next().value); }
   return cv;
 }
 
-/* ── a grid of values: thin lines on a lattice tied to the map (it does not swim as you pan),
-   each box labelled with the layer's value at its centre, formatted for that layer ── */
+/* ── a grid of values: numbers on a lattice tied to the map (it does not swim as you pan), each the
+   layer's value at that point, formatted for that layer; no lines, small type, close together ── */
 const NICE = [0.5, 1, 2, 3, 5, 10, 15, 20, 25, 50, 100, 200];
 function gridLabel(v, varKey, unit) {
   if (v == null || Number.isNaN(v)) return null;
   const sc = scaleFor(varKey);
   if (varKey === 'wx') return ['Clear', 'Pt cloud', 'Cloudy', 'Dull', 'Fog', 'Drizzle', 'Lt rain', 'Rain', 'Heavy', 'Sleet', 'Lt snow', 'Snow', 'Hvy snow', 'Thunder', 'Hail'][Math.round(v)] ?? null;
-  if (varKey === 'ptype') return sc.keyLabel(v) || null;
+  if (varKey === 'ptype' || varKey === 'radar_type') { const t = radarTypeOf(v); return t ? RADAR_FAMILIES[t.family].short : null; }
   if (varKey === 'mwd' || varKey === 'wdir10') return ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(v / 22.5) % 16];
   if (sc.floor != null && v < sc.floor) return null;
   if (unit === '°C') return `${Math.round(v)}°`;
@@ -1394,26 +1460,23 @@ function gridLabel(v, varKey, unit) {
   const a = Math.abs(v);
   return a >= 10 ? String(Math.round(v)) : a >= 1 ? v.toFixed(1).replace(/\.0$/, '') : v.toFixed(a >= 0.1 ? 1 : 2);
 }
+/* the value grid's spacings, in cells: finer steps than NICE, so it is a little closer together at every
+   zoom rather than suddenly four times as dense at some */
+const GRID_STEPS = [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 200];
 function drawValueGrid(ctx, G, X, Y, gx0, gy0, gx1, gy1, s, u, st) {
   const f = G.frame;
   const minCell = f.nx && f.k < 1 ? 0.5 : 1;
-  const g = NICE.find((n) => n >= minCell && n * s >= 74 * u) || 200;
+  const g = GRID_STEPS.find((n) => n >= minCell && n * s >= 60 * u) || 200;
   const i0 = Math.floor(gx0 / g), i1 = Math.ceil(gx1 / g), j0 = Math.floor(gy0 / g), j1 = Math.ceil(gy1 / g);
   ctx.save();
-  ctx.lineWidth = Math.max(1, 0.8 * u);
-  ctx.strokeStyle = st.glass === 'light' ? 'rgba(20,30,44,0.16)' : 'rgba(255,255,255,0.14)';
-  ctx.beginPath();
-  for (let i = i0; i <= i1; i++) { ctx.moveTo(X(i * g), Y(j0 * g)); ctx.lineTo(X(i * g), Y(j1 * g)); }
-  for (let j = j0; j <= j1; j++) { ctx.moveTo(X(i0 * g), Y(j * g)); ctx.lineTo(X(i1 * g), Y(j * g)); }
-  ctx.stroke();
-  ctx.font = `700 ${Math.min(17, Math.max(11, g * s / 5.2 / u)) * u}px ${FONT}`;
+  ctx.font = `700 ${Math.min(13, Math.max(9.5, g * s / 6 / u)) * u}px ${FONT}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   for (let j = j0; j < j1; j++) {
     for (let i = i0; i < i1; i++) {
       const cx = (i + 0.5) * g, cy = (j + 0.5) * g;
       const t = gridLabel(sampleFrame(f, cx, cy), G.varKey, G.unit);
-      if (t) haloText(ctx, t, X(cx), Y(cy), st, 3.5 * u);
+      if (t) haloText(ctx, t, X(cx), Y(cy), st, 3 * u);
     }
   }
   ctx.restore();
@@ -1857,6 +1920,7 @@ function drawChrome(ctx, R, u, C, st) {
 /* one layer's key, its foot at `foot`; returns its height */
 function drawKey(ctx, R, u, C, st, foot, pad, ink, sub) {
   const sc = C.scale || {};
+  if (sc.families) return drawFamiliesKey(ctx, R, u, C, st, foot, pad, ink, sub);
   const ticks = sc.ticks || [];
   const steps = sc.keySteps || ticks;
   const hasBar = steps.length > 1;
@@ -1916,6 +1980,57 @@ function drawKey(ctx, R, u, C, st, foot, pad, ink, sub) {
       ctx.fillText(txt, cx, by2 + bh2 + 17 * u);
       lastEnd = cx + w;
     }
+  }
+  return kh;
+}
+
+/* a key of several kinds on one rate axis (the radar by type): a row of colours for each, labelled,
+   with the rates beneath on a log scale */
+function drawFamiliesKey(ctx, R, u, C, st, foot, pad, ink, sub) {
+  const all = C.scale.families, fams = (C.scale.order || all.map((_, i) => i)).map((i) => all[i]);
+  const LO = 0.05, HI = 40, TICKS = [0.2, 0.5, 1, 2, 4, 8, 16, 30];
+  const rowH = 9 * u, gap = 7 * u, top = 36 * u;
+  const kh = top + fams.length * (rowH + gap) + 18 * u;
+  ctx.font = `700 ${13 * u}px ${FONT}`;
+  const name = `${C.variable}${C.unit ? ` · ${C.unit}` : ''}`;
+  const wName = ctx.measureText(name).width, full = R.w - 2 * pad;
+  const credit = wName + ctx.measureText(C.credit || '').width + 72 * u <= full ? C.credit || '' : C.creditShort || C.credit || '';
+  const wCredit = ctx.measureText(credit).width;
+  const kw = Math.min(full, Math.max(520 * u, wName + wCredit + 72 * u));
+  const kx = R.x + pad, ky = foot - kh;
+  glassPanel(ctx, kx, ky, kw, kh, 22 * u, u, st.glass);
+  ctx.fillStyle = sub;
+  ctx.fillText(fitText(ctx, name, kw - wCredit - 56 * u), kx + 20 * u, ky + 24 * u);
+  ctx.textAlign = 'right';
+  ctx.fillText(credit, kx + kw - 20 * u, ky + 24 * u);
+  ctx.textAlign = 'left';
+  ctx.font = `600 ${12 * u}px ${FONT}`;
+  const labelW = Math.max(...fams.map((f) => ctx.measureText(f.name).width)) + 14 * u;
+  const bx = kx + 20 * u + labelW, bw = kx + kw - 20 * u - bx;
+  const xOf = (r) => bx + (Math.log(r / LO) / Math.log(HI / LO)) * bw;
+  fams.forEach((f, i) => {
+    const y = ky + top + i * (rowH + gap);
+    ctx.fillStyle = ink;
+    ctx.fillText(f.name, kx + 20 * u, y + rowH);
+    ctx.save();
+    roundRect(ctx, bx, y, bw, rowH, rowH / 2);
+    ctx.clip();
+    const N = 160;
+    for (let k = 0; k < N; k++) {
+      const c = colourAt({ ...f.scale, floor: null }, LO * (HI / LO) ** ((k + 0.5) / N)) || [80, 90, 100, 255];
+      ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+      ctx.fillRect(bx + (k / N) * bw, y, bw / N + 0.6, rowH);
+    }
+    ctx.restore();
+  });
+  ctx.fillStyle = ink;
+  const ty = ky + top + fams.length * (rowH + gap) + 8 * u;
+  let lastEnd = -Infinity;
+  for (const r of TICKS) {
+    const txt = String(r), w = ctx.measureText(txt).width, cx = xOf(r) - w / 2;
+    if (cx < lastEnd + 6 * u || cx + w > bx + bw + 4 * u) continue;
+    ctx.fillText(txt, cx, ty);
+    lastEnd = cx + w;
   }
   return kh;
 }

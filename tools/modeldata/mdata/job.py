@@ -46,10 +46,10 @@ def derived(model, run_s, var, steps, d, status):
     already complete are reused), then combine them step by step."""
     import json
     from .common import read_frame
-    from .derived import weather_type, wx_inputs
+    from .derived import precip_type, ptype_inputs, weather_type, wx_inputs
     M = MODELS[model]
     run = _utc(run_s)
-    deps = wx_inputs(M.variables)
+    make, deps = (precip_type, ptype_inputs(M.variables)) if var == 'ptype' else (weather_type, wx_inputs(M.variables))
     for v in deps:
         try:
             done = json.loads((run_dir(model, run, v) / 'status.json').read_text()).get('state') == 'complete'
@@ -66,12 +66,12 @@ def derived(model, run_s, var, steps, d, status):
             p = run_dir(model, run, v) / f'{h}.bin'
             if p.exists():
                 f[v] = read_frame(p)[0]
-        if 'precip_rate' not in f and 'tcc' not in f:
+        if 'precip_rate' not in f and ('tcc' not in f or var == 'ptype'):
             status['missing'].append(h)
             continue
         f.setdefault('precip_rate', np.zeros_like(next(iter(f.values()))))
         vt = run + timedelta(hours=h)
-        write_frame(d / f'{h}.bin', weather_type(f), VARIABLES[var],
+        write_frame(d / f'{h}.bin', make(f), VARIABLES[var],
                     {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat()})
         status['done'].append(h)
         write_json(d / 'status.json', status)
@@ -225,11 +225,12 @@ def main(model, run_s, var, first=None):
     status = {'model': model, 'run': run.isoformat(), 'var': var, 'steps': steps, 'done': [], 'missing': [],
               'state': 'running', 'started': time.time()}
     write_json(d / 'status.json', status)
-    if var in ('wx', 'gust_peak', 'fog_vis') or var in ALIASES:
+    made_here = var == 'ptype' and model in ('ukv', 'mo_global')     # the Met Office models give rates, not a type
+    if var in ('wx', 'gust_peak', 'fog_vis') or var in ALIASES or made_here:
         if var == 'fog_vis':
             fog_area(model, run_s, var, steps, d, status, first)
         else:
-            (derived if var == 'wx' else peak if var == 'gust_peak' else alias)(model, run_s, var, steps, d, status)
+            (derived if var in ('wx', 'ptype') else peak if var == 'gust_peak' else alias)(model, run_s, var, steps, d, status)
         status['state'] = 'complete'
         status['seconds'] = round(time.time() - status['started'], 1)
         write_json(d / 'status.json', status)

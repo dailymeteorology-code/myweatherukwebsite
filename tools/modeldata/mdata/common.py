@@ -201,13 +201,15 @@ def encode(a, enc):
 def _replace(tmp, path):
     """os.replace, retried: Windows refuses while another process (the server) has the target open.
     Still refused, the file is written in place: a reader holds it open for reading only, which a
-    rename cannot get past but a write can."""
+    rename cannot get past but a write can. Any OS error is retried, not only a refusal: the
+    external drive has at times answered a rename with "Invalid argument" (EINVAL), which left a
+    live layer's index unwritten and the layer stuck on 12 Nov 2026."""
     import time
     for i in range(8):
         try:
             os.replace(tmp, path)
             return
-        except PermissionError:
+        except OSError:
             time.sleep(0.15 * (i + 1))
     Path(path).write_bytes(Path(tmp).read_bytes())
     try:

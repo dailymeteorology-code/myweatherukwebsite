@@ -224,11 +224,30 @@ export function pointInRing(x, y, ring) {
   return inside;
 }
 
+/* Each ring's bounding box, worked out once: a point outside it is outside the ring, so most tests
+   end there without walking the ring's hundreds of vertices. Keyed by the ring itself (rings are
+   made fresh, never edited), checked against its length to be safe. */
+const ringBoxes = new WeakMap();
+function ringBox(ring) {
+  const hit = ringBoxes.get(ring);
+  if (hit && hit.len === ring.length) return hit.bb;
+  let w = Infinity; let s = Infinity; let e = -Infinity; let n = -Infinity;
+  for (const pt of ring) {
+    const x = pt[0]; const y = pt[1];
+    if (x < w) w = x; if (x > e) e = x; if (y < s) s = y; if (y > n) n = y;
+  }
+  const bb = [w, s, e, n];
+  ringBoxes.set(ring, { len: ring.length, bb });
+  return bb;
+}
+
 /** Point-in-GeoJSON (Polygon / MultiPolygon), lon/lat. */
 export function pointInGeo(lon, lat, geom) {
   if (!geom) return false;
   const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.type === 'MultiPolygon' ? geom.coordinates : [];
   for (const p of polys) {
+    const bb = ringBox(p[0]);
+    if (lon < bb[0] || lon > bb[2] || lat < bb[1] || lat > bb[3]) continue;
     if (!pointInRing(lon, lat, p[0])) continue;
     let inHole = false;
     for (let h = 1; h < p.length; h += 1) if (pointInRing(lon, lat, p[h])) inHole = true;
@@ -297,6 +316,8 @@ export function isValidGeometry(geom) {
 /** Overlap fraction of two geometries, estimated by sampling (cheap and robust). */
 export function overlapFraction(a, b, samples = 400) {
   const [w, s, e, n] = geoBBox(a);
+  const bb = geoBBox(b);
+  if (bb[0] > e || bb[2] < w || bb[1] > n || bb[3] < s) return 0;      // apart: no point can be in both
   let inA = 0; let inBoth = 0;
   const side = Math.ceil(Math.sqrt(samples));
   for (let i = 0; i < side; i += 1) for (let j = 0; j < side; j += 1) {

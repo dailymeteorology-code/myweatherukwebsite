@@ -7,7 +7,7 @@
    54.9N 2.5W). Each output pixel is taken back to lon/lat and forward through the ELLIPSOIDAL
    projection: the spherical shortcut would misplace the UK by up to ~14 km. */
 import React, { useEffect, useState } from 'react';
-import { API, colourAt, loadLive, scaleFor } from '@/lib/modelViewer';
+import { API, colourAt, familyColour, loadLive, PTYPE_FAMILY, RADAR_FAMILIES, scaleFor } from '@/lib/modelViewer';
 
 const D = Math.PI / 180;
 const A = 6378137, FL = 1 / 298.257223563, E2 = FL * (2 - FL), E = Math.sqrt(E2);
@@ -147,16 +147,35 @@ export function radarCropMapping(head, box, W, H) {
   return { idx, tx, ty };
 }
 
-/** A crop painted through its mapping: resolves to an object URL of a PNG (revoke it when done). */
-export function paintRadarCrop(crop, map, W, H) {
+/** A crop painted through its mapping: resolves to an object URL of a PNG (revoke it when done).
+    `type`: { crop, map } of the precipitation type at the same time (2 km: ECMWF's codes for the
+    radar's analysis, the kind-and-strength bytes of a model's ptype), each pixel then in its kind's
+    colours (rain in the radar's own). */
+export function paintRadarCrop(crop, map, W, H, type = null) {
   const sc = scaleFor('radar');
   const { lo, hi, scale } = crop.head;
   const a = scale === 'sqrt' ? Math.sqrt(Math.max(lo, 0)) : lo, b = scale === 'sqrt' ? Math.sqrt(hi) : hi;
-  const lut = new Uint32Array(256);
-  for (let v = 0; v < 255; v++) {
-    const val = scale === 'sqrt' ? (a + (v / 254) * (b - a)) ** 2 : a + (v / 254) * (b - a);
-    const c = colourAt(sc, val);
-    if (c) lut[v] = (c[3] << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
+  const luts = [];
+  for (let f = 0; f < (type ? RADAR_FAMILIES.length : 1); f++) {
+    const lut = new Uint32Array(256);
+    for (let v = 0; v < 255; v++) {
+      const val = scale === 'sqrt' ? (a + (v / 254) * (b - a)) ** 2 : a + (v / 254) * (b - a);
+      const c = f ? familyColour(f, val) : colourAt(sc, val);
+      if (c) lut[v] = (c[3] << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
+    }
+    luts.push(lut);
+  }
+  const lut = luts[0];
+  /* each type cell's family (its nearest cell to each pixel: a type is never blended) */
+  let famOf = null, tq = null, tmap = null, tnx = 0;
+  if (type) {
+    const th = type.crop.head;
+    famOf = new Uint8Array(256);
+    for (let q = 0; q < 255; q++) {
+      const v = Math.round(th.lo + (q / 254) * (th.hi - th.lo));
+      famOf[q] = th.hi > 12 ? (v >= 1 && v <= 252 ? Math.floor((v - 1) / 63) : 0) : PTYPE_FAMILY[v] ?? 0;
+    }
+    tq = type.crop.q; tmap = type.map; tnx = th.nx;
   }
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
@@ -170,6 +189,12 @@ export function paintRadarCrop(crop, map, W, H) {
     if (i0 < 0) continue;
     const tx = map.tx[k], ty = map.ty[k];
     const v = Math.round((qv(i0) * (1 - tx) + qv(i0 + 1) * tx) * (1 - ty) + (qv(i0 + nx) * (1 - tx) + qv(i0 + nx + 1) * tx) * ty);
+    if (famOf && lut[v]) {
+      const j0 = tmap.idx[k];
+      const f = j0 < 0 ? 0 : famOf[tq[j0 + (tmap.tx[k] >= 0.5 ? 1 : 0) + (tmap.ty[k] >= 0.5 ? tnx : 0)]];
+      out[k] = luts[f][v];
+      continue;
+    }
     out[k] = lut[v];
   }
   ctx.putImageData(img, 0, 0);

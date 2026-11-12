@@ -215,7 +215,7 @@ VARIABLES = {
     'hail_1h':      dict(label='Hail (past hour)', unit='mm', group='Precipitation', lo=0, hi=50, scale='sqrt'),
     'conv_total':   dict(label='Convective precipitation (total)', unit='mm', group='Precipitation', lo=0, hi=300, scale='sqrt'),
     # 0 none, 1 rain, 3 freezing rain, 5 snow, 6 wet snow, 7 rain and snow, 8 ice pellets, 12 freezing drizzle (ECMWF's codes)
-    'ptype':        dict(label='Precipitation type', unit='', group='Precipitation', lo=0, hi=12),
+    'ptype':        dict(label='Precipitation type', unit='mm/h', group='Precipitation', lo=0, hi=254),   # derived.typed_rate's bytes
     'frozen_pct':   dict(label='Share of precipitation falling frozen', unit='%', group='Snow & ice', lo=0, hi=100),
     # snowfall as a depth, at the usual 10:1 ratio of fresh snow to water
     'snow_acc':     dict(label='Snow accumulation (10:1)', unit='cm', group='Snow & ice', lo=0, hi=200, scale='sqrt'),
@@ -579,7 +579,7 @@ class UKV(MetOffice):
     }
     pl_files = dict(MO_PL, wind100=('wind_speed_on_height_levels', 100.0))
     variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'snow_acc', 'feels', 'windchill', 'wdir10', 'wx',
-                               'fog_vis', 'gust_peak', 'wind100'] + MO_UPPER
+                               'fog_vis', 'gust_peak', 'wind100', 'ptype'] + MO_UPPER
 
 
 class MOGlobal(MetOffice):
@@ -604,7 +604,7 @@ class MOGlobal(MetOffice):
     }
     pl_files = dict(MO_PL, w700=('wind_vertical_velocity_on_pressure_levels', 70000.0))
     variables = list(files) + ['precip_1h', 'precip_total', 'snow_1h', 'snow_total', 'snow_acc', 'feels', 'windchill', 'wdir10', 'wx',
-                               'fog_vis', 'gust_peak', 'w700'] + MO_UPPER
+                               'fog_vis', 'gust_peak', 'w700', 'ptype'] + MO_UPPER
 
 
 # ── ECMWF (IFS, AIFS) ───────────────────────────────────────────────────────
@@ -783,13 +783,14 @@ class ECMWF:
         if var == 'olr':
             return -A[0]                             # upward thermal radiation: job.py differences the accumulation
         if var == 'ptype':
-            # the type is set wherever a trace falls: shown only where 0.1 mm/h or more fell since
-            # the step before (tp is the running total, in metres)
+            # the type with the rate that fell since the step before (tp is the running total, in
+            # metres): its kind and strength (derived.typed_rate)
             if not h or prev_h is None:
                 return np.zeros_like(A[0])
+            from .derived import typed_rate
             tp0 = self._get(run, prev_h, [('sfc', 'tp')])[0]
-            rate = np.nan_to_num(A[1] - tp0) * 1000.0 / (h - prev_h)
-            return np.where(rate >= 0.1, A[0], 0).astype(np.float32)
+            rate = np.maximum(np.nan_to_num(A[1] - tp0), 0) * 1000.0 / (h - prev_h)
+            return typed_rate(np.where(np.isfinite(A[1]), rate, np.nan), A[0])
         if var == 'w700':
             return A[0]
         if var == 'gust10':
@@ -954,11 +955,11 @@ class GFS:
             A.append(ECMWF._to_display(self, a, meta, nearest=self.SPEC[var][i][0] in getattr(self, 'CATEGORY', ())))
         if wave:
             return _sea_only(A[0])
-        if var == 'ptype':                                 # GFS's yes/no types as ECMWF's codes
-            # the types are set wherever a trace falls: shown only where 0.1 mm/h or more does
+        if var == 'ptype':                                 # GFS's yes/no types as ECMWF's codes, with its rate
+            from .derived import typed_rate
             rain, snow, frzr, icep = (np.nan_to_num(x) > 0.5 for x in A[:4])
             code = np.select([snow & rain, snow, icep, frzr, rain], [7, 5, 8, 3, 1], 0)
-            return np.where(np.nan_to_num(A[4]) * 3600.0 >= 0.1, code, 0).astype(np.float32)
+            return typed_rate(A[4] * 3600.0, code)
         if var == 'frozen_pct':                            # -50 where nothing falls
             return np.where(A[0] < 0, np.nan, A[0]).astype(np.float32)
         if var == 'snow_total':                            # chained by job.py: each step's new precipitation times its frozen share

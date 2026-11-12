@@ -11,9 +11,11 @@ Analysis, at each radar time t:
      Gaussian weight that relaxes to the model between stations:
          field = background + sum(w_i r_i) / (sum(w_i) + 0.25),   w_i = exp(-(d_i / L)^2)
      so a station pulls its own cell 80 % of the way to what it measured.
-  3. Rain is the Met Office 1 km radar composite at t (observed). The weather type adds LEELA
-     lightning (strikes within 15 km in the past 20 minutes), the wet bulb for snow and sleet,
-     and the UKV visibility.
+  3. Rain is the Met Office 1 km radar composite at t (observed). Its type (rain, sleet, snow,
+     freezing rain) is half the UKV's own snow share and half the analysed wet bulb's
+     (derived.radar_phase); now_ptype is that type wherever the radar has an echo, and radar_type
+     the 1 km radar by kind and strength (derived.typed_rate). The weather type adds LEELA lightning
+     (strikes within 15 km in the past 20 minutes), the same snow share, and the UKV visibility.
   4. Cloud is half what Meteosat saw (sat_cloud below, within half an hour of t) and half the
      UKV's, corrected by the airports' own cloud reports (station_cloud); the UKV alone where
      there is no satellite view.
@@ -33,7 +35,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 from .common import DATA, DX, NX, NY, PROJ, STATIC, X0, Y_TOP, read_frame, write_frame, write_json
-from .derived import weather_type
+from .derived import RT_HI, radar_phase, typed_rate, weather_type
 from .models import UKV, _feels, _windchill
 
 LIVE = DATA / 'live'
@@ -62,8 +64,11 @@ NOW = {
     'now_feels':     ('Feels like', '°C', dict(lo=-45, hi=45), ('max', 'min')),
     'now_tcc':       ('Cloud cover', '%', dict(lo=0, hi=100), ()),
     'now_wx':        ('Weather', '', dict(lo=0, hi=254), ()),
+    'now_ptype':     ('Precipitation type', '', dict(lo=0, hi=12), ()),
 }
-UKV_VARS = ('t2', 'td2', 'wind10', 'gust10', 'mslp', 'tcc', 'vis', 'precip_rate')
+# the radar by type, 1 km: one code a cell (derived.radar_type), so its bytes are the codes themselves
+RADAR_TYPE_ENC = dict(lo=0, hi=254)
+UKV_VARS = ('t2', 'td2', 'wind10', 'gust10', 'mslp', 'tcc', 'vis', 'precip_rate', 'snow_rate')
 # residual spreading: field, length scale (km), largest believable station-minus-model difference
 SPREAD = {'t2': (45, 8), 'td2': (45, 8), 'wind10': (40, 25), 'gust10': (35, 30), 'mslp': (120, 6)}
 
@@ -87,7 +92,22 @@ def ukv_hour(V):
     f = CACHE / f'{V:%Y%m%dT%H}.npz'
     if f.exists():
         with np.load(f) as z:
-            return {k: z[k] for k in z.files}
+            out = {k: z[k] for k in z.files}
+        # an hour cached before a field joined UKV_VARS: that field from the same run, added to it
+        lack = [v for v in UKV_VARS if v not in out]
+        if lack and 'run' in out:
+            run = datetime.fromtimestamp(float(out['run']), timezone.utc)
+            h = int((V - run).total_seconds() // 3600)
+            got = False
+            for v in lack:
+                try:
+                    out[v] = _U.field(run, h, v, None).astype(np.float32)
+                    got = True
+                except Exception:
+                    pass
+            if got:
+                np.savez_compressed(f, **out)
+        return out
     now = datetime.now(timezone.utc)
     newest = min(V, now.replace(minute=0, second=0, microsecond=0))
     for back in range(0, 14):
@@ -223,13 +243,18 @@ def at_station(a, o):
 
 
 # ── radar and lightning at t ─────────────────────────────────────────────────
-def radar_2km(t):
-    """The radar at t on the display grid (the 1 km frame averaged 2 x 2), or None."""
+def radar_1km(t):
+    """The radar at t, 1 km (mm/h, NaN off it), or None."""
     p = LIVE / 'radar' / f'{t:%Y%m%dT%H%M}.bin'
     if not p.exists():
         return None
-    r, _ = read_frame(p)
-    return np.nanmean(r.reshape(NY, 2, NX, 2), axis=(1, 3))
+    return read_frame(p)[0]
+
+
+def radar_2km(t):
+    """The radar at t on the display grid (the 1 km frame averaged 2 x 2), or None."""
+    r = radar_1km(t)
+    return None if r is None else np.nanmean(r.reshape(NY, 2, NX, 2), axis=(1, 3))
 
 
 def strikes_between(t0, t1):
@@ -446,12 +471,27 @@ def analyse(t, reports):
         base, above = ukv_cc, None
     # no view and no model (outside the domain) stays unknown
     A['tcc'] = np.where(np.isnan(base), np.nan, station_cloud(base, above, near)).astype(np.float32)
-    r2 = radar_2km(t)
+    r1 = radar_1km(t)
+    blocks = None if r1 is None else r1.reshape(NY, 2, NX, 2)
+    r2 = None if blocks is None else np.nanmean(blocks, axis=(1, 3))
     pr = np.where(np.isfinite(r2), r2, B.get('precip_rate', 0)) if r2 is not None else B.get('precip_rate', np.zeros((NY, NX)))
-    wx = weather_type({'precip_rate': pr, 'tcc': A['tcc'], 't2': t2, 'td2': td2, 'vis': B.get('vis', np.full((NY, NX), 99.0))})
+    # what is falling: rain, sleet, snow or freezing rain (derived.radar_phase), for the weather
+    # symbols (as a snow rate, its share of what falls; freezing rain shows as rain there) and as
+    # now_ptype, wherever the radar has any echo in the cell
+    code, share = radar_phase(B, t2, td2)
+    prn = np.nan_to_num(pr)
+    wx = weather_type({'precip_rate': pr, 'snow_rate': np.where(code == 3, 0, share) * prn, 'tcc': A['tcc'], 't2': t2, 'td2': td2,
+                       'vis': B.get('vis', np.full((NY, NX), 99.0))})
     thunder = near_mask(strikes_between(t - timedelta(minutes=20), t), 7.5)
     A['wx'] = np.where(thunder, 13, wx).astype(np.float32)
-    return A, {'stations': len(near), 'used': used, 'radar': r2 is not None, 'cloud': 'satellite' if sat is not None else 'ukv'}, near
+    extra = {}
+    if blocks is not None:
+        top = np.nanmax(blocks, axis=(1, 3))
+        A['ptype'] = np.where(np.isfinite(top), np.where(top >= 0.05, code, 0), np.nan).astype(np.float32)
+        extra['radar_type'] = typed_rate(r1, np.repeat(np.repeat(code, 2, axis=0), 2, axis=1))
+    else:
+        A['ptype'] = np.where(prn >= 0.1, code, 0).astype(np.float32)
+    return A, {'stations': len(near), 'used': used, 'radar': r2 is not None, 'cloud': 'satellite' if sat is not None else 'ukv'}, near, extra
 
 
 # ── observed days ────────────────────────────────────────────────────────────
@@ -708,7 +748,9 @@ def update():
     # the day's extremes include the night before the live layers had any of it
     slots = sorted(set(times) | set(today_slots(max(times))), reverse=True)
     cut = datetime.now(timezone.utc) - timedelta(hours=KEEP_H)
-    have = {p.stem for p in (LIVE / 'now_t2').glob('*.bin')} if (LIVE / 'now_t2').exists() else set()
+    def stamps(p):
+        return {f.stem for f in (LIVE / p).glob('*.bin')} if (LIVE / p).exists() else set()
+    have = stamps('now_t2') & stamps('now_ptype')          # a time analysed before the type was added: again
     days = {}
 
     def analysed(t):
@@ -730,28 +772,37 @@ def update():
             reports = []                                  # no station reports: UKV alone
         for t in todo:
             try:
-                A, info, near = analyse(t, reports)
+                A, info, near, extra = analyse(t, reports)
             except FileNotFoundError:
                 continue
             stamp = f'{t:%Y%m%dT%H%M}'
             if t >= cut:                                        # older slots only feed their day
                 for p, (_, _, enc, _) in NOW.items():
                     write_frame(LIVE / p / f'{stamp}.bin', A[p[4:]], enc, {'product': p, 'valid': t.isoformat(), 'k': 1, **info})
+                if 'radar_type' in extra:
+                    write_frame(LIVE / 'radar_type' / f'{stamp}.bin', extra['radar_type'], RADAR_TYPE_ENC,
+                                {'product': 'radar_type', 'valid': t.isoformat(), 'k': 0.5, 'rate_hi': RT_HI, **info})
             update_day(t, A, near)
             made.append(f'{t:%H:%M}')
     rained = fold_radar()
-    for p in NOW:
+    for p in [*NOW, 'radar_type']:
         d = LIVE / p
         if not d.exists():
             continue
-        keep = []
-        for f in sorted(d.glob('*.bin')):
-            tt = datetime.strptime(f.stem, '%Y%m%dT%H%M').replace(tzinfo=timezone.utc)
-            if tt < cut:
-                f.unlink(missing_ok=True)
-            else:
-                keep.append(tt.isoformat())
-        write_json(d / 'index.json', {'product': p, 'times': keep, 'ext': 'bin'})
+        try:                                   # each layer's index on its own: one failing never holds up the rest
+            keep = []
+            for f in sorted(d.glob('*.bin')):
+                tt = datetime.strptime(f.stem, '%Y%m%dT%H%M').replace(tzinfo=timezone.utc)
+                if tt < cut:
+                    f.unlink(missing_ok=True)
+                else:
+                    keep.append(tt.isoformat())
+            write_json(d / 'index.json', {'product': p, 'times': keep, 'ext': 'bin'})
+            for f in d.glob('*.tmp'):          # a write that failed part-way leaves its temporary file
+                if time.time() - f.stat().st_mtime > 600:
+                    f.unlink(missing_ok=True)
+        except Exception as e:
+            print(f'[now] index of {p} not written: {type(e).__name__}: {e}', flush=True)
     for f in CACHE.glob('*.npz') if CACHE.exists() else []:     # background hours older than the window
         if datetime.strptime(f.stem, '%Y%m%dT%H').replace(tzinfo=timezone.utc) < cut - timedelta(hours=2):
             f.unlink(missing_ok=True)
@@ -768,6 +819,12 @@ def catalog_entries():
             idx = {'times': [], 'ext': 'bin'}
         out[p] = {'label': label, 'kind': 'grid', 'source': 'UKV + METAR observations + Met Office radar', 'step': 15,
                   'times': idx['times'], 'ext': 'bin', 'lo': enc['lo'], 'hi': enc['hi'], 'unit': unit}
+    try:
+        idx = json.loads((LIVE / 'radar_type' / 'index.json').read_text())
+    except Exception:
+        idx = {'times': []}
+    out['radar_type'] = {'label': 'Rain radar: precipitation type', 'kind': 'grid', 'source': 'Met Office 1 km composite, typed by the UKV + METAR analysis',
+                         'step': 15, 'times': idx['times'], 'ext': 'bin', 'lo': 0, 'hi': 254, 'unit': 'mm/h'}
     return out
 
 

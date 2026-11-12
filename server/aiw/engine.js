@@ -61,6 +61,9 @@ export function createEngine({ ingest, broadcast = () => {} }) {
   }
 
   /* ── one cycle ── */
+  /* A busy minute is 2-3 s of work. Done in one go it holds up every page of the site that long, so the
+     cycle stops between storms (and between its stages) to let waiting requests through. */
+  const breathe = () => new Promise((r) => setImmediate(r));
   async function cycle() {
     if (running) return;
     running = true;
@@ -81,6 +84,7 @@ export function createEngine({ ingest, broadcast = () => {} }) {
         .filter((c) => c.count15 >= 6);
       updateTracks(tracks, cells, now, nextTrackId);
       status.cells = cells.length;
+      await breathe();
 
       const live = [...tracks.values()].filter((t) => !t.dead && t.lastSeen === now);
       status.tracksLive = live.length;
@@ -112,6 +116,7 @@ export function createEngine({ ingest, broadcast = () => {} }) {
       const prof = { fields: 0, predict: 0, systems: 0, assess: 0, reconcile: 0 };
       let tq = Date.now();
       const lap = (k) => { const n2 = Date.now(); prof[k] += n2 - tq; tq = n2; };
+      const pause = async () => { await breathe(); tq = Date.now(); };          // time spent on others is not the engine's
       const cellItems = [];
       for (const track of live) {
         if (!track.dead) track.mergedInto = undefined; // re-decided each cycle below
@@ -120,6 +125,7 @@ export function createEngine({ ingest, broadcast = () => {} }) {
         // Only storms with enough activity to possibly warrant a warning get
         // the full probability calculation; the rest are tracked only.
         if (track.n10 < Math.max(3, cfg.yellow.minStrikes10 * 0.5)) continue;
+        await pause();
         const env = envPeek(track.lat, track.lon, now);
         const local = localStrikes(track.lat, track.lon, 320);
         const motion = blendMotion({
@@ -131,12 +137,14 @@ export function createEngine({ ingest, broadcast = () => {} }) {
         lap('fields');
         const fields = buildFields(track, local, now, motion, { motionUncKmh: motion.spreadKmh ?? 15 });
         lap('fields');
+        await pause();
         const trend = trendOf(local, track, now);
         const ctx = { trend: trend.logRatio, n10: track.n10, cape: env?.cape, cycles: track.cycles,
           liftedIndex: env?.liftedIndex, shearKmh: env?.shear0_6kmKmh, showersMmH: env?.showersMmH };
         const probs = {};
         const n = fields.grid.nx * fields.grid.ny;
         for (const L of LEADS) {
+          if (L !== LEADS[0]) { lap('predict'); await pause(); }
           const p = new Float32Array(n);
           /* Most of a storm's grid is empty sky, where every density feature is
              ~0 and the model gives the same 'floor' value. Compute that once
@@ -164,6 +172,7 @@ export function createEngine({ ingest, broadcast = () => {} }) {
       const withWarning = new Set(getState().warnings.filter((w) => w.status === 'active').map((w) => w.trackId));
       for (const sys of groupSystems(cellItems, cfg.corridorProbability)) {
         lap('fields');
+        await pause();
         const { item, absorbed } = mergeSystem(sys.members, withWarning);
         lap('systems');
         for (const t of absorbed) t.mergedInto = item.track.id;
@@ -184,12 +193,12 @@ export function createEngine({ ingest, broadcast = () => {} }) {
         radar: 'not integrated', satellite: 'not integrated',
         at: now,
       };
-      tq = Date.now();
+      await pause();
       const changed = reconcile({ assessed, tracks, now, feedOk, modelInfo: info, dataQuality, paused: !!s.paused });
       lap('reconcile');
       status.profileMs = prof;
       tickTests(now);
-      verifyFinished(now);
+      await verifyFinished(now);
 
       status.cycles += 1;
       status.lastCycleAt = now;
@@ -216,14 +225,16 @@ export function createEngine({ ingest, broadcast = () => {} }) {
    *   falseArea share of the forecast polygon with no strike within 8 km —
    *            how much area was warned for nothing?
    */
-  function verifyFinished(now) {
+  async function verifyFinished(now) {
     const s = getState();
-    for (const w of s.warnings) {
+    for (const w of [...s.warnings]) {
       if (w.isTest || w.status === 'active' || w.verification) continue;
       const logs = w.trackLog || [];
       const lastAt = logs.length ? logs[logs.length - 1].at : w.issuedAt;
       if (now - lastAt < 35 * 60e3) continue; // wait for the outcome
       if (!logs.length) { w.verification = { skipped: 'no forecast logged' }; continue; }
+      await breathe();
+      if (w.verification) continue;                     // scored meanwhile
       const byLead = {};
       for (const L of LEADS) byLead[L] = { capturedStrikes: 0, nearbyStrikes: 0, sampledArea: 0, emptyArea: 0, forecasts: 0 };
       const from = logs[0].at; const to = lastAt + 31 * 60e3;

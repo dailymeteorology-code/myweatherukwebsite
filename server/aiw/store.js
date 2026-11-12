@@ -52,6 +52,23 @@ export function writeJsonAtomic(file, value) {
   fs.rmSync(tmp, { force: true });
 }
 
+/** The same, written without holding up the server: the text is made here, the file written in the
+    background (its own temporary name, so it never meets a synchronous write of the same file). */
+export async function writeJsonAtomicAsync(file, value) {
+  const json = JSON.stringify(value);
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-bg`;
+  await fs.promises.writeFile(tmp, json);
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try { await fs.promises.rename(tmp, file); return; } catch (err) {
+      if (!LOCKED.has(err.code) || attempt === 5) break;
+      await new Promise((r) => setTimeout(r, attempt * 20));
+    }
+  }
+  await fs.promises.writeFile(file, json);
+  await fs.promises.rm(tmp, { force: true });
+}
+
 export function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
@@ -74,6 +91,19 @@ const EMPTY_STATE = () => ({
 
 let state = null;
 let saveTimer = null;
+/* the state is ~11 MB and saved after every minute's cycle: written in the background, one save at a
+   time, with one more queued if the state changed while a save was being written */
+let saving = null;
+let saveAgain = false;
+function saveInBackground() {
+  if (saving) { saveAgain = true; return; }
+  saving = (async () => {
+    do {
+      saveAgain = false;
+      try { await writeJsonAtomicAsync(STATE_PATH, state); } catch (err) { console.warn(`[aiw] state not saved: ${err.message}`); }
+    } while (saveAgain);
+  })().finally(() => { saving = null; });
+}
 
 export function getState() {
   if (!state) state = { ...EMPTY_STATE(), ...readJson(STATE_PATH, {}) };
@@ -88,7 +118,7 @@ export function saveState({ now = false } = {}) {
     return;
   }
   if (saveTimer) return;
-  saveTimer = setTimeout(() => { saveTimer = null; writeJsonAtomic(STATE_PATH, state); }, 500);
+  saveTimer = setTimeout(() => { saveTimer = null; saveInBackground(); }, 500);
   saveTimer.unref?.();
 }
 
