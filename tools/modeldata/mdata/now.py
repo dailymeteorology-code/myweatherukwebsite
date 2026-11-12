@@ -93,9 +93,11 @@ def ukv_hour(V):
     if f.exists():
         with np.load(f) as z:
             out = {k: z[k] for k in z.files}
-        # an hour cached before a field joined UKV_VARS: that field from the same run, added to it
+        # an hour cached before a field joined UKV_VARS: that field from the same run, added to it;
+        # only for the last few hours, as the backfill of older ones would fetch an hour per
+        # analysis and hold the radar back (12 Nov 2026: one cycle took over nine minutes)
         lack = [v for v in UKV_VARS if v not in out]
-        if lack and 'run' in out:
+        if lack and 'run' in out and V >= datetime.now(timezone.utc) - timedelta(hours=3):
             run = datetime.fromtimestamp(float(out['run']), timezone.utc)
             h = int((V - run).total_seconds() // 3600)
             got = False
@@ -494,6 +496,32 @@ def analyse(t, reports):
     return A, {'stations': len(near), 'used': used, 'radar': r2 is not None, 'cloud': 'satellite' if sat is not None else 'ukv'}, near, extra
 
 
+TYPE_BACKFILL = 12                               # type-only fills per cycle
+
+
+def type_frames(t):
+    """now_ptype and radar_type for a time already analysed: from its analysed temperature and dew
+    point, the radar, and the UKV background where it is cached (the wet bulb alone where not).
+    Fetches nothing, redoes nothing else."""
+    stamp = f'{t:%Y%m%dT%H%M}'
+    r1 = radar_1km(t)
+    t2p, tdp = LIVE / 'now_t2' / f'{stamp}.bin', LIVE / 'now_td2' / f'{stamp}.bin'
+    if r1 is None or not t2p.exists() or not tdp.exists():
+        return False
+    t2, td2 = read_frame(t2p)[0], read_frame(tdp)[0]
+    V0 = t.replace(minute=0, second=0, microsecond=0)
+    hours = [V0] if t == V0 else [V0, V0 + timedelta(hours=1)]
+    B = background(t) if all((CACHE / f'{V:%Y%m%dT%H}.npz').exists() for V in hours) else {}
+    code, _ = radar_phase(B, t2, td2)
+    top = np.nanmax(r1.reshape(NY, 2, NX, 2), axis=(1, 3))
+    meta = {'valid': t.isoformat(), 'radar': True, 'backfill': True}
+    write_frame(LIVE / 'now_ptype' / f'{stamp}.bin', np.where(np.isfinite(top), np.where(top >= 0.05, code, 0), np.nan).astype(np.float32),
+                NOW['now_ptype'][2], {'product': 'now_ptype', 'k': 1, **meta})
+    write_frame(LIVE / 'radar_type' / f'{stamp}.bin', typed_rate(r1, np.repeat(np.repeat(code, 2, axis=0), 2, axis=1)), RADAR_TYPE_ENC,
+                {'product': 'radar_type', 'k': 0.5, 'rate_hi': RT_HI, **meta})
+    return True
+
+
 # ── observed days ────────────────────────────────────────────────────────────
 DAY_FIELDS = [(p[4:], s) for p, (_, _, _, stats) in NOW.items() for s in stats]
 
@@ -750,7 +778,7 @@ def update():
     cut = datetime.now(timezone.utc) - timedelta(hours=KEEP_H)
     def stamps(p):
         return {f.stem for f in (LIVE / p).glob('*.bin')} if (LIVE / p).exists() else set()
-    have = stamps('now_t2') & stamps('now_ptype')          # a time analysed before the type was added: again
+    have = stamps('now_t2')
     days = {}
 
     def analysed(t):
@@ -784,6 +812,16 @@ def update():
                                 {'product': 'radar_type', 'valid': t.isoformat(), 'k': 0.5, 'rate_hi': RT_HI, **info})
             update_day(t, A, near)
             made.append(f'{t:%H:%M}')
+    # the type of times analysed before it existed (or whose type failed): only the two type layers,
+    # from what is on disk, newest first; re-running whole analyses for them held the radar back
+    try:
+        missing = sorted((stamps('now_t2') & stamps('radar')) - stamps('now_ptype'), reverse=True)
+        for stamp in missing[:TYPE_BACKFILL]:
+            t = datetime.strptime(stamp, '%Y%m%dT%H%M').replace(tzinfo=timezone.utc)
+            if t >= cut:
+                type_frames(t)
+    except Exception as e:
+        print(f'[now] type backfill: {type(e).__name__}: {e}', flush=True)
     rained = fold_radar()
     for p in [*NOW, 'radar_type']:
         d = LIVE / p
