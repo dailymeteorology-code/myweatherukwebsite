@@ -46,7 +46,7 @@ const ADVECT = new Set(['precip_rate', 'rain_rate', 'snow_rate', 'conv_rain', 'h
   'gust10', 'gust_max', 'wind100', 'wind925', 'wind850', 'wind700', 'wind500', 'wind300', 'wind250', 't925', 't850', 't700', 't500', 'wbpt850', 'rh700',
   'rh850', 'w700', 'vort500', 'pw', 'cape_mu', 'cape_sb', 'cape_ml', 'cin_sb', 'cin_mu', 'cin_ml', 'li', 'kindex', 'srh3', 'swh', 'pp1d', 'mwp', 'olr',
   'prob', 'dust_aod', 'aod', 'pm10', 'pm25']);
-const CATEGORY = new Set(['wx', 'ptype', 'radar_type']);
+const CATEGORY = new Set(['wx', 'ptype', 'radar_type', 'snow_risk']);
 const ANGLE = new Set(['wdir10', 'mwd']);
 /** How a field moves between two steps: 'advect', 'blend', 'category' or 'angle'. */
 export const tweenKind = (key) => (ANGLE.has(key) ? 'angle' : CATEGORY.has(key) ? 'category' : ADVECT.has(key) ? 'advect' : 'blend');

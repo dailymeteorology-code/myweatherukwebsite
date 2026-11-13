@@ -22,16 +22,20 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { resolveEnsPython } from './pastFuture/index.js';
+import { FROST_RUNS } from './tcmFrost.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TOOL = path.resolve(HERE, '..', 'tools', 'modeldata');
 const DATA = process.env.MODELDATA_DIR || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/modeldata' : path.join(HERE, 'data', 'modeldata'));
 export const MODELDATA_DIR = DATA;
 const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg', 'night_lights.png', 'lines.json', 'cities.json', 'grid.json', 'roads.json', 'roads.bin']);
-const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer']);
+const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer', 'frost']);
+/* TCM FROST, MyWeatherUK's snow model: its runs come from its own mirror (server/tcmFrost.js),
+   already made, on the 2 km grid; nothing is ever fetched for it here */
+const MIRRORED = new Set(['frost']);
 const ENS_MODELS = new Set(['ecmwf_ens', 'aifs_ens', 'gefs']);
 /* each model's grid (mdata/common.py MODEL_GRID): its frames are kept apart, per grid */
-export const gridOf = (model) => (model === 'ukv' ? 'uk' : 'eu');
+export const gridOf = (model) => (model === 'ukv' || model === 'frost' ? 'uk' : 'eu');
 const GRIDS = new Set(['uk', 'eu']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
@@ -75,7 +79,8 @@ function python(args, onExit, extraEnv = {}) {
 
 const runIso = (tag) => `${tag.slice(0, 4)}-${tag.slice(4, 6)}-${tag.slice(6, 8)}T${tag.slice(9, 11)}:${tag.slice(11, 13)}Z`;
 const framesRoot = (model) => path.join(DATA, gridOf(model) === 'uk' ? 'frames' : `frames_${gridOf(model)}`);
-const frameDir = (model, run, v) => (ENS_MODELS.has(model) ? path.join(framesRoot(model), 'ens', model, run, v) : path.join(framesRoot(model), model, run, v));
+const frameDir = (model, run, v) => (model === 'frost' ? path.join(FROST_RUNS, run, v)
+  : ENS_MODELS.has(model) ? path.join(framesRoot(model), 'ens', model, run, v) : path.join(framesRoot(model), model, run, v));
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 /* The frames sit on an external hard drive that can take most of a second a file when it is busy;
    where files are read in bulk (every catalogue refresh reads ~30 status files) they are read
@@ -101,6 +106,7 @@ function pump() {
 
 /* `known`: the frames' status.json when the caller has already read it (null for none) */
 function ensureJob(model, run, v, prefetch = false, first = null, known = undefined) {
+  if (MIRRORED.has(model)) return;
   const key = `${model}/${run}/${v}`;
   if (running.has(key)) return;
   const queued = queue.find((q) => q.key === key);
@@ -200,6 +206,7 @@ function refreshCatalog() {
       if (cat) catCache = { at: Date.now(), cat };
       const warm = [];
       for (const m of cat?.models || []) {
+        if (MIRRORED.has(m.id)) continue;
         const r = m.runs?.length ? defaultRun(m) : null;
         if (!r) continue;
         const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';

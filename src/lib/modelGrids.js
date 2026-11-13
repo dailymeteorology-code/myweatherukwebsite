@@ -14,8 +14,9 @@ export const GRIDS = {
   uk: { name: 'uk', lat0: 54.9, lon0: -2.5, nx: 1042, ny: 970, dx: 2000, x0: -1158000, yTop: 902000 },
   eu: { name: 'eu', lat0: 50, lon0: -12, nx: 1083, ny: 708, dx: 8000, x0: -4428000, yTop: 2924000 },
 };
-/** The grid a model's frames are on (mdata/common.py MODEL_GRID). */
-export const gridOfModel = (id) => (id === 'ukv' || !id ? 'uk' : 'eu');
+/** The grid a model's frames are on (mdata/common.py MODEL_GRID; TCM FROST, MyWeatherUK's snow
+    model, is made on the UKV's). */
+export const gridOfModel = (id) => (id === 'ukv' || id === 'frost' || !id ? 'uk' : 'eu');
 
 const D = Math.PI / 180;
 const A = 6378137, FL = 1 / 298.257223563, E2 = FL * (2 - FL), E = Math.sqrt(E2);

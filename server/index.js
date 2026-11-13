@@ -36,6 +36,7 @@ import worldWarnings, { worldWarningDetail } from './worldWarnings.js';
 import radarPhase from './radarPhase.js';
 import { mountTcmV5 } from './tcmV5.js';
 import { mountTcmNova } from './tcmNova.js';
+import { mountTcmFrost } from './tcmFrost.js';
 import { mountTcmV3 } from './tcmV3.js';
 import { startAiw } from './aiw/index.js';
 import { mountLightning } from './lightning/index.js';
@@ -556,6 +557,7 @@ app.get('/api/radar/phase', async (req, res) => {
    service. See tcmV5.js. */
 mountTcmV5(app);
 mountTcmNova(app);
+mountTcmFrost(app);
 mountTcmV3(app);
 
 /* ── uploads ────────────────────────────────────────────────────────────── */

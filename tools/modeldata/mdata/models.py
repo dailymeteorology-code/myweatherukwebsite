@@ -216,6 +216,11 @@ VARIABLES = {
     'conv_total':   dict(label='Convective precipitation (total)', unit='mm', group='Precipitation', lo=0, hi=300, scale='sqrt'),
     # 0 none, 1 rain, 3 freezing rain, 5 snow, 6 wet snow, 7 rain and snow, 8 ice pellets, 12 freezing drizzle (ECMWF's codes)
     'ptype':        dict(label='Precipitation type', unit='mm/h', group='Precipitation', lo=0, hi=254),   # derived.typed_rate's bytes
+    # TCM FROST's layers (tools/tcm-frost; its runs are mirrored, never made here)
+    'snow_risk':     dict(label='Snow risk', unit='', group='Snow & ice', lo=0, hi=254),
+    'snow_chance':   dict(label='Chance of snow', unit='%', group='Snow & ice', lo=0, hi=100),
+    'snow_expected': dict(label='Snow expected', unit='cm', group='Snow & ice', lo=0, hi=150, scale='sqrt'),
+    'snow_24h':      dict(label='Snow in the last 24 h', unit='cm', group='Snow & ice', lo=0, hi=100, scale='sqrt'),
     'frozen_pct':   dict(label='Share of precipitation falling frozen', unit='%', group='Snow & ice', lo=0, hi=100),
     # snowfall as a depth, at the usual 10:1 ratio of fresh snow to water
     'snow_acc':     dict(label='Snow accumulation (10:1)', unit='cm', group='Snow & ice', lo=0, hi=200, scale='sqrt'),

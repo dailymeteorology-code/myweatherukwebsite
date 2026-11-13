@@ -15,6 +15,7 @@ import { GRIDS, projection } from '@/lib/modelGrids';
 import { CALC } from '@/lib/modelCalc';
 import { canDrawCells, drawCells, lutSize } from '@/lib/modelGL';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
+import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES } from '@/lib/frostKey';
 
 export const API = '/api/modeldata';
 /* bump when frames are re-made differently (v2: coarse models smooth, not blocks; v3: the global
@@ -270,6 +271,15 @@ const SCALES = {
   ptype: RADAR_TYPE,
   frozen_pct: { stops: [[5, '#dfe9f5', 120], [25, '#b9c8f2', 170], [50, '#9a8fe0', 200], [75, '#8a7fe0', 220], [100, '#ffffff', 235]], floor: 5, ticks: [5, 25, 50, 75, 100] },
   snow_acc: { stops: SNOW.map(([v, c, a]) => [v, c, a]), floor: 0.1, discrete: true, ticks: [0.1, 1, 3, 6, 12, 25, 50], contours: [1, 5, 10, 20], label: true },
+  /* TCM FROST, MyWeatherUK's snow model (lib/frostKey): its four risk levels, the chance of snow
+     falling in each period, and the snow expected to fall, since the run began and in 24 hours */
+  snow_risk: { stops: SNOW_RISK_LEVELS.map((l, i) => [l.level, l.colour, [150, 190, 215, 235][i]]), floor: 1, discrete: true,
+    keySteps: [1, 2, 3, 4], ticks: [1, 2, 3, 4], keyLabel: (v) => SNOW_RISK_NAMES[Math.round(v)] },
+  snow_chance: { stops: [[5, '#dfe9f5', 110], [10, '#c3d3f2', 150], [20, '#9fb0ea', 180], [30, '#7f9be6', 200], [40, '#8a7fe0', 212],
+    [50, '#9a6ee0', 222], [60, '#a35ad2', 230], [70, '#c25ac8', 236], [80, '#e05cb4', 242], [90, '#ffffff', 250]], floor: 5, discrete: true,
+  ticks: [5, 10, 20, 30, 40, 50, 60, 70, 80, 90] },
+  snow_expected: { stops: SNOW, floor: 0.1, discrete: true, ticks: [0.1, 1, 3, 6, 12, 25, 50], contours: [1, 5, 10, 20], label: true },
+  snow_24h: { stops: SNOW, floor: 0.1, discrete: true, ticks: [0.1, 1, 3, 6, 12, 25, 50], contours: [1, 5, 10, 20], label: true },
   t2max3: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
   t2min3: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
   t925: { stops: TEMP.map(([v, c, a]) => [v * 0.85 - 2, c, a]), ticks: [-20, -12, -6, -2, 0, 4, 8, 12, 16, 20], zero: true },
@@ -472,7 +482,7 @@ function colourTable(frame, varKey) {
   }
   return out;
 }
-const CODES = new Set(['wx', 'ptype', 'radar_type']);                     // a code between two codes means nothing: never interpolated
+const CODES = new Set(['wx', 'ptype', 'radar_type', 'snow_risk']);                     // a code between two codes means nothing: never interpolated
 /* ...except the precipitation types' kind-and-strength bytes, which the graphics card smooths within
    each kind (lib/modelGL typed) when Smooth is on */
 const TYPED = new Set(['ptype', 'radar_type']);
@@ -1179,13 +1189,15 @@ function drawStrikes(ctx, strikes, X, Y, u, daily, sty = STRIKE_STYLE) {
   ctx.restore();
 }
 
-/* a risk overlay: { alpha, areas: [{ colour, rings: [[[gx, gy]]], dash?, hatch? }] }, lowest level
-   first, each area tinted and outlined in its level's colour; Severe areas hatched */
+/* a risk overlay: { alpha, areas: [{ colour, rings: [[[gx, gy]]], dash?, hatch?, alpha?, line?, label? }] },
+   lowest level first, each area tinted and outlined in its level's colour; Severe areas hatched. A
+   line area is an outline only (the snow overlay's amounts over its risk), labelled along itself. */
 function drawRisk(ctx, risk, X, Y, u) {
-  const a = risk.alpha ?? 0.85;
   ctx.save();
   ctx.lineJoin = 'round';
   for (const ar of risk.areas) {
+    const a = ar.alpha ?? risk.alpha ?? 0.85;
+    if (ar.line) { drawRiskLine(ctx, ar, a, X, Y, u); continue; }
     ctx.beginPath();
     for (const ring of ar.rings) ring.forEach(([gx, gy], i) => (i ? ctx.lineTo(X(gx), Y(gy)) : ctx.moveTo(X(gx), Y(gy))));
     ctx.closePath();
@@ -1213,6 +1225,51 @@ function drawRisk(ctx, risk, X, Y, u) {
     ctx.strokeStyle = `rgba(${c},${Math.min(1, a + 0.1)})`;
     ctx.lineWidth = 2.2 * u;
     ctx.stroke();
+  }
+  ctx.restore();
+}
+/* an outline with a dark edge under it (it reads over any layer), and its label at each ring's edge
+   on the side the area asks for (labelAt 'e', 'n', 'w' or 's': nested lines label on different
+   sides, so their labels never pile up), if the ring is big enough to carry one */
+function drawRiskLine(ctx, ar, a, X, Y, u) {
+  const c = hex(ar.colour).join(',');
+  const path = new Path2D();
+  for (const ring of ar.rings) {
+    ring.forEach(([gx, gy], i) => (i ? path.lineTo(X(gx), Y(gy)) : path.moveTo(X(gx), Y(gy))));
+    path.closePath();
+  }
+  ctx.save();
+  ctx.setLineDash(ar.dash ? [7 * u, 5 * u] : []);
+  ctx.strokeStyle = `rgba(8,14,24,${0.5 * a})`;
+  ctx.lineWidth = 4 * u;
+  ctx.stroke(path);
+  ctx.strokeStyle = `rgba(${c},${Math.min(1, a + 0.1)})`;
+  ctx.lineWidth = 1.8 * u;
+  ctx.stroke(path);
+  if (ar.label) {
+    ctx.setLineDash([]);
+    ctx.font = `800 ${12 * u}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 3.6 * u;
+    ctx.strokeStyle = `rgba(8,14,24,${0.75 * a})`;
+    ctx.fillStyle = `rgba(${c},${Math.min(1, a + 0.1)})`;
+    const side = ar.labelAt || 'e';
+    for (const ring of ar.rings) {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, at = null, best = -Infinity;
+      for (const [gx, gy] of ring) {
+        const x = X(gx), y = Y(gy);
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+        const score = side === 'w' ? -x : side === 'n' ? -y : side === 's' ? y : x;
+        if (score > best) { best = score; at = [x, y]; }
+      }
+      if (x1 - x0 < 46 * u && y1 - y0 < 46 * u) continue;
+      ctx.strokeText(ar.label, at[0], at[1]);
+      ctx.fillText(ar.label, at[0], at[1]);
+    }
   }
   ctx.restore();
 }
@@ -1457,6 +1514,7 @@ function gridLabel(v, varKey, unit) {
   const sc = scaleFor(varKey);
   if (varKey === 'wx') return ['Clear', 'Pt cloud', 'Cloudy', 'Dull', 'Fog', 'Drizzle', 'Lt rain', 'Rain', 'Heavy', 'Sleet', 'Lt snow', 'Snow', 'Hvy snow', 'Thunder', 'Hail'][Math.round(v)] ?? null;
   if (varKey === 'ptype' || varKey === 'radar_type') { const t = radarTypeOf(v); return t ? RADAR_FAMILIES[t.family].short : null; }
+  if (varKey === 'snow_risk') return v >= 1 ? SNOW_RISK_LEVELS[Math.min(4, Math.round(v)) - 1].short : null;
   if (varKey === 'mwd' || varKey === 'wdir10') return ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(v / 22.5) % 16];
   if (sc.floor != null && v < sc.floor) return null;
   if (unit === '°C') return `${Math.round(v)}°`;

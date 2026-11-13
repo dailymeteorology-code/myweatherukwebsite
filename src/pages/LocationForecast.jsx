@@ -22,6 +22,7 @@ import {
   Umbrella, Sunrise, Sunset, Zap,
 } from 'lucide-react';
 import LocationThunder from '@/components/location/LocationThunder';
+import LocationSnow from '@/components/location/LocationSnow';
 import LocationSearchBox from '@/components/location/LocationSearchBox';
 import LocationLanding from '@/components/location/LocationLanding';
 import LocationWarnings, { warningIcon, warningName, warningSpan, severityFill, severityInk } from '@/components/location/LocationWarnings';
@@ -660,6 +661,7 @@ export default function LocationForecast() {
                 <HourlyCard model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} />
                 <PrecipCard model={model} />
                 <LocationThunder model={model} />
+                <LocationSnow model={model} />
                 <DaysCard model={model} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />
                 <div className="lw-glass lw-card">
                   <div className="lw-title"><Radar />Rain radar<span className="lw-title-aside">Met Office 1 km · then UKV</span></div>

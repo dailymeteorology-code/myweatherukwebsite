@@ -320,6 +320,8 @@ export function shape(resp) {
     runs: fc.runs, cell: fc.cell, lat, lon, anchor: fc.anchor || null,
     /* every NOVA hour (not only the UKV's: hourly to the end of the Main Run) */
     nova: nova ? { ...nova, hours: nova.times.map((t, k) => ({ t, p: nova.p[k], src: nova.src[k], nb: nova.nb_km[k] })) } : null,
+    /* the place's snow from TCM FROST, MyWeatherUK's snow model (server/tcmFrost.js frostPoint) */
+    frost: resp.frost || null,
   };
 }
 

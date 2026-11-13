@@ -45,6 +45,25 @@ def model_entry(m):
                      for r, s in runs]}
 
 
+def frost_entry():
+    """TCM FROST, MyWeatherUK's snow model: its mirrored runs (server/tcmFrost.js), as a model."""
+    import os
+    from pathlib import Path
+    root = Path(os.environ.get('FROST_DATA') or ('D:/MyWeatherUK-data/frost' if Path('D:/').exists() else DATA.parent / 'frost')) / 'runs'
+    runs = []
+    for d in sorted(root.glob('*Z'), reverse=True) if root.exists() else []:
+        try:
+            m = json.loads((d / 'manifest.json').read_text())
+        except Exception:
+            continue
+        runs.append({'run': m['run'], 'steps': m['leads'], 'complete': True, 'members': m.get('members')})
+    if not runs:
+        return None
+    return {'id': 'frost', 'label': 'TCM FROST', 'res_km': 2.0, 'grid': 'uk',
+            'source': 'TCM FROST, MyWeatherUK snow model: UKV, MO Global, IFS, AIFS, GFS + IFS ENS, AIFS ENS, GEFS',
+            'variables': ['snow_risk', 'snow_chance', 'snow_expected', 'snow_24h'], 'runs': runs}
+
+
 def prune(keep_hours=36):
     """Frames of runs older than `keep_hours` (relative to the newest run of that model)."""
     import shutil
@@ -85,6 +104,9 @@ def main():
         pass
     ensembles = [m if m['runs'] or m['id'] not in old_ens else dict(old_ens[m['id']], stale=True) for m in ensembles]
     ensembles = [dict(m, grid=grid_of(m['id'])) for m in ensembles]
+    frost = frost_entry()
+    if frost:
+        models.append(frost)
     write_json(DATA / 'catalog.json', {
         'generated': datetime.now(timezone.utc).isoformat(), 'grid': grid_meta('uk'), 'grids': {g: grid_meta(g) for g in GRIDS},
         'variables': VARIABLES, 'models': models, 'ensembles': ensembles, 'ens_fields': ens.FIELDS})

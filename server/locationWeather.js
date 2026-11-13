@@ -22,6 +22,7 @@ import { MODELDATA_DIR, POINT_DIR, builtCubes } from './modelData.js';
 import { geocode, reverseName } from './functions/getMetOfficeLocationWeather.js';
 import { searchPlaces } from './placeSearch.js';
 import { novaThunderAt } from './novaPoint.js';
+import { frostPoint } from './tcmFrost.js';
 
 const LIVE = path.join(MODELDATA_DIR, 'live');
 const OBS = path.join(MODELDATA_DIR, 'observed');
@@ -543,8 +544,10 @@ export function mountLocationWeather(app) {
     try { fc.anchor = anchorToNow(fc, now); } catch { fc.anchor = null; }
     let nova = null;
     try { nova = novaThunderAt(lat, lon); } catch { nova = null; }           // never costs the page its forecast
+    let frost = null;
+    try { frost = await frostPoint(lat, lon); } catch { frost = null; }       // TCM FROST's snow, likewise
     res.set('Cache-Control', 'no-cache');
-    res.json({ location: { name, lat, lon, country }, forecast: fc, now, nowcast: nc, nova, observed: observedAt(lat, lon), generated: new Date().toISOString() });
+    res.json({ location: { name, lat, lon, country }, forecast: fc, now, nowcast: nc, nova, frost, observed: observedAt(lat, lon), generated: new Date().toISOString() });
   });
 
   app.get('/api/location/search', async (req, res) => {

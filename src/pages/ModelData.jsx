@@ -22,7 +22,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
   Waves, MapPin, Search, ChevronDown, X, Layers, Star, Minus, Plus, Zap, Route, Grid3x3, Navigation, CloudSun, Cloud,
-  Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard,
+  Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard, Snowflake,
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, fieldLayer, frameContours, drawScene,
@@ -36,12 +36,15 @@ import { useAuth } from '@/lib/AuthContext';
 import { novaRecentRuns, novaRun, runName, riskAreas, RISK_KEY, londonDay } from '@/lib/novaOutlook';
 import { listStudioGraphics } from '@/components/studio/studioSaves';
 import { boxToLatLon } from '@/components/studio/studioGeo';
+import { frostRuns, frostRunName, snowSpans, snowKeyAt, snowOverlay } from '@/lib/frostOverlay';
+import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES, SNOW_AMOUNT_LEVELS, cmText } from '@/lib/frostKey';
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Fit', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS' };
+const SHORT_NAMES = { frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS' };
 /* who makes each model, its grid, and where the files come from (picker groups and the credit line) */
 const MODEL_INFO = {
+  frost: ['MyWeatherUK', '2 km', 'MyWeatherUK’s own snow model'],
   ukv: ['Met Office', '2 km', 'Met Office via AWS'], mo_global: ['Met Office', '10 km', 'Met Office via AWS'],
   ifs: ['ECMWF', '0.25°', 'ECMWF open data'], aifs: ['ECMWF', '0.25°', 'ECMWF open data'],
   gfs: ['NOAA', '0.25°', 'NOAA via AWS'], gefs_mean: ['NOAA', '0.5°', 'NOAA via AWS'], gefs_aer: ['NOAA', '0.25°', 'NOAA via AWS'],
@@ -585,6 +588,18 @@ export default function ModelData() {
   const [ovOutlooks, setOvOutlooks] = useState(null);
   const [ovErr, setOvErr] = useState(null);
   const ovOn = isAdmin && ov.on;
+  /* the snow overlay (for everyone): a TCM FROST run's snow risk, or the snow it expects, over any
+     layer, for the day on show, the 24 hours to the time on show, or the whole run */
+  const [sn, setSn] = useState(() => ({ on: false, run: null, show: 'risk', span: 'day', look: 'smooth', alpha: 0.85, ...(prefs.sn || {}) }));
+  const setSnK = (k, v) => setSn((o) => ({ ...o, [k]: v }));
+  const [snRuns, setSnRuns] = useState(null);       // the last 48 hours' runs, newest first
+  const [snAreas, setSnAreas] = useState({});       // span key -> { areas, peakRisk, peakCm, note } or null
+  const [snErr, setSnErr] = useState(null);
+  const snOn = sn.on;
+  const snRun = useMemo(() => (snRuns?.length ? snRuns.find((r) => r.tag === sn.run) || snRuns[0] : null), [snRuns, sn.run]);
+  const snRunKey = snRun ? `${snRun.tag}|${snRun.created}` : null;
+  const snKeys = useMemo(() => new Set(snowSpans(snRun, sn.span).map((s) => s.key)), [snRunKey, sn.span]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shownMsRef = useRef(null);
   /* Met Office warnings over any layer: those in force at the time on show */
   const [wn, setWn] = useState(() => ({ on: false, look: 'fill', labels: true, alpha: 0.85, ...(prefs.wn || {}) }));
   const setWnK = (k, v) => setWn((o) => ({ ...o, [k]: v }));
@@ -657,10 +672,10 @@ export default function ModelData() {
   useEffect(() => {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours,
-        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov, msl, wn, cmp, extras: extrasBy, layerAlpha, palette }));
+        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov, sn, msl, wn, cmp, extras: extrasBy, layerAlpha, palette }));
     } catch { /* private window: nothing to remember */ }
   }, [mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours, showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, msl,
-    strikeStyle, ov, wn, cmp, extrasBy, layerAlpha, palette]);
+    strikeStyle, ov, sn, wn, cmp, extrasBy, layerAlpha, palette]);
 
   /* the overlay's runs (the last 48 hours), the newest Main Run chosen unless one already is */
   useEffect(() => {
@@ -715,12 +730,61 @@ export default function ModelData() {
   }, [ovOn, ov.src, ovOutlooks]); // eslint-disable-line react-hooks/exhaustive-deps
   const outlookShown = useMemo(() => (ov.src === 'outlook' && ovOutlooks ? outlookOverlay(ovOutlooks.find((g) => g.id === ov.outlook)?.state) : null),
     [ov.src, ov.outlook, ovOutlooks, gridName]);   // eslint-disable-line react-hooks/exhaustive-deps -- remade on a grid switch
-  /** the overlay for a frame's time: the outlook, the span, or that London day's */
-  const riskFor = useCallback((validMs) => {
-    if (!ovOn) return null;
-    const areas = ov.src === 'outlook' ? outlookShown : (ov.span === 'custom' ? ovAreas.custom : ovAreas[londonDay(validMs)])?.areas;
-    return areas?.length ? { alpha: ov.alpha, areas } : null;
-  }, [ovOn, ov.src, ov.span, ov.alpha, outlookShown, ovAreas]);
+  /* the snow overlay's runs, fetched when it is turned on and every ten minutes while it is (a new
+     run arrives every six hours) */
+  useEffect(() => {
+    if (!snOn) return undefined;
+    let live = true;
+    const get = () => frostRuns().then((rs) => {
+      if (!live) return;
+      setSnRuns(rs);
+      setSnErr(rs.length ? null : 'No TCM FROST run on the site yet: the first is on its way.');
+    }).catch((e) => live && setSnErr(e.message));
+    get();
+    const t = setInterval(get, 10 * 60e3);
+    return () => { live = false; clearInterval(t); };
+  }, [snOn]);
+  /* its areas for every span of the run (so stepping and exports have each one's), the one on show
+     first and then outward from it, handed to the map a few at a time */
+  useEffect(() => {
+    if (!snOn || !snRun) return undefined;
+    let live = true;
+    setSnAreas({});
+    const specs = snowSpans(snRun, sn.span);
+    const k0 = snowKeyAt(snRun, sn.span, shownMsRef.current);
+    const i0 = Math.max(0, specs.findIndex((s) => s.key === k0));
+    const order = specs.map((s, i) => [Math.abs(i - i0) + (i < i0 ? 0.5 : 0), s]).sort((a, b) => a[0] - b[0]).map(([, s]) => s);
+    (async () => {
+      let pend = {}, last = 0;
+      for (const s of order) {
+        const r = await snowOverlay(snRun, s, { show: sn.show, look: sn.look, grid: gridName });
+        if (!live) return;
+        pend[s.key] = r;
+        if (performance.now() - last > 300) { const p = pend; pend = {}; last = performance.now(); setSnAreas((o) => ({ ...o, ...p })); }
+        await new Promise((ok) => setTimeout(ok, 0));                  // the page breathes between spans
+      }
+      if (Object.keys(pend).length) setSnAreas((o) => ({ ...o, ...pend }));
+    })().catch((e) => live && setSnErr(e.message));
+    return () => { live = false; };
+  }, [snOn, snRunKey, sn.show, sn.span, sn.look, gridName]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** the overlays for a frame's time: the risk overlay's (the outlook, the span, or that London day's)
+      and the snow overlay's, the snow on top; one object per time, so the map's layer cache holds */
+  const riskFor = useMemo(() => {
+    const memo = new Map();
+    return (validMs) => {
+      const nova = ovOn ? (ov.src === 'outlook' ? outlookShown : (ov.span === 'custom' ? ovAreas.custom : ovAreas[londonDay(validMs)])?.areas) : null;
+      const sk = snOn && snRun ? snowKeyAt(snRun, sn.span, validMs) : null;
+      const snow = sk ? snAreas[sk]?.areas : null;
+      if (!snow?.length) return nova?.length ? { alpha: ov.alpha, areas: nova } : null;
+      const k = `${nova?.length ? (ov.src === 'outlook' ? 'o' : ov.span === 'custom' ? 'c' : londonDay(validMs)) : '-'}|${sk}`;
+      let hit = memo.get(k);
+      if (!hit) {
+        hit = { alpha: ov.alpha, areas: [...(nova || []), ...snow.map((a) => ({ ...a, alpha: sn.alpha }))] };
+        memo.set(k, hit);
+      }
+      return hit;
+    };
+  }, [ovOn, ov.src, ov.span, ov.alpha, outlookShown, ovAreas, snOn, snRunKey, sn.span, sn.alpha, snAreas]); // eslint-disable-line react-hooks/exhaustive-deps
   const canvasRef = useRef(null);
   const stageRef = useRef(null);
   const topRef = useRef(null);
@@ -1803,6 +1867,7 @@ export default function ModelData() {
 
   /* one value, as this layer reads: a weather type, a direction, or a number with its unit */
   const fmtPoint = (v, sk = scaleKey, meta = vmeta) => (!Number.isFinite(v) ? '—' : sk === 'wx' ? WX_NAMES[Math.round(v)] ?? '—'
+    : sk === 'snow_risk' ? `${SNOW_RISK_NAMES[Math.round(v)] ?? '—'} risk of snow`
     : sk === 'ptype' || sk === 'radar_type' ? (() => { const t = radarTypeOf(v); return t ? `${RADAR_FAMILIES[t.family].name} · ${fmtValue(t.rate, 'mm/h')}` : 'Dry'; })()
     : sk === 'wdir10' || sk === 'mwd' ? `from the ${compass(v)} · ${Math.round(v)}°` : fmtValue(v, meta?.unit));
 
@@ -1861,7 +1926,7 @@ export default function ModelData() {
   );
 
   const layerCount = [showCities || wxOn, wxOn, arrowsOn, cloudsOn, canLightning && showLightning, showRoads, canGrid && showGrid,
-    canContours && showContours, canStar && showStar, ovOn, mslOn && !ownMsl, wn.on].filter(Boolean).length + extras.length;
+    canContours && showContours, canStar && showStar, ovOn, snOn, mslOn && !ownMsl, wn.on].filter(Boolean).length + extras.length;
   const styleSeg = <Seg small items={Object.entries(MAP_STYLES).map(([k, s]) => [k, s.label])} value={style} onChange={setStyle} />;
   const frameSeg = <Seg small items={Object.entries(FRAMES).map(([k, f]) => [k, f.label])} value={frameKey} onChange={setFrameKey} />;
   const sectionTitle = (t) => <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '4px 4px 7px' }}>{t}</div>;
@@ -2003,6 +2068,46 @@ export default function ModelData() {
       {ovStatus && <div style={{ fontSize: 11, color: ovErr ? '#f59e0b' : T.ink2 }}>{ovStatus}</div>}
     </div>
   );
+  /* the snow overlay's controls (everyone) */
+  shownMsRef.current = frame?.head?.valid ? Date.parse(frame.head.valid) : null;
+  const snKeyNow = snRun ? snowKeyAt(snRun, sn.span, shownMsRef.current) : null;
+  const snStatus = (() => {
+    if (snErr) return snErr;
+    if (!snRuns) return 'Loading the runs…';
+    if (!snRun || !shownMsRef.current) return null;
+    if (!snKeyNow || !snKeys.has(snKeyNow)) return sn.span === 'day' ? `${dayLabel(londonDay(shownMsRef.current))} is outside this run.` : 'The time on show is outside this run.';
+    if (!(snKeyNow in snAreas)) return 'Working out the snow…';
+    const a = snAreas[snKeyNow];
+    if (!a) return 'This run has nothing for that time yet.';
+    const what = sn.span === 'day' ? dayLabel(snKeyNow.slice(1)) : sn.span === 'run' ? 'The whole run' : 'The 24 hours to then';
+    const when = a.note === 'from the run’s start' || (sn.span === '24h' && a.note === 'since the run began') ? ` (${a.note})` : '';
+    const risk = a.peakRisk >= 1 ? `highest risk ${SNOW_RISK_NAMES[Math.round(a.peakRisk)]}` : 'no snow risk anywhere';
+    const cm = a.peakCm >= 0.2 ? `, up to ${cmText(a.peakCm)} expected` : '';
+    return `${what}${when}: ${risk}${cm}.`;
+  })();
+  const keyChip = { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 800, color: T.ink2 };
+  const snControls = (
+    <div style={{ display: 'grid', gap: 8, padding: '0 8px 10px 46px' }}>
+      <select value={sn.run || ''} onChange={(e) => setSnK('run', e.target.value || null)} style={field} aria-label="TCM FROST run">
+        <option value="" style={{ color: '#111' }}>Latest run{snRuns?.[0] ? ` · ${frostRunName(snRuns[0])}` : ''}</option>
+        {(snRuns || []).map((r) => <option key={r.tag} value={r.tag} style={{ color: '#111' }}>{frostRunName(r)} · {r.members} forecasts</option>)}
+      </select>
+      <Seg small items={[['risk', 'Risk'], ['amount', 'Amount'], ['both', 'Both']]} value={sn.show} onChange={(v) => setSnK('show', v)} />
+      <Seg small items={[['day', 'Day on show'], ['24h', '24 h to then'], ['run', 'Whole run']]} value={sn.span} onChange={(v) => setSnK('span', v)} />
+      <Seg small items={[['smooth', 'Simplified'], ['detailed', 'Detailed']]} value={sn.look} onChange={(v) => setSnK('look', v)} />
+      <label style={subRow}>Strength <input type="range" min={0.3} max={1} step={0.05} value={sn.alpha} onChange={(e) => setSnK('alpha', Number(e.target.value))} style={{ flex: 1, minWidth: 90 }} /></label>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+        {sn.show !== 'amount' && SNOW_RISK_LEVELS.map((l) => (
+          <span key={l.level} title={`${l.name}: ${l.rule} in 24 hours`} style={keyChip}><i style={{ width: 12, height: 8, borderRadius: 3, background: l.colour }} />{l.name}</span>
+        ))}
+        {sn.show === 'amount' && SNOW_AMOUNT_LEVELS.map((b) => (
+          <span key={b.cm} style={keyChip}><i style={{ width: 12, height: 8, borderRadius: 3, background: b.colour }} />{b.name}+</span>
+        ))}
+        {sn.show === 'both' && <span style={keyChip}><i style={{ width: 14, height: 0, borderTop: '2px solid #fff', boxShadow: '0 0 0 1px rgba(8,14,24,0.55)' }} />snow expected (1, 5, 10, 20 cm)</span>}
+      </div>
+      {snStatus && <div style={{ fontSize: 11, color: snErr ? '#f59e0b' : T.ink2 }}>{snStatus}</div>}
+    </div>
+  );
   /* any layer over or under the one on show: everything this view has, grouped as in the picker */
   const extraGroups = (() => {
     if (!model) return [];
@@ -2076,6 +2181,9 @@ export default function ModelData() {
       {canGrid && <LayerRow icon={<Grid3x3 size={14} />} label="Value grid" note="the number at each point" on={showGrid} onClick={() => setShowGrid((x) => !x)} />}
       {canContours && <LayerRow icon={<Waves size={14} />} label="Contours" note="lines at set values" on={showContours} onClick={() => setShowContours((x) => !x)} />}
       {canStar && <LayerRow icon={<Star size={14} />} label={isObs ? "Star the day's extreme" : 'Star the highest value'} note={isObs ? 'with where it was' : 'in the part of the map you can see'} on={showStar} onClick={() => setShowStar((x) => !x)} />}
+      <div style={{ height: 1, background: T.line, margin: '6px 4px' }} />
+      <LayerRow icon={<Snowflake size={14} />} label="Snow overlay" note="TCM FROST’s snow risk or snow expected, over any layer" on={sn.on} onClick={() => setSnK('on', !sn.on)} />
+      {sn.on && snControls}
       {isAdmin && (
         <>
           <div style={{ height: 1, background: T.line, margin: '6px 4px' }} />
@@ -2096,7 +2204,7 @@ export default function ModelData() {
     </Pill>
   );
   /* the models, grouped by who makes them: a picker on desktops, buttons on phones and tablets */
-  const modelGroups = (list) => ['Met Office', 'ECMWF', 'NOAA'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
+  const modelGroups = (list) => ['MyWeatherUK', 'Met Office', 'ECMWF', 'NOAA'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
   const chooseModel = (id) => (isProb ? (setEnsId(id), setEnsRunIso(null)) : (setModelId(id), setRunIso(null)));
   const modelPicker = (list, value, onChange, wide) => (
     <div style={{ position: 'relative', flexShrink: 0 }}>
