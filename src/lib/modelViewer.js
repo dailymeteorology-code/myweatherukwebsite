@@ -23,6 +23,8 @@ export const API = '/api/modeldata';
 const FRAME_V = 3;
 /* and per layer, when one layer's frames change: ptype v2 (12 Nov 2026) carries its kind and strength */
 const VAR_V = { ptype: 2 };
+/* and per model, when a model's frames change: AIFS v2 (13 Nov 2026) its precipitation no longer 1000x */
+const MODEL_V = { aifs: 2 };
 
 /* The display grid in use (lib/modelGrids): the UKV's 2 km grid or the global models' wide 8 km
    one. NX, NY, GRID and REGIONS are live bindings: setGrid() switches them for every importer. */
@@ -271,6 +273,12 @@ const SCALES = {
   ptype: RADAR_TYPE,
   frozen_pct: { stops: [[5, '#dfe9f5', 120], [25, '#b9c8f2', 170], [50, '#9a8fe0', 200], [75, '#8a7fe0', 220], [100, '#ffffff', 235]], floor: 5, ticks: [5, 25, 50, 75, 100] },
   snow_acc: { stops: SNOW.map(([v, c, a]) => [v, c, a]), floor: 0.1, discrete: true, ticks: [0.1, 1, 3, 6, 12, 25, 50], contours: [1, 5, 10, 20], label: true },
+  /* added 13 Nov 2026 with AIFS's and the GEFS mean's further fields */
+  snow_cover: { stops: [[5, '#c9d6e6', 90], [25, '#d9e4f2', 140], [50, '#e6eef8', 185], [75, '#f1f6fc', 215], [95, '#ffffff', 235]], floor: 5,
+    ticks: [5, 25, 50, 75, 100] },
+  soil_t: { stops: TEMP, ticks: [-10, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
+  soil_m: { stops: [[5, '#8c5a2b', 200], [15, '#c99b54', 190], [25, '#d8c27a', 180], [35, '#9fce8a', 175], [45, '#4fa3c7', 195], [60, '#2a5fa8', 215],
+    [80, '#1d3f80', 230]], ticks: [5, 15, 25, 35, 45, 60, 80] },
   /* TCM FROST, MyWeatherUK's snow model (lib/frostKey): its four risk levels, the chance of snow
      falling in each period, and the snow expected to fall, since the run began and in 24 hours */
   snow_risk: { stops: SNOW_RISK_LEVELS.map((l, i) => [l.level, l.colour, [150, 190, 215, 235][i]]), floor: 1, discrete: true,
@@ -397,7 +405,7 @@ function decodeTable(h) {
 }
 
 export async function loadFrame(model, runTag, v, step, signal) {
-  const r = await fetch(`${API}/frames/${model}/${runTag}/${v}/${step}?v=${FRAME_V}${VAR_V[v] ? `.${VAR_V[v]}` : ''}`, { signal });
+  const r = await fetch(`${API}/frames/${model}/${runTag}/${v}/${step}?v=${FRAME_V}${VAR_V[v] ? `.${VAR_V[v]}` : ''}${MODEL_V[model] ? `.m${MODEL_V[model]}` : ''}`, { signal });
   if (!r.ok) throw new Error(`frame ${step}: ${r.status}`);
   const buf = await r.arrayBuffer();
   const n = new DataView(buf).getUint32(0, true);

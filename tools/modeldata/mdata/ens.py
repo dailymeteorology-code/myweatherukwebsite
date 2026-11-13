@@ -56,6 +56,15 @@ FIELDS = {
     'vis':        dict(label='Visibility', unit='km', lo=0, hi=60, scale='sqrt'),
     'snowing':    dict(label='Snow falling', unit='', lo=0, hi=1),
     'frzr':       dict(label='Freezing rain', unit='', lo=0, hi=1),
+    # added 13 Nov 2026 (GEFS)
+    'icep':       dict(label='Ice pellets', unit='', lo=0, hi=1),
+    'rain':       dict(label='Rain falling', unit='', lo=0, hi=1),
+    'td2':        dict(label='Dew point (2 m)', unit='°C', lo=-35, hi=35),
+    'tmax':       dict(label='Highest temperature (6 h)', unit='°C', lo=-35, hi=45),
+    'tmin':       dict(label='Lowest temperature (6 h)', unit='°C', lo=-35, hi=45),
+    'pw':         dict(label='Precipitable water', unit='mm', lo=0, hi=80),
+    'srh3':       dict(label='Storm-relative helicity 0-3 km', unit='m²/s²', lo=-200, hi=800),
+    'ceiling':    dict(label='Cloud base (ceiling)', unit='m', lo=0, hi=5000, scale='sqrt'),
 }
 
 
@@ -212,7 +221,12 @@ class GEFS:
            't2': [('TMP', '2 m above ground')], 'precip_6h': [('APCP', 'surface')], 'precip_24h': [('APCP', 'surface')],
            'snow_depth': [('SNOD', 'surface')], 'cape': [('CAPE', 'surface')], 'mslp': [('PRMSL', 'mean sea level')],
            'tcc': [('TCDC', 'entire atmosphere')], 'vis': [('VIS', 'surface')], 'snowing': [('CSNOW', 'surface')],
-           'frzr': [('CFRZR', 'surface')]}
+           'frzr': [('CFRZR', 'surface')],
+           # added 13 Nov 2026
+           'icep': [('CICEP', 'surface')], 'rain': [('CRAIN', 'surface')], 'td2': [('DPT', '2 m above ground')],
+           'tmax': [('TMAX', '2 m above ground')], 'tmin': [('TMIN', '2 m above ground')],
+           'pw': [('PWAT', 'entire atmosphere (considered as a single layer)')], 'srh3': [('HLCY', '3000-0 m above ground')],
+           'ceiling': [('HGT', 'cloud ceiling')]}
     fields = list(REC)
 
     def __init__(self):
@@ -264,8 +278,11 @@ class GEFS:
             if f == 'wind':
                 return np.hypot(raw_at(h, R[0]), raw_at(h, R[1])) * MPH
             return raw_at(h, R[0]) * MPH
-        if f == 't2':
+        if f in ('t2', 'td2', 'tmax', 'tmin'):
             return raw_at(h, R[0]) - 273.15
+        if f == 'ceiling':                                  # no cloud has no ceiling: as high as can be, not missing
+            a = raw_at(h, R[0])
+            return np.where(np.isfinite(a) & (a < 1e5), a, 20000.0).astype(np.float32)
         if f == 'mslp':
             return raw_at(h, R[0]) / 100.0
         if f == 'vis':

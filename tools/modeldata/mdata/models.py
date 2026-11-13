@@ -224,6 +224,10 @@ VARIABLES = {
     'frozen_pct':   dict(label='Share of precipitation falling frozen', unit='%', group='Snow & ice', lo=0, hi=100),
     # snowfall as a depth, at the usual 10:1 ratio of fresh snow to water
     'snow_acc':     dict(label='Snow accumulation (10:1)', unit='cm', group='Snow & ice', lo=0, hi=200, scale='sqrt'),
+    # added 13 Nov 2026 with AIFS's and the GEFS mean's further fields
+    'snow_cover':   dict(label='Snow cover', unit='%', group='Snow & ice', lo=0, hi=100),
+    'soil_t':       dict(label='Soil temperature (top layer)', unit='°C', group='Radiation & surface', lo=-30, hi=50),
+    'soil_m':       dict(label='Soil moisture (top layer)', unit='%', group='Radiation & surface', lo=0, hi=100),
     't2max3':       dict(label='Max temperature (past 3 h)', unit='°C', group='Temperature', lo=-35, hi=45),
     't2min3':       dict(label='Min temperature (past 3 h)', unit='°C', group='Temperature', lo=-35, hi=45),
     't925':         dict(label='Temperature 925 hPa', unit='°C', group='Upper air', lo=-35, hi=35),
@@ -320,6 +324,114 @@ def _kindex(t850, t700, t500, rh850, rh700):
 def _pct(a):
     """A fraction or a percentage, as a percentage."""
     return a * 100.0 if np.nanmax(a) <= 1.6 else a
+
+
+# ── thermodynamics for what a model does not give itself (AIFS, the GEFS mean): the freezing
+#    levels, the wet-bulb potential temperature, the lifted index and CAPE, from its pressure levels ──
+def _es(t):
+    """Saturation vapour pressure over water (hPa) at t (C): Bolton (1980)."""
+    return 6.112 * np.exp(17.67 * t / (t + 243.5))
+
+
+def _q_from_rh(t, rh, p_hpa):
+    """Specific humidity (kg/kg) from temperature (C) and relative humidity (%) at a pressure."""
+    e = np.clip(rh, 0, 100) / 100.0 * _es(t)
+    return 0.622 * e / (p_hpa - 0.378 * e)
+
+
+def _wet_bulb_rh(t, rh):
+    """Wet-bulb temperature (C) from temperature (C) and relative humidity (%): Stull (2011)."""
+    rh = np.clip(rh, 1, 100)
+    return (t * np.arctan(0.151977 * np.sqrt(rh + 8.313659)) + np.arctan(t + rh) - np.arctan(rh - 1.676331)
+            + 0.00391838 * rh ** 1.5 * np.arctan(0.023101 * rh) - 4.686035)
+
+
+def _theta_e(tk, q, p_hpa):
+    """Equivalent potential temperature (K): Bolton (1980) eq. 43, the condensation temperature by eq. 21."""
+    q = np.clip(q, 1e-7, 0.05)
+    e = np.maximum(q * p_hpa / (0.622 + 0.378 * q), 1e-4)
+    r = q / (1 - q)
+    tl = 2840.0 / (3.5 * np.log(tk) - np.log(e) - 4.805) + 55.0
+    return tk * (1000.0 / p_hpa) ** (0.2854 * (1 - 0.28 * r)) * np.exp((3.376 / tl - 0.00254) * 1000.0 * r * (1 + 0.81 * r))
+
+
+def _theta_w(te):
+    """Wet-bulb potential temperature (C): where saturated air of this equivalent potential
+    temperature (K) is at 1000 hPa, its temperature there."""
+    return (_saturated_t(te, 1000.0) - 273.15).astype(np.float32)
+
+
+_TSAT = np.arange(170.0, 335.0, 0.05)
+_SAT = {}
+
+
+def _saturated_t(te, p_hpa):
+    """The temperature (K) of saturated air at p (a level) with equivalent potential temperature te:
+    from a table of the saturated air's te against its temperature (it rises with it), made once a level."""
+    tab = _SAT.get(p_hpa)
+    if tab is None:
+        es = _es(_TSAT - 273.15)
+        tab = _SAT[p_hpa] = _theta_e(_TSAT, 0.622 * es / (p_hpa - 0.378 * es), float(p_hpa))
+    return np.interp(te, tab, _TSAT)
+
+
+def _parcel_t(th, te, p_hpa):
+    """A lifted parcel's temperature (K) at a level: its dry adiabat (potential temperature th) below
+    where it saturates, its moist adiabat (te) above, which is whichever of the two is warmer."""
+    return np.maximum(th * (p_hpa / 1000.0) ** 0.2854, _saturated_t(te, p_hpa))
+
+
+def _lifted_index(t2, td2, sp_hpa, t500):
+    """Lifted index (K): the 500 hPa air less a surface parcel lifted to it (negative = unstable)."""
+    q = _q_from_rh(t2, 100.0 * _es(td2) / _es(t2), sp_hpa)
+    tk = t2 + 273.15
+    return (t500 + 273.15) - _parcel_t(tk * (1000.0 / sp_hpa) ** 0.2854, _theta_e(tk, q, sp_hpa), 500.0)
+
+
+def _cape_mu(levels, T, Q, sp_hpa, t2, td2):
+    """Most-unstable CAPE (J/kg) from pressure levels. The parcel: the air of highest equivalent
+    potential temperature of the surface and the levels up to 700 hPa above the ground. Lifted
+    (dry adiabat to its condensation level, moist above), its virtual buoyancy against the levels'
+    air is summed over the layers above it, the positive part only. T: level -> K, Q: level ->
+    kg/kg (none above the levels given: dry)."""
+    g, rd = 9.80665, 287.04
+    tk = t2 + 273.15
+    q0 = _q_from_rh(t2, 100.0 * _es(td2) / _es(t2), sp_hpa)
+    p0, th, te, t0 = sp_hpa.astype(np.float64), tk * (1000.0 / sp_hpa) ** 0.2854, _theta_e(tk, q0, sp_hpa), tk
+    for p in (1000, 925, 850, 700):
+        if p not in Q:
+            continue
+        tep = _theta_e(T[p], Q[p], float(p))
+        better = (p < sp_hpa - 5) & (tep > te)
+        p0, te, q0, t0 = np.where(better, p, p0), np.where(better, tep, te), np.where(better, Q[p], q0), np.where(better, T[p], t0)
+        th = np.where(better, T[p] * (1000.0 / p) ** 0.2854, th)
+    cape = np.zeros(np.shape(sp_hpa), np.float64)
+    lp, lb = p0.copy(), np.zeros_like(cape)
+    ltv = t0 * (1 + 0.61 * q0)                       # the parcel starts as the air it is
+    for p in levels:
+        above = p < lp - 1
+        tp = _parcel_t(th, te, float(p))
+        es = _es(tp - 273.15)
+        qp = np.minimum(q0, 0.622 * es / (p - 0.378 * es))
+        tve = T[p] * (1 + 0.61 * Q.get(p, 0.0))
+        b = (tp * (1 + 0.61 * qp) - tve) / tve
+        dz = rd / g * 0.5 * (ltv + tve) * np.log(np.maximum(lp, p + 1e-3) / p)
+        cape += np.where(above, g * np.maximum(0.5 * (lb + b), 0) * dz, 0.0)
+        lp, lb, ltv = np.where(above, p, lp), np.where(above, b, lb), np.where(above, tve, ltv)
+    return cape.astype(np.float32)
+
+
+def _crossing(ts, zs):
+    """The height (m above sea level) where a profile first falls through 0 C going up: ts, zs from
+    the lowest level up (C, m); 0 where it is at or below freezing already at the lowest level."""
+    out = np.where(ts[0] <= 0, 0.0, np.nan)
+    done = ts[0] <= 0
+    for k in range(len(ts) - 1):
+        cross = ~done & (ts[k] > 0) & (ts[k + 1] <= 0)
+        z = zs[k] + (zs[k + 1] - zs[k]) * ts[k] / np.maximum(ts[k] - ts[k + 1], 1e-6)
+        out = np.where(cross, np.maximum(z, 0.0), out)
+        done |= cross
+    return out.astype(np.float32)
 
 
 def _coriolis():
@@ -619,6 +731,7 @@ ECM_HOSTS = ('https://storage.googleapis.com/ecmwf-open-data', 'https://ecmwf-fo
 
 class ECMWF:
     id, label, res_km = 'ifs', 'ECMWF IFS', 25.0
+    MM = 1000.0                        # its precipitation and snowfall are metres of water: to mm (AIFS: kg m-2, mm already)
     path, stem = 'ifs/0p25/oper', 'oper-fc'
     cycles = (0, 6, 12, 18)
     SPEC = {
@@ -762,7 +875,7 @@ class ECMWF:
             with np.errstate(invalid='ignore', divide='ignore'):
                 return np.where(A[0] > 0, A[0] * 1000.0 / np.maximum(A[1], 50.0) * 100.0, 0.0).astype(np.float32)
         if var == 'conv_total':
-            return A[0] * 1000.0
+            return A[0] * self.MM
         if var == 'vort500':
             return A[0] * 1e5
         if var == 'olr':
@@ -774,7 +887,7 @@ class ECMWF:
                 return np.zeros_like(A[0])
             from .derived import typed_rate
             tp0 = self._get(run, prev_h, [('sfc', 'tp')])[0]
-            rate = np.maximum(np.nan_to_num(A[1] - tp0), 0) * 1000.0 / (h - prev_h)
+            rate = np.maximum(np.nan_to_num(A[1] - tp0), 0) * self.MM / (h - prev_h)
             return typed_rate(np.where(np.isfinite(A[1]), rate, np.nan), A[0])
         if var == 'w700':
             return A[0]
@@ -785,7 +898,7 @@ class ECMWF:
         if var == 'z500':
             return A[0] / 10.0
         if var in ('precip_total', 'snow_total'):
-            return A[0] * 1000.0
+            return A[0] * self.MM
         if var in ('tcc', 'lcc', 'mcc', 'hcc'):
             return A[0] * 100.0 if np.nanmax(A[0]) <= 1.01 else A[0]
         if var == 'rh2':
@@ -793,24 +906,86 @@ class ECMWF:
             return 100 * np.exp(17.625 * td / (243.04 + td)) / np.exp(17.625 * t / (243.04 + t))
         if var == 'feels':
             return _feels(A[0] - 273.15, A[1] - 273.15, np.hypot(A[2], A[3]) * MPH)
-        if var in ('precip_rate', 'sw_down', 'lw_down'):
+        if var == 'precip_rate':
+            return A[0] * self.MM                # mm since the start; job.py differences consecutive steps
+        if var in ('sw_down', 'lw_down'):
             return A[0]                          # raw accumulation; job.py differences consecutive steps
         return A[0]
+
+
+AIFS_T = (1000, 925, 850, 700, 600, 500, 400, 300, 250, 200)     # the levels CAPE is summed over
+AIFS_Q = (1000, 925, 850, 700, 600, 500, 400)                     # moisture above 400 hPa is too little to matter
+AIFS_Z = (1000, 925, 850, 700, 600, 500, 400)                     # the freezing levels' search
 
 
 class AIFS(ECMWF):
     id, label, res_km = 'aifs', 'ECMWF AIFS (AI)', 25.0
     path = 'aifs-single/0p25/oper'
+    MM = 1.0                           # AIFS writes precipitation in kg m-2, which is mm (13 Nov 2026: it was read as metres, 1000x)
     # the AI model gives specific humidity on pressure levels, not relative humidity
     SPEC = dict(ECMWF.SPEC, rh850=[('pl', 't', 850), ('pl', 'q', 850)],
-                kindex=[('pl', 't', 850), ('pl', 't', 700), ('pl', 't', 500), ('pl', 'q', 850), ('pl', 'q', 700)])
+                kindex=[('pl', 't', 850), ('pl', 't', 700), ('pl', 't', 500), ('pl', 'q', 850), ('pl', 'q', 700)],
+                # added 13 Nov 2026: its rates by kind, the profiles' fields, its land surface
+                rh700=[('pl', 't', 700), ('pl', 'q', 700)], wbpt850=[('pl', 't', 850), ('pl', 'q', 850)],
+                snow_rate=[('sfc', 'sf')], rain_rate=[('sfc', 'tp'), ('sfc', 'sf')], conv_rain=[('sfc', 'cp')],
+                frozen_pct=[('sfc', 'tp'), ('sfc', 'sf')],
+                frz=[('pl', 't', p) for p in AIFS_Z] + [('pl', 'gh', p) for p in AIFS_Z],
+                wbfz=[('pl', 't', p) for p in AIFS_Z] + [('pl', 'q', p) for p in AIFS_Z] + [('pl', 'gh', p) for p in AIFS_Z],
+                li=[('sfc', '2t'), ('sfc', '2d'), ('sfc', 'sp'), ('pl', 't', 500)],
+                cape_mu=[('sfc', '2t'), ('sfc', '2d'), ('sfc', 'sp')] + [('pl', 't', p) for p in AIFS_T] + [('pl', 'q', p) for p in AIFS_Q],
+                snow_cover=[('sfc', 'fscov')], soil_t=[('sol', 'sot', 1)], soil_m=[('sol', 'vsw', 1)])
 
     def schedule(self, run):
         return list(range(0, 241, 6))
 
-    variables = ['precip_rate', 'precip_total', 'conv_total', 'snow_total', 'snow_acc', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill',
-                 'wind10', 'wdir10', 'wind100', 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'kindex', 'pw', 't925', 't850', 't700', 't500', 'z850',
-                 'z500', 'thick', 'rh850', 'wind925', 'wind850', 'wind700', 'wind500', 'wind300', 'wind250', 'w700', 'sw_down', 'lw_down', 'wx']
+    variables = ['precip_rate', 'rain_rate', 'conv_rain', 'precip_total', 'conv_total', 'ptype', 'snow_rate', 'frozen_pct', 'snow_total',
+                 'snow_acc', 'snow_cover', 'frz', 'wbfz', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10', 'wind100',
+                 'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'cape_mu', 'li', 'kindex', 'pw', 'wbpt850', 't925', 't850', 't700', 't500', 'z850',
+                 'z500', 'thick', 'rh850', 'rh700', 'wind925', 'wind850', 'wind700', 'wind500', 'wind300', 'wind250', 'w700', 'sw_down',
+                 'lw_down', 'soil_t', 'soil_m', 'wx']
+
+    def field(self, run, h, var, prev_h, prev_raw=None):
+        S = self.SPEC.get(var)
+        if var in ('snow_rate', 'conv_rain'):
+            return self._get(run, h, S)[0] * self.MM                      # mm since the start; job.py differences them
+        if var == 'rain_rate':
+            tp, sf = self._get(run, h, S)
+            return (tp - sf) * self.MM
+        if var == 'frozen_pct':                                           # the snowfall's share of what fell since the step before
+            if not h or prev_h is None:
+                return np.full((NY, NX), np.nan, np.float32)
+            tp, sf = self._get(run, h, S)
+            tp0, sf0 = self._get(run, prev_h, S)
+            dp, ds = np.maximum(tp - tp0, 0) * self.MM, np.maximum(sf - sf0, 0) * self.MM
+            return np.where(dp >= 0.1, 100.0 * np.clip(ds / np.maximum(dp, 1e-6), 0, 1), np.nan).astype(np.float32)
+        if var in ('rh700', 'wbpt850'):
+            t, q = self._get(run, h, S)
+            p = 700.0 if var == 'rh700' else 850.0
+            return _rh_from_q(t - 273.15, q, p) if var == 'rh700' else _theta_w(_theta_e(t, q, p))
+        if var in ('frz', 'wbfz'):
+            A = self._get(run, h, S)
+            n = len(AIFS_Z)
+            ts = [a - 273.15 for a in A[:n]]
+            if var == 'wbfz':
+                ts = [_wet_bulb_rh(t, _rh_from_q(t, q, float(p))) for t, q, p in zip(ts, A[n:2 * n], AIFS_Z)]
+            return _crossing(ts, A[-n:])
+        if var == 'li':
+            t2, td2, sp, t500 = self._get(run, h, S)
+            return _lifted_index(t2 - 273.15, td2 - 273.15, sp / 100.0, t500 - 273.15).astype(np.float32)
+        if var == 'cape_mu':
+            A = self._get(run, h, S)
+            nt = len(AIFS_T)
+            T = dict(zip(AIFS_T, A[3:3 + nt]))
+            Q = dict(zip(AIFS_Q, A[3 + nt:]))
+            return _cape_mu(AIFS_T, T, Q, A[2] / 100.0, A[0] - 273.15, A[1] - 273.15)
+        if var == 'snow_cover':
+            a = self._get(run, h, S)[0]
+            return np.clip(a * 100.0 if np.nanmax(a) <= 1.01 else a, 0, 100).astype(np.float32)
+        if var == 'soil_t':
+            return self._get(run, h, S)[0] - 273.15
+        if var == 'soil_m':
+            return np.clip(self._get(run, h, S)[0] * 100.0, 0, 100).astype(np.float32)
+        return super().field(run, h, var, prev_h, prev_raw)
 
 
 # ── NOAA GFS ────────────────────────────────────────────────────────────────
@@ -932,8 +1107,10 @@ class GFS:
             # sea, step after step, adds up to snow that is not there
             pct = np.clip(np.nan_to_num(A[1]), 0, 100)
             return {'apcp': A[0] if h else np.zeros_like(A[0]), 'frac': np.where(pct >= 50, pct / 100.0, 0.0)}
-        if var in ('t2', 'td2', 'tskin', 'feels', 't850', 't500', 't925', 't700'):
+        if var in ('t2', 'td2', 'tskin', 'feels', 't850', 't500', 't925', 't700', 't2max3', 't2min3', 'soil_t'):
             return A[0] - 273.15
+        if var == 'soil_m':
+            return np.clip(A[0] * 100.0, 0, 100).astype(np.float32)
         if var == 'wdir10':
             return _wdir(A[0], A[1])
         if var == 'windchill':
@@ -984,10 +1161,32 @@ class GEFSMean(GFS):
         'rh700': [('RH', '700 mb')], 'wind850': [('UGRD', '850 mb'), ('VGRD', '850 mb')],
         'wind500': [('UGRD', '500 mb'), ('VGRD', '500 mb')], 'wind250': [('UGRD', '250 mb'), ('VGRD', '250 mb')],
         'sw_down': [('DSWRF', 'surface')],
+        # added 13 Nov 2026: the rest of what the mean's files have, and what can be made from it
+        'precip_total': [('APCP', 'surface')], 'snow_total': [('APCP', 'surface'), ('CSNOW', 'surface'), ('CICEP', 'surface')],
+        'ptype': [('CRAIN', 'surface'), ('CSNOW', 'surface'), ('CFRZR', 'surface'), ('CICEP', 'surface'), ('APCP', 'surface')],
+        'frozen_pct': [('CRAIN', 'surface'), ('CSNOW', 'surface'), ('CFRZR', 'surface'), ('CICEP', 'surface')],
+        't2max3': [('TMAX', '2 m above ground')], 't2min3': [('TMIN', '2 m above ground')],
+        'cin_mu': [('CIN', '180-0 mb above ground')], 'snow_swe': [('WEASD', 'surface')],
+        't925': [('TMP', '925 mb')], 't700': [('TMP', '700 mb')], 'rh850': [('RH', '850 mb')], 'z850': [('HGT', '850 mb')],
+        'thick': [('HGT', '500 mb'), ('HGT', '1000 mb')],
+        'wind925': [('UGRD', '925 mb'), ('VGRD', '925 mb')], 'wind700': [('UGRD', '700 mb'), ('VGRD', '700 mb')],
+        'wind300': [('UGRD', '300 mb'), ('VGRD', '300 mb')],
+        'kindex': [('TMP', '850 mb'), ('TMP', '700 mb'), ('TMP', '500 mb'), ('RH', '850 mb'), ('RH', '700 mb')],
+        'wbpt850': [('TMP', '850 mb'), ('RH', '850 mb')],
+        'frz': [('TMP', f'{p} mb') for p in (1000, 925, 850, 700, 500)] + [('HGT', f'{p} mb') for p in (1000, 925, 850, 700, 500)],
+        'wbfz': [('TMP', f'{p} mb') for p in (1000, 925, 850, 700, 500)] + [('RH', f'{p} mb') for p in (1000, 925, 850, 700, 500)]
+                + [('HGT', f'{p} mb') for p in (1000, 925, 850, 700, 500)],
+        'li': [('TMP', '2 m above ground'), ('RH', '2 m above ground'), ('PRES', 'surface'), ('TMP', '500 mb')],
+        'lw_down': [('DLWRF', 'surface')], 'olr': [('ULWRF', 'top of atmosphere')],
+        'shf': [('SHTFL', 'surface')], 'lhf': [('LHTFL', 'surface')],
+        'soil_t': [('TSOIL', '0-0.1 m below ground')], 'soil_m': [('SOILW', '0-0.1 m below ground')],
     }
     WAVE = set()
-    variables = ['precip_rate', 't2', 'td2', 'rh2', 'feels', 'windchill', 'wind10', 'wdir10', 'mslp', 'tcc', 'cape_mu', 'pw',
-                 'snow_depth', 't850', 't500', 'z500', 'rh700', 'wind850', 'wind500', 'wind250', 'sw_down', 'wx']
+    CATEGORY = set()                   # the mean of the members' yes/no types is the share of members: smooth, not nearest
+    variables = ['precip_rate', 'precip_total', 'ptype', 'frozen_pct', 'snow_total', 'snow_acc', 'snow_depth', 'snow_swe', 'frz', 'wbfz',
+                 't2', 't2max3', 't2min3', 'td2', 'rh2', 'feels', 'windchill', 'wind10', 'wdir10', 'mslp', 'tcc', 'cape_mu', 'cin_mu', 'li',
+                 'kindex', 'pw', 'wbpt850', 't925', 't850', 't700', 't500', 'z850', 'z500', 'thick', 'rh850', 'rh700', 'wind925', 'wind850',
+                 'wind700', 'wind500', 'wind300', 'wind250', 'sw_down', 'lw_down', 'olr', 'shf', 'lhf', 'soil_t', 'soil_m', 'wx']
 
     def schedule(self, run):
         return list(range(0, 241, 3)) + list(range(246, 385, 6))
@@ -995,7 +1194,64 @@ class GEFSMean(GFS):
     def url(self, run, h, wave=False):
         return f'{GEFS_BUCKET}/gefs.{run:%Y%m%d}/{run:%H}/atmos/pgrb2ap5/geavg.t{run:%H}z.pgrb2a.0p50.f{h:03d}'
 
+    def _recs(self, run, h, S):
+        """The step's records of a SPEC, on the display grid (and the APCP record's description)."""
+        recs = self.index(run, h)
+        rr = [self._pick(recs, v, lev) for v, lev in S]
+        if any(r is None for r in rr):
+            raise KeyError(f'{[s for s, r in zip(S, rr) if r is None]} not in {self.id} T+{h}')
+        blobs = fetch_ranges(self.url(run, h), [(r['start'], r['end'], i) for i, r in enumerate(rr)], gap=0, workers=8)
+        return [ECMWF._to_display(self, *decode_grib(blobs[i])) for i in range(len(rr))], rr
+
+    @staticmethod
+    def _bucket(r):
+        """An APCP record's hours: (from, to); GEFS buckets rain over 6 h (0-3, 0-6, 6-9, 6-12, ...)."""
+        m = re.match(r'(\d+)-(\d+) hour', r['desc'])
+        return (int(m.group(1)), int(m.group(2))) if m else None
+
     def field(self, run, h, var, prev_h, prev_raw=None):
+        if var in ('precip_total', 'snow_total'):
+            # chained by job.py (BUCKET_CHAIN): this step's bucket and its hours; the snow, its
+            # frozen share (the share of members with snow or ice pellets)
+            if h == 0:
+                return {'bucket': np.zeros((NY, NX), np.float32), 'from': 0, 'to': 0}
+            A, rr = self._recs(run, h, self.SPEC[var])
+            b = self._bucket(rr[0])
+            if b is None:
+                raise KeyError(f'APCP at T+{h} has no hours')
+            amt = np.maximum(A[0], 0)
+            if var == 'snow_total':
+                amt = amt * np.clip(np.nan_to_num(A[1]) + np.nan_to_num(A[2]), 0, 1)
+            return {'bucket': amt, 'from': b[0], 'to': b[1]}
+        if var in ('ptype', 'frozen_pct'):
+            # the mean of the members' yes/no types: the share of members with rain, snow, freezing rain, ice pellets
+            if h == 0:
+                return np.zeros((NY, NX), np.float32) if var == 'ptype' else np.full((NY, NX), np.nan, np.float32)
+            A, rr = self._recs(run, h, self.SPEC[var])
+            fr, fs, fz, fi = (np.clip(np.nan_to_num(a), 0, 1) for a in A[:4])
+            if var == 'frozen_pct':
+                tot = fr + fs + fz + fi
+                return np.where(tot >= 0.05, 100.0 * (fs + fi) / np.maximum(tot, 1e-6), np.nan).astype(np.float32)
+            from .derived import typed_rate
+            b = self._bucket(rr[4])
+            rate = np.maximum(A[4], 0) / max((b[1] - b[0]) if b else 6, 1)
+            share = fs / np.maximum(fr + fs, 1e-6)
+            ice = fz + fi >= 0.4
+            code = np.where(ice, np.where(fi > fz, 8, 3), np.select([share >= 0.7, share >= 0.3], [5, 7], 1))
+            return typed_rate(rate, code)
+        if var in ('wbpt850', 'frz', 'wbfz', 'li'):
+            A, _ = self._recs(run, h, self.SPEC[var])
+            if var == 'wbpt850':
+                t = A[0] - 273.15
+                return _theta_w(_theta_e(A[0], _q_from_rh(t, A[1], 850.0), 850.0))
+            if var == 'li':
+                t2 = A[0] - 273.15
+                return _lifted_index(t2, _dewpoint(t2, A[1]), A[2] / 100.0, A[3] - 273.15).astype(np.float32)
+            n = 5
+            ts = [a - 273.15 for a in A[:n]]
+            if var == 'wbfz':
+                ts = [_wet_bulb_rh(t, rh) for t, rh in zip(ts, A[n:2 * n])]
+            return _crossing(ts, A[-n:])
         if var == 'precip_rate':
             # GEFS buckets rain over 6 h (0-3, 0-6, 6-9, 6-12, ...): the mean rate over the bucket
             if h == 0:
@@ -1058,7 +1314,12 @@ SOURCES = {
 }
 # variables whose frames are differences of an accumulation between consecutive steps
 DIFFERENCED = {('ifs', 'precip_rate'), ('aifs', 'precip_rate'), ('ifs', 'sw_down'), ('aifs', 'sw_down'),
-               ('ifs', 'lw_down'), ('aifs', 'lw_down'), ('ifs', 'olr')}
+               ('ifs', 'lw_down'), ('aifs', 'lw_down'), ('ifs', 'olr'),
+               ('aifs', 'snow_rate'), ('aifs', 'rain_rate'), ('aifs', 'conv_rain')}
+# of those, the ones that are mm since the start, differenced into mm/h
+RATE_DIFF = {'precip_rate', 'snow_rate', 'rain_rate', 'conv_rain'}
+# running totals made in job.py from 6-hour buckets (the GEFS mean's APCP: 0-3, 0-6, 6-9, 6-12, ...)
+BUCKET_CHAIN = {('gefs_mean', 'precip_total'), ('gefs_mean', 'snow_total')}
 # a running snowfall total built in job.py from a running precipitation total and the frozen share
 SNOW_CHAIN = {('gfs', 'snow_total')}
 # copies of another variable in other units: snow_acc is the snowfall total as cm of snow at 10:1

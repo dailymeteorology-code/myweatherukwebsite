@@ -20,7 +20,7 @@ from datetime import timedelta
 import numpy as np
 
 from .common import FRAMES, write_frame, write_json, DATA
-from .models import ACCUM, ALIASES, DIFFERENCED, MODELS, SNOW_CHAIN, STEP_VARS, VARIABLES, _utc
+from .models import ACCUM, ALIASES, BUCKET_CHAIN, DIFFERENCED, MODELS, RATE_DIFF, SNOW_CHAIN, STEP_VARS, VARIABLES, _utc
 
 
 def run_dir(model, run, var):
@@ -229,7 +229,7 @@ def main(model, run_s, var, first=None):
     status = {'model': model, 'run': run.isoformat(), 'var': var, 'steps': steps, 'done': [], 'missing': [],
               'state': 'running', 'started': time.time()}
     write_json(d / 'status.json', status)
-    made_here = var == 'ptype' and model in ('ukv', 'mo_global')     # the Met Office models give rates, not a type
+    made_here = var == 'ptype' and model in ('ukv', 'mo_global', 'aifs')     # the Met Office models and AIFS give rates, not a type
     if var in ('wx', 'gust_peak', 'fog_vis') or var in ALIASES or made_here:
         if var == 'fog_vis':
             fog_area(model, run_s, var, steps, d, status, first)
@@ -242,7 +242,8 @@ def main(model, run_s, var, first=None):
     accum = var in ACCUM and model in ('ukv', 'mo_global')
     diff = (model, var) in DIFFERENCED
     chain = (model, var) in SNOW_CHAIN
-    need_all = accum or diff or chain              # these need every raw step, even if frames exist
+    buckets = (model, var) in BUCKET_CHAIN
+    need_all = accum or diff or chain or buckets   # these need every raw step, even if frames exist
     prev = {s: (steps[i - 1] if i else None) for i, s in enumerate(steps)}
     order = steps
     if first is not None and not need_all:          # the step on screen first, then outwards
@@ -284,6 +285,7 @@ def main(model, run_s, var, first=None):
         flush()
 
     total, acc_h, last_raw, last_h = None, None, None, None
+    base, base_h = None, None                      # a bucket chain: the total where the buckets last began again
     threads = int(os.environ.get('MDATA_THREADS', '16'))            # the server gives background jobs fewer
     with cf.ThreadPoolExecutor(threads) as ex:     # downloads are latency-bound: many in flight
         for h, a in ex.map(fetch, order):
@@ -297,6 +299,20 @@ def main(model, run_s, var, first=None):
                 if diff:
                     last_raw, last_h = None, None
                 flush()
+                continue
+            if buckets:                            # 6-hour buckets (0-3, 0-6, 6-9 ...): the total where this one began, plus it
+                if a['to'] == 0:
+                    base, base_h = np.zeros_like(a['bucket']), 0
+                    save(h, base, meta)
+                    continue
+                if base is None or a['from'] != base_h:
+                    status['missing'].append(h)    # a bucket missing before this one: the total cannot join up
+                    flush()
+                    continue
+                total = base + a['bucket']
+                if a['to'] % 6 == 0:
+                    base, base_h = total, a['to']
+                save(h, total, meta)
                 continue
             if chain:                              # snowfall: each step's new precipitation times its frozen share
                 apcp, frac = a['apcp'], a['frac']
@@ -327,8 +343,8 @@ def main(model, run_s, var, first=None):
                     out = np.full_like(raw, np.nan) if h else np.zeros_like(raw)
                 else:
                     dt = h - last_h
-                    delta = np.maximum(raw - last_raw, 0) if var == 'precip_rate' else (raw - last_raw)
-                    out = delta * 1000.0 / dt if var == 'precip_rate' else delta / (dt * 3600.0)
+                    delta = np.maximum(raw - last_raw, 0) if var in RATE_DIFF else (raw - last_raw)
+                    out = delta / dt if var in RATE_DIFF else delta / (dt * 3600.0)   # mm since the start -> mm/h; J/m2 -> W/m2
                 last_raw, last_h = raw, h
             save(h, out, meta)
     flush(force=True)
