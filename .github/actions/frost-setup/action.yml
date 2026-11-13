@@ -1,0 +1,19 @@
+name: TCM FROST setup
+description: Python, ecCodes and the TCM FROST requirements (the installed environment cached).
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        sudo apt-get install -y -qq --no-install-recommends libeccodes0 libeccodes-data >/dev/null 2>&1 \
+          || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libeccodes0 libeccodes-data >/dev/null)
+    - uses: actions/setup-python@v5
+      with: { python-version: '3.11' }
+    - uses: actions/cache@v4
+      id: pyenv
+      with:
+        path: ${{ env.pythonLocation }}
+        key: frost-pyenv-${{ runner.os }}-${{ env.pythonLocation }}-${{ hashFiles('tools/tcm-frost/requirements.txt') }}
+    - if: steps.pyenv.outputs.cache-hit != 'true'
+      shell: bash
+      run: pip install -q -r tools/tcm-frost/requirements.txt

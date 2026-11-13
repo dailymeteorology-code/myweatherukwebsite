@@ -1,0 +1,52 @@
+# TCM FROST, MyWeatherUK's snow model, on GitHub's servers so it keeps running when the PC is off.
+#
+# Every 30 minutes (and on any change to the engine) the route step asks the published release
+# which 6-hourly cycle is due: the newest from 18Z yesterday onwards that every source has
+# published (8.5 h after its time) and that is not yet in it. That cycle runs (all models from
+# AWS, every ensemble member, 2 km, 10 days) and is published as a Release asset; if more cycles
+# are waiting, the workflow starts itself again straight away. The site mirrors the release
+# (server/tcmFrost.js) and keeps 48 h of runs.
+name: TCM FROST
+
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  push:
+    paths: ['tools/tcm-frost/**', '.github/workflows/frost.yml', '.github/actions/frost-setup/**']
+  workflow_dispatch:
+    inputs:
+      cycle: { description: 'YYYYmmddHH to run (blank: the newest due)', required: false, default: '' }
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency: { group: tcm-frost, cancel-in-progress: false }
+
+env:
+  PYTHONPATH: tools/tcm-frost:tools/tcm-nova:tools/modeldata
+  GH_TOKEN: ${{ github.token }}
+  FROST_DATA: /tmp/frost
+  MODELDATA_DIR: /tmp/frost/modeldata
+  MDATA_GRID: uk
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/frost-setup
+      - id: route
+        run: |
+          if [ -n "${{ github.event.inputs.cycle }}" ]; then
+            echo "cycle=${{ github.event.inputs.cycle }}" >> "$GITHUB_OUTPUT"
+          else
+            python -m frost.route | tee -a "$GITHUB_OUTPUT"
+          fi
+      - if: steps.route.outputs.cycle != ''
+        run: python -m frost.run --cycle ${{ steps.route.outputs.cycle }} --out /tmp/frost/runs --workers 4
+      - if: steps.route.outputs.cycle != ''
+        run: python -m frost.publish --cycle ${{ steps.route.outputs.cycle }} --out /tmp/frost/runs
+      - if: steps.route.outputs.more != '' && steps.route.outputs.more != '0'
+        run: gh workflow run frost.yml --ref "${{ github.ref_name }}"
