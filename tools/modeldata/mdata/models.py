@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
-from .common import NC_LOCK, NX, NY, X0, DX, regular_frac, smooth_sample
+from .common import NC_LOCK, NX, NY, X0, DX, RUN_WINDOW_H, recent_runs, regular_frac, smooth_sample
 
 from nova.io_aws import decode_grib, ecmwf_index, exists, fetch_ranges, get, open_nc   # noqa: E402
 
@@ -351,17 +351,18 @@ class MetOffice:
     files = {}
     pl_files = {}
 
-    def runs(self, n=8):
+    def runs(self, n=None):
+        """Every run from the newest published back RUN_WINDOW_H hours (or the newest n)."""
         start = (datetime.now(timezone.utc) - timedelta(days=2)).strftime('%Y%m%d')
         _, pre = _s3_list(f'{self.model}/', '/', f'{self.model}/{start}')
         runs = sorted({_utc(p.split('/')[1]) for p in pre if re.match(r'.*/\d{8}T\d{4}Z/$', p)}, reverse=True)
         out = []
-        for r in runs[:n * 2]:
+        for r in runs:
+            if out and (len(out) >= n if n is not None else (out[0][0] - r).total_seconds() > RUN_WINDOW_H * 3600):
+                break
             steps = self.steps(r)
             if steps:
                 out.append((r, steps))
-            if len(out) >= n:
-                break
         # UKV reaches T+120 only from 03Z and 15Z: once those fall out of the newest n, keep the
         # newest of them listed anyway (marked `kept`), so the Location page always has days 3-5
         self.kept_runs = set()
@@ -676,29 +677,8 @@ class ECMWF:
     def _has(self, run, h):
         return any(exists(self.base(run, h, host) + '.index') for host in ECM_HOSTS)
 
-    def runs(self, n=4):
-        now = datetime.now(timezone.utc)
-        t = now.replace(minute=0, second=0, microsecond=0)
-        t -= timedelta(hours=t.hour % 6)
-        out = []
-        for k in range(10):
-            r = t - timedelta(hours=6 * k)
-            if r.hour not in self.cycles or not self._has(r, 0):
-                continue
-            sched = self.schedule(r)
-            lo, hi = 0, len(sched) - 1                      # how far the run is published
-            if not self._has(r, sched[hi]):
-                while lo < hi:
-                    mid = (lo + hi + 1) // 2
-                    if self._has(r, sched[mid]):
-                        lo = mid
-                    else:
-                        hi = mid - 1
-                sched = sched[:lo + 1]
-            out.append((r, sched))
-            if len(out) >= n:
-                break
-        return out
+    def runs(self, n=None):
+        return recent_runs(self._has, self.schedule, self.cycles, n=n)
 
     def _get(self, run, h, wants, wave=False):
         idx = self.index(run, h, wave)
@@ -889,28 +869,8 @@ class GFS:
             return f'{GFS_BUCKET}/gfs.{run:%Y%m%d}/{run:%H}/wave/gridded/gfswave.t{run:%H}z.global.0p25.f{h:03d}.grib2'
         return f'{GFS_BUCKET}/gfs.{run:%Y%m%d}/{run:%H}/atmos/gfs.t{run:%H}z.pgrb2.0p25.f{h:03d}'
 
-    def runs(self, n=4):
-        t = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-        t -= timedelta(hours=t.hour % 6)
-        out = []
-        for k in range(8):
-            r = t - timedelta(hours=6 * k)
-            if not exists(self.url(r, 0) + '.idx'):
-                continue
-            sched = self.schedule(r)
-            lo, hi = 0, len(sched) - 1
-            if not exists(self.url(r, sched[hi]) + '.idx'):
-                while lo < hi:
-                    mid = (lo + hi + 1) // 2
-                    if exists(self.url(r, sched[mid]) + '.idx'):
-                        lo = mid
-                    else:
-                        hi = mid - 1
-                sched = sched[:lo + 1]
-            out.append((r, sched))
-            if len(out) >= n:
-                break
-        return out
+    def runs(self, n=None):
+        return recent_runs(lambda r, h: exists(self.url(r, h) + '.idx'), self.schedule, n=n)
 
     def index(self, run, h, wave=False):
         k = (run, h, wave)

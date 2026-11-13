@@ -198,6 +198,39 @@ def encode(a, enc):
     return out
 
 
+# Every run from a model's newest back this many hours is listed, so a past run can be picked
+# (yesterday's same cycle included: the newest and the one a day before are both in).
+RUN_WINDOW_H = 24
+
+
+def recent_runs(has, schedule, cycles=(0, 6, 12, 18), n=None, window_h=RUN_WINDOW_H, look=14):
+    """Runs on the six-hourly cycles, newest first, that have begun to publish: every one from the
+    newest back `window_h` hours, or the newest `n`. Each with the steps published so far.
+    has(run, step) -> bool; schedule(run) -> the steps the run will have."""
+    from datetime import datetime, timedelta, timezone
+    t = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    t -= timedelta(hours=t.hour % 6)
+    out = []
+    for k in range(look):
+        r = t - timedelta(hours=6 * k)
+        if out and (len(out) >= n if n is not None else (out[0][0] - r).total_seconds() > window_h * 3600):
+            break
+        if r.hour not in cycles or not has(r, 0):
+            continue
+        sched = schedule(r)
+        lo, hi = 0, len(sched) - 1                         # how far the run is published
+        if not has(r, sched[hi]):
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if has(r, sched[mid]):
+                    lo = mid
+                else:
+                    hi = mid - 1
+            sched = sched[:lo + 1]
+        out.append((r, sched))
+    return out
+
+
 def _replace(tmp, path):
     """os.replace, retried: Windows refuses while another process (the server) has the target open.
     Still refused, the file is written in place: a reader holds it open for reading only, which a

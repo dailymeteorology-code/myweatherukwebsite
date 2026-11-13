@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
-from .common import DATA, DX, FRAMES, GRID, NX, NY, PROJ, X0, Y_TOP, smooth_sample, write_json
+from .common import DATA, DX, FRAMES, GRID, NX, NY, PROJ, X0, Y_TOP, recent_runs, smooth_sample, write_json
 from .models import MPH, _utc
 from nova.io_aws import decode_grib, ecmwf_index, exists, fetch_ranges, get   # noqa: E402
 
@@ -117,28 +117,8 @@ class ECMWFEns:
     def _has(self, run, h):
         return any(exists(self.base(run, h, host) + '.index') for host in self.hosts)
 
-    def runs(self, n=3):
-        t = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-        t -= timedelta(hours=t.hour % 6)
-        out = []
-        for k in range(8):
-            r = t - timedelta(hours=6 * k)
-            if not self._has(r, 0):
-                continue
-            sched = self.schedule(r)
-            lo, hi = 0, len(sched) - 1
-            if not self._has(r, sched[hi]):
-                while lo < hi:
-                    mid = (lo + hi + 1) // 2
-                    if self._has(r, sched[mid]):
-                        lo = mid
-                    else:
-                        hi = mid - 1
-                sched = sched[:lo + 1]
-            out.append((r, sched))
-            if len(out) >= n:
-                break
-        return out
+    def runs(self, n=None):
+        return recent_runs(self._has, self.schedule, n=n)
 
     def index(self, run, h):
         k = (run, h)
@@ -245,28 +225,8 @@ class GEFS:
     def schedule(self, run):
         return list(range(0, 241, 6))
 
-    def runs(self, n=3):
-        t = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-        t -= timedelta(hours=t.hour % 6)
-        out = []
-        for k in range(8):
-            r = t - timedelta(hours=6 * k)
-            if not exists(self.url(r, 0, 30) + '.idx'):
-                continue
-            sched = self.schedule(r)
-            lo, hi = 0, len(sched) - 1
-            if not exists(self.url(r, sched[hi], 30) + '.idx'):
-                while lo < hi:
-                    mid = (lo + hi + 1) // 2
-                    if exists(self.url(r, sched[mid], 30) + '.idx'):
-                        lo = mid
-                    else:
-                        hi = mid - 1
-                sched = sched[:lo + 1]
-            out.append((r, sched))
-            if len(out) >= n:
-                break
-        return out
+    def runs(self, n=None):
+        return recent_runs(lambda r, h: exists(self.url(r, h, 30) + '.idx'), self.schedule, n=n)
 
     def _recs(self, run, h, m):
         k = (run, h, m)

@@ -358,6 +358,22 @@ function defaultRun(m) {
   const most = Math.max(0, ...runs.map((r) => r.steps.length));
   return runs.find((r) => r.steps.length >= 0.6 * most) || runs[0] || m.runs[0];
 }
+/* a model's runs grouped by their day (UTC), newest first: the last day's worth is listed, so for
+   the UKV that is two dozen */
+const runDays = (runs) => {
+  const out = [];
+  for (const r of runs) {
+    const day = new Date(r.run).toLocaleDateString('en-GB', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' });
+    if (!out.length || out[out.length - 1][0] !== day) out.push([day, []]);
+    out[out.length - 1][1].push(r);
+  }
+  return out;
+};
+const runOptions = (runs) => runDays(runs).map(([day, rs]) => (
+  <optgroup key={day} label={day} style={{ color: '#111' }}>
+    {rs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runLabel(r.run)} · T+{r.steps[r.steps.length - 1]}{r.run === runs[0].run ? ' · latest' : ''}</option>)}
+  </optgroup>
+));
 const runLabel = (iso) => new Date(iso).toLocaleString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', hour: '2-digit' }).replace(',', '') + 'Z';
 /* what the key says about a frame: the model, the run and the lead time, and the shorter version
    that a narrow window has room for */
@@ -2098,7 +2114,7 @@ export default function ModelData() {
     <div style={{ position: 'relative' }}>
       <select value={run?.run || ''} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} style={{ ...sel, ...(narrow ? { width: '100%', padding: '10px 34px 10px 14px', fontSize: 13.5 } : {}) }}
         title={model.source || `${model.label} · ${model.members} members`} aria-label="Run">
-        {model.runs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runLabel(r.run)} · T+{r.steps[r.steps.length - 1]}</option>)}
+        {runOptions(model.runs)}
       </select>
       <ChevronDown style={{ position: 'absolute', right: 12, top: narrow ? 12 : 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
     </div>
@@ -2122,7 +2138,7 @@ export default function ModelData() {
               {spec('Run', (
                 <div style={{ position: 'relative' }}>
                   <select value={runB?.run || ''} onChange={(e) => setCmpK('run', e.target.value)} style={{ ...sel, width: '100%' }} aria-label="Second window's run">
-                    {modelB.runs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runLabel(r.run)} · T+{r.steps[r.steps.length - 1]}</option>)}
+                    {runOptions(modelB.runs)}
                   </select>
                   <ChevronDown style={{ position: 'absolute', right: 12, top: 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
                 </div>
