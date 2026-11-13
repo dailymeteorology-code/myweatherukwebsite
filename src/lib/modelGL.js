@@ -18,6 +18,11 @@
      band edges  the colour is read just either side of the value, so a step in the scale is
                  antialiased rather than a staircase
 
+     typed       precipitation type (one byte of kind and strength): smooth too, but kinds never
+                 blend (halfway between rain and snow is not sleet). The kind is a vote of the 4 x 4
+                 cells around the pixel, the strength runs through them, and a dry cell counts as just
+                 under the lightest level, so the edge of the precipitation rounds off as rain's does
+
    No data stays no data: a pixel needs at least half its nearest cells' weight to have a value.
    The canvas here is never shown: lib/modelViewer copies from it onto the graphic straight after each
    draw, so it composes with everything else. Without WebGL 2 the page uses its old picture path. */
@@ -44,6 +49,7 @@ uniform vec2 uCentre;       // the display cell at that point
 uniform float uK;           // display cells per frame cell
 uniform int uNearest;       // 1: cells as they are
 uniform int uSoft;          // 1: a smooth field: cubic B-spline
+uniform int uTyped;         // 1: kind-and-strength bytes: 0 dry, else 1 + 63 x kind + level (0-62)
 out vec4 outColour;
 const float NONE = 254.5;
 
@@ -86,6 +92,37 @@ float value(vec2 c) {
   }
   return uSoft == 1 ? v : clamp(v, lo, hi);
 }
+/* precipitation type: (kind, level) at a point; kind -1 for no data, a level under -0.5 dry */
+const float DRYL = -1.0;
+float lvl(float b) { return b > NONE || b < 0.5 ? DRYL : mod(b - 1.0, 63.0); }
+vec2 typed(vec2 c) {
+  vec2 f = c - 0.5, fl = floor(f), t = f - fl;
+  ivec2 b = ivec2(fl);
+  float p = cell(b), q = cell(b + ivec2(1, 0)), r = cell(b + ivec2(0, 1)), s = cell(b + ivec2(1, 1));
+  float n = (p < NONE ? (1.0 - t.x) * (1.0 - t.y) : 0.0) + (q < NONE ? t.x * (1.0 - t.y) : 0.0)
+          + (r < NONE ? (1.0 - t.x) * t.y : 0.0) + (s < NONE ? t.x * t.y : 0.0);
+  if (n < 0.5) return vec2(-1.0, -9.0);
+  vec4 wx = catmull(t.x), wy = catmull(t.y), bx = bspline(t.x), by = bspline(t.y);
+  vec4 vote = vec4(0.0);
+  float v = 0.0;
+  for (int j = 0; j < 4; j++) {
+    for (int i = 0; i < 4; i++) {
+      float x = cell(b + ivec2(i - 1, j - 1));
+      v += wx[i] * wy[j] * lvl(x);
+      if (x < NONE && x > 0.5) {
+        float k = floor((x - 1.0) / 63.0);
+        vote += bx[i] * by[j] * vec4(k == 0.0, k == 1.0, k == 2.0, k == 3.0);
+      }
+    }
+  }
+  float lp = lvl(p), lq = lvl(q), lr = lvl(r), ls = lvl(s);
+  v = clamp(v, min(min(lp, lq), min(lr, ls)), max(max(lp, lq), max(lr, ls)));   // no ringing past the nearest four
+  float k = 0.0, best = vote.x;
+  if (vote.y > best) { k = 1.0; best = vote.y; }
+  if (vote.z > best) { k = 2.0; best = vote.z; }
+  if (vote.w > best) { k = 3.0; best = vote.w; }
+  return vec2(k, v);
+}
 void main() {
   vec2 px = uTarget.xy + vec2(gl_FragCoord.x, uTarget.z - gl_FragCoord.y);
   vec2 c = ((px - uView.xy) / uView.z + uCentre) / uK;
@@ -114,6 +151,17 @@ void main() {
   if (uNearest == 1) {
     float b = out_ ? 255.0 : cell(ivec2(floor(c)));
     outColour = b < NONE ? colour(b) : vec4(0.0);
+    return;
+  }
+  if (uTyped == 1) {
+    vec2 kv = out_ ? vec2(-1.0, -9.0) : typed(c);
+    if (kv.x < 0.0) { outColour = vec4(0.0); return; }
+    float l = kv.y, base = 1.0 + 63.0 * kv.x;
+    float dl = min(fwidth(l) * 0.5, 4.0);
+    float wet = smoothstep(-0.5 - dl, -0.5 + dl, l);      // the edge of the precipitation, antialiased
+    if (wet <= 0.0) { outColour = vec4(0.0); return; }
+    float lc = clamp(l, 0.0, 62.0);                       // within the kind: never into the next one's bytes
+    outColour = (colour(base + clamp(lc - dl, 0.0, 62.0)) + colour(base + lc) * 2.0 + colour(base + clamp(lc + dl, 0.0, 62.0))) * 0.25 * wet;
     return;
   }
   float v = out_ ? -1.0 : value(c);
@@ -146,7 +194,7 @@ function setup() {
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'program');
     gl.useProgram(program);
     const at = (n) => gl.getUniformLocation(program, n);
-    const u = { cells: at('uCells'), lut: at('uLut'), size: at('uSize'), target: at('uTarget'), view: at('uView'), centre: at('uCentre'), k: at('uK'), nearest: at('uNearest'), soft: at('uSoft') };
+    const u = { cells: at('uCells'), lut: at('uLut'), size: at('uSize'), target: at('uTarget'), view: at('uView'), centre: at('uCentre'), k: at('uK'), nearest: at('uNearest'), soft: at('uSoft'), typed: at('uTyped') };
     gl.uniform1i(u.cells, 0);
     gl.uniform1i(u.lut, 1);
     gl.disable(gl.BLEND);
@@ -222,6 +270,7 @@ export function drawCells(a) {
   gl.uniform1f(u.k, a.K);
   gl.uniform1i(u.nearest, a.nearest ? 1 : 0);
   gl.uniform1i(u.soft, a.soft ? 1 : 0);
+  gl.uniform1i(u.typed, a.typed ? 1 : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   return canvas;
 }

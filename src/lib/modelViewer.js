@@ -473,13 +473,17 @@ function colourTable(frame, varKey) {
   return out;
 }
 const CODES = new Set(['wx', 'ptype', 'radar_type']);                     // a code between two codes means nothing: never interpolated
+/* ...except the precipitation types' kind-and-strength bytes, which the graphics card smooths within
+   each kind (lib/modelGL typed) when Smooth is on */
+const TYPED = new Set(['ptype', 'radar_type']);
 /** A frame as something drawScene can lay on the map: drawn from its values on the graphics card, or
     (pictures, and browsers without WebGL 2) as a canvas, the frame's colours one pixel to a cell.
     The UK grid's cells are real, so they can be shown as they are; the wide grid's are not. */
 export function fieldLayer(frame, varKey, smooth, colourCache, smoothCache, rainy) {
   if (!frame || !onGrid(frame)) return null;
   if (frame.q && !frame.mix && canDrawCells() && !(import.meta.env.DEV && window.__oldDraw)) {
-    return { gl: true, frame, key: varKey, soft: !!scaleFor(varKey).band, nearest: CODES.has(varKey) || (GRID.name === 'uk' && !frame.prob && !smooth) };
+    return { gl: true, frame, key: varKey, soft: !!scaleFor(varKey).band, typed: TYPED.has(varKey),
+      nearest: (CODES.has(varKey) && !TYPED.has(varKey)) || (GRID.name === 'uk' && !frame.prob && !smooth) };
   }
   return smooth && rainy && !CODES.has(varKey) && scaleFor(varKey).discrete && frame.q && !frame.prob ? smoothCanvas(frame, varKey, smoothCache) : frameCanvas(frame, varKey, colourCache);
 }
@@ -1012,7 +1016,7 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
       if (x1 <= x0 || y1 <= y0) return;
       const w = x1 - x0, h = y1 - y0;
       const out = drawCells({ frame: f, q: f.q, W, H, K, lutKey: `${cv.key}|${PALETTE}|${f.prob ? 'chance' : `${f.head?.lo}|${f.head?.hi}|${f.head?.scale}`}`, lut: () => colourTable(f, cv.key),
-        x: x0, y: y0, w, h, ox, oy, s, cx, cy, nearest: cv.nearest || opts.coarse, soft: cv.soft });
+        x: x0, y: y0, w, h, ox, oy, s, cx, cy, nearest: cv.nearest || opts.coarse, soft: cv.soft, typed: cv.typed });
       if (out) {
         ctx.imageSmoothingEnabled = false;
         ctx.globalAlpha = alpha;

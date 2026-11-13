@@ -15,13 +15,33 @@ from .common import DATA, GRIDS, frames_root, grid_meta, grid_of, write_json
 from .models import MODELS, SOURCES, VARIABLES
 
 
+def complete(m, r, steps, runs):
+    """Is the run fully published? Models with a fixed schedule: every step of it is there. The UKV:
+    T+120 from 03Z and 15Z, T+54 every three hours, T+12 otherwise. Met Office Global: as far as the
+    other runs at that hour reach, or (with none listed) eight hours old, as it publishes slowly."""
+    if not steps:
+        return False
+    if m.id == 'ukv':
+        return steps[-1] >= (120 if r.hour in (3, 15) else 54 if r.hour % 3 == 0 else 12)
+    if hasattr(m, 'schedule'):
+        try:
+            return steps[-1] >= m.schedule(r)[-1]
+        except Exception:
+            pass
+    peers = [s[-1] for rr, s in runs if rr != r and rr.hour == r.hour and s]
+    if peers:
+        return steps[-1] >= max(peers)
+    return (datetime.now(timezone.utc) - r).total_seconds() >= 8 * 3600
+
+
 def model_entry(m):
     try:
         runs = m.runs()
     except Exception as e:
         return {'id': m.id, 'error': str(e)[:200], 'runs': []}
     return {'id': m.id, 'label': m.label, 'res_km': m.res_km, 'grid': grid_of(m.id), 'source': SOURCES[m.id], 'variables': m.variables,
-            'runs': [dict({'run': r.isoformat(), 'steps': s}, **({'kept': True} if r in getattr(m, 'kept_runs', ()) else {}))
+            'runs': [dict({'run': r.isoformat(), 'steps': s, 'complete': complete(m, r, s, runs)},
+                          **({'kept': True} if r in getattr(m, 'kept_runs', ()) else {}))
                      for r, s in runs]}
 
 

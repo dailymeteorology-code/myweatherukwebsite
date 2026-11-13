@@ -9,6 +9,7 @@ an interrupted job resumes. Progress is in status.json next to the frames.
 from __future__ import annotations
 
 import concurrent.futures as cf
+import os
 import logging
 import sys
 import time
@@ -74,7 +75,10 @@ def derived(model, run_s, var, steps, d, status):
         write_frame(d / f'{h}.bin', make(f), VARIABLES[var],
                     {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat()})
         status['done'].append(h)
-        write_json(d / 'status.json', status)
+        if time.time() - status.get('_saved', 0) >= 2.0:
+            status['_saved'] = time.time()
+            write_json(d / 'status.json', status)
+    status.pop('_saved', None)
 
 
 def peak(model, run_s, var, steps, d, status):
@@ -253,8 +257,35 @@ def main(model, run_s, var, first=None):
         except Exception as e:
             return h, e
 
+    # What made a job slow was the drive, not AWS (12 Nov 2026: 114 of 156 s writing frames to the
+    # busy external drive, 35 s rewriting the status after every step, 5 s waiting on downloads).
+    # Frames now go to the drive from their own threads while the next steps download, and a step
+    # is listed done only once its frame is written; the status is saved every couple of seconds.
+    writes = cf.ThreadPoolExecutor(4)
+    pending = []                                   # (write, step)
+    saved = [0.0]
+
+    def settle(block=False):
+        for job in list(pending):
+            if block or job[0].done():
+                job[0].result()                    # a write that failed fails the job
+                status['done'].append(job[1])
+                pending.remove(job)
+
+    def flush(force=False):
+        settle(block=force)
+        if force or time.time() - saved[0] >= 2.0:
+            status['done'].sort()
+            write_json(d / 'status.json', status)
+            saved[0] = time.time()
+
+    def save(h, arr, meta):
+        pending.append((writes.submit(write_frame, d / f'{h}.bin', arr, enc, meta), h))
+        flush()
+
     total, acc_h, last_raw, last_h = None, None, None, None
-    with cf.ThreadPoolExecutor(16) as ex:           # downloads are latency-bound: many in flight
+    threads = int(os.environ.get('MDATA_THREADS', '16'))            # the server gives background jobs fewer
+    with cf.ThreadPoolExecutor(threads) as ex:     # downloads are latency-bound: many in flight
         for h, a in ex.map(fetch, order):
             vt = run + timedelta(hours=h)
             meta = {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat()}
@@ -265,16 +296,14 @@ def main(model, run_s, var, first=None):
                 status['missing'].append(h)        # not published at this step (a running total carries on)
                 if diff:
                     last_raw, last_h = None, None
-                write_json(d / 'status.json', status)
+                flush()
                 continue
             if chain:                              # snowfall: each step's new precipitation times its frozen share
                 apcp, frac = a['apcp'], a['frac']
                 total = (total if total is not None else np.zeros_like(apcp)) + \
                     np.maximum(apcp - (last_raw if last_raw is not None else 0.0), 0) * frac
                 last_raw = apcp
-                write_frame(d / f'{h}.bin', total, enc, meta)
-                status['done'].append(h)
-                write_json(d / 'status.json', status)
+                save(h, total, meta)
                 continue
             cov = None
             if isinstance(a, tuple):
@@ -301,9 +330,9 @@ def main(model, run_s, var, first=None):
                     delta = np.maximum(raw - last_raw, 0) if var == 'precip_rate' else (raw - last_raw)
                     out = delta * 1000.0 / dt if var == 'precip_rate' else delta / (dt * 3600.0)
                 last_raw, last_h = raw, h
-            write_frame(d / f'{h}.bin', out, enc, meta)
-            status['done'].append(h)
-            write_json(d / 'status.json', status)
+            save(h, out, meta)
+    flush(force=True)
+    writes.shutdown()
     status['state'] = 'complete'
     status['seconds'] = round(time.time() - status['started'], 1)
     write_json(d / 'status.json', status)

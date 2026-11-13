@@ -37,12 +37,28 @@ const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
 const MAX_USER_JOBS = 3;               // what someone is waiting for
 const MAX_PREFETCH_JOBS = 1;           // background warming, never in the way
+/* downloads in flight per job: someone waiting gets the line; the warming leaves room for them */
+const THREADS = (p) => (p === true ? '8' : '16');
 const MAX_POINT_JOBS = 3;              // the Location page's UKV frames: their own lane, not behind the warming,
                                         // three at a time so a new run is ready in minutes, not an hour
 const LIMIT = (p) => (p === 'point' ? MAX_POINT_JOBS : p ? MAX_PREFETCH_JOBS : MAX_USER_JOBS);
 
 const running = new Map();            // key -> { child, prefetch }
-const queue = [];                     // [{key, args, prefetch}]
+const queue = [];                     // [{key, args, prefetch, rank, seq}]
+let seq = 0;
+/* the order jobs start in, within a lane: someone waiting first, then the Location page's, then the
+   warming, newest run first, the much-used layers before the rest, and Met Office Global (whole-globe
+   files, ~7 MB a field a step) after the other models */
+function rankOf(model, run, v, prefetch) {
+  const lane = prefetch === true ? 2 : prefetch === 'point' ? 1 : 0;
+  const tier = PREFETCH.includes(v) ? 0 : 1;
+  const heavy = model === 'mo_global' ? 1 : 0;
+  return [lane, tier, heavy, -tagMs(run)];
+}
+const before = (a, b) => {
+  for (let i = 0; i < a.rank.length; i++) if (a.rank[i] !== b.rank[i]) return a.rank[i] - b.rank[i];
+  return a.seq - b.seq;
+};
 let catalogBusy = false;
 
 function python(args, onExit, extraEnv = {}) {
@@ -68,6 +84,7 @@ const readJsonAsync = async (f) => { try { return JSON.parse(await fs.promises.r
 
 function pump() {
   const count = (p) => [...running.values()].filter((r) => r.prefetch === p).length;
+  queue.sort(before);
   for (let i = 0; i < queue.length;) {
     const job = queue[i];
     if (running.has(job.key)) { queue.splice(i, 1); continue; }
@@ -77,7 +94,7 @@ function pump() {
       running.delete(job.key);
       if (code) console.warn(`[modeldata] job ${job.key} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
       pump();
-    }, { MDATA_GRID: gridOf(job.args[0]) });
+    }, { MDATA_GRID: gridOf(job.args[0]), MDATA_THREADS: THREADS(job.prefetch) });
     running.set(job.key, { child, prefetch: job.prefetch });
   }
 }
@@ -90,25 +107,37 @@ function ensureJob(model, run, v, prefetch = false, first = null, known = undefi
   if (queued) {
     if (!prefetch && queued.prefetch) {                 // someone is now waiting for it
       queued.prefetch = false;
+      queued.rank = rankOf(model, run, v, false);
       if (first != null) queued.args = [model, runIso(run), v, String(first)];
       pump();
     } else if (prefetch === 'point' && queued.prefetch === true) {
       queued.prefetch = 'point';                        // the Location page needs it: into its own lane
+      queued.rank = rankOf(model, run, v, 'point');
       pump();
     }
     return;
   }
   const st = known !== undefined ? known : readJson(path.join(frameDir(model, run, v), 'status.json'));
   if (st?.state === 'complete' && !grown(model, run, st)) return;
-  queue.push({ key, args: [model, runIso(run), v, ...(first != null ? [String(first)] : [])], prefetch });
+  queue.push({ key, args: [model, runIso(run), v, ...(first != null ? [String(first)] : [])], prefetch, rank: rankOf(model, run, v, prefetch), seq: seq++ });
   pump();
 }
 
+/* variables whose frames are complete, with the steps they were complete for: the warming checks
+   hundreds every catalogue refresh, and need read no file while a run has not grown */
+const settled = new Map();
+const stepsNow = (model, run) => {
+  const m = [...(catalogNow()?.models || []), ...(catalogNow()?.ensembles || [])].find((x) => x.id === model);
+  return m?.runs?.find((x) => x.run.replace(/[-:]/g, '').slice(0, 13) + 'Z' === run)?.steps.length ?? null;
+};
 /** ensureJob, reading the status file in the background first. */
 async function ensureJobAsync(model, run, v, prefetch = false, first = null) {
   const key = `${model}/${run}/${v}`;
   if (running.has(key) || queue.some((q) => q.key === key)) return ensureJob(model, run, v, prefetch, first);
+  const now = stepsNow(model, run);
+  if (now != null && settled.get(key) >= now) return undefined;
   const st = await readJsonAsync(path.join(frameDir(model, run, v), 'status.json'));
+  if (st?.state === 'complete' && !grown(model, run, st)) settled.set(key, st.steps?.length ?? 0);
   return ensureJob(model, run, v, prefetch, first, st);
 }
 
@@ -141,10 +170,11 @@ export function defaultRun(m) {
   return runs.find((r) => r.steps.length >= 0.6 * most) || runs[0] || m.runs[0];
 }
 
-/* warmed in the background (one job at a time) for each model's default run, most-used first */
+/* Warmed in the background (one job at a time) for each model's default run: these much-used layers
+   as the run's steps reach AWS, and every other layer of the run as soon as it is fully published
+   (catalog.complete), so a layer is there before anyone asks. A new default run takes over the
+   queue; one that is no longer the default is dropped from it. */
 const PREFETCH = ['precip_rate', 'precip_total', 't2', 'gust10', 'mslp', 'refc', 'cape_mu'];
-/* Met Office Global files are whole-globe downloads (~7 MB a field a step): warm only the top three */
-const PREFETCH_LIMIT = { mo_global: 3, gefs_mean: 2 };
 
 /* Two lanes, each one job at a time: 'fast' (radar, lightning, the current-conditions analysis)
    and 'sat' (satellite imagery). Satellite catch-up after the PC has slept is long, and in one job
@@ -168,12 +198,18 @@ function refreshCatalog() {
     try {
       const cat = await readJsonAsync(path.join(DATA, 'catalog.json'));
       if (cat) catCache = { at: Date.now(), cat };
+      const warm = [];
       for (const m of cat?.models || []) {
         const r = m.runs?.length ? defaultRun(m) : null;
         if (!r) continue;
         const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';
-        for (const v of PREFETCH.filter((x) => m.variables?.includes(x)).slice(0, PREFETCH_LIMIT[m.id] ?? 99)) await ensureJobAsync(m.id, tag, v, true);
+        const first = PREFETCH.filter((x) => m.variables?.includes(x));
+        const rest = r.complete ? (m.variables || []).filter((x) => !first.includes(x)) : [];
+        for (const v of [...first, ...rest]) warm.push([m.id, tag, v]);
       }
+      const wanted = new Set(warm.map(([mid, tag, v]) => `${mid}/${tag}/${v}`));
+      for (let i = queue.length - 1; i >= 0; i--) if (queue[i].prefetch === true && !wanted.has(queue[i].key)) queue.splice(i, 1);
+      for (const [mid, tag, v] of warm) await ensureJobAsync(mid, tag, v, true);
       await refreshPoint(cat);
     } catch (e) {
       console.warn(`[modeldata] after the catalogue: ${e.message}`);

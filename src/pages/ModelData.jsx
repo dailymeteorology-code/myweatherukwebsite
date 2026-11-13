@@ -110,8 +110,8 @@ const LIVE_LIST = [
   ['Now: observed + UKV', 'now_gust10', 'Wind gusts', 'now_gust10', 'gust10'],
   ['Now: observed + UKV', 'now_mslp', 'Pressure', 'now_mslp', 'mslp'],
   ['Now: observed + UKV', 'now_tcc', 'Cloud cover', 'now_tcc', 'tcc'],
-  ['Radar & lightning', 'radar', 'Rain radar', 'radar'],
-  ['Radar & lightning', 'radar_type', 'Rain radar: precipitation type', 'radar_type', 'radar_type'],
+  ['Radar & lightning', 'radar', 'Rain radar', 'radar_type', 'radar_type'],                 // rain, snow, sleet and ice
+  ['Radar & lightning', 'radar_plain', 'Rain radar: rain colours only', 'radar'],
   ['Satellite', 'sat_clouds', 'Clouds over the map', 'sat_ir'],
   ['Satellite', 'sat_ir', 'Infrared', 'sat_ir'],
   ['Satellite', 'sat_ir_enh', 'Infrared: cloud-top colours', 'sat_ir'],

@@ -497,29 +497,65 @@ def analyse(t, reports):
 
 
 TYPE_BACKFILL = 12                               # type-only fills per cycle
+QUICK_TYPES = 12                                 # the radar loop's three hours: typed first, every cycle
 
 
-def type_frames(t):
-    """now_ptype and radar_type for a time already analysed: from its analysed temperature and dew
-    point, the radar, and the UKV background where it is cached (the wet bulb alone where not).
-    Fetches nothing, redoes nothing else."""
+def type_frames(t, model_ok=False):
+    """now_ptype and radar_type for a radar time: from its analysed temperature and dew point and the
+    UKV background where it is cached (the wet bulb alone where not); fetches nothing, redoes nothing
+    else. With `model_ok`, a time not yet analysed takes the UKV's own temperature and dew point
+    instead (fetching its hours if need be), and its analysis replaces it later."""
     stamp = f'{t:%Y%m%dT%H%M}'
     r1 = radar_1km(t)
-    t2p, tdp = LIVE / 'now_t2' / f'{stamp}.bin', LIVE / 'now_td2' / f'{stamp}.bin'
-    if r1 is None or not t2p.exists() or not tdp.exists():
+    if r1 is None:
         return False
-    t2, td2 = read_frame(t2p)[0], read_frame(tdp)[0]
+    t2p, tdp = LIVE / 'now_t2' / f'{stamp}.bin', LIVE / 'now_td2' / f'{stamp}.bin'
     V0 = t.replace(minute=0, second=0, microsecond=0)
     hours = [V0] if t == V0 else [V0, V0 + timedelta(hours=1)]
-    B = background(t) if all((CACHE / f'{V:%Y%m%dT%H}.npz').exists() for V in hours) else {}
+    if t2p.exists() and tdp.exists():
+        t2, td2 = read_frame(t2p)[0], read_frame(tdp)[0]
+        B = background(t) if all((CACHE / f'{V:%Y%m%dT%H}.npz').exists() for V in hours) else {}
+        source = 'analysis'
+    elif model_ok:
+        try:
+            B = background(t)
+        except FileNotFoundError:
+            return False
+        if 't2' not in B or 'td2' not in B:
+            return False
+        t2, td2, source = B['t2'], B['td2'], 'ukv'
+    else:
+        return False
     code, _ = radar_phase(B, t2, td2)
     top = np.nanmax(r1.reshape(NY, 2, NX, 2), axis=(1, 3))
-    meta = {'valid': t.isoformat(), 'radar': True, 'backfill': True}
+    meta = {'valid': t.isoformat(), 'radar': True, 'backfill': True, 'type_from': source}
     write_frame(LIVE / 'now_ptype' / f'{stamp}.bin', np.where(np.isfinite(top), np.where(top >= 0.05, code, 0), np.nan).astype(np.float32),
                 NOW['now_ptype'][2], {'product': 'now_ptype', 'k': 1, **meta})
     write_frame(LIVE / 'radar_type' / f'{stamp}.bin', typed_rate(r1, np.repeat(np.repeat(code, 2, axis=0), 2, axis=1)), RADAR_TYPE_ENC,
                 {'product': 'radar_type', 'k': 0.5, 'rate_hi': RT_HI, **meta})
     return True
+
+
+def write_index(p, cut):
+    """A live layer's index of its times (older ones' frames removed). Each layer on its own: one
+    failing never holds up the rest."""
+    d = LIVE / p
+    if not d.exists():
+        return
+    try:
+        keep = []
+        for f in sorted(d.glob('*.bin')):
+            tt = datetime.strptime(f.stem, '%Y%m%dT%H%M').replace(tzinfo=timezone.utc)
+            if tt < cut:
+                f.unlink(missing_ok=True)
+            else:
+                keep.append(tt.isoformat())
+        write_json(d / 'index.json', {'product': p, 'times': keep, 'ext': 'bin'})
+        for f in d.glob('*.tmp'):              # a write that failed part-way leaves its temporary file
+            if time.time() - f.stat().st_mtime > 600:
+                f.unlink(missing_ok=True)
+    except Exception as e:
+        print(f'[now] index of {p} not written: {type(e).__name__}: {e}', flush=True)
 
 
 # ── observed days ────────────────────────────────────────────────────────────
@@ -778,6 +814,22 @@ def update():
     cut = datetime.now(timezone.utc) - timedelta(hours=KEEP_H)
     def stamps(p):
         return {f.stem for f in (LIVE / p).glob('*.bin')} if (LIVE / p).exists() else set()
+    # The radar's type first: each recent scan without one gets it now (from its analysis where that
+    # is done, from the UKV alone where not), and its index goes out straight away, so the radar loops
+    # show rain, snow, sleet and ice within the cycle the scan arrives, even while the analyses are
+    # hours behind (after the PC has slept, 13 Nov 2026). The analysis replaces it when it gets there.
+    typed = stamps('now_ptype')
+    quick = 0
+    for t in sorted(times, reverse=True)[:QUICK_TYPES]:
+        if t < cut or f'{t:%Y%m%dT%H%M}' in typed:
+            continue
+        try:
+            quick += bool(type_frames(t, model_ok=True))
+        except Exception as e:
+            print(f'[now] type of {t:%H:%M}: {type(e).__name__}: {e}', flush=True)
+    if quick:
+        for p in ('now_ptype', 'radar_type'):
+            write_index(p, cut)
     have = stamps('now_t2')
     days = {}
 
@@ -824,23 +876,7 @@ def update():
         print(f'[now] type backfill: {type(e).__name__}: {e}', flush=True)
     rained = fold_radar()
     for p in [*NOW, 'radar_type']:
-        d = LIVE / p
-        if not d.exists():
-            continue
-        try:                                   # each layer's index on its own: one failing never holds up the rest
-            keep = []
-            for f in sorted(d.glob('*.bin')):
-                tt = datetime.strptime(f.stem, '%Y%m%dT%H%M').replace(tzinfo=timezone.utc)
-                if tt < cut:
-                    f.unlink(missing_ok=True)
-                else:
-                    keep.append(tt.isoformat())
-            write_json(d / 'index.json', {'product': p, 'times': keep, 'ext': 'bin'})
-            for f in d.glob('*.tmp'):          # a write that failed part-way leaves its temporary file
-                if time.time() - f.stat().st_mtime > 600:
-                    f.unlink(missing_ok=True)
-        except Exception as e:
-            print(f'[now] index of {p} not written: {type(e).__name__}: {e}', flush=True)
+        write_index(p, cut)
     for f in CACHE.glob('*.npz') if CACHE.exists() else []:     # background hours older than the window
         if datetime.strptime(f.stem, '%Y%m%dT%H').replace(tzinfo=timezone.utc) < cut - timedelta(hours=2):
             f.unlink(missing_ok=True)
