@@ -326,6 +326,8 @@ class _MetOffice(Source):
             pr, sr, t2, td2 = ex.map(lambda v: self._try(run, step, v), ('precip_rate', 'snow_rate', 't2', 'td2'))
         last = self._chain.get(run)
         n = self.cells.n
+        if pr is None and last is not None:
+            return None                               # the next step with its rates integrates across this one
         if last is None or last[0] >= step:
             tp, sf = np.zeros(n, np.float32), np.zeros(n, np.float32)
             p_known, s_known = pr, sr
@@ -349,6 +351,11 @@ class _MetOffice(Source):
 
 class UKV(_MetOffice):
     key, MD, reach = 'ukv', 'UKV', 54
+
+    def schedule(self, run):
+        """Hourly to T+54, then three-hourly: the long runs list some fields hourly beyond T+54,
+        but not the precipitation (those steps were 404s for half the files)."""
+        return [h for h in super().schedule(run) if h <= 54 or h % 3 == 0]
 
 
 class MOGlobal(_MetOffice):

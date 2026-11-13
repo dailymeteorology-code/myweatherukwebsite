@@ -52,3 +52,7 @@ server/data/patterns/
 server/data/patterns-cache/
 # Lightning strike archive, when there is no D: drive (server/lightning).
 server/data/lightning/
+
+# Python caches of the snow model and Model Data tools
+tools/tcm-frost/**/__pycache__/
+tools/modeldata/**/__pycache__/
