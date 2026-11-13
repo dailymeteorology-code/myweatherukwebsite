@@ -179,21 +179,21 @@ def blend_all(cycle, jobs, leads, out):
         maps = {
             'snow_chance': chance(X, W, CHANCE_CM) * 100.0,
             'snow_risk': risk(S24, W).astype(np.float32),
-            'snow_acc': pmm(A, W),
+            'snow_expected': pmm(A, W),
             'snow_24h': pmm(S24, W),
         }
         meta = {'model': 'frost', 'run': run_iso, 'step': L, 'valid': vt.isoformat()}
         for var, v in maps.items():
             write_frame(out / var / f'{L}.bin', cells.full(v), ENC[var], {**meta, 'var': var})
-        series[:, i, 0] = encode(maps['snow_acc'], ENC['snow_acc'])
+        series[:, i, 0] = encode(maps['snow_expected'], ENC['snow_expected'])
         series[:, i, 1] = np.rint(np.nan_to_num(maps['snow_chance'])).astype(np.uint8)
         series[:, i, 2] = maps['snow_risk'].astype(np.uint8)
         if vt.hour == 0 or i == len(leads) - 1:
             snaps[vt] = [a.copy() for a in acc]
         if i % 10 == 0:
-            log(f"T+{L}: {len(W)} members, most snow expected {maps['snow_acc'].max():.1f} cm, "
+            log(f"T+{L}: {len(W)} members, most snow expected {maps['snow_expected'].max():.1f} cm, "
                 f"highest chance {np.nanmax(maps['snow_chance']):.0f}%, highest risk {int(maps['snow_risk'].max())}")
-    for var in ('snow_chance', 'snow_risk', 'snow_acc', 'snow_24h'):
+    for var in ('snow_chance', 'snow_risk', 'snow_expected', 'snow_24h'):
         write_status(out / var, run_iso, var, leads)
 
     # each day (UTC, = the UK's in the snow season): its own snow, from the totals at its ends

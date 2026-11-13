@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-ENGINE = 'tcm-frost-1.0.0'
+ENGINE = 'tcm-frost-1.0.1'
 HERE = Path(__file__).resolve().parent
 STATIC = HERE.parent / 'static'
 DATA = Path(os.environ.get('FROST_DATA') or ('D:/MyWeatherUK-data/frost' if Path('D:/').exists() else '/tmp/frost'))
@@ -49,7 +49,7 @@ DAY_THRESHOLDS = (0.2, 1.0, 5.0, 10.0)             # each day's chance of at lea
 
 # frame encodings (Model Data's format: one byte a cell, 255 no data)
 ENC = {
-    'snow_acc':    dict(lo=0, hi=150, scale='sqrt'),   # cm since the run began
+    'snow_expected':    dict(lo=0, hi=150, scale='sqrt'),   # cm since the run began
     'snow_24h':    dict(lo=0, hi=100, scale='sqrt'),   # cm in the 24 h to this time
     'snow_chance': dict(lo=0, hi=100),                 # % chance of snow in the period
     'snow_risk':   dict(lo=0, hi=254),                 # 0-4: the byte is the level

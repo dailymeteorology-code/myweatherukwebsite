@@ -39,9 +39,9 @@ def write_status(d, run_iso, var, leads):
 
 
 def write_point(path, idx, leads, series, days, day_names, valid):
-    """series: uint8 (cells, leads, 3) = expected cm since the start (snow_acc bytes), chance %, risk;
+    """series: uint8 (cells, leads, 3) = expected cm since the start (snow_expected bytes), chance %, risk;
     days: uint8 (cells, days, 6) = expected cm (snow_24h bytes), chance of 0.2 / 1 / 5 / 10 cm %, risk."""
-    head = json.dumps({'cells': int(idx.size), 'leads': leads, 'valid': valid, 'series': ['snow_acc', 'snow_chance', 'snow_risk'],
+    head = json.dumps({'cells': int(idx.size), 'leads': leads, 'valid': valid, 'series': ['snow_expected', 'snow_chance', 'snow_risk'],
                        'days': day_names, 'day_vars': ['cm', 'p0', 'p1', 'p5', 'p10', 'risk'], 'enc': ENC,
                        'grid': GRID}).encode()
     body = struct.pack('<I', len(head)) + head + idx.astype('<u4').tobytes() + series.tobytes() + days.tobytes()
