@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-ENGINE = 'tcm-frost-1.0.1'
+ENGINE = 'tcm-frost-1.1.0'
 HERE = Path(__file__).resolve().parent
 STATIC = HERE.parent / 'static'
 DATA = Path(os.environ.get('FROST_DATA') or ('D:/MyWeatherUK-data/frost' if Path('D:/').exists() else '/tmp/frost'))
@@ -20,6 +20,9 @@ HORIZON_H = 240                                    # ten days
 # the output steps: every 3 h for five days, every 6 h to ten (what the ensembles publish)
 LEADS = list(range(3, 121, 3)) + list(range(126, HORIZON_H + 1, 6))
 KEEP_H = 48                                        # runs kept on the site
+# runs published before this (UTC) are made again by the cloud, newest first, while they are still
+# kept: move it on when an engine change should redo the runs already on the site
+REBUILD_BEFORE = '2026-11-13T19:50:00Z'            # 1.1.0: the Met Office Global read, longer runs, stitched totals
 
 # Each source: its kind, nominal resolution (for its terrain), how far it reaches, and its weight
 # by lead time as (lead h, weight per MEMBER) knots, linear between. The UKV, at 2 km, carries the
@@ -35,6 +38,11 @@ SOURCES = {
     'gefs':      dict(kind='ens', res_km=50.0, label='NOAA GEFS, 30 members',      w=[(0, 0.15), (240, 0.20)]),
 }
 LAG_PENALTY = 0.75                                 # a source run 6 h older than the cycle counts this much
+# Runs that stop short (the 06Z and 18Z runs: IFS at 90 h, IFS ENS at 144 h, the Met Office Global at
+# 69 h; the UKV at 54 h but for its 03Z and 15Z runs): the newest run at these hours that reaches
+# further carries the model on from where the short one stops (the UKV's long run is also a member
+# throughout, a run three hours older than the cycle's own)
+LONG = {'ukv': (3, 15), 'mo_global': (0, 12), 'ifs': (0, 12), 'ifs_ens': (0, 12)}
 
 # what counts
 CHANCE_CM = 0.2                                    # snow falling in a period: at least this much

@@ -9,7 +9,7 @@ expected to fall, on a 2 km grid, out to ten days, every six hours.
 |---|---|---|---|---|
 | Met Office UKV (the cycle's run, to T+54) | 1 | 2 km | 54 h | its own snowfall rate |
 | Met Office UKV (newest 03Z/15Z run) | 1 | 2 km | 120 h | its own snowfall rate |
-| Met Office Global | 1 | 10 km | 168 h | its own snowfall rate |
+| Met Office Global | 1 | 10 km | 168 h (06/18Z: 69 h) | its own snowfall rate |
 | ECMWF IFS | 1 | 0.25° | 240 h (06/18Z: 90 h) | its snowfall (`sf`) |
 | ECMWF AIFS | 1 | 0.25° | 240 h | its snowfall (`sf`) |
 | NOAA GFS | 1 | 0.25° | 240 h | its frozen percentage (`CPOFP`) |
@@ -19,6 +19,18 @@ expected to fall, on a 2 km grid, out to ten days, every six hours.
 
 A source whose run for the cycle is not out yet is taken from its run before, weighted down
 (×0.75 per six hours of age).
+
+**Runs that stop short.** The 06Z and 18Z runs of the IFS (90 h), the IFS ENS (144 h) and the Met
+Office Global (69 h) stop well short of ten days, and so does every UKV run but 03Z and 15Z (54 h).
+The newest run of the same model that reaches further (config.LONG: 00Z/12Z, or the UKV's
+03Z/15Z) carries it on from where the short one stops, read from the day before so its 24-hour
+totals are whole. Its totals since the run began are stitched: the short run's to the seam, then
+the long run's own snow after it, member by member. (The UKV's long run is a member throughout,
+a time-lagged second UKV.)
+
+**Only whole totals count.** A member counts towards a total (since the run began, the last 24 h,
+a day) only where it has every period that total spans, so a run that starts late or misses a
+step never reads as less snow. A Met Office step whose file fails costs that step only.
 
 ## Bringing each member to 2 km (frost/physics.py)
 
@@ -54,10 +66,16 @@ the ensembles carry the spread later.
 
 ## Outputs
 
-Model Data frames (`snow_chance`, `snow_risk`, `snow_acc`, `snow_24h`; 3-hourly to T+120,
-6-hourly to T+240), a point cube for the Location page, and a manifest. Runs on GitHub Actions
+Model Data frames (`snow_chance`, `snow_risk`, `snow_expected`, `snow_24h`; 3-hourly to
+T+120, 6-hourly to T+240), a point cube for the Location page, a manifest (every source's run,
+members, periods and problems) and `log.txt`, everything the run said. Runs on GitHub Actions
 (`.github/workflows/frost.yml`), published as Release assets (`tcm-frost`), mirrored by the
-site (`server/tcmFrost.js`), 48 h kept.
+site (`server/tcmFrost.js`), 48 h kept. Runs published before `config.REBUILD_BEFORE` are made
+again by the cloud while they are still kept, so an engine change redoes the runs on the site.
+
+On the site: Model Data shows TCM FROST as a model (its four layers), and its **Snow overlay**
+puts the risk or the expected snow over any layer, for the day on show, the 24 hours to the time
+on show, or the whole run; the Location page has a snow risk card for the place.
 
 ## Honesty
 

@@ -283,9 +283,12 @@ class _MetOffice(Source):
     def __init__(self, cells):
         super().__init__(cells)
         from mdata import models as MD
-        self.M = getattr(MD, self.MD)()
+        from mdata.common import lonlat
+        lonlat()                                      # the grid's lon/lat, made once here: four threads racing to make it
+        self.M = getattr(MD, self.MD)()               # read each other's half-written file (the Global's first cloud run)
         self._steps = {}
-        self._rate = {}                               # (run, step) -> (precip, snow) rates
+        self._chain = {}                              # run -> (step, tp, sf, precip rate, snow rate): the totals so far
+        self.errors = []
 
     def runs_before(self, cycle, back_h=24, every=None):
         return [cycle - timedelta(hours=h) for h in range(0, back_h + 1, self.every)]
@@ -307,28 +310,41 @@ class _MetOffice(Source):
         a = a[0] if isinstance(a, tuple) else a
         return np.asarray(a, np.float32).ravel()[self.cells.idx]
 
-    def fetch(self, run, step):
+    def _try(self, run, step, var):
         try:
-            with cf.ThreadPoolExecutor(4) as ex:      # the downloads side by side (decoding is serialised by NC_LOCK)
-                pr, sr, t2, td2 = ex.map(lambda v: self._field(run, step, v), ('precip_rate', 'snow_rate', 't2', 'td2'))
-        except Exception:
+            return self._field(run, step, var)
+        except Exception as e:
+            if len(self.errors) < 40:
+                self.errors.append(f'T+{step} {var}: {type(e).__name__}: {str(e)[:160]}')
             return None
-        self._rate[(run, step)] = (pr, sr)
-        steps = [s for s in self.schedule(run) if s < step]
-        prev = steps[-1] if steps else None
-        cum = self.__dict__.setdefault('_cum', {})
-        if prev is None:
-            tp, sf = np.zeros_like(pr), np.zeros_like(sr)
-        elif (run, prev) in cum and (run, prev) in self._rate:
-            p0, s0 = self._rate[(run, prev)]
-            dt = step - prev
-            tp = cum[(run, prev)][0] + 0.5 * (np.nan_to_num(p0) + np.nan_to_num(pr)) * dt      # trapezoid through the hours
-            sf = cum[(run, prev)][1] + 0.5 * (np.nan_to_num(s0) + np.nan_to_num(sr)) * dt
+
+    def fetch(self, run, step):
+        """The step's fields, its rates turned into totals since the first step read (a trapezoid
+        through the hours). A field that fails costs that step only: the totals carry on over it
+        at the last rate known, so one bad file no longer ends the run's snow there."""
+        with cf.ThreadPoolExecutor(4) as ex:          # the downloads side by side (decoding is serialised by NC_LOCK)
+            pr, sr, t2, td2 = ex.map(lambda v: self._try(run, step, v), ('precip_rate', 'snow_rate', 't2', 'td2'))
+        last = self._chain.get(run)
+        n = self.cells.n
+        if last is None or last[0] >= step:
+            tp, sf = np.zeros(n, np.float32), np.zeros(n, np.float32)
+            p_known, s_known = pr, sr
         else:
+            s0, tp0, sf0, p0, r0 = last
+            dt = step - s0
+
+            def on(total, a, b):
+                a = b if a is None else a
+                b = a if b is None else b
+                return total if a is None else total + 0.5 * (np.nan_to_num(a) + np.nan_to_num(b)) * dt
+            tp, sf = on(tp0, p0, pr), on(sf0, r0, sr)
+            p_known, s_known = (p0 if pr is None else pr), (r0 if sr is None else sr)
+        self._chain[run] = (step, tp, sf, p_known, s_known)
+        if t2 is None or (pr is None and last is None):
             return None
-        cum[(run, step)] = (tp, sf)
-        one = lambda a: a[None, :]                                                             # noqa: E731
-        return {'tp': one(tp), 'sf': one(sf), 'fs': None, 't2': one(t2), 'td2': one(td2), 't850': None}
+        one = lambda a: None if a is None else a[None, :]                                      # noqa: E731
+        return {'tp': one(tp), 'sf': one(sf) if s_known is not None else None, 'fs': None, 't2': one(t2),
+                'td2': one(td2) if td2 is not None else one(t2 - 1.0), 't850': None}
 
 
 class UKV(_MetOffice):
