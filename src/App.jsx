@@ -15,6 +15,7 @@ import AdminOnlyRoute from '@/components/AdminOnlyRoute';
 import Lightning from '@/pages/Lightning';
 import WeatherPatterns from '@/pages/WeatherPatterns';
 import TCMOutlooks from '@/pages/TCMOutlooks';
+import TCMFrost from '@/pages/TCMFrost';
 import News from '@/pages/News';
 import ModelData from '@/pages/ModelData';
 import TCMArchive from '@/pages/TCMArchive';
@@ -62,7 +63,7 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout
   : <>{children}</>;
 
 // ─── Route order — determines slide direction ─────────────────────────────
-const ROUTE_ORDER = ['/', '/Home', '/LocationWeather', '/News', '/Lightning', '/TCMOutlooks', '/WeatherPatterns',
+const ROUTE_ORDER = ['/', '/Home', '/LocationWeather', '/News', '/Lightning', '/TCMOutlooks', '/TCMFrost', '/WeatherPatterns',
   '/TCMArchive', '/MyWeatherArchive', '/ForecastVerification', '/WeatherScenarios', '/Settings', '/AdminSettings'];
 function routeIndex(pathname) {
   const idx = ROUTE_ORDER.findIndex(r => pathname === r || pathname.startsWith(r + '/'));
@@ -71,7 +72,7 @@ function routeIndex(pathname) {
 
 const PAGE_LABELS = {
   '/': 'Home', '/Home': 'Home', '/News': 'News', '/Lightning': 'Lightning',
-  '/TCMOutlooks': 'TCM Outlooks', '/TCMNova': 'TCM NOVA', '/TCMV5': 'TCM NOVA', '/WeatherPatterns': 'Weather Patterns', '/GraphicStudio': 'Graphic Studio',
+  '/TCMOutlooks': 'TCM Outlooks', '/TCMFrost': 'TCM FROST', '/TCMNova': 'TCM NOVA', '/TCMV5': 'TCM NOVA', '/WeatherPatterns': 'Weather Patterns', '/GraphicStudio': 'Graphic Studio',
   '/Settings': 'Settings', '/AdminSettings': 'Admin',
   '/TCMArchive': 'Archive', '/MyWeatherArchive': 'Archive',
   '/LocationWeather': 'Location', '/ForecastVerification': 'Verification', '/WeatherScenarios': 'Scenarios',
@@ -517,6 +518,8 @@ const AuthenticatedApp = () => {
               {/* TCM NOVA replaced TCM V5; the old address keeps working */}
               <Route path="/TCMV5" element={<LayoutWrapper currentPageName="TCMNova"><TCMOutlooks forceEngine="nova" /></LayoutWrapper>} />
               <Route path="/TCMOutlooks" element={<LayoutWrapper currentPageName="TCMOutlooks"><TCMOutlooks /></LayoutWrapper>} />
+              {/* TCM FROST, MyWeatherUK's snow model (13 Nov 2026) */}
+              <Route path="/TCMFrost" element={<LayoutWrapper currentPageName="TCMFrost"><TCMFrost /></LayoutWrapper>} />
               <Route path="/WeatherPatterns" element={<LayoutWrapper currentPageName="WeatherPatterns"><WeatherPatterns /></LayoutWrapper>} />
               <Route path="/TCMArchive" element={<LayoutWrapper currentPageName="TCMArchive"><TCMArchive /></LayoutWrapper>} />
               <Route path="/MyWeatherArchive" element={<LayoutWrapper currentPageName="MyWeatherArchive"><MyWeatherArchive /></LayoutWrapper>} />

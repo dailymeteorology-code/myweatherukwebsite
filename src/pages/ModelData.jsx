@@ -2087,14 +2087,23 @@ export default function ModelData() {
   })();
   const keyChip = { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 800, color: T.ink2 };
   const snControls = (
-    <div style={{ display: 'grid', gap: 8, padding: '0 8px 10px 46px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 8, padding: '0 8px 10px 46px' }}>
       <select value={sn.run || ''} onChange={(e) => setSnK('run', e.target.value || null)} style={field} aria-label="TCM FROST run">
         <option value="" style={{ color: '#111' }}>Latest run{snRuns?.[0] ? ` · ${frostRunName(snRuns[0])}` : ''}</option>
         {(snRuns || []).map((r) => <option key={r.tag} value={r.tag} style={{ color: '#111' }}>{frostRunName(r)} · {r.members} forecasts</option>)}
       </select>
-      <Seg small items={[['risk', 'Risk'], ['amount', 'Amount'], ['both', 'Both']]} value={sn.show} onChange={(v) => setSnK('show', v)} />
-      <Seg small items={[['day', 'Day on show'], ['24h', '24 h to then'], ['run', 'Whole run']]} value={sn.span} onChange={(v) => setSnK('span', v)} />
-      <Seg small items={[['smooth', 'Simplified'], ['detailed', 'Detailed']]} value={sn.look} onChange={(v) => setSnK('look', v)} />
+      {/* each row no wider than the panel: three choices of time would not fit as buttons beside the indent */}
+      <div style={{ maxWidth: '100%', overflow: 'hidden' }}>
+        <Seg small items={[['risk', 'Risk'], ['amount', 'Amount'], ['both', 'Both']]} value={sn.show} onChange={(v) => setSnK('show', v)} />
+      </div>
+      <select value={sn.span} onChange={(e) => setSnK('span', e.target.value)} style={field} aria-label="Snow overlay time">
+        <option value="day" style={{ color: '#111' }}>The day on show</option>
+        <option value="24h" style={{ color: '#111' }}>The 24 hours to the time on show</option>
+        <option value="run" style={{ color: '#111' }}>The whole run (ten days)</option>
+      </select>
+      <div style={{ maxWidth: '100%', overflow: 'hidden' }}>
+        <Seg small items={[['smooth', 'Simplified'], ['detailed', 'Detailed']]} value={sn.look} onChange={(v) => setSnK('look', v)} />
+      </div>
       <label style={subRow}>Strength <input type="range" min={0.3} max={1} step={0.05} value={sn.alpha} onChange={(e) => setSnK('alpha', Number(e.target.value))} style={{ flex: 1, minWidth: 90 }} /></label>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
         {sn.show !== 'amount' && SNOW_RISK_LEVELS.map((l) => (

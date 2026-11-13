@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { releaseAssets } from './githubReleases.js';
 
 export const FROST_DATA = process.env.FROST_DATA || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/frost' : path.join(process.cwd(), 'server', 'data', 'frost'));
@@ -180,10 +181,53 @@ export async function frostPoint(lat, lon, tag = null) {
   return { run: run.run, tag: run.tag, created: run.created, members: run.members, engine: run.engine, steps, days: dayList };
 }
 
+/* ── the TCM FROST page's ground: every 2 km cell's height (the snow model's own DEM of the UK and
+   Ireland, tools/tcm-frost/static) and whether it is land anywhere (Model Data's land mask), read
+   once and kept, gzip: [u32 head length][head JSON {nx, ny}][int16 heights][uint8 land] ── */
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const MD_STATIC = path.join(process.env.MODELDATA_DIR || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/modeldata' : path.join(HERE, 'data', 'modeldata')), 'static');
+async function readNpy(file) {
+  const b = await fs.promises.readFile(file);
+  const major = b[6], start = major === 1 ? 10 : 12;
+  const hl = major === 1 ? b.readUInt16LE(8) : b.readUInt32LE(8);
+  const header = b.subarray(start, start + hl).toString('latin1');
+  const shape = (/'shape':\s*\(([^)]*)\)/.exec(header)?.[1] || '').split(',').map((s) => s.trim()).filter(Boolean).map(Number);
+  return { descr: /'descr':\s*'([^']+)'/.exec(header)?.[1], shape, data: b.subarray(start + hl) };
+}
+let terrainGz = null;
+async function terrain() {
+  if (terrainGz) return terrainGz;
+  const dem = await readNpy(path.join(HERE, '..', 'tools', 'tcm-frost', 'static', 'dem2km.npy'));
+  const [ny, nx] = dem.shape, n = nx * ny;
+  if (dem.descr !== '<i2' || !n) throw new Error(`terrain: unexpected ${dem.descr} ${dem.shape}`);
+  let land;
+  try {
+    const m = await readNpy(path.join(MD_STATIC, 'land_mask.npy'));
+    land = Buffer.from(m.data.subarray(0, n));
+  } catch {
+    land = Buffer.alloc(n);
+    for (let i = 0; i < n; i++) land[i] = dem.data.readInt16LE(2 * i) > 0 ? 1 : 0;
+  }
+  const head = Buffer.from(JSON.stringify({ nx, ny }));
+  const len = Buffer.alloc(4);
+  len.writeUInt32LE(head.length);
+  terrainGz = await new Promise((ok, no) => zlib.gzip(Buffer.concat([len, head, dem.data.subarray(0, 2 * n), land]), (e, r) => (e ? no(e) : ok(r))));
+  return terrainGz;
+}
+
 export function mountTcmFrost(app) {
   fs.mkdirSync(FROST_RUNS, { recursive: true });
   setTimeout(syncFrost, 30e3).unref?.();
   setInterval(syncFrost, 10 * 60e3).unref?.();
+  app.get('/api/frost/terrain', async (req, res) => {
+    try {
+      const gz = await terrain();
+      res.set({ 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip', 'Cache-Control': 'public, max-age=86400' });
+      res.end(gz);
+    } catch (e) {
+      res.status(503).json({ error: e.message });
+    }
+  });
   app.get('/api/frost/runs', async (req, res) => {
     res.set('Cache-Control', 'no-cache');
     res.json({ runs: await frostRuns() });

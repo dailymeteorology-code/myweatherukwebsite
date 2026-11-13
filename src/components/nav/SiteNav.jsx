@@ -6,7 +6,7 @@ import {
   Home, MapPin, Database, CloudLightning, Layers, Zap,
   Archive, BarChart3, Target,
   Newspaper, Mail, Settings as SettingsIcon, CreditCard, ShieldAlert,
-  ChevronDown, Menu, X, Radar, Sun, Moon,
+  ChevronDown, Menu, X, Radar, Sun, Moon, Snowflake,
 } from 'lucide-react';
 import { useTheme } from '@/components/ThemeContext';
 import { useLogo } from '@/components/MobileHeaderLogo';
@@ -52,6 +52,7 @@ const GROUPS = [
       { label: 'Model Data', path: '/ModelData', icon: Database, blurb: 'Maps from UKV, Met Office Global, ECMWF and GFS, plus live radar and satellite' },
       { label: 'Lightning', path: '/Lightning', icon: CloudLightning, blurb: 'Live strikes worldwide, past days to replay, and AI lightning warnings' },
       { label: 'TCM Outlooks', path: '/TCMOutlooks', icon: Zap, blurb: 'Where thunderstorms are likely in the coming days, from our TCM model' },
+      { label: 'TCM FROST', path: '/TCMFrost', icon: Snowflake, blurb: 'The chance, risk and amount of snow for the next ten days, from our own 2 km snow model' },
       { label: 'Weather Patterns', path: '/WeatherPatterns', icon: Layers, blurb: 'The three ways each of the next two weeks could go, with the chance of each' },
       { label: 'Weather Scenarios', path: '/WeatherScenarios', icon: Radar, blurb: 'A library of the weather the UK can get, month by month and region by region' },
     ],
