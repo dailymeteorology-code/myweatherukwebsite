@@ -6,6 +6,11 @@
 # AWS, every ensemble member, 2 km, 10 days) and is published as a Release asset; if more cycles
 # are waiting, the workflow starts itself again straight away. The site mirrors the release
 # (server/tcmFrost.js) and keeps 48 h of runs.
+#
+# GitHub fires this repository's cron irregularly: on the night of 13-14 Nov 2026 only twice in
+# eleven hours, so the 12Z run was never made and the 00Z waited until morning. As TCM NOVA does,
+# every run therefore also starts the next one itself, about ten minutes later (the heartbeat job);
+# the cron only restarts that chain if it ever breaks.
 name: TCM FROST
 
 on:
@@ -21,8 +26,6 @@ permissions:
   contents: write
   actions: write
 
-concurrency: { group: tcm-frost, cancel-in-progress: false }
-
 env:
   PYTHONPATH: tools/tcm-frost:tools/tcm-nova:tools/modeldata
   GH_TOKEN: ${{ github.token }}
@@ -31,9 +34,21 @@ env:
   MDATA_GRID: uk
 
 jobs:
+  # the chain: wait, then start the next run (workflow_dispatch: the one event GitHub's own token
+  # may trigger); a newer heartbeat replaces an older one, so exactly one chain stays alive
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency: { group: tcm-frost-heartbeat, cancel-in-progress: true }
+    steps:
+      - run: |
+          sleep 570
+          gh workflow run frost.yml -R "${{ github.repository }}" --ref "${{ github.ref_name }}"
+
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    concurrency: { group: tcm-frost, cancel-in-progress: false }
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/frost-setup
