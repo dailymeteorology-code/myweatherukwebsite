@@ -5,26 +5,43 @@
    where it is. So the motion between the two steps is measured and the in-between frame moves both
    along it to where the weather would be at that moment, and only then blends the two:
 
-     out(x, t) = (1 - t) A(x - t F(x)) + t B(x + (1 - t) F(x))
+     out(x, t) = (1 - t) A(x - h) + t B(x - h + F)
 
-   t = 0 gives A and t = 1 gives B exactly, so every real model frame is shown as it is, and growth
-   and decay between the two blend away smoothly. Everything happens on the VALUES (the frames'
-   encoded bytes), before colouring, so a stepped colour scale keeps its crisp bands.
+   where h is how far the weather at x has come since A (t F on a straight path), and F the step's
+   motion where that path is half-way along. t = 0 gives A and t = 1 gives B exactly, so every real
+   model frame is shown as it is, and growth and decay between the two blend away smoothly.
+   Everything happens on the VALUES (the frames' encoded bytes), before colouring, so a stepped
+   colour scale keeps its crisp bands.
+
+   Two things make the frames between hold together when the weather moves a long way in a step
+   (a front 300 km in the six hours of a global model's later steps). The motion is taken where
+   each cell's path crosses the middle of the step, found by following it back (13 Nov 2026: taken
+   at the cell itself, a band tore in two and jumped late in the step). And the path is a curve,
+   not a straight line: with the motion of the steps either side, it leaves A at the speed the
+   weather had arriving there and reaches B at the speed it leaves with (a Hermite curve), so the
+   weather glides through every real frame instead of turning a corner at each.
 
    Moving is not enough on its own. A model's showers do not match one for one from hour to hour,
    so a blend always softens them: the reds and yellows sink at every in-between frame and return at
    every real one, and the rain visibly pulses with the model's steps. So each in-between frame then
    has its values remapped to have the mix of intensities that lies between A's and B's (matching
    the quantiles, the "probability matching" of radar nowcasting): the same pattern, with the peaks
-   and the rain area it should have.
+   and the rain area it should have. As strongly as the two moved frames agree, though: where the
+   motion cannot carry one onto the other (a core fading here while another grows there) keeping the
+   peaks up would show both at full strength, a band seeming to split, so it eases off to a dissolve.
 
-   The motion F: first block matching on a small copy of the field, which finds the big moves (a
-   shower can travel further than its own width between steps, and then gradients alone cannot see
-   it go), then pyramidal Lucas-Kanade from there. At each level both frames are warped halfway
-   towards each other by the motion so far (so F belongs to the middle of the step, where it is
-   used), the leftover motion is solved in windows, and the answer is spread by a confidence-weighted
-   blur, since only where there is structure can motion be seen at all. Weather moves with a broad
-   steering flow, so a very smooth F is what is wanted.
+   The motion F, from coarse to fine. On the smallest copy of the field each tile is sought over a
+   wide reach (a shower can travel further than its own width between steps, and then gradients
+   alone cannot see it go); at every finer level small tiles are sought again around what the
+   coarser level found, on the finest within about 40 cells, so a band too narrow for the coarse
+   copies to see gets its own move (13 Nov 2026: an AIFS band over Scotland went 320 km north-east
+   in six hours, was measured at a third of that, and tore in two between the frames). Tiles are
+   matched by normalised correlation, so rain that strengthens or weakens on the way still matches,
+   and rain and the like on their heavier parts (the values squared), so a wide sheet of drizzle that
+   hardly moves does not hold the cores back. A median of the nine around drops stray moves at each
+   level; on the finest, Lucas-Kanade (both frames warped halfway towards each other, the leftover
+   solved in small windows) adds the last part of a cell. Moves are placed half-way along themselves,
+   so F belongs to the middle of the step, where it is used.
 
    How each kind of field moves:
      advect   rain, cloud, fog, wind, pressure and everything else carried along: as above
@@ -47,6 +64,9 @@ const ADVECT = new Set(['precip_rate', 'rain_rate', 'snow_rate', 'conv_rain', 'h
   'rh850', 'w700', 'vort500', 'pw', 'cape_mu', 'cape_sb', 'cape_ml', 'cin_sb', 'cin_mu', 'cin_ml', 'li', 'kindex', 'srh3', 'swh', 'pp1d', 'mwp', 'olr',
   'prob', 'dust_aod', 'aod', 'pm10', 'pm25']);
 const CATEGORY = new Set(['wx', 'ptype', 'radar_type', 'snow_risk']);
+/* fields of scattered cores on a wide weak background: matched on their heavier parts */
+const HEAVY = new Set(['precip_rate', 'rain_rate', 'snow_rate', 'conv_rain', 'hail_rate', 'precip_1h', 'rain_1h', 'snow_1h', 'hail_1h', 'radar', 'refc',
+  'lightning', 'prob']);
 const ANGLE = new Set(['wdir10', 'mwd']);
 /** How a field moves between two steps: 'advect', 'blend', 'category' or 'angle'. */
 export const tweenKind = (key) => (ANGLE.has(key) ? 'angle' : CATEGORY.has(key) ? 'category' : ADVECT.has(key) ? 'advect' : 'blend');
@@ -66,16 +86,19 @@ function meanByte(qa, qb) {
   }
   return n ? s / n : 0;
 }
-/* a field shrunk by whole cells; no data counts as `fill` */
-function shrink(q, W, H, s, fill) {
+/* a field shrunk by whole cells; no data counts as `fill`; `heavy`: each value squared (over 64),
+   so the stronger parts weigh most */
+function shrink(q, W, H, s, fill, heavy = false) {
   const w = Math.max(2, Math.floor(W / s)), h = Math.max(2, Math.floor(H / s));
   const o = new Float32Array(w * h), n = 1 / (s * s);
+  const lut = new Float32Array(256);
+  for (let b = 0; b < 256; b++) { const v = b === NONE ? fill : b; lut[b] = heavy ? (v * v) / 64 : v; }
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       let sum = 0;
       for (let j = 0; j < s; j++) {
         const row = (y * s + j) * W + x * s;
-        for (let i = 0; i < s; i++) { const v = q[row + i]; sum += v === NONE ? fill : v; }
+        for (let i = 0; i < s; i++) sum += lut[q[row + i]];
       }
       o[y * w + x] = sum * n;
     }
@@ -165,62 +188,91 @@ function refine(A, B, U, V, w, h, win, spread, lamK = 0.02) {
   for (let i = 0; i < n; i++) { U[i] = nu[i] / (dn[i] + eps); V[i] = nv[i] / (dn[i] + eps); }
 }
 
-/* Block matching on a small copy: for tiles with something in them, the shift of the next frame that
-   fits best, kept where it fits clearly better than no shift and placed half-way along it. Gives
-   the level's starting motion, spread out by how good each fit was. */
-function blockMotion(A, B, w, h) {
-  const T = 5, half = 6, reach = Math.max(4, Math.round(Math.min(w, h) * 0.24));
-  const u = new Float32Array(w * h), v = new Float32Array(w * h), c = new Float32Array(w * h), tmp = new Float32Array(w * h);
+/* Block matching. Each tile of A (a square of 2 half + 1 cells, every T cells, where there is
+   something to see) is sought in B within r cells of the move so far (U, V; zero at the start), by
+   normalised correlation, so rain that strengthens or weakens on the way still matches; of two near
+   equals the one nearer the move so far wins. Each move found is placed half-way along it (where the
+   motion is used), weighted by how much better it fits than the move so far; spread a little, they
+   replace the move so far where they are sure and go part way where less so. */
+function searchBlocks(A, B, w, h, U, V, r, half, T, spreadR) {
+  const n = w * h, su = new Float32Array(n), sv = new Float32Array(n), sc = new Float32Array(n), tmp = new Float32Array(n);
   let mean = 0;
-  for (let i = 0; i < A.length; i++) mean += A[i];
-  mean /= A.length;
+  for (let i = 0; i < n; i++) mean += A[i];
+  mean /= n;
   let spread = 0;
-  for (let i = 0; i < A.length; i++) spread += (A[i] - mean) ** 2;
-  spread /= A.length;
+  for (let i = 0; i < n; i++) spread += (A[i] - mean) ** 2;
+  spread /= n;
+  const side = 2 * half + 1, m = side * side, pa = new Float32Array(m);
+  const fit = (tx, ty, dx, dy, am, as) => {
+    let sb = 0, sbb = 0, sab = 0, k = 0;
+    for (let y = ty - half; y <= ty + half; y++) {
+      const yb = y + dy;
+      if (yb < 0 || yb >= h) return -1;
+      const rb = yb * w + dx;
+      for (let x = tx - half; x <= tx + half; x++, k++) {
+        const xb = x + dx;
+        if (xb < 0 || xb >= w) return -1;
+        const bb = B[rb + x];
+        sb += bb; sbb += bb * bb; sab += pa[k] * bb;
+      }
+    }
+    const bm = sb / m, bv = sbb - m * bm * bm;
+    return bv > 1e-9 ? (sab - m * am * bm) / (as * Math.sqrt(bv)) : 0;
+  };
   for (let ty = half; ty < h - half; ty += T) {
     for (let tx = half; tx < w - half; tx += T) {
-      let s1 = 0, s2 = 0, n = 0;
-      for (let y = ty - half; y <= ty + half; y += 2) for (let x = tx - half; x <= tx + half; x += 2) { const a = A[y * w + x]; s1 += a; s2 += a * a; n++; }
-      const texture = s2 / n - (s1 / n) ** 2;
-      if (texture < 0.05 * spread + 1e-3) continue;
-      let best = Infinity, bx = 0, by = 0, still = 0;
-      for (let dy = -reach; dy <= reach; dy++) {
-        const y0 = ty - half + dy, y1 = ty + half + dy;
-        if (y0 < 0 || y1 >= h) continue;
-        for (let dx = -reach; dx <= reach; dx++) {
-          const x0 = tx - half + dx, x1 = tx + half + dx;
-          if (x0 < 0 || x1 >= w) continue;
-          let e = 0;
-          for (let y = ty - half; y <= ty + half; y += 2) {
-            const ra = y * w, rb = (y + dy) * w + dx;
-            for (let x = tx - half; x <= tx + half; x += 2) { const d = A[ra + x] - B[rb + x]; e += d * d; }
-            if (e > best) break;
-          }
-          e = e / n + (dx * dx + dy * dy) * 0.002 * texture;   // of two equal fits, the shorter move
-          if (!dx && !dy) still = e;
-          if (e < best) { best = e; bx = dx; by = dy; }
+      let s1 = 0, k = 0;
+      for (let y = ty - half; y <= ty + half; y++) for (let x = tx - half; x <= tx + half; x++, k++) { pa[k] = A[y * w + x]; s1 += pa[k]; }
+      const am = s1 / m;
+      let av = 0;
+      for (let j = 0; j < m; j++) av += (pa[j] - am) ** 2;
+      if (av / m < 0.05 * spread + 1e-3) continue;          // nothing here to follow
+      const as = Math.sqrt(av), i0 = ty * w + tx;
+      const u0 = U ? Math.round(U[i0]) : 0, v0 = V ? Math.round(V[i0]) : 0;
+      const base = fit(tx, ty, u0, v0, am, as);
+      let best = -Infinity, bx = u0, by = v0;
+      for (let dy = v0 - r; dy <= v0 + r; dy++) {
+        for (let dx = u0 - r; dx <= u0 + r; dx++) {
+          const c = fit(tx, ty, dx, dy, am, as) - 0.03 * ((dx - u0) ** 2 + (dy - v0) ** 2) / (r * r);
+          if (c > best) { best = c; bx = dx; by = dy; }
         }
       }
-      if (best >= still * 0.8) continue;                 // no clear move here
+      const gain = best - base;
+      if (best < 0.35 || gain < 0.02) continue;             // no convincing fit, or the move so far will do
       const px = Math.max(0, Math.min(w - 1, Math.round(tx + bx / 2))), py = Math.max(0, Math.min(h - 1, Math.round(ty + by / 2))), i = py * w + px;
-      const weight = Math.max(1e-3, still - best);
-      u[i] += bx * weight; v[i] += by * weight; c[i] += weight;
+      const weight = gain * best * best;
+      su[i] += bx * weight; sv[i] += by * weight; sc[i] += weight;
     }
   }
-  blur(u, w, h, 4, tmp, 3); blur(v, w, h, 4, tmp, 3); blur(c, w, h, 4, tmp, 3);
+  blur(su, w, h, spreadR, tmp, 2); blur(sv, w, h, spreadR, tmp, 2); blur(sc, w, h, spreadR, tmp, 2);
   let top = 0;
-  for (let i = 0; i < c.length; i++) if (c[i] > top) top = c[i];
-  const eps = 0.02 * top + 1e-9;
-  for (let i = 0; i < c.length; i++) { u[i] /= c[i] + eps; v[i] /= c[i] + eps; }
-  return { u, v };
+  for (let i = 0; i < n; i++) if (sc[i] > top) top = sc[i];
+  if (!top) return;
+  for (let i = 0; i < n; i++) {
+    if (sc[i] <= 0) continue;
+    const a = Math.min(1, sc[i] / (0.12 * top));
+    U[i] += (su[i] / sc[i] - U[i]) * a; V[i] += (sv[i] / sc[i] - V[i]) * a;
+  }
+}
+/* each value the median of the nine around it: a stray move among good ones goes */
+function median3(a, w, h) {
+  const src = a.slice(), win = new Float32Array(9);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      let k = 0;
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) win[k++] = src[(y + j) * w + x + i];
+      win.sort();
+      a[y * w + x] = win[4];
+    }
+  }
 }
 
 /** The motion from frame bytes `qa` to `qb` (each W x H): { u, v, w, h, s }, in cells of the full
-    field per step, on a grid `s` times coarser. */
-export function measureFlow(qa, qb, W, H, { fill = meanByte(qa, qb), target = 220, win = 4, spread = 7, spreadTop = 3, iters = 3, lam = 0.02 } = {}) {
+    field per step, on a grid `s` times coarser. `heavy`: matched on the stronger parts (rain). */
+export function measureFlow(qa, qb, W, H, { fill = meanByte(qa, qb), target = 220, win = 3, spread = 3, iters = 2, lam = 0.02, heavy = false, debug = null } = {}) {
   const s = Math.max(1, Math.round(Math.max(W, H) / target));
-  const levels = [{ A: shrink(qa, W, H, s, fill), B: shrink(qb, W, H, s, fill) }];
-  while (Math.max(levels[levels.length - 1].A.w, levels[levels.length - 1].A.h) > 80) {
+  const levels = [{ A: shrink(qa, W, H, s, fill, heavy), B: shrink(qb, W, H, s, fill, heavy) }];
+  while (Math.max(levels[levels.length - 1].A.w, levels[levels.length - 1].A.h) > 64) {
     const top = levels[levels.length - 1];
     levels.push({ A: halve(top.A), B: halve(top.B) });
   }
@@ -228,9 +280,8 @@ export function measureFlow(qa, qb, W, H, { fill = meanByte(qa, qb), target = 22
   for (let l = levels.length - 1; l >= 0; l--) {
     const { A, B } = levels[l];
     const { w, h } = A;
-    let u = new Float32Array(w * h), v = new Float32Array(w * h);
-    if (!U) ({ u, v } = blockMotion(A.a, B.a, w, h));    // the smallest copy: the big moves
-    else {                                               // the coarser answer, as a start
+    const u = new Float32Array(w * h), v = new Float32Array(w * h);
+    if (U) {                                             // the coarser answer, as a start
       for (let y = 0, i = 0; y < h; y++) {
         for (let x = 0; x < w; x++, i++) {
           const fx = ((x + 0.5) * pw) / w - 0.5, fy = ((y + 0.5) * ph) / h - 0.5;
@@ -239,44 +290,76 @@ export function measureFlow(qa, qb, W, H, { fill = meanByte(qa, qb), target = 22
         }
       }
     }
-    for (let k = 0; k < iters; k++) refine(A.a, B.a, u, v, w, h, win, l === 0 ? spread : spreadTop, lam);
+    debug?.(l, 'start', u, v, w, h);
+    if (!U) searchBlocks(A.a, B.a, w, h, u, v, Math.max(4, Math.round(Math.min(w, h) * 0.3)), 3, 2, 3);   // the big moves, from nothing
+    else searchBlocks(A.a, B.a, w, h, u, v, l === 0 ? 8 : 4, 3, 2, 2);   // what this level can see that the coarser could not (the finest: a band's own move)
+    median3(u, w, h); median3(v, w, h);
+    debug?.(l, 'blocks', u, v, w, h);
+    if (l === 0) for (let k = 0; k < iters; k++) refine(A.a, B.a, u, v, w, h, win, spread, lam);   // the last part of a cell
+    debug?.(l, 'refined', u, v, w, h);
     U = u; V = v; pw = w; ph = h;
   }
   return { u: U, v: V, w: pw, h: ph, s: W / pw, sy: H / ph };
 }
 
-/* the motion at every cell of the field, from its coarse grid */
-function denseFlow(F, W, H) {
-  const U = new Float32Array(W * H), V = new Float32Array(W * H);
-  const kx = F.w / W, ky = F.h / H;
-  for (let y = 0, i = 0; y < H; y++) {
-    const fy = (y + 0.5) * ky - 0.5;
-    for (let x = 0; x < W; x++, i++) {
-      const fx = (x + 0.5) * kx - 0.5;
-      U[i] = bilinear(F.u, F.w, F.h, fx, fy) * F.s;
-      V[i] = bilinear(F.v, F.w, F.h, fx, fy) * F.sy;
-    }
-  }
-  return { U, V };
-}
-
-/* the last few pairs' motion, as a run plays through them once: a window's layer and what is laid
-   over it each have their own, and a cap on the cells kept (a 1 km radar frame is four UKV frames) */
+/* the last few pairs' motion (on its coarse grid), as a run plays through them once: a window's
+   layer and what is laid over it each have their own */
 const flows = new Map();
-const FLOW_CELLS = 16e6;
-function flowOf(a, b, W, H, fill) {
+const FLOW_PAIRS = 24;
+function flowOf(a, b, W, H, fill, heavy = false) {
   const hit = flows.get(a);
   if (hit && hit.b === b) return hit.flow;
-  const flow = denseFlow(measureFlow(a.q, b.q, W, H, fill >= 0 ? { fill } : {}), W, H);
-  flows.set(a, { b, flow, cells: W * H });
-  let held = 0;
-  for (const f of flows.values()) held += f.cells;
-  for (const [k, f] of flows) {
-    if (held <= FLOW_CELLS || flows.size <= 2) break;
-    flows.delete(k);
-    held -= f.cells;
-  }
+  const flow = measureFlow(a.q, b.q, W, H, { ...(fill >= 0 ? { fill } : {}), heavy });
+  flows.set(a, { b, flow });
+  while (flows.size > FLOW_PAIRS) flows.delete(flows.keys().next().value);
   return flow;
+}
+
+/* ── the paths ────────────────────────────────────────────────────────────── */
+/* how much the speed at a real frame may differ from the step's own: half way to the neighbour's,
+   no more than a third of the step's motion and a cell (a wrong neighbour cannot send it astray) */
+function lean(f, g) {
+  let d = 0.5 * (g - f);
+  const cap = 0.35 * Math.abs(f) + 0.75;
+  return f + (d > cap ? cap : d < -cap ? -cap : d);
+}
+/* For every cell at time t, in full cells: where its weather was in A (ax, ay) and will be in B
+   (bx, by). Worked out on the motion's coarse grid, then spread to every cell in the box:
+   F the step's motion, P the step before's and N the step after's (or null), kp and kn their
+   lengths against this one's (their motion per step made this step's). */
+const paths = { size: 0 };
+function pathsAt(F, P, N, kp, kn, t, W, H, box) {
+  const { w, h } = F, s = F.s, sy = F.sy, n = w * h;
+  const h10 = t * t * t - 2 * t * t + t, h01 = 3 * t * t - 2 * t * t * t, h11 = t * t * t - t * t;
+  const cax = new Float32Array(n), cay = new Float32Array(n), cbx = new Float32Array(n), cby = new Float32Array(n);
+  for (let cy = 0, i = 0; cy < h; cy++) {
+    for (let cx = 0; cx < w; cx++, i++) {
+      let mx = cx, my = cy, fu = 0, fv = 0, hu = 0, hv = 0;
+      for (let it = 0; it < 3; it++) {                   // the path's middle, by following it back
+        fu = bilinear(F.u, w, h, mx, my) * s; fv = bilinear(F.v, w, h, mx, my) * sy;
+        let m0u = fu, m0v = fv, m1u = fu, m1v = fv;
+        if (P) { m0u = lean(fu, bilinear(P.u, w, h, mx, my) * s * kp); m0v = lean(fv, bilinear(P.v, w, h, mx, my) * sy * kp); }
+        if (N) { m1u = lean(fu, bilinear(N.u, w, h, mx, my) * s * kn); m1v = lean(fv, bilinear(N.v, w, h, mx, my) * sy * kn); }
+        hu = h01 * fu + h10 * m0u + h11 * m1u; hv = h01 * fv + h10 * m0v + h11 * m1v;
+        const midu = 0.5 * fu + 0.125 * (m0u - m1u), midv = 0.5 * fv + 0.125 * (m0v - m1v);
+        mx = cx + (midu - hu) / s; my = cy + (midv - hv) / sy;
+      }
+      cax[i] = -hu; cay[i] = -hv; cbx[i] = fu - hu; cby[i] = fv - hv;
+    }
+  }
+  /* to every cell (scratch arrays, reused: one frame is worked out at a time) */
+  if (paths.size !== W * H) Object.assign(paths, { size: W * H, ax: new Float32Array(W * H), ay: new Float32Array(W * H), bx: new Float32Array(W * H), by: new Float32Array(W * H) });
+  const kx = w / W, ky = h / H;
+  const X0 = box ? box[0] : 0, Y0 = box ? box[1] : 0, X1 = box ? box[2] : W, Y1 = box ? box[3] : H;
+  for (let y = Y0; y < Y1; y++) {
+    const fy = (y + 0.5) * ky - 0.5;
+    for (let x = X0, i = y * W + X0; x < X1; x++, i++) {
+      const fx = (x + 0.5) * kx - 0.5;
+      paths.ax[i] = bilinear(cax, w, h, fx, fy); paths.ay[i] = bilinear(cay, w, h, fx, fy);
+      paths.bx[i] = bilinear(cbx, w, h, fx, fy); paths.by[i] = bilinear(cby, w, h, fx, fy);
+    }
+  }
+  return paths;
 }
 
 /* ── the frames between ───────────────────────────────────────────────────── */
@@ -299,18 +382,19 @@ function sample(q, W, H, x, y, fill) {
 }
 const nearest = (q, W, H, x, y) => q[Math.min(H - 1, Math.max(0, Math.round(y))) * W + Math.min(W - 1, Math.max(0, Math.round(x)))];
 
-/** Bytes of the moved-and-blended field at t (0..1). `fill` < 0: no data stays no data, the frame
-    nearer in time deciding where only one has it; otherwise no data counts as that byte, and a
-    result at that byte is no data again. `box` [x0, y0, x1, y1] limits the work to the cells in
-    view; those outside stay no data. */
-export function advect(qa, qb, W, H, U, V, t, fill = -1, box = null) {
+/** Bytes of the moved-and-blended field at t (0..1), along the paths `Q` (pathsAt: each cell's
+    place in A and in B, as offsets). `fill` < 0: no data stays no data, the frame nearer in time
+    deciding where only one has it; otherwise no data counts as that byte, and a result at that byte
+    is no data again. `box` [x0, y0, x1, y1] limits the work to the cells in view; those outside
+    stay no data. */
+export function advect(qa, qb, W, H, Q, t, fill = -1, box = null) {
   const out = new Uint8Array(W * H).fill(NONE), s = 1 - t, xm = W - 1.001, ym = H - 1.001;
+  let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, n = 0;  // how alike the two moved frames are, where it is wet
   const X0 = box ? Math.max(0, box[0]) : 0, Y0 = box ? Math.max(0, box[1]) : 0, X1 = box ? Math.min(W, box[2]) : W, Y1 = box ? Math.min(H, box[3]) : H;
   for (let y = Y0; y < Y1; y++) {
     let i = y * W + X0;
     for (let x = X0; x < X1; x++, i++) {
-      const u = U[i], v = V[i];
-      let ax = x - t * u, ay = y - t * v, bx = x + s * u, by = y + s * v;
+      let ax = x + Q.ax[i], ay = y + Q.ay[i], bx = x + Q.bx[i], by = y + Q.by[i];
       if (ax < 0) ax = 0; else if (ax > xm) ax = xm;
       if (ay < 0) ay = 0; else if (ay > ym) ay = ym;
       if (bx < 0) bx = 0; else if (bx > xm) bx = xm;
@@ -323,7 +407,9 @@ export function advect(qa, qb, W, H, U, V, t, fill = -1, box = null) {
       if (a0 !== NONE && a1 !== NONE && a2 !== NONE && a3 !== NONE && b0 !== NONE && b1 !== NONE && b2 !== NONE && b3 !== NONE) {
         const ar = ax - ai, as = ay - aj, br = bx - bi, bs = by - bj;
         const at = a0 + (a1 - a0) * ar, ab = a2 + (a3 - a2) * ar, bt = b0 + (b1 - b0) * br, bb = b2 + (b3 - b2) * br;
-        r = (at + (ab - at) * as) * s + (bt + (bb - bt) * bs) * t;
+        const va = at + (ab - at) * as, vb = bt + (bb - bt) * bs;
+        r = va * s + vb * t;
+        sa += va; sb += vb; saa += va * va; sbb += vb * vb; sab += va * vb; n++;
       } else {
         const a = sample(qa, W, H, ax, ay, fill), b = sample(qb, W, H, bx, by, fill);
         if (a >= 0 && b >= 0) r = a * s + b * t;
@@ -335,13 +421,16 @@ export function advect(qa, qb, W, H, U, V, t, fill = -1, box = null) {
       out[i] = r >= 254.5 ? NONE : r + 0.5;
     }
   }
+  const cov = n * sab - sa * sb, var_ = (n * saa - sa * sa) * (n * sbb - sb * sb);
+  out.agree = n > 50 && var_ > 0 ? cov / Math.sqrt(var_) : 1;
   return out;
 }
-function advectCategory(qa, qb, W, H, U, V, t) {
-  const out = new Uint8Array(W * H), s = 1 - t, first = t < 0.5;
-  for (let y = 0, i = 0; y < H; y++) {
-    for (let x = 0; x < W; x++, i++) {
-      out[i] = first ? nearest(qa, W, H, x - t * U[i], y - t * V[i]) : nearest(qb, W, H, x + s * U[i], y + s * V[i]);
+function advectCategory(qa, qb, W, H, Q, t, box = null) {
+  const out = new Uint8Array(W * H).fill(NONE), first = t < 0.5;
+  const X0 = box ? Math.max(0, box[0]) : 0, Y0 = box ? Math.max(0, box[1]) : 0, X1 = box ? Math.min(W, box[2]) : W, Y1 = box ? Math.min(H, box[3]) : H;
+  for (let y = Y0; y < Y1; y++) {
+    for (let x = X0, i = y * W + X0; x < X1; x++, i++) {
+      out[i] = first ? nearest(qa, W, H, x + Q.ax[i], y + Q.ay[i]) : nearest(qb, W, H, x + Q.bx[i], y + Q.by[i]);
     }
   }
   return out;
@@ -410,8 +499,9 @@ function spreadsOf(a, b, W, box) {
   if (spreads.size > 12) spreads.delete(spreads.keys().next().value);
   return out;
 }
-/** Remaps bytes `q` in place so their quantiles lie t of the way from `qa`'s to `qb`'s. */
-export function matchSpread(q, W, box, qa, qb, t) {
+/** Remaps bytes `q` in place so their quantiles lie t of the way from `qa`'s to `qb`'s (`strength`
+    of the way there: 0 leaves them as they are). */
+export function matchSpread(q, W, box, qa, qb, t, strength = 1) {
   if (!qa || !qb) return q;
   const hist = histogram(q, W, box);
   let total = 0;
@@ -425,7 +515,7 @@ export function matchSpread(q, W, box, qa, qb, t) {
     cum += hist[b];
     const k0 = Math.min(LEVELS - 1, k | 0), f = k - k0;
     const va = qa[k0] + (qa[k0 + 1] - qa[k0]) * f, vb = qb[k0] + (qb[k0 + 1] - qb[k0]) * f;
-    lut[b] = Math.max(0, Math.min(254, Math.round(va * (1 - t) + vb * t)));
+    lut[b] = Math.max(0, Math.min(254, Math.round(b + (va * (1 - t) + vb * t - b) * strength)));
   }
   const X0 = box ? box[0] : 0, Y0 = box ? box[1] : 0, X1 = box ? box[2] : W, Y1 = box ? box[3] : q.length / W;
   for (let y = Y0; y < Y1; y++) { const row = y * W; for (let x = X0; x < X1; x++) q[row + x] = lut[q[row + x]]; }
@@ -435,8 +525,11 @@ export function matchSpread(q, W, box, qa, qb, t) {
 /** The frame t (0..1) of the way from frame `a` to frame `b`, for the scale key `key`. Frames with
     no bytes to move (pictures) come back as a mix for lib/modelViewer's frameCanvas to dissolve;
     frames that do not match are not mixed and the nearer one is returned. `box` [x0, y0, x1, y1],
-    cells of the frame, limits the work to what is in view (the cells outside are left empty). */
-export function tweenFrame(a, b, t, key, box = null) {
+    cells of the frame, limits the work to what is in view (the cells outside are left empty).
+    `near` { prev, next, kp, kn }: the frames before `a` and after `b` (either may be missing) and
+    the length of this step against the one before and the one after, so the motion carries on
+    smoothly through the real frames. */
+export function tweenFrame(a, b, t, key, box = null, near = null) {
   if (!a || !b) return a || b;
   if (t <= 0 || a === b) return a;
   if (t >= 1) return b;
@@ -451,12 +544,21 @@ export function tweenFrame(a, b, t, key, box = null) {
   if (kind === 'blend') q = blendBytes(a.q, b.q, t, fill);
   else if (kind === 'angle') q = blendAngles(a, b, t);
   else {
-    const { U, V } = flowOf(a, b, W, H, fill);
-    if (kind === 'category') q = advectCategory(a.q, b.q, W, H, U, V, t);
+    const heavy = HEAVY.has(key);
+    const F = flowOf(a, b, W, H, fill, heavy);
+    const fits = (f) => f && f.q && f.q.length === a.q.length;
+    const P = near && fits(near.prev) && near.kp > 0 ? flowOf(near.prev, a, W, H, fill, heavy) : null;
+    const N = near && fits(near.next) && near.kn > 0 ? flowOf(b, near.next, W, H, fill, heavy) : null;
+    const Q = pathsAt(F, P, N, near?.kp || 1, near?.kn || 1, t, W, H, view);
+    if (kind === 'category') q = advectCategory(a.q, b.q, W, H, Q, t, view);
     else {
-      q = advect(a.q, b.q, W, H, U, V, t, fill, view);
+      q = advect(a.q, b.q, W, H, Q, t, fill, view);
+      /* the peaks kept up as strongly as the two moved frames agree: where the motion carries one onto
+         the other the weather keeps its strength between them; where it cannot (a core fading here
+         while another grows there) keeping it up would show both at full strength, so it eases off
+         to a plain dissolve */
       const { qa, qb } = spreadsOf(a, b, W, view);
-      matchSpread(q, W, view, qa, qb, t);
+      matchSpread(q, W, view, qa, qb, t, Math.max(0, Math.min(1, (q.agree - 0.45) / 0.4)));
     }
   }
   return { ...a, q };

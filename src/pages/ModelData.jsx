@@ -244,8 +244,19 @@ function runBeside(m, first, run) {
   return older.find((r) => r.steps.length >= 0.8 * (run?.steps.length || 0)) || older[0] || defaultRun(m);
 }
 /* a frame part-way between two frames of a run, for a smooth GIF or video: it stands in for a frame
-   (the time and T+ are its own) and lib/modelTween works out its values when its layers are made */
-const tweenRaw = (a, b, t, ms) => ({ ...a, head: { ...a.head, valid: new Date(ms).toISOString(), step: t < 0.5 ? a.head.step : b.head.step }, tween: { a, b, t, span: Date.parse(b.head.valid) - Date.parse(a.head.valid) } });
+   (the time and T+ are its own) and lib/modelTween works out its values when its layers are made.
+   The frames before `a` and after `b` come along, so the motion carries on through the real frames. */
+const tweenRaw = (a, b, t, ms, prev = null, next = null) => ({ ...a, head: { ...a.head, valid: new Date(ms).toISOString(), step: t < 0.5 ? a.head.step : b.head.step },
+  tween: { a, b, t, span: Date.parse(b.head.valid) - Date.parse(a.head.valid), prev, next } });
+/* lib/modelTween's `near` for a frame between: the frames either side (through `map`, as the layer
+   being made has them) and the steps' lengths against this one's */
+const validOf = (f) => (f?.head?.valid ? Date.parse(f.head.valid) : null);
+function nearOf(tw, map = (f) => f) {
+  if (!tw || (!tw.prev && !tw.next)) return null;
+  const ta = validOf(tw.a), tb = validOf(tw.b), tp = validOf(tw.prev), tn = validOf(tw.next), span = tb - ta;
+  const prev = tw.prev ? map(tw.prev) : null, next = tw.next ? map(tw.next) : null;
+  return { prev, next, kp: prev && tp != null && ta > tp ? span / (ta - tp) : 0, kn: next && tn != null && tn > tb ? span / (tn - tb) : 0 };
+}
 const GIF_FPS = 25;                                         // 40 ms a frame: the smoothest every GIF viewer keeps to
 const WARN_FADE = 40 * 60e3;                                // how long a warning takes to ease on in a smooth export
 /* the display cells a window can see, as cells of a frame, with room for what is drawn from them */
@@ -1059,7 +1070,7 @@ export default function ModelData() {
         const a = framesB[stepsB[i]], b = framesB[stepsB[i + 1]];
         if (!a || !b) break;
         const t = (ms - ta) / (tb - ta);
-        return t <= 0 ? a : t >= 1 ? b : tweenRaw(a, b, t, ms);
+        return t <= 0 ? a : t >= 1 ? b : tweenRaw(a, b, t, ms, i ? framesB[stepsB[i - 1]] || null : null, framesB[stepsB[i + 2]] || null);
       }
     }
     const k = nearestStep(stepsB, runMsB, ms);
@@ -1412,7 +1423,7 @@ export default function ModelData() {
      it would any frame. */
   const layersFor = useCallback((P, raw, sync = false, ms = null) => {
     const tw = raw?.tween, C = P.caches, st = staticsBy[P.grid];
-    const f = tw ? tweenFrame(disp(tw.a), disp(tw.b), tw.t, P.scaleKey, cellBox(disp(tw.a), tw.box)) : disp(raw);
+    const f = tw ? tweenFrame(disp(tw.a), disp(tw.b), tw.t, P.scaleKey, cellBox(disp(tw.a), tw.box), nearOf(tw, disp)) : disp(raw);
     const later = sync ? undefined : { onReady: bump };
     const sc = scaleFor(P.scaleKey);
     const comp = (map, key, tol) => {
@@ -1420,7 +1431,7 @@ export default function ModelData() {
       const a = companionOf(map, tw ? tw.a : raw, P.live, tol);
       if (!tw) return a;
       const b = companionOf(map, tw.b, P.live, tol);
-      return a && b ? tweenFrame(a, b, tw.t, key, cellBox(a, tw.box)) : a || b;
+      return a && b ? tweenFrame(a, b, tw.t, key, cellBox(a, tw.box), nearOf(tw, (r) => companionOf(map, r, P.live, tol))) : a || b;
     };
     /* the layers laid over and under this one, each at its own strength; a whole-map layer is drawn
        see-through on the maps worth seeing, so what is under it shows */
@@ -1429,7 +1440,7 @@ export default function ModelData() {
       if (!raw) return [];
       const a = x.prep(extraFrameOf(x.map, tw ? tw.a : raw, x.byTime));
       const b = tw ? x.prep(extraFrameOf(x.map, tw.b, x.byTime)) : null;
-      const fr = tw && a && b ? tweenFrame(a, b, tw.t, x.scale, cellBox(a, tw.box)) : a || b;
+      const fr = tw && a && b ? tweenFrame(a, b, tw.t, x.scale, cellBox(a, tw.box), nearOf(tw, (r) => x.prep(extraFrameOf(x.map, r, x.byTime)))) : a || b;
       const canvas = fieldLayer(fr, x.scale, smooth, x.cache, x.cache, RAINY.has(x.scale));
       return canvas ? [{ canvas, alpha: x.alpha * (x.place === 'over' ? veil(x.scale) : 1), place: x.place, key: { variable: x.meta.label, unit: x.meta.unit, credit: x.place === 'over' ? 'Laid over' : 'Laid under', scale: NO_COLOURS.has(x.scale) ? {} : scaleFor(x.scale) } }] : [];
     });
@@ -1757,24 +1768,56 @@ export default function ModelData() {
   };
   if (import.meta.env.DEV) window.__mdExport = (short = 1080) => { const [W, H] = exportSize(short); const cv = document.createElement('canvas'); cv.width = W; cv.height = H; renderAt(frame, cv.getContext('2d'), W, H); return cv.toDataURL('image/jpeg', 0.85); };
   const gifCancel = useRef(false);
-  /* The frames of a GIF or video: each step for `speed` ms, as it is or, smooth, moving on to the next
-     all the way through at the file's frame rate. It ends on a short rest. A GIF goes round and round,
-     so a smooth one dissolves from its last frame back to its first. */
+  /* The frames of a GIF or video, timed by the clock. Every step lasts as long as the time it covers,
+     so the weather moves at one steady pace (a model's three-hourly steps last three times its hourly
+     ones), and how fast is set from how many steps there are: a few linger, a ten-day run moves
+     briskly (4 to 30 s of motion; a GIF at most 15, to keep the file small). The first frame is held
+     a moment to take in, the last a little longer. Smooth, the frames between follow at the file's
+     frame rate; a GIF goes round and round, so a smooth one dissolves from its last frame to its first. */
   const motionPlan = (job, list) => {
-    const fps = job === 'gif' ? GIF_FPS : exp.fps, tick = 1000 / fps;
+    const fps = job === 'gif' ? GIF_FPS : exp.fps, tick = 1000 / fps, gif = job === 'gif';
     const smoothly = exp.smooth && list.length > 1;
-    const per = Math.max(1, Math.round(speed / tick));
-    const plan = [];
+    const gaps = [];
     for (let i = 0; i + 1 < list.length; i++) {
-      if (job === 'gif' && !smoothly) { plan.push({ i, t: 0, delay: speed }); continue; }
-      for (let k = 0; k < per; k++) plan.push({ i, t: smoothly ? k / per : 0, same: !smoothly && k > 0, delay: tick });
+      const a = validOf(frames[list[i]]), b = validOf(frames[list[i + 1]]);
+      gaps.push(a != null && b != null && b > a ? b - a : null);
     }
+    const known = gaps.filter((g) => g != null).sort((x, y) => x - y);
+    const typical = known.length ? known[known.length >> 1] : 3600e3;
+    const spans = gaps.map((g) => g ?? typical);
+    const total = spans.reduce((n, g) => n + g, 0) || 1;
+    const length = Math.min(gif ? 15 : 30, Math.max(4, 1.4 * Math.max(1, spans.length) ** 0.62)) * 1000;   // ms of motion
+    const msOf = (g) => Math.max(180, (g / total) * length);                                          // no step a blink
+    const plan = [];
+    const hold = (i, ms) => {
+      if (gif) { plan.push({ i, t: 0, delay: Math.round(ms) }); return; }                                // a GIF frame can simply stay
+      const n = Math.max(1, Math.round(ms / tick));
+      for (let k = 0; k < n; k++) plan.push({ i, t: 0, same: plan.length > 0 && k > 0, delay: tick });
+    };
     const end = list.length - 1;
-    if (job === 'gif') {
-      plan.push({ i: end, t: 0, delay: Math.max(speed, 900) });
-      if (smoothly) for (let k = 1; k < per; k++) plan.push({ fade: k / per, delay: tick });
-    } else for (let k = 0; k < fps; k++) plan.push({ i: end, t: 0, same: k > 0, delay: tick });
-    return { plan, fps, smoothly };
+    if (gif && !smoothly) {
+      spans.forEach((g, i) => plan.push({ i, t: 0, delay: Math.round(msOf(g) + (i ? 0 : 700)) }));
+      plan.push({ i: end, t: 0, delay: 1500 });
+    } else {
+      hold(0, 700);
+      spans.forEach((g, i) => {
+        const n = Math.max(1, Math.round(msOf(g) / tick));
+        for (let k = 0; k < n; k++) plan.push({ i, t: smoothly ? k / n : 0, same: (!smoothly && k > 0) || (!gif && i === 0 && k === 0), delay: tick });
+      });
+      hold(end, gif ? 1200 : 1600);
+      if (gif && smoothly) { const n = Math.round(600 / tick); for (let k = 1; k < n; k++) plan.push({ fade: k / n, delay: tick }); }
+    }
+    return { plan, fps, smoothly, msPer: (u) => (u / total) * length, typical };
+  };
+  /* how fast an export runs, said as the clock: "an hour every 0.3 s" */
+  const motionPace = (job) => {
+    const list = motionFrames(job);
+    if (list.length < 2) return '';
+    const m = motionPlan(job, list);
+    /* said in the steps' own unit: a day, its hours (a 6-hourly model: "6 hours"), an hour, 10 minutes */
+    const h = Math.round(m.typical / 3600e3);
+    const [unit, name] = m.typical >= 20 * 3600e3 ? [864e5, 'a day'] : m.typical <= 30 * 60e3 ? [6e5, '10 minutes'] : h > 1 ? [h * 3600e3, `${h} hours`] : [3600e3, 'an hour'];
+    return `${name} every ${(Math.max(180, m.msPer(unit)) / 1000).toFixed(2).replace(/0$/, '')} s`;
   };
   const motionFrames = (job) => {
     const lo = exp.from, hi = exp.to ?? steps.length - 1;
@@ -1791,7 +1834,7 @@ export default function ModelData() {
       const a = frames[list[p.i]];
       if (!p.t) return a;
       const b = frames[list[p.i + 1]], ta = Date.parse(a.head.valid);
-      return tweenRaw(a, b, p.t, ta + (Date.parse(b.head.valid) - ta) * p.t);
+      return tweenRaw(a, b, p.t, ta + (Date.parse(b.head.valid) - ta) * p.t, p.i ? frames[list[p.i - 1]] || null : null, frames[list[p.i + 2]] || null);
     };
     /* the last frame and the first, kept for the dissolve from one to the other */
     const ends = [];
@@ -1830,6 +1873,21 @@ export default function ModelData() {
     }
   };
   if (import.meta.env.DEV) window.__mdMotion = exportMotion;
+  /* (development) the frames of a smooth export at plan positions, as JPEGs, to look at transitions */
+  if (import.meta.env.DEV) {
+    window.__mdPlan = (job = 'video') => { const list = motionFrames(job); const m = motionPlan(job, list); return { steps: list, n: m.plan.length, fps: m.fps, plan: m.plan.map((p) => [p.i, +(p.t || 0).toFixed(3), p.fade ?? null]) }; };
+    window.__mdPlanFrames = (idx, job = 'video', short = 540) => {
+      const list = motionFrames(job), { plan } = motionPlan(job, list), [W, H] = exportSize(short);
+      return idx.map((k) => {
+        const p = plan[k], cv = document.createElement('canvas');
+        cv.width = W; cv.height = H;
+        const a = frames[list[p.i]];
+        const raw = !p.t ? a : (() => { const b = frames[list[p.i + 1]], ta = Date.parse(a.head.valid); return tweenRaw(a, b, p.t, ta + (Date.parse(b.head.valid) - ta) * p.t, p.i ? frames[list[p.i - 1]] || null : null, frames[list[p.i + 2]] || null); })();
+        renderAt(raw, cv.getContext('2d'), W, H, 'smooth');
+        return cv.toDataURL('image/jpeg', 0.88);
+      });
+    };
+  }
 
   const groups = useMemo(() => {
     if (!model || !cat) return [];
@@ -2358,7 +2416,7 @@ export default function ModelData() {
   );
   const speedSelect = (
     <div style={{ position: 'relative' }}>
-      <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} style={{ ...sel, padding: '7px 26px 7px 10px' }} title="Playback, GIF and video speed" aria-label="Playback speed">
+      <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} style={{ ...sel, padding: '7px 26px 7px 10px' }} title="Playback speed (GIFs and videos time themselves)" aria-label="Playback speed">
         {[120, 200, 300, 450, 650, 900, 1300, 2000].map((v) => <option key={v} value={v} style={{ color: '#111' }}>{(1000 / v).toFixed(v > 500 ? 1 : 0)} fps</option>)}
       </select>
       <ChevronDown style={{ position: 'absolute', right: 8, top: 9, width: 13, height: 13, pointerEvents: 'none', opacity: 0.7 }} />
@@ -2415,7 +2473,7 @@ export default function ModelData() {
             <Seg small items={[[30, '30 fps'], [60, '60 fps']]} value={exp.fps} onChange={(v) => setExp((x) => ({ ...x, fps: v }))} />
             {motionBtn('video', <Clapperboard size={14} />, `Video of ${motionName}`)}
           </div>
-          <div style={{ fontSize: 11, color: exp.err ? '#f59e0b' : T.ink2 }}>{exp.err || (waiting > 0 ? `Waiting for ${waiting} frames from AWS` : !canMakeVideo() ? 'This browser cannot make video files; Chrome, Edge, Safari and recent Firefox can.' : `Video ${lengthSec('video')} s · GIF ${lengthSec('gif')} s, ${GIF_FPS} frames a second`)}</div>
+          <div style={{ fontSize: 11, color: exp.err ? '#f59e0b' : T.ink2 }}>{exp.err || (waiting > 0 ? `Waiting for ${waiting} frames from AWS` : !canMakeVideo() ? 'This browser cannot make video files; Chrome, Edge, Safari and recent Firefox can.' : `Video ${lengthSec('video')} s · GIF ${lengthSec('gif')} s · timed by the clock: ${motionPace('video')}${exp.smooth ? '' : ' (each step held)'}`)}</div>
         </>
       ) : (
         <div style={{ display: 'grid', gap: 6 }}>
