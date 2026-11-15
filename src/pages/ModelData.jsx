@@ -710,6 +710,18 @@ export default function ModelData() {
   const [mapOpen, setMapOpen] = useState(false);              // the Layers panel
   const [regionsOpen, setRegionsOpen] = useState(false);
   const [pin, setPin] = useState(null);                     // a clicked point: its value through the steps
+  /* a county picked from the search (components/modeldata/RegionPicker), outlined in green over the
+     map, on each grid's cells; it stays until another place is picked or it is closed */
+  const [hl, setHl] = useState(null);
+  const hlRings = useMemo(() => {
+    if (!hl) return null;
+    const out = {};
+    for (const g of Object.keys(GRIDS)) {
+      const P = projection(g);
+      out[g] = hl.polys.flatMap((poly) => poly.map((ring) => ring.map(([lo, la]) => P.toGrid(lo, la))));
+    }
+    return out;
+  }, [hl]);
   /* The display grid: the UKV's 2 km grid for the UKV, live and observed; the wide 8 km grid of
      Europe, the Atlantic and North Africa for the global models and their ensembles. It is switched
      here, during render, so every lon/lat conversion and frame below already uses it; the view
@@ -1548,6 +1560,7 @@ export default function ModelData() {
       strikesDaily: isObs, strikeStyle,
       risk: raw && P.grid === gridName ? riskFor(at) : null,              // its shapes are made for the first window's grid
       warnings: wn.on && at != null ? { alpha: wn.alpha, look: wn.look, labels: wn.labels, areas: warningsAt(at, P.grid, isObs, sync === 'smooth' ? WARN_FADE : 0) } : null,
+      highlight: hlRings ? { rings: hlRings[P.grid] || [], name: hl.name } : null,
       pressure: mslF ? {
         lines: msl.isobars ? pressureLines(mslF, msl.every, P.resKm, C.pressure, later) : null,
         list: msl.symbols || msl.centres ? pressureCentres(mslF, C.centre, later) : null, symbols: msl.symbols, centres: msl.centres,
@@ -1555,7 +1568,7 @@ export default function ModelData() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disp, style, basemapFor, staticsBy, showCities, smooth, showContours, fontsOk, showStar, isObs, isLive, showLightning, strikes, showRoads, roadsBy, showGrid, obsSummary, obsKey,
-    obsStrikes, strikeStyle, riskFor, gridName, wn, warningsAt, msl, bump, calcTick, layerAlpha, palette]);
+    obsStrikes, strikeStyle, riskFor, gridName, wn, warningsAt, msl, bump, calcTick, layerAlpha, palette, hlRings]);
   useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); smoothCache.current.clear(); }, [thr, dir, scaleKey]);
   useEffect(() => { Object.values(cachesB).forEach((m) => m.clear()); }, [cachesB, dataB?.key, thr, dir, scaleB]);
 
@@ -1715,7 +1728,7 @@ export default function ModelData() {
       else if (e.key === ' ' && tag !== 'BUTTON') { e.preventDefault(); setPlaying((p) => !p); }
       else if (e.key === '+' || e.key === '=') z?.(1.35);
       else if (e.key === '-' || e.key === '_') z?.(1 / 1.35);
-      else if (e.key === 'Escape') { setPin(null); setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setExp((x) => ({ ...x, open: false })); }
+      else if (e.key === 'Escape') { setPin(null); setHl(null); setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setExp((x) => ({ ...x, open: false })); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -2527,10 +2540,19 @@ export default function ModelData() {
       subtitle={!model ? '' : isProb ? `${model.label} · ${model.members} members` : timeSteps ? chipSub
         : `${SHORT_NAMES[model.id] || model.label} · ${MODEL_INFO[model.id]?.[1] || ''} · ${browserItems.length} layers`} />
   );
-  /* zoom to a place: areas, their countries and their regions (components/modeldata/RegionPicker) */
+  /* zoom to a place: areas, their countries and their regions (components/modeldata/RegionPicker); its
+     search also finds counties (zoomed to and outlined in green) and places (zoomed to, about 80 km
+     across and at least 16 cells, and pinned, so their values show) */
   const regionList = (
-    <RegionPicker grid={gridName} phone={phone} titled={narrow} onPick={(b) => fit(b)} onClose={phone || layout === 'tablet' ? closePanels : () => setRegionsOpen(false)}
-      wholeBox={(REGIONS.all || REGIONS.ukv)?.box} />
+    <RegionPicker grid={gridName} phone={phone} titled={narrow} onPick={(b) => { setHl(null); fit(b); }} onClose={phone || layout === 'tablet' ? closePanels : () => setRegionsOpen(false)}
+      wholeBox={(REGIONS.all || REGIONS.ukv)?.box} cities={statics?.cities}
+      onCounty={(c, gb) => { setHl(c); fit(gb); }}
+      onPlace={(p) => {
+        setHl(null);
+        const hs = Math.max(8, 40000 / GRIDS[gridName].dx);
+        fit([p.x - hs, p.y - hs, p.x + hs, p.y + hs]);
+        setPin({ gx: p.x, gy: p.y });
+      }} />
   );
   /* the playback speed, in words; a speed typed into the Download panel shows as its milliseconds */
   const speedOptions = (
@@ -2912,6 +2934,15 @@ export default function ModelData() {
       )}
 
       {!exp.open && !isLong && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || obsPanel || modeOpen || shapeOpen)) && pinCard}
+      {/* the county outlined from the search: its name, and a way to stop showing it */}
+      {hl && !isLong && !exp.open && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || modeOpen || shapeOpen)) && (
+        <div style={{ ...T.capsule, position: 'absolute', right: 10, bottom: botH, padding: '4px 4px 4px 12px', fontSize: 12.5, fontWeight: 700, display: 'flex', gap: 8,
+          alignItems: 'center', zIndex: 3, maxWidth: 'calc(100% - 20px)' }}>
+          <span style={{ width: 12, height: 12, borderRadius: 3, flexShrink: 0, background: 'rgba(34,197,94,0.3)', boxShadow: 'inset 0 0 0 2px #16a34a' }} />
+          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{hl.name}</span>
+          <IconBtn title="Stop outlining it (Esc)" onClick={() => setHl(null)} style={{ width: 26, height: 26 }}><X size={13} /></IconBtn>
+        </div>
+      )}
 
       {/* Long range: the polar vortex and the MJO, over the map */}
       {isLong && <LongRange t={T} phone={phone} onMap={showVortex} style={{ position: 'absolute', left: 10, right: 10, top: topH, bottom: phone ? 16 : 10, zIndex: 5 }} />}

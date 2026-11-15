@@ -1506,14 +1506,16 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   const box = [Math.max(0, gx0), Math.max(0, gy0), Math.min(gx1, NX), Math.min(gy1, NY)];
   const G = L.grid, A = L.arrows, K = L.risk, P = L.pressure, T = L.star, Wx = L.wx, Wn = L.warnings;
   const labels = L.contours && L.contourLabels ? L.contours : null;
-  if (G?.frame || A?.frame || K?.areas?.length || Wn?.areas?.length || L.strikes?.length || labels || P || L.cities || T) {
-    layer('over', [G?.frame, G?.varKey, G?.unit, A?.frame, K?.areas, K?.alpha, Wn?.areas, Wn?.alpha, Wn?.look, Wn?.labels, L.strikes, L.strikesDaily, L.strikeStyle, labels,
+  const Hl = L.highlight;
+  if (G?.frame || A?.frame || K?.areas?.length || Wn?.areas?.length || L.strikes?.length || labels || P || L.cities || T || Hl?.rings?.length) {
+    layer('over', [G?.frame, G?.varKey, G?.unit, A?.frame, K?.areas, K?.alpha, Wn?.areas, Wn?.alpha, Wn?.look, Wn?.labels, L.strikes, L.strikesDaily, L.strikeStyle, labels, Hl?.rings,
       P?.lines, P?.list, P?.symbols, P?.centres, L.cities, Wx?.frame, Wx?.utcMs, T?.frame, T?.unit, T?.floor,
       T?.at?.gx, T?.at?.gy, T?.at?.v, T?.at?.place, !!L.chrome, L.chrome?.sub ? 1 : 0, (L.chrome?.extras || []).length, L.chrome?.brand, L.chrome?.time, L.style, KEY_SCALE], (c) => {
       if (G?.frame) drawValueGrid(c, G, X, Y, ...box, s, u, st);
       if (A?.frame) drawArrows(c, A, X, Y, ...box, s, u, st);
       if (K?.areas?.length) drawRisk(c, K, X, Y, u);
       if (Wn?.areas?.length) drawWarnings(c, Wn, X, Y, u);
+      if (Hl?.rings?.length) drawHighlight(c, Hl, X, Y, u);
       if (L.strikes?.length) drawStrikes(c, L.strikes, X, Y, u, L.strikesDaily, L.strikeStyle);
       if (labels) drawContourLabels(c, labels, X, Y, rect, u, st);
       if (P) drawPressure(c, P, X, Y, rect, u, st);
@@ -1577,6 +1579,27 @@ function edgeFade(ctx, x, y, w, h, f, bg) {
    An outline (any colour) is optional. */
 export const STRIKE_STYLE = { colour: 'age', fill: '#ffd21f', outline: true, outlineColour: '#1a0f00' };
 const STRIKE_AGES = [[5, '255,255,255', 5.2], [15, '255,226,60', 4.4], [30, '255,150,40', 3.8], [Infinity, '235,70,50', 3.2]];
+/* a county picked from the search (15 Nov 2026): lightly filled and outlined in green, on a white
+   casing so it shows over any layer */
+function drawHighlight(ctx, H, X, Y, u) {
+  ctx.save();
+  ctx.beginPath();
+  for (const ring of H.rings) {
+    ring.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
+    ctx.closePath();
+  }
+  ctx.fillStyle = 'rgba(34,197,94,0.2)';
+  ctx.fill('evenodd');
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+  ctx.lineWidth = Math.max(4, 6 * u);
+  ctx.stroke();
+  ctx.strokeStyle = '#16a34a';
+  ctx.lineWidth = Math.max(2.2, 3.2 * u);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawStrikes(ctx, strikes, X, Y, u, daily, sty = STRIKE_STYLE) {
   const one = sty.colour === 'one';
   const fill = one ? hex(sty.fill || STRIKE_STYLE.fill).join(',') : null;

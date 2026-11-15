@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.52.010 | 2026-11-15 | Patch | — | The site's line, "Alert. Aware. Safe" and "For A Brighter Future", beside Account in the top bar; on phones and tablets it stands under the MyWeatherUK name on the home page in place of the description | Location Weather overhaul (Nov) |
+| 5.52.011 | 2026-11-15 | Patch | — | Model Data: search for any town, village or county in Zoom to (and countries and regions as before): a place is zoomed to and pinned, a county zoomed to and outlined in green | Model Data STRATA redesign (Nov) |
+| 5.52.010 | 2026-11-15 | Patch | 44cff9b | The site's line, "Alert. Aware. Safe" and "For A Brighter Future", beside Account in the top bar; on phones and tablets it stands under the MyWeatherUK name on the home page in place of the description | Location Weather overhaul (Nov) |
 | 5.52.009 | 2026-11-15 | Patch | 203ad9a | Warning map on phones: the warning's details take under half the screen (was three-quarters), so its area stays in view, and they drag down to close | Location Weather overhaul (Nov) |
 | 5.52.008 | 2026-11-15 | Patch | 22cc244 | Home: pressing a warning card opens the warning map on that warning, on its day, framed on its area, with its full details open beside it | Location Weather overhaul (Nov) |
 | 5.52.007 | 2026-11-15 | Patch | 605df71 | Model Data: point at any line of the polar vortex chart (or press on it on a phone or tablet) to pick out that GEFS member, GFS, the mean, the observed or the normal, and see what it says that day, its lowest and highest, and whether it reverses the winds; the timeline lands only on steps that have loaded (a drag, a tap, the arrow keys, back and next) and no longer jitters under a drag | Model Data STRATA redesign (Nov) |
