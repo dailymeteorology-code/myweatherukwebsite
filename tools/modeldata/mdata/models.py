@@ -288,6 +288,8 @@ VARIABLES = {
     'cloud700':     dict(label='Cloud at 700 hPa (about 3 km)', unit='%', group='Cloud & visibility', lo=0, hi=100),
     'cloud500':     dict(label='Cloud at 500 hPa (about 5.5 km)', unit='%', group='Cloud & visibility', lo=0, hi=100),
     'cloud300':     dict(label='Cloud at 300 hPa (about 9 km)', unit='%', group='Cloud & visibility', lo=0, hi=100),
+    # the snow risk as a conditions index, 0 none .. 5 very high (mdata/derived.py snow_conditions)
+    'snow_cond':    dict(label='Snow risk (conditions index)', unit='', group='Snow & ice', lo=0, hi=254),
     # air quality (NOAA GEFS-Aerosols)
     'aod':          dict(label='Aerosol optical depth (all, 550 nm)', unit='', group='Air quality', lo=0, hi=4, scale='sqrt'),
     'dust_aod':     dict(label='Saharan dust (optical depth)', unit='', group='Air quality', lo=0, hi=4, scale='sqrt'),
@@ -1719,7 +1721,12 @@ class ICONEurope(ICON):
     id, label = 'icon_europe', 'DWD ICON-EU (Europe)'
 
 
-MODELS = {m.id: m for m in (UKV(), MOGlobal(), ECMWF(), AIFS(), GFS(), GEFSMean(), GEFSAerosol(), ICON(), ICONEurope())}
+from .mix import MixModel                                    # noqa: E402  (MyWeatherUK's UKV + ICON-EU blend)
+MODELS = {m.id: m for m in (UKV(), MOGlobal(), ECMWF(), AIFS(), GFS(), GEFSMean(), GEFSAerosol(), ICON(), ICONEurope(), MixModel())}
+# the snow risk as a conditions index (mdata/derived.py), for the UKV and ICON-EU (the Mix lists its own)
+UKV.variables = UKV.variables + ['snow_cond']
+ICON.variables = ICON.variables + ['snow_cond']
+ICONEurope.variables = ICON.variables
 SOURCES = {
     'ukv': 'Met Office UKV 2 km — AWS open data (uk-deterministic-2km)',
     'mo_global': 'Met Office Global 10 km — AWS open data (global-deterministic-10km)',
@@ -1730,6 +1737,7 @@ SOURCES = {
     'gefs_aer': 'NOAA GEFS-Aerosols 0.25°: dust, smoke, sea salt and fine particles — AWS open data (noaa-gefs-pds, chem)',
     'icon': 'DWD ICON-EU 0.0625° (6.5 km) — Source: Deutscher Wetterdienst (DWD open data, opendata.dwd.de)',
     'icon_europe': 'DWD ICON-EU 0.0625° (6.5 km), its whole area — Source: Deutscher Wetterdienst (DWD open data, opendata.dwd.de)',
+    'mix': 'MWUK Mix: MyWeatherUK blend of the Met Office UKV 2 km (AWS) and DWD ICON-EU 6.5 km (Deutscher Wetterdienst), on the UKV grid',
 }
 # variables whose frames are differences of an accumulation between consecutive steps
 DIFFERENCED = {('ifs', 'precip_rate'), ('aifs', 'precip_rate'), ('ifs', 'sw_down'), ('aifs', 'sw_down'),

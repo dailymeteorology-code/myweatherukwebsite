@@ -31,16 +31,19 @@ export const MODELDATA_DIR = DATA;
 const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg', 'night_lights.png', 'lines.json', 'cities.json', 'grid.json', 'roads.json', 'roads.bin']);
 /* DWD ICON-EU (15 Nov 2026) twice: 'icon' on the UKV's 2 km grid, 'icon_europe' on the wide one;
    both read the same DWD files (mdata/models.py ICON keeps each on D: once fetched) */
-const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer', 'frost', 'icon', 'icon_europe']);
+const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer', 'frost', 'icon', 'icon_europe', 'mix']);
 /* ICON's files are each the whole of Europe (~1 MB a field a step), so every layer of a run is
    ~5 GB: only the much-used layers are warmed for it; the rest are made when someone opens them */
 const WARM_FIRST_ONLY = new Set(['icon', 'icon_europe']);
+/* MWUK Mix (mdata/mix.py) is made from the UKV's and ICON's own frames when someone opens it: never warmed, so it
+   never adds downloads of its own in the background */
+const NO_WARM = new Set(['mix']);
 /* TCM FROST, MyWeatherUK's snow model: its runs come from its own mirror (server/tcmFrost.js),
    already made, on the 2 km grid; nothing is ever fetched for it here */
 const MIRRORED = new Set(['frost']);
 const ENS_MODELS = new Set(['ecmwf_ens', 'aifs_ens', 'gefs']);
 /* each model's grid (mdata/common.py MODEL_GRID): its frames are kept apart, per grid */
-export const gridOf = (model) => (model === 'ukv' || model === 'frost' || model === 'icon' ? 'uk' : 'eu');
+export const gridOf = (model) => (model === 'ukv' || model === 'frost' || model === 'icon' || model === 'mix' ? 'uk' : 'eu');
 const GRIDS = new Set(['uk', 'eu']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
@@ -244,7 +247,7 @@ function refreshCatalog() {
       if (cat) catCache = { at: Date.now(), cat };
       const warm = [];
       for (const m of cat?.models || []) {
-        if (MIRRORED.has(m.id)) continue;
+        if (MIRRORED.has(m.id) || NO_WARM.has(m.id)) continue;
         const r = m.runs?.length ? defaultRun(m) : null;
         if (!r) continue;
         const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';

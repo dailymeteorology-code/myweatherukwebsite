@@ -98,6 +98,18 @@ def prune_icon_raw(keep_hours=30, cap_gb=40.0):
                     f.unlink(missing_ok=True)
 
 
+def mix_entry(models):
+    """MWUK Mix, MyWeatherUK's UKV + ICON-EU blend (mdata/mix.py): its runs paired from the UKV's and
+    ICON's entries."""
+    from .mix import MixModel, pairs
+    by = {m['id']: m for m in models}
+    if not by.get('ukv', {}).get('runs') or not by.get('icon', {}).get('runs'):
+        return None
+    m = MixModel()
+    return {'id': 'mix', 'label': m.label, 'res_km': m.res_km, 'grid': grid_of('mix'), 'source': SOURCES['mix'], 'variables': m.variables,
+            'runs': pairs(by['ukv']['runs'], by['icon']['runs'])}
+
+
 def prune(keep_hours=36):
     """Frames of runs older than `keep_hours` (relative to the newest run of that model)."""
     import shutil
@@ -131,7 +143,7 @@ def main():
     from . import ens
     with cf.ThreadPoolExecutor(len(MODELS) + 1) as ex:
         ens_fut = ex.submit(ens.catalog_entries)
-        models = list(ex.map(model_entry, MODELS.values()))
+        models = list(ex.map(model_entry, [m for m in MODELS.values() if m.id != 'mix']))
         ensembles = ens_fut.result()
     # a model whose listing failed this time keeps its last good runs
     models = [m if m['runs'] or m['id'] not in old else dict(old[m['id']], stale=True) for m in models]
@@ -145,6 +157,9 @@ def main():
     frost = frost_entry()
     if frost:
         models.append(frost)
+    mix = mix_entry(models)
+    if mix:
+        models.append(mix)
     write_json(DATA / 'catalog.json', {
         'generated': datetime.now(timezone.utc).isoformat(), 'grid': grid_meta('uk'), 'grids': {g: grid_meta(g) for g in GRIDS},
         'variables': VARIABLES, 'models': models, 'ensembles': ensembles, 'ens_fields': ens.FIELDS})

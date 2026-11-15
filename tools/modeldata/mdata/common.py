@@ -42,7 +42,7 @@ GRIDS = {
 }
 # every model's grid: the UKV (and everything live and observed) on its own, the rest on the wide one;
 # DWD ICON-EU (6.5 km) on both, as two entries: 'icon' on the UKV's 2 km grid, 'icon_europe' wide
-MODEL_GRID = {'ukv': 'uk', 'icon': 'uk'}
+MODEL_GRID = {'ukv': 'uk', 'icon': 'uk', 'mix': 'uk'}
 grid_of = lambda model: MODEL_GRID.get(model, 'eu')   # noqa: E731
 GRID = os.environ.get('MDATA_GRID', 'uk')
 if GRID not in GRIDS:

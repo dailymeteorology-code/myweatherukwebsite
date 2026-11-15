@@ -69,6 +69,83 @@ def wet_bulb(t, td):
     return t - (t - td) / 3.0
 
 
+# ── snow_cond: the snow risk as a conditions index (15 Nov 2026, the user's chart) ─────────────────
+# Where what snow needs comes together, in five steps (1 very low .. 5 very high, 0 none): something
+# falling, or falling close by, or very moist air at 1.5 km (the ingredients), times how right the
+# temperatures are for it to be snow at the ground (the wet bulb at 2 m, how deep the melting layer
+# is, the air at 1.5 km, the 1000-500 hPa thickness), lifted to the model's own snow where the model
+# already has it falling as snow. It is a conditions estimate, not a probability: a band of rain with
+# the cold air right behind it shows a risk along its back edge even where the model keeps it rain.
+SNOW_COND_NAMES = ['None', 'Very low', 'Low', 'Moderate', 'High', 'Very high']
+SNOW_COND_STEPS = (0.06, 0.15, 0.27, 0.42, 0.6)          # the index (0-1) where each step begins
+
+
+def snow_cond_inputs(variables):
+    """The frames snow_cond is made from, out of what a model has: the melting layer from the wet-bulb
+    freezing level (UKV, above the ground), the snowfall limit less the model's own hills (ICON), or
+    the freezing level (the rest)."""
+    want = ['precip_rate', 'snow_rate', 't2', 'td2', 't850', 'thick', 'rh850']
+    if 'wbfz' in variables:
+        want.append('wbfz')
+    elif 'snow_line' in variables and 'orog' in variables:
+        want += ['snow_line', 'orog']
+    elif 'frz' in variables:
+        want.append('frz')
+    return [v for v in want if v in variables]
+
+
+def _rising(x, mid, width):
+    """0 well below `mid`, 1 well above it (a logistic step `width` wide)."""
+    return 1.0 / (1.0 + np.exp(-(x - mid) / width))
+
+
+def snow_conditions(f, cell_km=2.0):
+    """f: {name: float array} (snow_cond_inputs) -> the index steps 0-5 (NaN off the model)."""
+    return snow_cond_steps(snow_cond_score(f, cell_km))
+
+
+def snow_cond_steps(s):
+    """The index (0-1, NaN off the model) -> its steps 0-5."""
+    code = np.select([s >= SNOW_COND_STEPS[4], s >= SNOW_COND_STEPS[3], s >= SNOW_COND_STEPS[2], s >= SNOW_COND_STEPS[1], s >= SNOW_COND_STEPS[0]],
+                     [5, 4, 3, 2, 1], 0)
+    return np.where(np.isfinite(s), code, np.nan).astype(np.float32)
+
+
+def snow_cond_score(f, cell_km=2.0):
+    """f: {name: float array} (snow_cond_inputs) -> the index itself, 0-1 (NaN off the model)."""
+    from scipy import ndimage
+    pr = np.nan_to_num(f['precip_rate'])
+    # ingredients: falling here; falling within about 12 km (a soft halo); or saturated air at 1.5 km
+    now = np.clip((pr - 0.03) / 0.5, 0, 1)
+    r = max(1, int(round(6 / cell_km)))                     # a round reach (a square one drew square halos round showers)
+    yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
+    near = ndimage.gaussian_filter(ndimage.grey_dilation(now, footprint=(xx * xx + yy * yy) <= r * r), max(1.0, r / 1.5))
+    moist = np.clip((np.nan_to_num(f['rh850'], nan=0) - 82) / 14, 0, 1) if 'rh850' in f else np.zeros_like(pr)
+    ingred = np.maximum(np.maximum(now, 0.65 * near), 0.35 * moist)
+    # temperatures: each a 0-1 step, weighted
+    t2 = np.nan_to_num(f['t2'], nan=10.0)
+    tw = wet_bulb(t2, np.nan_to_num(f['td2'], nan=10.0)) if 'td2' in f else t2
+    parts = [(1 - _rising(tw, 1.0, 0.35), 0.4)]
+    if 'wbfz' in f:                                         # wet-bulb 0 C level above the ground (m)
+        parts.append((1 - _rising(np.nan_to_num(f['wbfz'], nan=2000.0), 300, 90), 0.25))
+    elif 'snow_line' in f:                                  # the snowfall limit above the ground (m)
+        agl = np.nan_to_num(f['snow_line'], nan=3000.0) - np.nan_to_num(f.get('orog', 0.0), nan=0.0)
+        parts.append((1 - _rising(agl, 120, 90), 0.25))
+    elif 'frz' in f:                                        # the 0 C level (m)
+        parts.append((1 - _rising(np.nan_to_num(f['frz'], nan=3000.0), 500, 120), 0.25))
+    if 't850' in f:
+        parts.append((1 - _rising(np.nan_to_num(f['t850'], nan=5.0), -2.5, 1.0), 0.2))
+    if 'thick' in f:
+        parts.append((1 - _rising(np.nan_to_num(f['thick'], nan=540.0), 530, 2.0), 0.15))
+    therm = sum(g * w for g, w in parts) / sum(w for _, w in parts)
+    if 'snow_rate' in f:                                    # the model's own snow, where it has it
+        share = np.clip(np.nan_to_num(f['snow_rate']) / np.maximum(pr, 1e-6), 0, 1) * (pr >= 0.05)
+        therm = np.maximum(therm, 0.92 * share)
+    s = ingred * therm
+    ok = np.isfinite(f['precip_rate']) & np.isfinite(f['t2'])
+    return np.where(ok, s, np.nan).astype(np.float32)
+
+
 def weather_type(f):
     """f: {name: float array}. Returns float codes (NaN where there is no data)."""
     pr = np.nan_to_num(f['precip_rate'])

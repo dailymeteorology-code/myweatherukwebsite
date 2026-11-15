@@ -61,10 +61,14 @@ def derived(model, run_s, var, steps, d, status):
     already complete are reused), then combine them step by step."""
     import json
     from .common import read_frame
-    from .derived import precip_type, ptype_inputs, weather_type, wx_inputs
+    from functools import partial
+    from .common import DX
+    from .derived import precip_type, ptype_inputs, snow_cond_inputs, snow_conditions, weather_type, wx_inputs
     M = MODELS[model]
     run = _utc(run_s)
-    make, deps = (precip_type, ptype_inputs(M.variables)) if var == 'ptype' else (weather_type, wx_inputs(M.variables))
+    make, deps = ((precip_type, ptype_inputs(M.variables)) if var == 'ptype'
+                  else (partial(snow_conditions, cell_km=DX / 1000.0), snow_cond_inputs(M.variables)) if var == 'snow_cond'
+                  else (weather_type, wx_inputs(M.variables)))
     for v in deps:
         try:
             done = json.loads((run_dir(model, run, v) / 'status.json').read_text()).get('state') == 'complete'
@@ -81,7 +85,7 @@ def derived(model, run_s, var, steps, d, status):
             p = run_dir(model, run, v) / f'{h}.bin'
             if p.exists():
                 f[v] = read_frame(p)[0]
-        if 'precip_rate' not in f and ('tcc' not in f or var == 'ptype'):
+        if ('precip_rate' not in f and ('tcc' not in f or var in ('ptype', 'snow_cond'))) or (var == 'snow_cond' and 't2' not in f):
             status['missing'].append(h)
             continue
         f.setdefault('precip_rate', np.zeros_like(next(iter(f.values()))))
@@ -231,7 +235,7 @@ def alias(model, run_s, var, steps, d, status):
     status['missing'].extend(left)
 
 
-def main(model, run_s, var, first=None):
+def main(model, run_s, var, first=None, threads=None):
     logging.disable(logging.WARNING)
     warnings.filterwarnings('ignore')
     M = MODELS[model]
@@ -243,13 +247,14 @@ def main(model, run_s, var, first=None):
     status = {'model': model, 'run': run.isoformat(), 'var': var, 'steps': steps, 'done': [], 'missing': [],
               'state': 'running', 'started': time.time()}
     write_json(d / 'status.json', status)
-    made_here = var == 'ptype' and model in ('ukv', 'mo_global', 'aifs')     # the Met Office models and AIFS give rates, not a type
+    made_here = var == 'ptype' and model in ('ukv', 'mo_global', 'aifs', 'mix')   # the Met Office models, AIFS and the Mix give rates, not a type
     own_wx = var == 'wx' and getattr(M, 'OWN_WX', False)                       # ICON-EU: from its own present weather
-    if (var in ('wx', 'gust_peak', 'fog_vis') and not own_wx) or var in ALIASES or made_here:
+    mix_own = model == 'mix' and var == 'snow_cond'                             # the Mix blends its two models' own indices (mdata/mix.py)
+    if (var in ('wx', 'gust_peak', 'fog_vis') and not own_wx) or (var == 'snow_cond' and not mix_own) or var in ALIASES or made_here:
         if var == 'fog_vis':
             fog_area(model, run_s, var, steps, d, status, first)
         else:
-            (derived if var in ('wx', 'ptype') else peak if var == 'gust_peak' else alias)(model, run_s, var, steps, d, status)
+            (derived if var in ('wx', 'ptype', 'snow_cond') else peak if var == 'gust_peak' else alias)(model, run_s, var, steps, d, status)
         status['state'] = 'complete'
         status['seconds'] = round(time.time() - status['started'], 1)
         write_json(d / 'status.json', status)
@@ -264,6 +269,9 @@ def main(model, run_s, var, first=None):
     if first is not None and not need_all:          # the step on screen first, then outwards
         f = int(first)
         order = sorted(steps, key=lambda s: (abs(s - f), s))
+
+    if hasattr(M, 'prepare'):                      # the MWUK Mix: its two models' frames first (mdata/mix.py)
+        M.prepare(run, var, first)
 
     def fetch(h):
         if not need_all and (d / f'{h}.bin').exists():
@@ -302,7 +310,8 @@ def main(model, run_s, var, first=None):
 
     total, acc_h, last_raw, last_h = None, None, None, None
     base, base_h = None, None                      # a bucket chain: the total where the buckets last began again
-    threads = int(os.environ.get('MDATA_THREADS', '16'))            # the server gives background jobs fewer
+    env_threads = int(os.environ.get('MDATA_THREADS', '16'))        # the server gives background jobs fewer
+    threads = min(int(threads), env_threads) if threads else env_threads   # the Mix's many source layers at once: fewer each
     # the step on screen first, on its own, with the whole connection to itself: started together
     # with the rest, its download shared the link with fifteen others and the page waited 40 s
     head = [fetch(order[0])] if first is not None and not need_all and order else []
@@ -315,6 +324,9 @@ def main(model, run_s, var, first=None):
                 continue
             if isinstance(a, Exception):
                 status['missing'].append(h)        # not published at this step (a running total carries on)
+                why = status.setdefault('why', {})
+                if len(why) < 12:                  # what went wrong, for the first few (a step missing for good is otherwise silent)
+                    why[str(h)] = f'{type(a).__name__}: {a}'[:240]
                 if diff:
                     last_raw, last_h = None, None
                 flush()
