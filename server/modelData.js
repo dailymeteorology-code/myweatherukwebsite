@@ -41,8 +41,21 @@ const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
 const MAX_USER_JOBS = 3;               // what someone is waiting for
 const MAX_PREFETCH_JOBS = 1;           // background warming, never in the way
-/* downloads in flight per job: someone waiting gets the line; the warming leaves room for them */
-const THREADS = (p) => (p === true ? '8' : '16');
+/* downloads in flight per job: someone waiting gets the line; the warming and the Location page's
+   catching up leave room for them (15 Nov 2026: three Location jobs and the warming, 16 downloads
+   each, shared the 6 MB/s wireless link with the layer someone had asked for, and its first frame
+   took 40-55 s) */
+const THREADS = (p) => (p === true ? '4' : p === 'point' ? '6' : '16');
+/* while anyone waits for a layer, the background jobs pause before each download (mdata/job.py
+   wait_turn), so the one being waited for has the whole connection; this file says so */
+const BUSY_FILE = path.join(DATA, '.user-busy');
+let busyNow = null;
+function markBusy() {
+  const busy = queue.some((q) => !q.prefetch) || [...running.values()].some((r) => !r.prefetch);
+  if (busy === busyNow) return;
+  busyNow = busy;
+  (busy ? fs.promises.writeFile(BUSY_FILE, String(Date.now())) : fs.promises.rm(BUSY_FILE, { force: true })).catch(() => {});
+}
 const MAX_POINT_JOBS = 3;              // the Location page's UKV frames: their own lane, not behind the warming,
                                         // three at a time so a new run is ready in minutes, not an hour
 const LIMIT = (p) => (p === 'point' ? MAX_POINT_JOBS : p ? MAX_PREFETCH_JOBS : MAX_USER_JOBS);
@@ -65,11 +78,15 @@ const before = (a, b) => {
 };
 let catalogBusy = false;
 
-function python(args, onExit, extraEnv = {}) {
+/* \`urgent\`: someone is waiting for it, so it runs at the computer's normal priority; everything
+   else (the warming, the catalogue, the Location page's catching up) below it, so on a busy machine
+   the layer being waited for is not starved (15 Nov 2026: at 100 % CPU a waited-for job took 16-32 s
+   to its first frame, 5 s on its own) */
+function python(args, onExit, extraEnv = {}, urgent = false) {
   const py = resolveEnsPython();
   const env = { ...process.env, ...py.env, PYTHONIOENCODING: 'utf-8', ...extraEnv };
   const child = spawn(py.cmd, ['-m', ...args], { cwd: TOOL, env, windowsHide: true });
-  try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* not fatal */ }
+  if (!urgent) try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* not fatal */ }
   let err = '';
   child.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
   child.on('exit', (code) => onExit?.(code, err));
@@ -90,25 +107,41 @@ const readJsonAsync = async (f) => { try { return JSON.parse(await fs.promises.r
 function pump() {
   const count = (p) => [...running.values()].filter((r) => r.prefetch === p).length;
   queue.sort(before);
+  /* no new background job starts while someone is waiting for a layer */
+  const waiting = queue.some((q) => !q.prefetch && !running.has(q.key)) || [...running.values()].some((r) => !r.prefetch);
   for (let i = 0; i < queue.length;) {
     const job = queue[i];
     if (running.has(job.key)) { queue.splice(i, 1); continue; }
-    if (count(job.prefetch) >= LIMIT(job.prefetch)) { i++; continue; }
+    if (count(job.prefetch) >= LIMIT(job.prefetch) || (job.prefetch && waiting)) { i++; continue; }
     queue.splice(i, 1);
-    const child = python([ENS_MODELS.has(job.args[0]) ? 'mdata.ens' : 'mdata.job', ...job.args], (code, err) => {
-      running.delete(job.key);
-      if (code) console.warn(`[modeldata] job ${job.key} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
+    const entry = { child: null, prefetch: job.prefetch, killed: false };
+    entry.child = python([ENS_MODELS.has(job.args[0]) ? 'mdata.ens' : 'mdata.job', ...job.args], (code, err) => {
+      if (running.get(job.key) === entry) running.delete(job.key);          // not the job started again in its place
+      if (code && !entry.killed) console.warn(`[modeldata] job ${job.key} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
       pump();
-    }, { MDATA_GRID: gridOf(job.args[0]), MDATA_THREADS: THREADS(job.prefetch) });
-    running.set(job.key, { child, prefetch: job.prefetch });
+    }, { MDATA_GRID: gridOf(job.args[0]), MDATA_THREADS: THREADS(job.prefetch), MDATA_LANE: job.prefetch ? 'background' : 'user' }, !job.prefetch);
+    running.set(job.key, entry);
   }
+  markBusy();
 }
 
 /* `known`: the frames' status.json when the caller has already read it (null for none) */
 function ensureJob(model, run, v, prefetch = false, first = null, known = undefined) {
   if (MIRRORED.has(model)) return;
   const key = `${model}/${run}/${v}`;
-  if (running.has(key)) return;
+  const r = running.get(key);
+  if (r) {
+    /* someone now waits for what the background is making: it is started again as theirs (the
+       frames it has made are kept; its downloads would otherwise give way to its own waiting) */
+    if (!prefetch && r.prefetch && !r.killed) {
+      r.killed = true;
+      try { r.child.kill(); } catch { /* gone already */ }
+      running.delete(key);
+      queue.push({ key, args: [model, runIso(run), v, ...(first != null ? [String(first)] : [])], prefetch: false, rank: rankOf(model, run, v, false), seq: seq++ });
+      pump();
+    }
+    return;
+  }
   const queued = queue.find((q) => q.key === key);
   if (queued) {
     if (!prefetch && queued.prefetch) {                 // someone is now waiting for it

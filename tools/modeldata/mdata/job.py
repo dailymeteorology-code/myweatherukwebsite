@@ -23,6 +23,20 @@ from .common import FRAMES, write_frame, write_json, DATA
 from .models import ACCUM, ALIASES, BUCKET_CHAIN, DIFFERENCED, MODELS, RATE_DIFF, SNOW_CHAIN, STEP_VARS, VARIABLES, _utc
 
 
+LANE = os.environ.get('MDATA_LANE', 'user')
+BUSY = DATA / '.user-busy'
+
+
+def wait_turn():
+    """A background job gives way: while someone is waiting for a layer (the server keeps .user-busy
+    while any of theirs runs), its next download waits, a couple of minutes at most at a time."""
+    if LANE == 'user':
+        return
+    t0 = time.time()
+    while time.time() - t0 < 120 and BUSY.exists():
+        time.sleep(0.5)
+
+
 def run_dir(model, run, var):
     return FRAMES / model / f'{run:%Y%m%dT%H%MZ}' / var
 
@@ -253,6 +267,7 @@ def main(model, run_s, var, first=None):
     def fetch(h):
         if not need_all and (d / f'{h}.bin').exists():
             return h, 'have'
+        wait_turn()
         try:
             return h, M.field(run, h, var, prev[h])
         except Exception as e:
@@ -282,13 +297,16 @@ def main(model, run_s, var, first=None):
 
     def save(h, arr, meta):
         pending.append((writes.submit(write_frame, d / f'{h}.bin', arr, enc, meta), h))
-        flush()
+        flush(force=not status['done'])            # the first frame listed the moment it is written
 
     total, acc_h, last_raw, last_h = None, None, None, None
     base, base_h = None, None                      # a bucket chain: the total where the buckets last began again
     threads = int(os.environ.get('MDATA_THREADS', '16'))            # the server gives background jobs fewer
+    # the step on screen first, on its own, with the whole connection to itself: started together
+    # with the rest, its download shared the link with fifteen others and the page waited 40 s
+    head = [fetch(order[0])] if first is not None and not need_all and order else []
     with cf.ThreadPoolExecutor(threads) as ex:     # downloads are latency-bound: many in flight
-        for h, a in ex.map(fetch, order):
+        for h, a in __import__('itertools').chain(head, ex.map(fetch, order[len(head):])):
             vt = run + timedelta(hours=h)
             meta = {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat()}
             if isinstance(a, str):

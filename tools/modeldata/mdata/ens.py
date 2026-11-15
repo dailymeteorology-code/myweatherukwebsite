@@ -22,6 +22,7 @@ import concurrent.futures as cf
 import gzip
 import json
 import logging
+import os
 import struct
 import sys
 import time
@@ -358,6 +359,10 @@ def main(model, run_s, f, first=None):
         out = d / f'{h}.bin'
         if out.exists():
             return h, 'have'
+        if os.environ.get('MDATA_LANE', 'user') != 'user':      # background: give way to whoever is waiting
+            t0 = time.time()
+            while time.time() - t0 < 120 and (DATA / '.user-busy').exists():
+                time.sleep(0.5)
         try:
             a = M.field(run, h, f, raw_at)
         except Exception as e:
