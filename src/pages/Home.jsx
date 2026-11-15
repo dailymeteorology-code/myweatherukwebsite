@@ -454,6 +454,9 @@ export default function Home() {
      in it. Once the reader picks a tab, their pick sticks. */
   const [warnTab, setWarnTab] = useState(null);
   const [showWarningsMap, setShowWarningsMap] = useState(false);
+  /* a warning card opens the map on its own warning: that day, its area, its details beside it */
+  const [mapFocus, setMapFocus] = useState(null);
+  const openWarningMap = (warning = null) => { setMapFocus(warning); setShowWarningsMap(true); };
   const [showWarningsArchive, setShowWarningsArchive] = useState(false);
   const [showBanners, setShowBanners] = useState(false);
   const [cookieConsentReady, setCookieConsentReady] = useState(false);
@@ -816,7 +819,7 @@ export default function Home() {
                     className="relative">
                     <WarningCard
                       warning={warning} index={index} isUpcoming={currentTab.upcoming}
-                      isOwner={isOwner} onDelete={deleteManualWarning} />
+                      isOwner={isOwner} onDelete={deleteManualWarning} onOpen={openWarningMap} />
                   </div>
                 ))}
               </motion.div>
@@ -836,7 +839,7 @@ export default function Home() {
           {/* The three ways out of this panel, together, at the foot of the
               thing they belong to — rather than floating below the section. */}
           <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 18 }}>
-            <button type="button" onClick={() => setShowWarningsMap(true)} style={quietBtn}>
+            <button type="button" onClick={() => openWarningMap()} style={quietBtn}>
               <AlertTriangle style={{ width: 14, height: 14 }} /> Warning map
             </button>
             {/* Every warning on record, in its own liquid-glass sheet like the map: a calendar,
@@ -1193,7 +1196,7 @@ export default function Home() {
 
       </main>
 
-      <WarningsMapModal isOpen={showWarningsMap} onClose={() => setShowWarningsMap(false)} warnings={mergedAll} />
+      <WarningsMapModal isOpen={showWarningsMap} onClose={() => { setShowWarningsMap(false); setMapFocus(null); }} warnings={mergedAll} focus={mapFocus} />
       <WarningsArchiveModal isOpen={showWarningsArchive} onClose={() => setShowWarningsArchive(false)} />
 
       {/* ══ FOOTER ══════════════════════════════════════════════════════════════

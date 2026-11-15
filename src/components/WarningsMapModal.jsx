@@ -54,6 +54,17 @@ const SEV_ORDER = ['Red', 'Amber', 'Yellow'];
 const UK_BOUNDS = [[49.85, -8.65], [61.0, 2.05]];
 /* framing clear of the floating glass: the title bar above, the day strip below */
 const FIT = { paddingTopLeft: [24, 86], paddingBottomRight: [24, 92] };
+/* framing one warning while its details are open: clear of the details sheet too (430 px down the
+   right, or 74% of the height from the bottom on a phone: warnings-glass.css .wg-side), and no closer
+   than a county or so, however small the area */
+function besideDetails(el) {
+  const w = el?.clientWidth || 0, h = el?.clientHeight || 0;
+  if (window.matchMedia?.('(max-width: 640px)').matches) return { paddingTopLeft: [16, 70], paddingBottomRight: [16, Math.round(h * 0.74) + 14], maxZoom: 9 };
+  return { paddingTopLeft: [24, 86], paddingBottomRight: [Math.min(430, w - 24) + 36, 40], maxZoom: 9 };
+}
+
+/** One warning's identity, the same on a home-page card and on the map's copy of it. */
+const warningKey = (w) => String(w.warningId || w.id || `${w.type}|${w.severity}|${w.validFrom}|${w.validTo}`);
 
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 /* the midnight `n` calendar days on: not n × 24 h, which the clock change (a 23- or 25-hour day) throws off */
@@ -75,7 +86,9 @@ const dayLabel = (d, i) => {
   return d.toLocaleDateString('en-GB', { weekday: 'short' });
 };
 
-export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
+/* `focus`: a warning to open the map on (a home-page warning card): its day, its area framed, its
+   details open beside it. Without it the map opens on today, framed on all of the day's warnings. */
+export default function WarningsMapModal({ isOpen, onClose, warnings = [], focus = null }) {
   /* The map, the panel behind it and the ground under it all followed the dark
      basemap regardless of the site theme, so this opened as a black sheet over
      a white page. */
@@ -111,6 +124,8 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
   const insideWarned = useRef((lat, lon) => insideGeometries(geomsRef.current, lat, lon)).current;
   const fitKeyRef = useRef('');
   const fitTargetRef = useRef(UK_BOUNDS);   // what the map is framed on: the warnings shown, or the UK
+  const fitSideRef = useRef(false);         // framed on one warning, leaving room for its details
+  const focusFitRef = useRef('');           // a warning still to be framed on its own (opened from its card)
   const movedRef = useRef(false);           // the reader has panned or zoomed: stop re-framing
   const roRef = useRef(null);
 
@@ -178,6 +193,29 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
   }, [dayPeak, dayIdx]);
   const warnedDays = dayPeak.filter(Boolean).length;
 
+  /* Where each opening starts, set while rendering the opening itself, so its very first frame is
+     already right and nothing that runs later can undo it (an effect clearing the last opening's
+     day and warning used to land after a card had set its own, and the map opened on today):
+       the "Warning map" button   today, nothing open
+       a warning card (`focus`)   the first day that warning is in force on, the filters cleared if
+                                  they would hide it, its details open (a warning with no area to
+                                  draw still gets its details) */
+  const openKey = isOpen ? (focus ? warningKey(focus) : '') : null;   // null while closed
+  const [openedAs, setOpenedAs] = useState(null);
+  if (openKey !== openedAs) {
+    setOpenedAs(openKey);
+    if (openKey !== null) {
+      const target = openKey ? mappable.find((w) => warningKey(w) === openKey) || focus : null;
+      const idx = target ? days.findIndex((d) => activeOn(target, d)) : 0;
+      setDayIdx(Math.max(0, idx));
+      if (target && sevFilter.length && !sevFilter.includes(target.severity)) setSevFilter([]);
+      if (target && typeFilter.length && !typeFilter.includes(target.type)) setTypeFilter([]);
+      setSelected(target);
+    }
+  }
+  /* and a card's warning is framed on its own (the map effect below reads this when it first draws) */
+  useEffect(() => { if (openKey) focusFitRef.current = openKey; }, [openKey]);
+
   const toggle = (list, setList, v) =>
     setList(list.includes(v) ? list.filter(x => x !== v) : [...list, v]);
 
@@ -200,9 +238,11 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
 
       const drawn = [];
       const tags = [];
+      const focused = [];   // the areas of the warning opened from its card, to frame on their own
       ordered.forEach(w => {
         let biggest = null, bigArea = -1;
         const hex = sevOf(w.severity).hex;
+        const isFocus = !!focusFitRef.current && warningKey(w) === focusFitRef.current;
         w.polygons.forEach(g => {
           const polyList = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
           polyList.forEach(rings => {
@@ -215,6 +255,7 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
             poly.on('mouseout', () => poly.setStyle({ fillOpacity: 0.34 }));
             layersRef.current.push(poly);
             drawn.push(poly);
+            if (isFocus) focused.push(poly);
             const b = poly.getBounds();
             const area = (b.getNorth() - b.getSouth()) * (b.getEast() - b.getWest());
             if (area > bigArea) { bigArea = area; biggest = poly; }
@@ -233,13 +274,21 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
       geomsRef.current = visible.flatMap(w => w.polygons);
       labelsRef.current?.setFilter(insideWarned);
 
-      // Refit only when the set of warnings changes, not when a tag toggle redraws.
+      // Refit only when the set of warnings changes, not when a tag toggle redraws; a warning opened
+      // from its card is framed on its own, once, clear of its details.
       const fitKey = `${dayIdx}|${visible.map(w => w.warningId || `${w.type}${w.validFrom}${w.severity}`).join(',')}`;
-      if (fitKeyRef.current !== fitKey) {
+      if (fitKeyRef.current !== fitKey || focused.length) {
         fitKeyRef.current = fitKey;
-        try { fitTargetRef.current = drawn.length ? L.featureGroup(drawn).getBounds() : UK_BOUNDS; } catch { fitTargetRef.current = UK_BOUNDS; }
+        if (focused.length) {
+          try { fitTargetRef.current = L.featureGroup(focused).getBounds(); } catch { fitTargetRef.current = UK_BOUNDS; }
+          fitSideRef.current = true;
+          focusFitRef.current = '';
+        } else {
+          try { fitTargetRef.current = drawn.length ? L.featureGroup(drawn).getBounds() : UK_BOUNDS; } catch { fitTargetRef.current = UK_BOUNDS; }
+          fitSideRef.current = false;
+        }
         movedRef.current = false;
-        try { map.fitBounds(fitTargetRef.current, FIT); } catch { /* noop */ }
+        try { map.fitBounds(fitTargetRef.current, fitSideRef.current ? besideDetails(mapRef.current) : FIT); } catch { /* noop */ }
       }
     };
 
@@ -264,7 +313,7 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
         ['mousedown', 'touchstart', 'wheel'].forEach((ev) => el.addEventListener(ev, mine, { passive: true }));
         const ro = new ResizeObserver(() => {
           map.invalidateSize({ animate: false });
-          if (!movedRef.current) { try { map.fitBounds(fitTargetRef.current, FIT); } catch { /* noop */ } }
+          if (!movedRef.current) { try { map.fitBounds(fitTargetRef.current, fitSideRef.current ? besideDetails(el) : FIT); } catch { /* noop */ } }
         });
         ro.observe(el);
         roRef.current = () => { ro.disconnect(); ['mousedown', 'touchstart', 'wheel'].forEach((ev) => el.removeEventListener(ev, mine)); };
@@ -285,10 +334,13 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [] }) {
     layersRef.current = [];
     fitKeyRef.current = '';
     fitTargetRef.current = UK_BOUNDS;
-    setSelected(null);
+    fitSideRef.current = false;
+    focusFitRef.current = '';
+    /* the day and the open warning are not reset here: the next opening sets its own, as it renders */
   }, [isOpen]);
 
-  useEffect(() => { setSelected(null); }, [dayIdx]);
+  /* another day: the open warning stays open if it is in force on that day too */
+  useEffect(() => { setSelected((s) => (s && activeOn(s, days[dayIdx]) ? s : null)); }, [dayIdx, days]);
   useEffect(() => { setSaveError(''); }, [selected]);
 
   /* Escape closes the open warning first, then the map; the page behind does not scroll */

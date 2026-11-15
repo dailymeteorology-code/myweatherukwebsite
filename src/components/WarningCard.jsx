@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Clock, MapPin, Eye, Trash2, RefreshCw, ChevronDown,
+  Clock, MapPin, Eye, Trash2, RefreshCw, ChevronDown, Map as MapIcon,
 } from 'lucide-react';
 import { warningSymbol } from '@/components/warnings/WarningSymbols';
 import { format, isValid } from 'date-fns';
@@ -177,8 +177,11 @@ function useCountdown(targetDate) {
 }
 
 /* ─── MAIN CARD ────────────────────────────────────────────────── */
-export default function WarningCard({ warning, index, isUpcoming = false, isOwner = false, onDelete }) {
+/* `onOpen`: what pressing the card does instead of opening its own details sheet. The home page
+   passes one that opens the warning map on this warning, with its details beside it. */
+export default function WarningCard({ warning, index, isUpcoming = false, isOwner = false, onDelete, onOpen }) {
   const [expanded, setExpanded] = useState(false);
+  const open = () => (onOpen ? onOpen(warning) : setExpanded(true));
   const [showDiff, setShowDiff] = useState(false);
   const sev     = getSev(warning.severity);
   const Icon    = warningSymbol(warning.type);
@@ -225,7 +228,10 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
         transition={{ delay: index * 0.07, duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
         whileHover={{ y: -5, transition: { duration: 0.2 } }}
         whileTap={{ scale: 0.985 }}
-        onClick={() => setExpanded(true)}
+        onClick={open}
+        role="button" tabIndex={0}
+        aria-label={`${warning.severity} ${warning.type} warning: ${onOpen ? 'show it on the warning map' : 'more details'}`}
+        onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); } }}
         style={{
           position: 'relative', borderRadius: 22, overflow: 'hidden',
           background: cardBg,
@@ -355,13 +361,15 @@ export default function WarningCard({ warning, index, isUpcoming = false, isOwne
                 </button>
               )}
 
-              {/* Eye icon */}
-              <div style={{
+              {/* where pressing the card goes: the map, or the card's own details */}
+              <div title={onOpen ? 'Show on the warning map' : 'More details'} style={{
                 width: 28, height: 28, borderRadius: 9, flexShrink: 0,
                 background: `rgba(${sev.rgb},0.10)`, border: `1px solid rgba(${sev.rgb},0.22)`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <Eye style={{ width: 13, height: 13, color: sevInk }} />
+                {onOpen
+                  ? <MapIcon style={{ width: 13, height: 13, color: sevInk }} />
+                  : <Eye style={{ width: 13, height: 13, color: sevInk }} />}
               </div>
             </div>
           </div>
