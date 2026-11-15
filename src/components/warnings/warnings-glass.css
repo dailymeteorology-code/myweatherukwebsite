@@ -150,8 +150,17 @@
   border-radius: 24px; overflow: hidden; display: flex; flex-direction: column;
   animation: wg-slide 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+/* the grab handle: phones only, where the details are a sheet from the bottom */
+.wg-grab { display: none; }
 @media (max-width: 640px) {
-  .wg-side { top: auto; left: 0; right: 0; bottom: 0; width: 100%; height: 74%; border-radius: 24px 24px 0 0; animation-name: wg-up; }
+  /* Under half the screen (it was 74%, and the map above it was a sliver), so the warning's area
+     stays in view; its text scrolls inside. Drag the handle, the header or the time bar down to put
+     it away (WarningsMapModal: dragSheet). Keep 0.45 / 260 px in step with besideDetails(). */
+  .wg-side { top: auto; left: 0; right: 0; bottom: 0; width: 100%; height: 45%; min-height: 260px; border-radius: 24px 24px 0 0; animation-name: wg-up; }
+  .wg-grab { display: flex; justify-content: center; padding: 8px 0 2px; flex: none; touch-action: none; cursor: grab; }
+  .wg-grab i { width: 40px; height: 5px; border-radius: 99px; background: var(--wg-ink3); opacity: 0.75; }
+  .wg-side .wg-d-head, .wg-side .wg-d-time { touch-action: none; }
+  .wg-side .wg-d-head { padding-top: 8px; }
 }
 .wg .leaflet-control-zoom { border: 0 !important; border-radius: 13px !important; overflow: hidden; box-shadow: var(--wg-shadow) !important; }
 .wg .leaflet-control-zoom a {

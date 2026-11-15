@@ -54,12 +54,16 @@ const SEV_ORDER = ['Red', 'Amber', 'Yellow'];
 const UK_BOUNDS = [[49.85, -8.65], [61.0, 2.05]];
 /* framing clear of the floating glass: the title bar above, the day strip below */
 const FIT = { paddingTopLeft: [24, 86], paddingBottomRight: [24, 92] };
-/* framing one warning while its details are open: clear of the details sheet too (430 px down the
-   right, or 74% of the height from the bottom on a phone: warnings-glass.css .wg-side), and no closer
-   than a county or so, however small the area */
+/* the details on a phone: a sheet from the bottom, 45% of the height but at least 260 px
+   (warnings-glass.css .wg-side) */
+const PHONE = '(max-width: 640px)';
+const phoneSheet = (h) => Math.max(260, Math.round(h * 0.45));
+
+/* framing one warning while its details are open: clear of the details too (430 px down the right,
+   or the sheet from the bottom on a phone), and no closer than a county or so, however small the area */
 function besideDetails(el) {
   const w = el?.clientWidth || 0, h = el?.clientHeight || 0;
-  if (window.matchMedia?.('(max-width: 640px)').matches) return { paddingTopLeft: [16, 70], paddingBottomRight: [16, Math.round(h * 0.74) + 14], maxZoom: 9 };
+  if (window.matchMedia?.(PHONE).matches) return { paddingTopLeft: [16, 70], paddingBottomRight: [16, phoneSheet(h) + 14], maxZoom: 9 };
   return { paddingTopLeft: [24, 86], paddingBottomRight: [Math.min(430, w - 24) + 36, 40], maxZoom: 9 };
 }
 
@@ -356,6 +360,51 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [], focus
     return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = overflow; };
   }, [isOpen, onClose, selected]);
 
+  /* On a phone the details are a sheet from the bottom. Drag its handle, header or time bar down
+     and it follows the finger; let go far enough down (or with a flick) and it slides away and the
+     warning closes, otherwise it springs back. The header's buttons still just take their tap, and
+     the text below scrolls as before. */
+  const sheetRef = useRef(null);
+  const dragRef = useRef(null);
+  const settle = (el) => { el.style.transition = 'transform 0.22s cubic-bezier(0.22, 1, 0.36, 1)'; };
+  const dragSheet = {
+    down: (e) => {
+      const el = sheetRef.current;
+      if (!el || !window.matchMedia?.(PHONE).matches || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      if (e.target.closest('button, a, input, select, textarea') || !e.target.closest('.wg-grab, .wg-d-head, .wg-d-time')) return;
+      dragRef.current = { id: e.pointerId, y0: e.clientY, t0: performance.now(), dy: 0 };
+      try { el.setPointerCapture(e.pointerId); } catch { /* it follows without capture too */ }
+      el.style.animation = 'none';   // the opening slide holds `transform` while it lasts; it is over by now
+      el.style.transition = 'none';
+    },
+    move: (e) => {
+      const d = dragRef.current;
+      if (!d || e.pointerId !== d.id || !sheetRef.current) return;
+      d.dy = Math.max(0, e.clientY - d.y0);
+      sheetRef.current.style.transform = `translateY(${d.dy}px)`;
+    },
+    up: (e) => {
+      const d = dragRef.current, el = sheetRef.current;
+      if (!d || e.pointerId !== d.id || !el) return;
+      dragRef.current = null;
+      const speed = d.dy / Math.max(1, performance.now() - d.t0);   // px a millisecond: a flick goes too
+      settle(el);
+      if (d.dy > Math.min(110, el.offsetHeight * 0.3) || (d.dy > 24 && speed > 0.5)) {
+        el.style.transform = `translateY(${el.offsetHeight + 24}px)`;
+        setTimeout(() => setSelected(null), 200);
+      } else {
+        el.style.transform = '';
+      }
+    },
+    cancel: (e) => {
+      const d = dragRef.current, el = sheetRef.current;
+      if (!d || e.pointerId !== d.id || !el) return;
+      dragRef.current = null;
+      settle(el);
+      el.style.transform = '';
+    },
+  };
+
   if (typeof document === 'undefined' || !isOpen) return null;
 
   const filtersOn = sevFilter.length + typeFilter.length;
@@ -459,9 +508,11 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [], focus
           })}
         </div>
 
-        {/* the full warning, in the Met Office's order */}
+        {/* the full warning, in the Met Office's order (on a phone, a sheet that drags down to close) */}
         {selected && (
-          <div key={selected.warningId || `${selected.type}${selected.validFrom}`} className="wg-side wg-glass is-strong">
+          <div key={selected.warningId || `${selected.type}${selected.validFrom}`} ref={sheetRef} className="wg-side wg-glass is-strong"
+            onPointerDown={dragSheet.down} onPointerMove={dragSheet.move} onPointerUp={dragSheet.up} onPointerCancel={dragSheet.cancel}>
+            <div className="wg-grab" aria-hidden="true"><i /></div>
             <WarningDetailPanel warning={selected} onClose={() => setSelected(null)} style={{ flex: 1, minHeight: 0 }}
               actions={(
                 <button type="button" className="wg-btn" onClick={saveImage} disabled={saving}
