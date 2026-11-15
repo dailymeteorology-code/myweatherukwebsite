@@ -640,11 +640,15 @@ function GeneralTab({ formData, setFormData, saveMutation, handleImageUpload, up
                   required
                 />
               </Field>
-              <Field label="Version Tag" hint="e.g. v2.1.0">
+              {/* the site's version, numbered with every save of the site (version.json, scripts/version.mjs,
+                  VERSIONS.md): shown here, set by each update, never typed */}
+              <Field label="Site version" hint="5 · ## a bigger update · ### a patch">
                 <StyledInput
-                  placeholder="v1.0.0"
-                  value={formData.version}
-                  onChange={e => setFormData(p => ({ ...p, version: e.target.value }))}
+                  value={typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : ''}
+                  readOnly
+                  aria-readonly="true"
+                  title="Numbered automatically with every update: the main version (5), the bigger updates (##) and the patches (###)"
+                  style={{ fontVariantNumeric: 'tabular-nums', cursor: 'default' }}
                 />
               </Field>
             </div>

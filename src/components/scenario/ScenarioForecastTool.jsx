@@ -485,7 +485,7 @@ export default function ScenarioForecastTool({ siteLogoUrl = '' }) {
   const [endDate, setEndDate] = useState('');            // '' = one day; otherwise the last day of a range
   const rangeDays = endDate && endDate > validDate ? Math.round((Date.parse(endDate) - Date.parse(validDate)) / 864e5) + 1 : 1;
   const [cards, setCards] = useState(defaultCards);
-  const [version, setVersion] = useState('V5.00');
+  const [version, setVersion] = useState(typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '');   // the site's version, 5.##.###
   const [fireworks, setFireworks] = useState(false);
   const [viewId, setViewId] = useState('nweu');
   const view = VIEWS[viewId];

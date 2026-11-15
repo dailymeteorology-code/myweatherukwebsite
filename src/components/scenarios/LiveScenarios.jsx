@@ -84,7 +84,7 @@ function drawGraphic(ctx, data, ukGeo, ctxGeo, logo) {
   ctx.fillStyle = '#9fb4d6'; ctx.font = `600 26px ${FONT}`;
   ctx.fillText('ECMWF · GFS · UKMO model runs', W - 40, 134);
   ctx.fillStyle = '#5f7598'; ctx.font = `700 24px ${FONT}`;
-  ctx.fillText('MyWeatherUK V5.00', W - 40, 170);
+  ctx.fillText(`MyWeatherUK ${typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : ''}`.trim(), W - 40, 170);   // the site's version, 5.##.###
   ctx.textAlign = 'left';
 
   data.scenarios.forEach((s, i) => {

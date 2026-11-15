@@ -460,10 +460,10 @@ const AuthenticatedApp = () => {
 
   const isRestrictedUser = accessGranted && siteSettings?.site_disabled && (!isAuthenticated || user?.role !== 'admin');
 
-  /* Admin Settings owns the version tag. The build's own version stands in when
-     nobody has set one, so the corner is never blank. */
-  const buildVersion = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '';
-  const versionLabel = (siteSettings?.version || '').trim() || (buildVersion ? `v${buildVersion}` : '');
+  /* The site's version, numbers only: 5.##.### (version.json, bumped with every save of the site:
+     scripts/version.mjs, listed in VERSIONS.md). Admin Settings' old free-text tag ("self-hosted", "V5.00")
+     no longer stands in for it. */
+  const versionLabel = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '';
 
   return (
     <div>
