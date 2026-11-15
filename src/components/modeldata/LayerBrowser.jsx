@@ -5,8 +5,9 @@
    categories, each with one of the website's weather icons on a navy badge; Popular comes first
    with the most-used layers the model has. Typing searches every layer by name, line and category.
 
-   Desktop and tablet: a large card under the top bar, the categories down its side. Phones: a sheet
-   from the bottom, the categories as a row of chips. Esc closes it. */
+   Desktop and tablet: a large card under the top bar, the categories down its side. Phones: a solid
+   sheet from the bottom with every category in one list that scrolls up and down (headings stay in
+   view), a "Jump to" menu beside the search, and nothing that has to be swiped sideways. Esc closes it. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { categoryOf } from '@/lib/modelLayers';
@@ -61,14 +62,23 @@ export default function LayerBrowser({ items, popular = [], selected, onPick, on
     </button>
   );
 
+  const section = (c) => (
+    <section key={c.id} data-cat={c.id} className="mdb-section">
+      <div className="mdb-sect"><Badge icon={c.icon} />{c.name}<span className="mdb-count" style={{ marginLeft: 0 }}>{c.keys.length}</span></div>
+      <div className="mdb-grid">{c.keys.map((k) => byKey.get(k)).filter(Boolean).map((it) => card(it, false))}</div>
+    </section>
+  );
   const list = found
     ? (found.length ? <div className="mdb-grid">{found.map((it) => card(it, true))}</div> : <div className="mdb-empty">Nothing called “{query.trim()}”. Try rain, snow, wind or cloud.</div>)
-    : shown && (
-      <>
-        <div className="mdb-sect"><Badge icon={shown.icon} />{shown.name}<span className="mdb-count" style={{ marginLeft: 0 }}>{shown.keys.length}</span></div>
-        <div className="mdb-grid">{shown.keys.map((k) => byKey.get(k)).filter(Boolean).map((it) => card(it, false))}</div>
-      </>
-    );
+    : phone ? cats.map(section)                                   // phones: every category in one list that scrolls up and down
+      : shown && section(shown);
+  /* phones: open the list at the layer on show's category, and jump to any other from the menu */
+  const cardsRef = useRef(null);
+  const jump = (id, smooth) => {
+    const el = cardsRef.current?.querySelector(`[data-cat="${CSS.escape(id)}"]`);
+    if (el && cardsRef.current) cardsRef.current.scrollTo({ top: el.offsetTop - cardsRef.current.offsetTop, behavior: smooth ? 'smooth' : 'auto' });
+  };
+  useEffect(() => { if (phone && !q) jump(byKey.get(selected)?.group || cats[0]?.id, false); }, [phone]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className={`mdb${phone ? ' is-phone' : ''}`} role="dialog" aria-modal="false" aria-label={title} style={style}>
@@ -79,20 +89,20 @@ export default function LayerBrowser({ items, popular = [], selected, onPick, on
           <input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search rain, snow, wind, cloud…" aria-label="Search the layers" />
           {query ? <button type="button" className="mdb-x" style={{ width: 24, height: 24 }} onClick={() => setQuery('')} aria-label="Clear the search"><X size={12} /></button> : null}
         </label>
+        {phone && (
+          <label className="mdb-jump" title="Jump to a category">
+            <select value="" onChange={(e) => { if (e.target.value) { setQuery(''); requestAnimationFrame(() => jump(e.target.value, true)); } }} aria-label="Jump to a category">
+              <option value="">Jump to…</option>
+              {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </label>
+        )}
         <button type="button" className="mdb-x" onClick={onClose} aria-label="Close"><X size={16} /></button>
       </div>
       {/* phones and tablets: the model and the run, above the layers */}
       {extra ? <div className="mdb-extra">{extra}</div> : null}
       <div className="mdb-body">
-        {phone ? (
-          <div className="mdb-chips" role="tablist" aria-label="Categories">
-            {cats.map((c) => (
-              <button key={c.id} type="button" role="tab" className="mdb-chip" aria-pressed={!found && c.id === shown?.id} onClick={() => { setQuery(''); setCat(c.id); }}>
-                <Badge icon={c.icon} />{c.name}
-              </button>
-            ))}
-          </div>
-        ) : (
+        {!phone && (
           <nav className="mdb-cats" aria-label="Categories">
             {cats.map((c) => (
               <button key={c.id} type="button" className="mdb-cat" aria-pressed={!found && c.id === shown?.id} onClick={() => { setQuery(''); setCat(c.id); }}>
@@ -103,7 +113,7 @@ export default function LayerBrowser({ items, popular = [], selected, onPick, on
             ))}
           </nav>
         )}
-        <div className="mdb-cards">{list}</div>
+        <div className="mdb-cards" ref={cardsRef}>{list}</div>
       </div>
       {note ? <div className="mdb-foot">{note}</div> : null}
     </div>

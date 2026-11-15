@@ -22,19 +22,20 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
   Waves, MapPin, ChevronDown, X, Layers, Star, Minus, Plus, Zap, Route, Grid3x3, Navigation, CloudSun, Cloud,
-  Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard, Snowflake,
+  Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard, Snowflake, Ratio,
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, fieldLayer, frameContours, drawScene,
   realtimeBasemap, fmtValue, download, makeGif, makeVideo, canMakeVideo, probFrame, loadLive, loadRoads, loadObserved, WX_NAMES, sampleFrame,
   lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres, splitFrame, drawPanes, withGrid, viewOnGrid, WARN_COLOURS,
   coversMap, SEE_THROUGH, setPalette, scaleSwatch, radarTypeOf, RADAR_FAMILIES,
-  setTone, onWxIcons, probScaleKey, scaleRamp, DISPLAY, INK, ACCENT,
+  setTone, onWxIcons, probScaleKey, scaleRamp, DISPLAY, INK, ACCENT, familyRate, onSatTiles, SAT_CREDIT, setKeyScale,
 } from '@/lib/modelViewer';
 import '@/components/modeldata/strata.css';
 import LayerBrowser from '@/components/modeldata/LayerBrowser';
 import Timeline from '@/components/modeldata/Timeline';
 import { LAYER_DESC, POPULAR, probFamily, probLine, categoryOf } from '@/lib/modelLayers';
+import { withMorePlaces } from '@/lib/modelPlaces';
 import { tweenFrame } from '@/lib/modelTween';
 import { GRIDS, gridOfModel, projection } from '@/lib/modelGrids';
 import { useAuth } from '@/lib/AuthContext';
@@ -470,7 +471,9 @@ function mkTheme(light) {
     '--md-on': t.on, '--md-on-ink': t.onInk, '--md-card': light ? '#FFFFFF' : 'rgba(255,255,255,0.05)', '--md-accent': t.accent,
     '--md-accent-soft': light ? 'rgba(10,111,219,0.09)' : 'rgba(77,163,255,0.16)', '--md-casing': light ? '#FFFFFF' : 'rgba(0,0,0,0.5)',
     '--md-line': t.line, '--md-lift': light ? 'rgba(11,26,49,0.14)' : 'rgba(0,0,0,0.4)', '--md-past': light ? 'rgba(11,26,49,0.38)' : 'rgba(255,255,255,0.5)',
+    '--md-solid': light ? '#F6F8FB' : '#0E1624',                   // phones' sheets: solid, no frosted glass
   };
+  t.solid = t.vars['--md-solid'];
   return t;
 }
 const THEMES = { dark: mkTheme(false), light: mkTheme(true) };
@@ -536,7 +539,8 @@ function Sheet({ title, note, onClose, children, tall, clear }) {
   return (
     <>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 44, background: clear ? 'transparent' : 'rgba(2,6,14,0.45)' }} />
-      <div role="dialog" aria-modal="true" aria-label={title} style={{ ...t.glass, position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 45, borderRadius: '22px 22px 0 0',
+      <div role="dialog" aria-modal="true" aria-label={title} style={{ ...t.glass, backdropFilter: 'none', WebkitBackdropFilter: 'none', background: t.solid,   // solid: Safari can stall scrolling in frosted panels
+        position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 45, borderRadius: '22px 22px 0 0',
         maxHeight: tall ? '82%' : '64%', display: 'flex', flexDirection: 'column', transform: `translateY(${dy}px)`,
         transition: start.current == null ? 'transform .2s ease' : 'none', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
         <div onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} style={{ padding: '8px 14px', touchAction: 'none', cursor: 'grab', flexShrink: 0 }}>
@@ -547,7 +551,7 @@ function Sheet({ title, note, onClose, children, tall, clear }) {
             <IconBtn title="Close" onClick={onClose} style={{ width: 32, height: 32 }}><X size={15} /></IconBtn>
           </div>
         </div>
-        <div style={{ overflowY: 'auto', overscrollBehavior: 'contain', padding: '2px 14px 18px' }}>{children}</div>
+        <div style={{ overflowY: 'auto', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', padding: '2px 14px 18px' }}>{children}</div>
       </div>
     </>
   );
@@ -717,7 +721,9 @@ export default function ModelData() {
   }, []);
   const layout = vw < 640 ? 'phone' : vw < 1180 ? 'tablet' : 'desktop';
   const phone = layout === 'phone', narrow = layout !== 'desktop';
+  setKeyScale(phone ? 1.6 : layout === 'tablet' ? 1.2 : 1);    // keys big enough to read on a small screen (downloads match)
   const [modeOpen, setModeOpen] = useState(false);            // phones: the view menu
+  const [shapeOpen, setShapeOpen] = useState(false);          // phones: the frame's shape
   const [exp, setExp] = useState({ open: false, png: 1080, gif: 720, video: 1080, fps: 60, smooth: true, from: 0, to: null, busy: null, job: null, err: null });
   useEffect(() => {
     try {
@@ -862,7 +868,8 @@ export default function ModelData() {
     const faces = ['500 20px Inter', '600 20px Inter', '650 20px Inter', '700 20px Inter', '650 20px "Inter Tight"', '760 20px "Inter Tight"'];
     Promise.all(faces.map((f) => document.fonts.load(f))).then(() => setFontsOk((n) => n + 1)).catch(() => {});
     onWxIcons(() => setFontsOk((n) => n + 1));
-    return () => onWxIcons(null);
+    onSatTiles(() => setFontsOk((n) => n + 1));                   // the Satellite map's detail tiles, as they arrive
+    return () => { onWxIcons(null); onSatTiles(null); };
   }, []);
 
   /* catalogue + static layers */
@@ -1126,7 +1133,12 @@ export default function ModelData() {
       if (staticsBy[g]) continue;
       const layers = () => Promise.all([fetch(staticUrl('lines.json', g)).then((r) => r.json()), fetch(staticUrl('cities.json', g)).then((r) => r.json()),
         loadImage('/logo.png').catch(() => null)])
-        .then(([lines, cities, logo]) => !stop && setStaticsBy((o) => ({ ...o, [g]: { lines, cities, logo } })))
+        .then(([lines, cities, logo]) => {
+          if (stop) return;
+          setStaticsBy((o) => ({ ...o, [g]: { lines, cities, logo } }));
+          // then the towns and villages that appear as you zoom in (lib/modelPlaces)
+          withMorePlaces(cities, g).then((all) => { if (all !== cities) setStaticsBy((o) => (o[g] ? { ...o, [g]: { ...o[g], cities: all } } : o)); });
+        })
         .catch(() => { if (!stop) setTimeout(layers, 5000); });
       layers();
     }
@@ -1978,13 +1990,13 @@ export default function ModelData() {
   const fmtPoint = (v, sk = scaleKey, meta = vmeta) => (!Number.isFinite(v) ? '—' : sk === 'wx' ? WX_NAMES[Math.round(v)] ?? '—'
     : sk === 'snow_risk' ? `${SNOW_RISK_NAMES[Math.round(v)] ?? '—'} risk of snow`
     : sk === 'snow_cond' ? `${['None', 'Very low', 'Low', 'Moderate', 'High', 'Very high'][Math.round(v)] ?? '—'} snow risk (conditions)`
-    : sk === 'ptype' || sk === 'radar_type' ? (() => { const t = radarTypeOf(v); return t ? `${RADAR_FAMILIES[t.family].name} · ${fmtValue(t.rate, 'mm/h')}` : 'Dry'; })()
+    : sk === 'ptype' || sk === 'radar_type' ? (() => { const t = radarTypeOf(v); return t ? `${RADAR_FAMILIES[t.family].name} · ${familyRate(t.family, t.rate).text}` : 'Dry'; })()
     : sk === 'wdir10' || sk === 'mwd' ? `from the ${compass(v)} · ${Math.round(v)}°` : fmtValue(v, meta?.unit));
 
   /* panels: on a phone one at a time, as sheets from the bottom; elsewhere as cards */
-  const panelOpen = { data: varOpen, layers: mapOpen, compare: cmpOpen, regions: regionsOpen, export: exp.open, summary: obsPanel && !sidePanel, mode: modeOpen };
+  const panelOpen = { data: varOpen, layers: mapOpen, compare: cmpOpen, regions: regionsOpen, export: exp.open, summary: obsPanel && !sidePanel, mode: modeOpen, shape: shapeOpen };
   const closePanels = () => {
-    setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false);
+    setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setShapeOpen(false);
     setExp((e) => (e.open ? { ...e, open: false } : e));
     if (!sidePanel) setObsPanel(false);
   };
@@ -1999,6 +2011,7 @@ export default function ModelData() {
     if (name === 'export') setExp((e) => ({ ...e, open: true }));
     if (name === 'summary') setObsPanel(true);
     if (name === 'mode') setModeOpen(true);
+    if (name === 'shape') setShapeOpen(true);
   };
   const setModeTo = (m) => { setMode(m); setVarOpen(false); setModeOpen(false); if (m === 'observed') setShowStar(true); };
   const layerLabel = isObs ? obsItem.label : isLive ? liveItem.label : isProb ? preset.label : vmeta?.label || 'Choose a layer';
@@ -2288,7 +2301,7 @@ export default function ModelData() {
   );
   const layerRows = (
     <div style={{ display: 'grid', gap: 1 }}>
-      <LayerRow icon={<MapPin size={14} />} label="Places" note={wxOn ? 'shown with the weather symbols' : null} on={showCities || wxOn} locked={wxOn} onClick={() => setShowCities((x) => !x)} />
+      <LayerRow icon={<MapPin size={14} />} label="Places" note={wxOn ? 'shown with the weather symbols' : 'more towns and villages as you zoom in (GeoNames)'} on={showCities || wxOn} locked={wxOn} onClick={() => setShowCities((x) => !x)} />
       {canWx && <LayerRow icon={<CloudSun size={14} />} label="Weather symbols" note={ownWx ? 'part of this layer' : 'above the places; sun or moon by the real sun'} on={wxOn} locked={ownWx} onClick={() => setShowWx((x) => !x)} />}
       {canArrows && <LayerRow icon={<Navigation size={14} />} label="Wind arrows" note={ownArrows ? 'part of this layer' : 'the way the wind is blowing'} on={arrowsOn} locked={ownArrows} onClick={() => setShowArrows((x) => !x)} />}
       {canMsl && <LayerRow icon={<Gauge size={14} />} label="Sea-level pressure" note={ownMsl ? 'this layer: its isobars, highs and lows' : 'isobars, highs and lows over the layer'} on={mslOn} locked={ownMsl} onClick={() => setMslK('on', !msl.on)} />}
@@ -2321,6 +2334,7 @@ export default function ModelData() {
       <div className="md-sec">
         <span className="md-sec-t">Map style</span>
         <div className="md-noscroll" style={{ overflowX: 'auto' }}>{styleSeg}</div>
+        {style === 'satellite' && <span className="md-sec-n" style={{ marginTop: 0 }}>{SAT_CREDIT}</span>}
       </div>
       <div className="md-sec">
         <span className="md-sec-t">Show on the map</span>
@@ -2458,20 +2472,13 @@ export default function ModelData() {
         ? `${model.label}: ${model.members} members. The chance is the share of members past your threshold, so drag the slider to ask a different question. Flooding uses 24 h rain or ECMWF runoff (wet ground runs off more); it is a signal, not a river forecast.`
         : model.source;
   /* phones and tablets: the model and the run, above the layers in the picker */
+  /* (two labelled pickers, MODEL and RUN, side by side: the device's own lists, which always scroll,
+     where a row of chips had to be swiped sideways) */
   const modelRunRow = cat && !timeSteps && (
-    <>
-      <div className="mdb-extra-row">
-        <span className="mdb-extra-lab">Model</span>
-        <div className="mdb-extra-chips">
-          {modelGroups(isProb ? cat.ensembles : cat.models).flatMap(([, ms]) => ms).map((m) => (
-            <button key={m.id} type="button" onClick={() => chooseModel(m.id)} style={chip(m.id === (isProb ? ensId : modelId))}>
-              {SHORT_NAMES[m.id] || m.label}<span style={{ opacity: 0.7, fontWeight: 500 }}> · {MODEL_INFO[m.id]?.[1] || ''}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="mdb-extra-row"><span className="mdb-extra-lab">Run</span><div>{runSelect}</div></div>
-    </>
+    <div className="mdb-fields">
+      {isProb ? modelField(cat.ensembles, ensId) : modelField(cat.models, modelId)}
+      {runField}
+    </div>
   );
   /* the layer picker, where it opens */
   const browser = (pos, extra) => (
@@ -2717,21 +2724,36 @@ export default function ModelData() {
       {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" style={{ marginLeft: 2 }} />}
     </button>
   );
+  /* how many steps have loaded, in plain sight: a ring that fills and the count (the marks under the
+     timeline are the same steps, solid once they have loaded) */
+  const loadMeter = steps.length > 1 && (() => {
+    const done = loadedCount >= steps.length, pct = loadedCount / steps.length;
+    return (
+      <span className={`mdt-load${done ? ' is-done' : ''}`} role="status" aria-live="polite"
+        title={done ? `All ${steps.length} steps have loaded` : `${loadedCount} of ${steps.length} steps have loaded; the rest are coming from ${fetchedFrom(model?.id)}. Each mark under the timeline is a step, solid once it has loaded.`}>
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="8" className="mdt-load-bg" />
+          <circle cx="10" cy="10" r="8" className="mdt-load-fg" style={{ strokeDasharray: `${(pct * 50.27).toFixed(2)} 50.27` }} />
+        </svg>
+        <span><b>{loadedCount}/{steps.length}</b>{!phone && <i>{done ? 'all loaded' : 'loaded'}</i>}</span>
+      </span>
+    );
+  })();
   /* the time on show, as the STRATA clock: the day in the accent, the hour in ink, the lead under it */
   const [dayPart, hourPart] = isObs ? [validLabel, ''] : validLabel.split(', ');
   const timeLabel = (
     <span className="mdt-time">
       <b><i>{dayPart}</i>{hourPart ? ` · ${hourPart}` : ''}</b>
-      <span>{subLabel}</span>
+      <span>{subLabel}{phone && loadMeter}</span>
     </span>
   );
-  /* a labelled tool on the phone's bottom bar */
+  /* a labelled tool on the phone's bottom bar: an icon over a word, a finger's width each */
   const tool = (icon, label, on, onClick, badge) => (
-    <button key={label} onClick={onClick} aria-pressed={!!on} style={{ border: 'none', cursor: 'pointer', fontFamily: FONT, flex: 1, minWidth: 0, height: 46, borderRadius: 14,
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, fontSize: 10.5, fontWeight: 700,
-      color: on ? T.ink : T.ink2, background: on ? T.on : 'transparent', boxShadow: on ? T.onShadow : 'none', position: 'relative' }}>
+    <button key={label} onClick={onClick} aria-pressed={!!on} style={{ border: 'none', cursor: 'pointer', fontFamily: FONT, flex: 1, minWidth: 0, height: 50, borderRadius: 16,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, fontSize: 11.5, fontWeight: 650, letterSpacing: '-0.005em',
+      color: on ? T.onInk : T.ink3, background: on ? T.on : 'transparent', boxShadow: on ? T.onShadow : 'none', position: 'relative' }}>
       {icon}<span>{label}</span>
-      {badge ? <span style={{ position: 'absolute', top: 4, right: '50%', marginRight: -18, minWidth: 15, height: 15, borderRadius: 99, fontSize: 9.5, lineHeight: '15px', background: '#3d8bff', color: '#fff' }}>{badge}</span> : null}
+      {badge ? <span style={{ position: 'absolute', top: 3, right: '50%', marginRight: -20, minWidth: 16, height: 16, borderRadius: 99, fontSize: 10, lineHeight: '16px', fontWeight: 760, background: T.accent, color: '#fff' }}>{badge}</span> : null}
     </button>
   );
 
@@ -2746,7 +2768,7 @@ export default function ModelData() {
       </div>
 
       {/* top bar */}
-      <div ref={topRef} style={{ position: 'absolute', top: phone ? 8 : 10, left: phone ? 8 : 10, right: phone ? 8 : 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', pointerEvents: 'none' }}>
+      <div ref={topRef} style={{ position: 'absolute', top: 10, left: 10, right: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', pointerEvents: 'none' }}>
         {layout === 'desktop' ? (
           <>
             <div className="md-noscroll" style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', overflowX: 'auto', minWidth: 0, maxWidth: '100%', pointerEvents: 'auto' }}>
@@ -2773,7 +2795,7 @@ export default function ModelData() {
             <div style={{ ...T.capsule, padding: 7, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{compareBtn}{layersBtn}</div>
           </>
         ) : (
-          <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flex: 1, minWidth: 0 }}>
+          <div style={{ ...T.capsule, padding: phone ? 6 : 5, display: 'flex', alignItems: 'center', gap: phone ? 8 : 6, pointerEvents: 'auto', flex: 1, minWidth: 0 }}>
             {phone ? modeBtn : modeSeg}
             {dataChip}
             {!phone && compareBtn}
@@ -2845,14 +2867,14 @@ export default function ModelData() {
           <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />{liveProd.times?.length ? 'Loading the latest images…' : 'The first images are being fetched…'}
         </div>
       )}
-      {(!frame || pending > 0) && key && (
+      {!frame && key && (
         <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', whiteSpace: 'nowrap' }}>
           <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />
           {!status ? 'Starting…' : `Fetching from ${fetchedFrom(model?.id)} · ${loadedCount}/${steps.length}`}
         </div>
       )}
 
-      {!exp.open && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || obsPanel || modeOpen)) && pinCard}
+      {!exp.open && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || obsPanel || modeOpen || shapeOpen)) && pinCard}
 
       {/* desktop: the export card above the timeline */}
       {layout === 'desktop' && exp.open && card('Download', null, () => setExp((e) => ({ ...e, open: false })), exportBody, { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
@@ -2864,6 +2886,7 @@ export default function ModelData() {
           {playBtn}
           <IconBtn title="Next step (→)" onClick={stepFwd}><ChevronRight size={16} /></IconBtn>
           <div style={{ flex: 1, minWidth: 80, display: 'flex', padding: '0 8px' }}>{slider}</div>
+          {loadMeter}
           {timeLabel}
           {speedField}
           <button type="button" className="md-act" aria-pressed={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => setExp((e) => ({ ...e, open: !e.open }))}>
@@ -2876,26 +2899,32 @@ export default function ModelData() {
           {playBtn}
           <IconBtn title="Next step" onClick={stepFwd} style={{ width: 38, height: 38 }}><ChevronRight size={17} /></IconBtn>
           <div style={{ flex: 1, minWidth: 80, display: 'flex', padding: '0 6px' }}>{slider}</div>
+          {loadMeter}
           {timeLabel}
           <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => openPanel('regions')} style={{ width: 38, height: 38 }}><MapIcon size={16} /></IconBtn>
           {isObs && <IconBtn on={obsPanel} title="The day's extremes" onClick={() => (sidePanel ? setObsPanel(false) : openPanel('summary'))} style={{ width: 38, height: 38 }}><Star size={16} /></IconBtn>}
           <button type="button" className="md-act" aria-pressed={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => openPanel('export')}><Download size={16} />Download</button>
         </div>
       ) : (
-        <div ref={botRef} style={{ ...T.glass, position: 'absolute', left: 8, right: 8, bottom: 22, borderRadius: 24, padding: '6px 6px 4px', display: 'grid', gap: 2 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 4px' }}>
-            {playBtn}
-            <div style={{ flex: 1, minWidth: 60, display: 'flex' }}>{slider}</div>
-            {timeLabel}
+        <div ref={botRef} className="md-phone-bar" style={{ ...T.glass, position: 'absolute', left: 10, right: 10, bottom: 16, borderRadius: 26, padding: '10px 12px 6px', display: 'grid', gap: 6 }}>
+          {/* the time on show, with a step back and a step on either side of it */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconBtn title="Previous step" onClick={stepBack} style={{ width: 40, height: 40 }}><ChevronLeft size={19} /></IconBtn>
+            <div className="md-phone-time" style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center' }}>{timeLabel}</div>
+            <IconBtn title="Next step" onClick={stepFwd} style={{ width: 40, height: 40 }}><ChevronRight size={19} /></IconBtn>
           </div>
-          <div style={{ display: 'flex', gap: 2 }}>
-            {tool(<ChevronLeft size={18} />, 'Back', false, stepBack)}
-            {tool(<ChevronRight size={18} />, 'Next', false, stepFwd)}
-            {tool(<Layers size={18} />, 'Map', mapOpen, () => openPanel('layers'), layerCount)}
-            {tool(<Columns2 size={18} />, 'Compare', cmpOpen || cmp.on, () => openPanel('compare'))}
-            {tool(<MapIcon size={18} />, 'Regions', regionsOpen, () => openPanel('regions'))}
-            {isObs && tool(<Star size={18} />, 'Day', obsPanel, () => openPanel('summary'))}
-            {tool(<Download size={18} />, 'Download', exp.open, () => openPanel('export'))}
+          {/* play, and the whole width to drag along the timeline */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {playBtn}
+            <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>{slider}</div>
+          </div>
+          <div style={{ display: 'flex', gap: 4, borderTop: `1px solid ${T.line}`, paddingTop: 6, marginTop: 2 }}>
+            {tool(<Layers size={19} />, 'Map', mapOpen, () => openPanel('layers'), layerCount)}
+            {tool(<Ratio size={19} />, frameKey === 'screen' ? 'Shape' : FRAMES[frameKey].label, shapeOpen, () => openPanel('shape'))}
+            {tool(<Columns2 size={19} />, 'Compare', cmpOpen || cmp.on, () => openPanel('compare'))}
+            {tool(<MapIcon size={19} />, 'Regions', regionsOpen, () => openPanel('regions'))}
+            {isObs && tool(<Star size={19} />, 'Day', obsPanel, () => openPanel('summary'))}
+            {tool(<Download size={19} />, 'Download', exp.open, () => openPanel('export'))}
           </div>
         </div>
       )}
@@ -2906,11 +2935,34 @@ export default function ModelData() {
           <div style={{ display: 'grid', gap: 6 }}>
             {MODE_INFO.map(([k, l, d]) => (
               <button key={k} onClick={() => setModeTo(k)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', padding: '12px 14px', borderRadius: 14,
-                background: k === mode ? T.on : T.chip, boxShadow: k === mode ? T.onShadow : 'none' }}>
-                <span style={{ display: 'block', fontSize: 15, fontWeight: 800, color: T.ink }}>{l}</span>
-                <span style={{ display: 'block', fontSize: 12.5, color: T.ink2, marginTop: 2 }}>{d}</span>
+                background: k === mode ? T.on : T.chip, boxShadow: k === mode ? T.onShadow : 'none' }} aria-pressed={k === mode}>
+                <span style={{ display: 'block', fontSize: 15, fontWeight: 800, color: k === mode ? T.onInk : T.ink }}>{l}</span>
+                <span style={{ display: 'block', fontSize: 12.5, color: k === mode ? T.onInk : T.ink2, opacity: k === mode ? 0.78 : 1, marginTop: 2 }}>{d}</span>
               </button>
             ))}
+          </div>
+        </Sheet>
+      )}
+      {phone && shapeOpen && (
+        <Sheet title="Shape" note="the frame on the map, and its downloads" onClose={closePanels} clear>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {[['screen', 'Screen', 'fills the screen'], ['square', '1:1', 'square post'], ['story', '9:16', 'story, full screen'], ['portrait', '4:5', 'portrait post']].map(([k, l, d]) => {
+              const on = frameKey === k, a = FRAMES[k].a || 0.62;
+              const w = a >= 1 ? 30 : 30 * a, h = a >= 1 ? 30 / a : 30;
+              return (
+                <button key={k} type="button" aria-pressed={on} onClick={() => { setFrameKey(k); setShapeOpen(false); }}
+                  style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', padding: 14, borderRadius: 16, display: 'flex', alignItems: 'center', gap: 12,
+                    background: on ? T.on : T.chip, color: on ? T.onInk : T.ink, boxShadow: on ? T.onShadow : 'none' }}>
+                  <span style={{ width: 34, height: 34, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                    <i style={{ width: w, height: h, borderRadius: 4, border: '2px solid currentColor' }} />
+                  </span>
+                  <span style={{ minWidth: 0 }}>
+                    <b style={{ display: 'block', fontSize: 16, fontWeight: 760 }}>{l}</b>
+                    <span style={{ display: 'block', fontSize: 12, opacity: 0.75, marginTop: 1 }}>{d}</span>
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </Sheet>
       )}

@@ -148,6 +148,16 @@ export const KIND_ORDER = [0, 2, 1, 3];                        // rain, snow, sl
 export const PTYPE_FAMILY = { 1: 0, 11: 0, 7: 1, 5: 2, 6: 2, 3: 3, 8: 3, 10: 3, 12: 3 };
 /** A rate's colour in a family (normal or pale, as the page has chosen). */
 export const familyColour = (f, rate) => colourAt(RADAR_FAMILIES[f]?.scale || RADAR_KEY, rate);
+/* the unit each kind is read in: rain in mm an hour; snow and sleet as cm of fresh snow an hour
+   (10:1, so the number is the water's mm/h); ice (freezing rain) in inches an hour */
+export const FAMILY_UNITS = { rain: 'mm/h', snow: 'cm/h', sleet: 'cm/h', ice: 'in/h' };
+/** A rate (mm/h of water) in its kind's own unit: { value, unit, text }. */
+export function familyRate(f, mmh) {
+  const short = RADAR_FAMILIES[f]?.short || 'rain', unit = FAMILY_UNITS[short];
+  const v = short === 'ice' ? mmh / 25.4 : mmh;
+  const txt = short === 'ice' ? (v < 0.01 ? '<0.01' : v.toFixed(v < 0.1 ? 3 : 2)) : v < 10 ? v.toFixed(1) : String(Math.round(v));
+  return { value: v, unit, text: `${txt} ${unit}` };
+}
 const RADAR_TYPE = {
   stops: RADAR_STOPS, floor: 0.5, discrete: true, ticks: [], families: RADAR_FAMILIES, order: KIND_ORDER,
   swatch: [25, 88, 151, 214],                                   // each family at 1 mm/h, for the colours' preview
@@ -456,6 +466,10 @@ for (const [k, band] of Object.entries(BANDS)) { SCALES[k].band = band; if (LIGH
    and the page sets it for its previews, so every colour table knows which scales to use */
 let TONE = 'dark';
 export function setTone(t) { TONE = t === 'light' ? 'light' : 'dark'; }
+/* how big the keys are drawn against the rest of the graphic: the page makes them bigger on phones,
+   where at the graphic's own size their words would be ~5 px (its downloads match what it shows) */
+let KEY_SCALE = 1;
+export function setKeyScale(k) { KEY_SCALE = Math.max(1, Math.min(2, Number(k) || 1)); }
 export const toneOf = () => TONE;
 /* what a cached colour table was made with: the colours chosen and the map's tone */
 const palId = () => `${PALETTE}|${TONE}`;
@@ -974,7 +988,7 @@ function drawPressure(ctx, P, X, Y, R, u, st) {
 export const MAP_STYLES = {
   light: { label: 'Light', base: 'basemap_light.png?v=strata1', glass: 'light', coast: 'rgba(11,26,49,0.5)', border: 'rgba(11,26,49,0.32)', text: '#0B1A31', halo: 'rgba(255,255,255,0.94)', bg: '#9fbbd8' },
   dark: { label: 'Dark', base: 'basemap.png', glass: 'dark', coast: 'rgba(226,236,248,0.62)', border: 'rgba(226,236,248,0.42)', text: '#f2f6fb', halo: 'rgba(6,10,18,0.8)', bg: '#0e1b2a' },
-  satellite: { label: 'Satellite', base: 'sat_day.jpg', glass: 'dark', coast: 'rgba(255,255,255,0.5)', border: 'rgba(255,255,255,0.4)', text: '#ffffff', halo: 'rgba(0,0,0,0.75)', bg: '#06111f' },
+  satellite: { label: 'Satellite', base: 'sat_day.jpg', detail: true, glass: 'dark', coast: 'rgba(255,255,255,0.5)', border: 'rgba(255,255,255,0.4)', text: '#ffffff', halo: 'rgba(0,0,0,0.75)', bg: '#06111f' },
   realtime: { label: 'Real-time', base: null, glass: 'dark', coast: 'rgba(255,255,255,0.45)', border: 'rgba(255,255,255,0.35)', text: '#ffffff', halo: 'rgba(0,0,0,0.75)', bg: '#050a14' },
 };
 
@@ -1122,6 +1136,145 @@ export function realtimeBasemap(day, night, utcMs) {
   return out;
 }
 
+/* ── the Satellite map's detail as you zoom in (15 Nov 2026) ───────────────────────────────────────
+   The map's own picture is NASA Blue Marble at 1 km (4 km on the wide grid). Closer in, NASA GIBS
+   tiles (EPSG:4326 WMTS: keyless, open to browsers, public domain) are warped onto the grid: Blue
+   Marble at 500 m, then the Landsat global annual mosaic (WELD, 30 m, 2000). Landsat's open sea is
+   streaky, so it is laid only on the land and a little way out to sea (a mask made from the light
+   map's land), and the sea stays Blue Marble. Tiles come in as they load; the page redraws then. */
+const GIBS = 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best';
+const SAT_LAYERS = [
+  { maxZ: 7, url: (z, r, c) => `${GIBS}/BlueMarble_NextGeneration/default/500m/${z}/${r}/${c}.jpg` },
+  { maxZ: 11, land: true, url: (z, r, c) => `${GIBS}/Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual/default/2000-12-01/31.25m/${z}/${r}/${c}.jpg` },
+];
+export const SAT_CREDIT = 'NASA Blue Marble; Landsat (NASA/USGS WELD) as you zoom in, via NASA GIBS';
+const satTiles = new Map();
+let satNotify = null, satRaf = 0;
+/** Called (once a frame at most) when a satellite tile or the land mask arrives, so the page redraws. */
+export function onSatTiles(cb) { satNotify = cb; }
+const satChanged = () => { if (!satRaf && satNotify) satRaf = requestAnimationFrame(() => { satRaf = 0; satNotify?.(); }); };
+function satTile(li, z, r, c, load = true) {
+  const k = `${li}|${z}|${r}|${c}`;
+  let t = satTiles.get(k);
+  if (t) { satTiles.delete(k); satTiles.set(k, t); return t; }                    // most recently used last
+  if (!load) return null;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';                    // GIBS allows it: the canvas stays exportable
+  t = { img, ok: false };
+  img.onload = () => { t.ok = true; satChanged(); };
+  img.onerror = () => { t.failed = true; };
+  img.src = SAT_LAYERS[li].url(z, r, c);
+  satTiles.set(k, t);
+  if (satTiles.size > 700) satTiles.delete(satTiles.keys().next().value);
+  return t;
+}
+/* where Landsat may go: the light map's land (its sea is blue, its land near-grey), a little wider,
+   with a soft edge; made once a grid from the light basemap (2x the grid) */
+const landMasks = {};
+function landMask(grid) {
+  if (grid in landMasks) return landMasks[grid];
+  landMasks[grid] = null;
+  const img = new Image();
+  img.onload = () => {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const x = cv.getContext('2d', { willReadFrequently: true });
+    x.drawImage(img, 0, 0);
+    const d = x.getImageData(0, 0, w, h), p = d.data;
+    for (let i = 0; i < p.length; i += 4) { const land = p[i + 2] - p[i] < 22; p[i] = p[i + 1] = p[i + 2] = 255; p[i + 3] = land ? 255 : 0; }
+    x.putImageData(d, 0, 0);
+    const out = document.createElement('canvas'); out.width = w; out.height = h;
+    const o = out.getContext('2d');
+    if (FILTER_OK) o.filter = 'blur(1.5px)';
+    for (const [dx, dy] of [[0, 0], [2, 0], [-2, 0], [0, 2], [0, -2], [1.4, 1.4], [-1.4, 1.4], [1.4, -1.4], [-1.4, -1.4]]) o.drawImage(cv, dx, dy);
+    landMasks[grid] = out;
+    satChanged();
+  };
+  img.src = staticUrl('basemap_light.png?v=strata1', grid);
+  return null;
+}
+let satSheet = null;
+/* one tile (or the part of a coarser one that covers it) warped onto the grid: cut into n x n pieces,
+   each placed by its projected corners, so the curve of the projection is followed */
+function warpTile(dst, img, sx, sy, sw, sh, lonL, latT, span, n, toScr) {
+  const g = [];
+  for (let i = 0; i <= n; i++) for (let j = 0; j <= n; j++) g.push(toScr(lonL + (span * j) / n, latT - (span * i) / n));
+  const pw = sw / n, ph = sh / n, base = dst.getTransform();
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const tl = g[i * (n + 1) + j], tr = g[i * (n + 1) + j + 1], bl = g[(i + 1) * (n + 1) + j];
+    const a = (tr[0] - tl[0]) / pw, b = (tr[1] - tl[1]) / pw, c = (bl[0] - tl[0]) / ph, d = (bl[1] - tl[1]) / ph;
+    const px = sx + j * pw, py = sy + i * ph;
+    dst.setTransform(base);
+    dst.transform(a, b, c, d, tl[0] - a * px - c * py, tl[1] - b * px - d * py);
+    dst.drawImage(img, px, py, pw, ph, px - 0.35, py - 0.35, pw + 0.7, ph + 0.7);   // a hair over, so no seams
+  }
+  dst.setTransform(base);
+}
+function drawSatDetail(ctx, clip, X, Y, s, ox, oy, cx, cy, fast) {
+  const degPx = GRID.dx / s / 111320;                       // the view: degrees of latitude a canvas pixel
+  const own = GRID.dx / 2 / 111320;                         // the map's own picture (2x the grid)
+  let z = Math.ceil(Math.log2(0.5625 / degPx) - 0.25);
+  if (0.5625 / 2 ** z > own / 1.5) return;                  // the picture is as sharp as the screen here
+  z = Math.min(z, 11);
+  const gx0 = Math.max(0, (clip.x - ox) / s + cx), gx1 = Math.min(NX, (clip.x + clip.w - ox) / s + cx);
+  const gy0 = Math.max(0, (clip.y - oy) / s + cy), gy1 = Math.min(NY, (clip.y + clip.h - oy) / s + cy);
+  if (gx1 <= gx0 || gy1 <= gy0) return;
+  const P = projection(GRID);
+  let lo0 = 999, lo1 = -999, la0 = 999, la1 = -999;
+  for (let i = 0; i <= 6; i++) for (let j = 0; j <= 6; j++) {
+    if (i && i < 6 && j && j < 6) continue;                // the view's edge is enough
+    const [lon, lat] = P.fromGrid(gx0 + ((gx1 - gx0) * i) / 6, gy0 + ((gy1 - gy0) * j) / 6);
+    lo0 = Math.min(lo0, lon); lo1 = Math.max(lo1, lon); la0 = Math.min(la0, lat); la1 = Math.max(la1, lat);
+  }
+  let span, c0, c1, r0, r1;
+  for (;;) {                                                 // at most ~90 tiles: coarser if more
+    span = 288 / 2 ** z;
+    c0 = Math.floor((lo0 + 180) / span); c1 = Math.floor((lo1 + 180) / span);
+    r0 = Math.floor((90 - la1) / span); r1 = Math.floor((90 - la0) / span);
+    if ((c1 - c0 + 1) * (r1 - r0 + 1) <= 90 || z <= 5) break;
+    z--;
+  }
+  const li = z <= SAT_LAYERS[0].maxZ ? 0 : 1, L = SAT_LAYERS[li];
+  let dst = ctx, offX = 0, offY = 0;
+  if (L.land) {
+    if (!landMask(GRID.name)) return;
+    satSheet ||= document.createElement('canvas');
+    if (satSheet.width < clip.w || satSheet.height < clip.h) { satSheet.width = Math.ceil(clip.w); satSheet.height = Math.ceil(clip.h); }
+    dst = satSheet.getContext('2d');
+    dst.setTransform(1, 0, 0, 1, 0, 0);
+    dst.clearRect(0, 0, satSheet.width, satSheet.height);
+    offX = clip.x; offY = clip.y;
+  }
+  dst.imageSmoothingEnabled = true;
+  dst.imageSmoothingQuality = 'high';
+  const toScr = (lon, lat) => { const [gx, gy] = P.toGrid(lon, lat); return [X(gx) - offX, Y(gy) - offY]; };
+  const n = fast ? 2 : 4;
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      if (r < 0 || c < 0) continue;
+      const lonL = -180 + c * span, latT = 90 - r * span;
+      const t = satTile(li, z, r, c);
+      if (t.ok) { warpTile(dst, t.img, 0, 0, 512, 512, lonL, latT, span, n, toScr); continue; }
+      // still loading: the part of a coarser tile already here (this layer's, then Blue Marble's)
+      for (let k = 1; k <= 4; k++) {
+        const zz = z - k, lj = zz <= SAT_LAYERS[0].maxZ ? 0 : 1;
+        if (zz < 0) break;
+        const p = satTile(lj, zz, r >> k, c >> k, false);
+        if (!p?.ok) continue;
+        const size = 512 / 2 ** k;
+        warpTile(dst, p.img, (c - ((c >> k) << k)) * size, (r - ((r >> k) << k)) * size, size, size, lonL, latT, span, Math.max(1, n >> 1), toScr);
+        break;
+      }
+    }
+  }
+  if (dst !== ctx) {
+    dst.globalCompositeOperation = 'destination-in';
+    dst.drawImage(landMasks[GRID.name], X(0) - offX, Y(0) - offY, NX * s, NY * s);
+    dst.globalCompositeOperation = 'source-over';
+    ctx.drawImage(satSheet, 0, 0, clip.w, clip.h, clip.x, clip.y, clip.w, clip.h);
+  }
+}
+
 /* Smaller copies of a big image (made once, with good downscaling), so drawing it zoomed
    out is a near-1:1 copy instead of a costly 'high quality' shrink of 4 million pixels. */
 const pyrCache = new WeakMap();
@@ -1191,6 +1344,7 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   if (L.basemap) drawPyramid(ctx, L.basemap, X(0), Y(0), NX * s, NY * s, opts.coarse);
+  if (L.basemap && st.detail && !opts.coarse) drawSatDetail(ctx, clip, X, Y, s, ox, oy, cx, cy, !!L.interacting);
   const put = (cv, smoothOn, alpha = 1) => {
     if (cv.gl) {
       const f = cv.frame, W = f.nx || f.head?.nx || NX, H = f.ny || f.head?.ny || NY, K = f.nx ? f.k || 1 : 1;
@@ -1278,7 +1432,7 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   if (G?.frame || A?.frame || K?.areas?.length || Wn?.areas?.length || L.strikes?.length || labels || P || L.cities || T) {
     layer('over', [G?.frame, G?.varKey, G?.unit, A?.frame, K?.areas, K?.alpha, Wn?.areas, Wn?.alpha, Wn?.look, Wn?.labels, L.strikes, L.strikesDaily, L.strikeStyle, labels,
       P?.lines, P?.list, P?.symbols, P?.centres, L.cities, Wx?.frame, Wx?.utcMs, T?.frame, T?.unit, T?.floor,
-      T?.at?.gx, T?.at?.gy, T?.at?.v, T?.at?.place, !!L.chrome, L.chrome?.sub ? 1 : 0, (L.chrome?.extras || []).length, L.chrome?.brand, L.chrome?.time, L.style], (c) => {
+      T?.at?.gx, T?.at?.gy, T?.at?.v, T?.at?.place, !!L.chrome, L.chrome?.sub ? 1 : 0, (L.chrome?.extras || []).length, L.chrome?.brand, L.chrome?.time, L.style, KEY_SCALE], (c) => {
       if (G?.frame) drawValueGrid(c, G, X, Y, ...box, s, u, st);
       if (A?.frame) drawArrows(c, A, X, Y, ...box, s, u, st);
       if (K?.areas?.length) drawRisk(c, K, X, Y, u);
@@ -1994,14 +2148,18 @@ function drawCities(ctx, cities, X, Y, R, cellPx, u, st, top, footer, wx) {
      and no label over another: the wide map has far more places than fit when zoomed out */
   const th = themeOf(st);
   const pxKm = cellPx / 2;
-  const maxRank = pxKm > 3 ? 4 : pxKm > 1.6 ? 3 : pxKm > 0.75 ? 2 : 1;
+  /* ranks 1-3: the hand-picked cities; 4-9: the towns, villages and suburbs of Great Britain and
+     Ireland by size (lib/modelPlaces), each zoom step letting in the next */
+  const maxRank = pxKm > 18 ? 9 : pxKm > 12 ? 8 : pxKm > 8 ? 7 : pxKm > 5.5 ? 6 : pxKm > 3.8 ? 5 : pxKm > 2.6 ? 4
+    : pxKm > 1.6 ? 3 : pxKm > 0.75 ? 2 : 1;
   const placed = [];
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  for (const c of [...cities].sort((a, b) => a.rank - b.rank)) {
-    if (c.rank > maxRank) continue;
-    const x = X(c.x), y = Y(c.y), big = c.rank === 1;
-    ctx.font = big ? `650 ${20 * u}px ${FONT}` : `600 ${18.5 * u}px ${FONT}`;
+  for (const c of byRank(cities)) {
+    if (c.rank > maxRank) break;
+    const x = X(c.x), y = Y(c.y), big = c.rank === 1, minor = c.rank >= 4;
+    if (x < R.x || x > R.x + R.w || y < R.y || y > R.y + R.h) continue;
+    ctx.font = big ? `650 ${20 * u}px ${FONT}` : minor ? `${c.rank >= 7 ? 550 : 600} ${(c.rank >= 7 ? 15.5 : 17) * u}px ${FONT}` : `600 ${18.5 * u}px ${FONT}`;
     const tw = ctx.measureText(c.name).width;
     if (x < R.x + 12 * u || y < top + (wx?.frame ? 52 : 16) * u || x + 14 * u + tw > R.x + R.w - 12 * u || y > R.y + R.h - footer) continue;
     const box = [x - 8 * u, y - (wx?.frame ? 50 : 14) * u, x + 16 * u + tw, y + 14 * u];
@@ -2012,11 +2170,19 @@ function drawCities(ctx, cities, X, Y, R, cellPx, u, st, top, footer, wx) {
       const [lon, lat] = gridLonLat(c.x, c.y);
       wxBadge(ctx, Math.round(code), x + 2 * u, y - 30 * u, 17 * u, sunElev(lon, lat, wx.utcMs) < -0.833, u);
     }
-    ctx.beginPath(); ctx.arc(x, y, 5.6 * u, 0, Math.PI * 2); ctx.fillStyle = th.halo; ctx.fill();
-    ctx.beginPath(); ctx.arc(x, y, 3.3 * u, 0, Math.PI * 2); ctx.fillStyle = th.ink; ctx.fill();
-    inkText(ctx, c.name, x + 11 * u, y + 0.5 * u, th.ink, th.halo, 4.6 * u);
+    const dot = c.rank >= 7 ? 0.75 : 1;
+    ctx.beginPath(); ctx.arc(x, y, 5.6 * u * dot, 0, Math.PI * 2); ctx.fillStyle = th.halo; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 3.3 * u * dot, 0, Math.PI * 2); ctx.fillStyle = th.ink; ctx.fill();
+    inkText(ctx, c.name, x + 11 * u * dot, y + 0.5 * u, c.rank >= 7 ? th.sub : th.ink, th.halo, 4.6 * u);
   }
   ctx.textBaseline = 'alphabetic';
+}
+/* the places in the order they are offered a spot: by rank, then the bigger first (sorted once a list) */
+const rankedCache = new WeakMap();
+function byRank(cities) {
+  let r = rankedCache.get(cities);
+  if (!r) { r = [...cities].sort((a, b) => a.rank - b.rank || (b.pop || 0) - (a.pop || 0)); rankedCache.set(cities, r); }
+  return r;
 }
 
 /* frosted glass inside a canvas: the scene under the panel, blurred, then a tint, a top
@@ -2108,7 +2274,7 @@ export function chromeTop(R, u, C) { return C ? headLayout(R, u, C).bottom : R.y
 /* one key's height (the families' key is a row per kind) */
 function keyHeight(K, u) {
   const sc = K.scale || {};
-  if (sc.families) return 18 * u + 12 * u + (sc.order || sc.families).length * 21 * u + 22 * u;
+  if (sc.families) return 34 * u + familyGroups(sc).reduce((n, g) => n + g.fams.length * 21 * u + 17 * u, 0);
   if (isCatKey(sc)) return 23 * u + catRows(sc, u).length * 24 * u;
   return (sc.keySteps || sc.ticks || []).length > 1 ? 64 * u : 30 * u;
 }
@@ -2178,8 +2344,9 @@ function drawCatKey(ctx, R, u, K, foot, M, th) {
 /** How much of the foot of a graphic the keys take. */
 export function chromeFoot(u, C) {
   if (!C) return 0;
-  if (C.warnList) return 160 * u;
-  return 40 * u + [C, ...(C.extras || [])].reduce((n, K) => n + keyHeight(K, u) + 16 * u, 0);
+  const uk = u * KEY_SCALE;                                 // the keys' own unit (bigger on phones)
+  if (C.warnList) return 160 * uk;
+  return 40 * u + [C, ...(C.extras || [])].reduce((n, K) => n + keyHeight(K, uk) + 16 * uk, 0);
 }
 
 /* the model badge: white for the model and run, the accent for the lead time; returns its left edge */
@@ -2337,17 +2504,18 @@ function drawChrome(ctx, R, u, C, st) {
 
   // ── the keys (or a warnings window's list), low on the left; the source low on the right ──
   let keysTop = R.y + R.h - M, keysRight = R.x + M;
+  const uk = u * KEY_SCALE;                                 // the keys' own unit (bigger on phones)
   if (C.warnList) {
-    const r = drawWarnKey(ctx, R, u, C, M, th);
+    const r = drawWarnKey(ctx, R, uk, C, M, th);
     keysTop = r.top; keysRight = r.right;
   } else {
     let foot = R.y + R.h - M;
     for (const K of [C, ...(C.extras || [])]) {
-      const k = drawKey(ctx, R, u, K, foot, M, th);
-      foot -= k.h + 16 * u;
+      const k = drawKey(ctx, R, uk, K, foot, M, th);
+      foot -= k.h + 16 * uk;
       keysRight = Math.max(keysRight, k.right);
     }
-    keysTop = foot + 16 * u;
+    keysTop = foot + 16 * uk;
   }
   const source = C.source || '';
   if (source) {
@@ -2476,15 +2644,31 @@ function drawKey(ctx, R, u, K, foot, M, th) {
 
 /* a key of several kinds on one rate axis (precipitation by type): a stepped row of colours for each,
    labelled, the rates beneath on a log scale (STRATA UiPrecipKey) */
+/* the kinds in key order, in runs that share a unit's ticks: rain (mm/h), snow and sleet (cm/h at
+   10:1, the same numbers) together; ice (in/h) on its own ticks */
+const unitGroup = (f) => (f.short === 'ice' ? 'in' : 'metric');
+const GROUP_TICKS = { metric: [0.2, 1, 4, 10, 40], in: [0.01, 0.05, 0.2, 0.5, 1] };
+function familyGroups(sc) {
+  const all = sc.families, groups = [];
+  for (const f of (sc.order || all.map((_, i) => i)).map((i) => all[i])) {
+    const g = unitGroup(f);
+    if (!groups.length || groups[groups.length - 1].g !== g) groups.push({ g, fams: [] });
+    groups[groups.length - 1].fams.push(f);
+  }
+  return groups;
+}
 function drawFamiliesKey(ctx, R, u, K, foot, M, th) {
-  const all = K.scale.families, fams = (K.scale.order || all.map((_, i) => i)).map((i) => all[i]);
-  const LO = 0.05, HI = 40, TICKS = [0.2, 1, 4, 10, 40];
-  const rowH = 21 * u, barH = 8 * u, titleSize = 18 * u, tickSize = 15 * u;
+  const groups = familyGroups(K.scale), fams = groups.flatMap((g) => g.fams);
+  const LO = 0.05, HI = 40;
+  const rowH = 21 * u, barH = 8 * u, titleSize = 18 * u, tickSize = 15 * u, tickH = 17 * u;
   const kh = keyHeight(K, u);
   ctx.font = `650 ${17 * u}px ${FONT}`;
-  const labW = Math.max(...fams.map((f) => ctx.measureText(f.name).width)) + 14 * u;
-  const barW = Math.max(160 * u, Math.min(R.w - 2 * M - labW - 54 * u, 330 * u));
-  const x = R.x + M, top = foot - kh, w = labW + barW + 46 * u;
+  const nameW = Math.max(...fams.map((f) => ctx.measureText(f.name).width));
+  ctx.font = `600 ${13 * u}px ${FONT}`;
+  const unitW = Math.max(...fams.map((f) => ctx.measureText(FAMILY_UNITS[f.short] || 'mm/h').width));
+  const labW = nameW + 8 * u + unitW + 12 * u;
+  const barW = Math.max(160 * u, Math.min(R.w - 2 * M - labW - 20 * u, 330 * u));
+  const x = R.x + M, top = foot - kh, w = labW + barW + 12 * u;
   clearing(ctx, x - 14 * u, top - 10 * u, w + 28 * u, kh + 18 * u, u, th);
   const tb = top + 15 * u;
   ctx.font = `650 ${titleSize}px ${FONT}`;
@@ -2492,34 +2676,48 @@ function drawFamiliesKey(ctx, R, u, K, foot, M, th) {
   inkText(ctx, title, x, tb, th.ink, th.halo, 4 * u);
   const bx = x + labW;
   const xOf = (r) => bx + (Math.log(r / LO) / Math.log(HI / LO)) * barW;
-  fams.forEach((f, i) => {
-    const yc = tb + 12 * u + i * rowH + rowH / 2;
-    ctx.font = `650 ${17 * u}px ${FONT}`;
-    inkText(ctx, f.name, x, yc + 6 * u, th.ink, th.halo, 4 * u);
-    ctx.save();
-    ctx.shadowColor = th.shadow; ctx.shadowBlur = 4 * u; ctx.shadowOffsetY = 1 * u;
-    roundRect(ctx, bx - 1.5 * u, yc - barH / 2 - 1.5 * u, barW + 3 * u, barH + 3 * u, (barH + 3 * u) / 2);
-    ctx.fillStyle = th.casing; ctx.fill();
-    ctx.restore();
-    ctx.save();
-    roundRect(ctx, bx, yc - barH / 2, barW, barH, barH / 2);
-    ctx.clip();
-    const N = 140;
-    for (let k = 0; k < N; k++) {
-      const c = colourAt({ ...f.scale, floor: null }, LO * (HI / LO) ** ((k + 0.5) / N)) || [120, 130, 140, 255];
-      ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
-      ctx.fillRect(bx + (k / N) * barW, yc - barH / 2, barW / N + 0.6, barH);
+  let y = tb + 12 * u;
+  for (const gp of groups) {
+    for (const f of gp.fams) {
+      drawFamilyRow(ctx, f, x, bx, y + rowH / 2, nameW, barW, barH, LO, HI, u, th);
+      y += rowH;
     }
-    ctx.restore();
-  });
-  const ty = tb + 12 * u + fams.length * rowH + 16 * u;
-  ctx.font = `600 ${tickSize}px ${FONT}`;
-  for (const r of TICKS) {
-    const txt = String(r), tw2 = ctx.measureText(txt).width;
-    inkText(ctx, txt, Math.min(xOf(r) - tw2 / 2, bx + barW - tw2), ty, th.muted, th.halo, 3.5 * u);
+    // this run's ticks, in its own unit (each row names its unit)
+    ctx.font = `600 ${tickSize}px ${FONT}`;
+    const per = gp.g === 'in' ? 25.4 : 1;
+    let lastEnd = -Infinity;
+    for (const v of GROUP_TICKS[gp.g]) {
+      const txt = String(v), tw2 = ctx.measureText(txt).width;
+      const cx = Math.min(xOf(v * per) - tw2 / 2, bx + barW - tw2);
+      if (cx < lastEnd + 5 * u) continue;
+      inkText(ctx, txt, cx, y + 13 * u, th.muted, th.halo, 3.5 * u);
+      lastEnd = cx + tw2;
+    }
+    y += tickH;
   }
-  inkText(ctx, 'mm/h', bx + barW + 10 * u, ty, th.muted, th.halo, 3.5 * u);
   return { h: kh, right: x + w };
+}
+/* one kind's row of the key: its name and unit, then its stepped colours on the shared log axis */
+function drawFamilyRow(ctx, f, x, bx, yc, nameW, barW, barH, LO, HI, u, th) {
+  ctx.font = `650 ${17 * u}px ${FONT}`;
+  inkText(ctx, f.name, x, yc + 6 * u, th.ink, th.halo, 4 * u);
+  ctx.font = `600 ${13 * u}px ${FONT}`;
+  inkText(ctx, FAMILY_UNITS[f.short] || 'mm/h', x + nameW + 8 * u, yc + 5 * u, th.muted, th.halo, 3.5 * u);
+  ctx.save();
+  ctx.shadowColor = th.shadow; ctx.shadowBlur = 4 * u; ctx.shadowOffsetY = 1 * u;
+  roundRect(ctx, bx - 1.5 * u, yc - barH / 2 - 1.5 * u, barW + 3 * u, barH + 3 * u, (barH + 3 * u) / 2);
+  ctx.fillStyle = th.casing; ctx.fill();
+  ctx.restore();
+  ctx.save();
+  roundRect(ctx, bx, yc - barH / 2, barW, barH, barH / 2);
+  ctx.clip();
+  const N = 140;
+  for (let k = 0; k < N; k++) {
+    const c = colourAt({ ...f.scale, floor: null }, LO * (HI / LO) ** ((k + 0.5) / N)) || [120, 130, 140, 255];
+    ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+    ctx.fillRect(bx + (k / N) * barW, yc - barH / 2, barW / N + 0.6, barH);
+  }
+  ctx.restore();
 }
 
 function roundRect(ctx, x, y, w, h, r) {
