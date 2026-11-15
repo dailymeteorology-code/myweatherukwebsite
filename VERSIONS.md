@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.52.001 | 2026-11-15 | Patch | — | Location Weather: rain splashing on the top card again (the warnings card when there is one), snow that settles along it, round its corners and now and then off its ends, and frost on the glass below freezing | Location Weather overhaul (Nov) |
+| 5.52.002 | 2026-11-15 | Patch | — | Model Data: three new models (NOAA's AI GFS, Canada's GDPS, MET Norway's HARMONIE at 2.5 km) and 25 layers worked out from other layers (wet-bulb, humidex, frost and icy-surface risk, Beaufort force, lapse rates, pressure and temperature changes and more) | Model Data STRATA redesign (Nov) |
+| 5.52.001 | 2026-11-15 | Patch | 7c7a694 | Location Weather: rain splashing on the top card again (the warnings card when there is one), snow that settles along it, round its corners and now and then off its ends, and frost on the glass below freezing | Location Weather overhaul (Nov) |
 | 5.52.000 | 2026-11-15 | Update | 21c6708 | Model Data: the wide map grown to Alaska, Canada, Greenland, all of Scandinavia and North Africa; a region picker (the UK and Ireland, Europe, North Africa and North America, down to countries and regions); no descriptions under layer names; the radar's rain, sleet, snow and ice steered by what the airports report | Model Data STRATA redesign (Nov) |
 | 5.51.000 | 2026-11-15 | Update | 77627aa | Location Weather: the freezing level read at the ground, the hours and detailed forecast to the last day (Saturday), the radar beside the days and the detailed forecast moved up | Location Weather overhaul (Nov) |
 | 5.50.006 | 2026-11-15 | Patch | 8d3fa4e | Version tool: tags only the save that carries the version (a failed commit cannot pass its number to the one before) | Location Weather overhaul (Nov) |

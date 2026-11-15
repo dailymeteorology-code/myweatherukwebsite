@@ -295,6 +295,13 @@ VARIABLES = {
     'dust_aod':     dict(label='Saharan dust (optical depth)', unit='', group='Air quality', lo=0, hi=4, scale='sqrt'),
     'pm25':         dict(label='PM2.5 (fine particles)', unit='µg/m³', group='Air quality', lo=0, hi=400, scale='sqrt'),
     'pm10':         dict(label='PM10 (coarse particles)', unit='µg/m³', group='Air quality', lo=0, hi=600, scale='sqrt'),
+    # the new models' own fields (15 Nov 2026: GDPS, ARPEGE, AROME, HARMONIE)
+    'rain_total':   dict(label='Total rain', unit='mm', group='Precipitation', lo=0, hi=400, scale='sqrt'),
+    'frzr_total':   dict(label='Total freezing rain', unit='mm', group='Snow & ice', lo=0, hi=60, scale='sqrt'),
+    'icep_total':   dict(label='Total ice pellets', unit='mm', group='Snow & ice', lo=0, hi=60, scale='sqrt'),
+    'tt':           dict(label='Total totals index', unit='°C', group='Convection', lo=0, hi=75),
+    'showalter':    dict(label='Showalter index', unit='°C', group='Convection', lo=-15, hi=25),
+    'uv_index':     dict(label='UV index', unit='', group='Radiation & surface', lo=0, hi=16),
 }
 
 # accumulated-from-T+0 quantities and how they are built
@@ -1722,7 +1729,10 @@ class ICONEurope(ICON):
 
 
 from .mix import MixModel                                    # noqa: E402  (MyWeatherUK's UKV + ICON-EU blend)
-MODELS = {m.id: m for m in (UKV(), MOGlobal(), ECMWF(), AIFS(), GFS(), GEFSMean(), GEFSAerosol(), ICON(), ICONEurope(), MixModel())}
+from .models_more import DIFFERENCED_MORE, MODELS_MORE, SOURCES_MORE, VARIABLES_MORE   # noqa: E402  (AIGFS, GDPS, MEPS...: 15 Nov 2026)
+for _k, _v in VARIABLES_MORE.items():
+    VARIABLES.setdefault(_k, _v)
+MODELS = {m.id: m for m in (UKV(), MOGlobal(), ECMWF(), AIFS(), GFS(), GEFSMean(), GEFSAerosol(), ICON(), ICONEurope(), MixModel(), *MODELS_MORE)}
 # the snow risk as a conditions index (mdata/derived.py), for the UKV and ICON-EU (the Mix lists its own)
 UKV.variables = UKV.variables + ['snow_cond']
 ICON.variables = ICON.variables + ['snow_cond']
@@ -1738,6 +1748,7 @@ SOURCES = {
     'icon': 'DWD ICON-EU 0.0625° (6.5 km) — Source: Deutscher Wetterdienst (DWD open data, opendata.dwd.de)',
     'icon_europe': 'DWD ICON-EU 0.0625° (6.5 km), its whole area — Source: Deutscher Wetterdienst (DWD open data, opendata.dwd.de)',
     'mix': 'MWUK Mix: MyWeatherUK blend of the Met Office UKV 2 km (AWS) and DWD ICON-EU 6.5 km (Deutscher Wetterdienst), on the UKV grid',
+    **SOURCES_MORE,
 }
 # variables whose frames are differences of an accumulation between consecutive steps
 DIFFERENCED = {('ifs', 'precip_rate'), ('aifs', 'precip_rate'), ('ifs', 'sw_down'), ('aifs', 'sw_down'),
@@ -1746,6 +1757,7 @@ DIFFERENCED = {('ifs', 'precip_rate'), ('aifs', 'precip_rate'), ('ifs', 'sw_down
 # ICON-EU: its rates from its totals since T+0, its radiation and heat fluxes from their means since T+0
 DIFFERENCED |= {(m, v) for m in ('icon', 'icon_europe') for v in ('precip_rate', 'rain_rate', 'snow_rate', 'conv_rain', 'sw_down', 'sw_direct',
                                                                  'sw_diffuse', 'lw_net', 'olr', 'shf', 'lhf')}
+DIFFERENCED |= DIFFERENCED_MORE                             # MEPS: its rates from its totals
 # of those, the ones that are mm since the start, differenced into mm/h
 RATE_DIFF = {'precip_rate', 'snow_rate', 'rain_rate', 'conv_rain'}
 # running totals made in job.py from 6-hour buckets (the GEFS mean's APCP: 0-3, 0-6, 6-9, 6-12, ...)
@@ -1754,3 +1766,11 @@ BUCKET_CHAIN = {('gefs_mean', 'precip_total'), ('gefs_mean', 'snow_total')}
 SNOW_CHAIN = {('gfs', 'snow_total')}
 # copies of another variable in other units: snow_acc is the snowfall total as cm of snow at 10:1
 ALIASES = {'snow_acc': 'snow_total'}
+
+# layers made from other layers (mdata/recipes.py, 15 Nov 2026): registered here, and given to every
+# model whose own layers allow them (made in job.py from those layers' frames: no downloads)
+from .recipes import RECIPES, add_recipes                    # noqa: E402
+for _v, (_ins, _fn, _meta) in RECIPES.items():
+    if _meta and _v not in VARIABLES:
+        VARIABLES[_v] = _meta
+RECIPE_ADDED = add_recipes(MODELS.values())

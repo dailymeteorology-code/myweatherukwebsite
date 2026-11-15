@@ -99,6 +99,51 @@ def derived(model, run_s, var, steps, d, status):
     status.pop('_saved', None)
 
 
+def recipe(model, run_s, var, steps, d, status):
+    """A layer made from the model's other layers (mdata/recipes.py, 15 Nov 2026): its inputs first
+    (any already complete are reused; a recipe made from recipes makes those in turn), then each step
+    from their frames. An input h hours earlier needs that step in the run: without it, the step is
+    left out."""
+    import json
+    from .common import read_frame
+    from .recipes import RECIPES, inputs_of
+    run = _utc(run_s)
+    ins, fn, _ = RECIPES[var]
+    for v in dict.fromkeys(inputs_of(var)):
+        try:
+            done = json.loads((run_dir(model, run, v) / 'status.json').read_text()).get('state') == 'complete'
+        except Exception:
+            done = False
+        if not done:
+            main(model, run_s, v)
+    have = set(steps)
+    for h in steps:
+        if (d / f'{h}.bin').exists():
+            status['done'].append(h)
+            continue
+        args = []
+        for i in ins:
+            v, lag = (i, 0) if isinstance(i, str) else i
+            p = run_dir(model, run, v) / f'{h + lag}.bin'
+            if (h + lag) not in have or not p.exists():
+                args = None
+                break
+            args.append(read_frame(p)[0])
+        if args is None:
+            status['missing'].append(h)
+            continue
+        with np.errstate(all='ignore'):
+            a = np.asarray(fn(*args), np.float32)
+        vt = run + timedelta(hours=h)
+        write_frame(d / f'{h}.bin', a, VARIABLES[var], {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat(),
+                                                        'recipe': list(inputs_of(var))})
+        status['done'].append(h)
+        if time.time() - status.get('_saved', 0) >= 2.0:
+            status['_saved'] = time.time()
+            write_json(d / 'status.json', status)
+    status.pop('_saved', None)
+
+
 def peak(model, run_s, var, steps, d, status):
     """The strongest gust at each point from the start of the run to each step: a running maximum
     of the model's own gusts, so played through, the map fills in with the worst the run brings up
@@ -247,6 +292,12 @@ def main(model, run_s, var, first=None, threads=None):
     status = {'model': model, 'run': run.isoformat(), 'var': var, 'steps': steps, 'done': [], 'missing': [],
               'state': 'running', 'started': time.time()}
     write_json(d / 'status.json', status)
+    if var in getattr(M, '_recipes', ()):          # a layer made from the model's other layers (mdata/recipes.py)
+        recipe(model, run_s, var, steps, d, status)
+        status['state'] = 'complete'
+        status['seconds'] = round(time.time() - status['started'], 1)
+        write_json(d / 'status.json', status)
+        return
     made_here = var == 'ptype' and model in ('ukv', 'mo_global', 'aifs', 'mix')   # the Met Office models, AIFS and the Mix give rates, not a type
     own_wx = var == 'wx' and getattr(M, 'OWN_WX', False)                       # ICON-EU: from its own present weather
     mix_own = model == 'mix' and var == 'snow_cond'                             # the Mix blends its two models' own indices (mdata/mix.py)

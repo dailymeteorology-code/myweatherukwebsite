@@ -36,7 +36,7 @@ import LayerBrowser from '@/components/modeldata/LayerBrowser';
 import Timeline from '@/components/modeldata/Timeline';
 import { LAYER_DESC, POPULAR, probFamily, probLine, categoryOf } from '@/lib/modelLayers';
 import { withMorePlaces } from '@/lib/modelPlaces';
-import RegionPicker from '@/components/modeldata/RegionPicker';
+import RegionPicker, { gridBox } from '@/components/modeldata/RegionPicker';
 import { tweenFrame } from '@/lib/modelTween';
 import { GRIDS, gridOfModel, projection } from '@/lib/modelGrids';
 import { useAuth } from '@/lib/AuthContext';
@@ -48,7 +48,7 @@ import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES, SNOW_AMOUNT_LEVELS, cmText } from '@
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Screen', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix' };
+const SHORT_NAMES = { frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE' };
 /* who makes each model, its grid, and where the files come from (picker groups and the credit line) */
 const MODEL_INFO = {
   frost: ['MyWeatherUK', '2 km', 'MyWeatherUK’s own snow model'],
@@ -60,9 +60,16 @@ const MODEL_INFO = {
   icon: ['DWD', '6.5 km', 'Source: Deutscher Wetterdienst'], icon_europe: ['DWD', '6.5 km', 'Source: Deutscher Wetterdienst'],
   /* MWUK Mix: MyWeatherUK's blend of the UKV and ICON-EU on the UKV's 2 km grid (tools/modeldata/mdata/mix.py) */
   mix: ['MyWeatherUK', '2 km', 'MyWeatherUK blend of the Met Office UKV and DWD ICON-EU'],
+  /* 15 Nov 2026: NOAA's AI GFS, Canada's GDPS (tools/modeldata/mdata/models_more.py) */
+  aigfs: ['NOAA', '0.25°', 'NOAA NOMADS', 'NOAA'], gdps: ['ECCC', '15 km', 'Environment and Climate Change Canada', 'Canada'],
+  /* MET Norway's MEPS: HARMONIE-AROME at 2.5 km over the Nordic countries and the Baltic (read over OPeNDAP) */
+  meps: ['MET Norway', '2.5 km', 'MET Norway MEPS (HARMONIE-AROME)', 'MET Norway'],
 };
-/* where a model's frames are being fetched from, for the loading notices: DWD's own server for ICON */
-const fetchedFrom = (id) => (MODEL_INFO[id]?.[0] === 'DWD' ? 'DWD' : 'AWS');
+/* a regional model's own area (west, south, east, north), brought into view when it is picked while
+   the map is somewhere else: MEPS covers the Nordic countries and the Baltic only */
+const MODEL_AREA = { meps: [-4, 53, 38, 72] };
+/* where a model's frames are being fetched from, for the loading notices */
+const fetchedFrom = (id) => MODEL_INFO[id]?.[3] || (MODEL_INFO[id]?.[0] === 'DWD' ? 'DWD' : 'AWS');
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
 const compass = (deg) => COMPASS[Math.round(deg / 22.5) % 16];
 /* the viewer's settings, remembered in this browser between visits */
@@ -1992,6 +1999,8 @@ export default function ModelData() {
   const fmtPoint = (v, sk = scaleKey, meta = vmeta) => (!Number.isFinite(v) ? '—' : sk === 'wx' ? WX_NAMES[Math.round(v)] ?? '—'
     : sk === 'snow_risk' ? `${SNOW_RISK_NAMES[Math.round(v)] ?? '—'} risk of snow`
     : sk === 'snow_cond' ? `${['None', 'Very low', 'Low', 'Moderate', 'High', 'Very high'][Math.round(v)] ?? '—'} snow risk (conditions)`
+    : sk === 'frost_risk' || sk === 'ice_risk' ? `${['No', 'Low', 'Moderate', 'High'][Math.round(v)] ?? '—'} ${sk === 'frost_risk' ? 'frost' : 'ice'} risk`
+    : sk === 'beaufort' ? (Math.round(v) ? `Force ${Math.round(v)}` : 'Calm')
     : sk === 'ptype' || sk === 'radar_type' ? (() => { const t = radarTypeOf(v); return t ? `${RADAR_FAMILIES[t.family].name} · ${familyRate(t.family, t.rate).text}` : 'Dry'; })()
     : sk === 'wdir10' || sk === 'mwd' ? `from the ${compass(v)} · ${Math.round(v)}°` : fmtValue(v, meta?.unit));
 
@@ -2368,8 +2377,17 @@ export default function ModelData() {
     </button>
   );
   /* the models, grouped by who makes them: a picker on desktops, buttons on phones and tablets */
-  const modelGroups = (list) => ['MyWeatherUK', 'Met Office', 'ECMWF', 'DWD', 'NOAA'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
-  const chooseModel = (id) => (isProb ? (setEnsId(id), setEnsRunIso(null)) : (setModelId(id), setRunIso(null)));
+  const modelGroups = (list) => ['MyWeatherUK', 'Met Office', 'ECMWF', 'DWD', 'Météo-France', 'MET Norway', 'ECCC', 'NOAA'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
+  const chooseModel = (id) => {
+    if (isProb) { setEnsId(id); setEnsRunIso(null); return; }
+    setModelId(id); setRunIso(null);
+    /* a regional model picked while the map is elsewhere: its own area comes into view */
+    const area = MODEL_AREA[id];
+    if (area && gridOfModel(id) === gridName) {
+      const { box } = gridBox(area, gridName);
+      if (!view || view.cx < box[0] || view.cx > box[2] || view.cy < box[1] || view.cy > box[3]) fit(box);
+    }
+  };
   const modelText = (m) => `${SHORT_NAMES[m.id] || m.label} · ${MODEL_INFO[m.id]?.[1] || ''}`;
   const modelOptions = (list) => modelGroups(list).map(([g, ms]) => (
     <optgroup key={g} label={g} style={{ color: '#111' }}>

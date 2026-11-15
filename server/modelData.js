@@ -31,10 +31,11 @@ export const MODELDATA_DIR = DATA;
 const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg', 'night_lights.png', 'lines.json', 'cities.json', 'grid.json', 'roads.json', 'roads.bin']);
 /* DWD ICON-EU (15 Nov 2026) twice: 'icon' on the UKV's 2 km grid, 'icon_europe' on the wide one;
    both read the same DWD files (mdata/models.py ICON keeps each on D: once fetched) */
-const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer', 'frost', 'icon', 'icon_europe', 'mix']);
+const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer', 'frost', 'icon', 'icon_europe', 'mix',
+  'aigfs', 'gdps', 'meps']);             // 15 Nov 2026: NOAA AIGFS, ECCC GDPS, MET Norway MEPS (mdata/models_more.py)
 /* ICON's files are each the whole of Europe (~1 MB a field a step), so every layer of a run is
    ~5 GB: only the much-used layers are warmed for it; the rest are made when someone opens them */
-const WARM_FIRST_ONLY = new Set(['icon', 'icon_europe']);
+const WARM_FIRST_ONLY = new Set(['icon', 'icon_europe', 'aigfs', 'gdps', 'meps']);   // the new models too: the wide grid is bigger now
 /* MWUK Mix (mdata/mix.py) is made from the UKV's and ICON's own frames when someone opens it: never warmed, so it
    never adds downloads of its own in the background */
 const NO_WARM = new Set(['mix']);

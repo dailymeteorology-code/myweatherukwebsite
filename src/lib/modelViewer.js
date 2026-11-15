@@ -284,6 +284,51 @@ const SCALES = {
   mwd: { stops: [[0, '#000000', 0], [360, '#000000', 0]], ticks: [] },
   dust_aod: { stops: [[0.02, '#e9e1c8', 0], [0.05, '#ecd9a6', 120], [0.1, '#e6c27a', 165], [0.2, '#d99a4a', 200], [0.4, '#b8662e', 225], [0.8, '#7a3a1c', 240]], floor: 0.02, ticks: [0.05, 0.1, 0.2, 0.4, 0.8] },
   pm10: { stops: [[10, '#7cc8a0', 0], [20, '#a6cf3e', 140], [40, '#efd23a', 180], [60, '#f08b2c', 205], [100, '#dc3a3a', 225], [180, '#a52284', 240]], floor: 10, ticks: [20, 40, 60, 100, 180] },
+  /* the new models' own fields (15 Nov 2026: GDPS, ARPEGE, AROME, HARMONIE) */
+  rain_total: { stops: TOTAL, floor: 1, discrete: true, ticks: [1, 2, 5, 10, 15, 20, 30, 50, 75, 100], contours: [5, 10, 20, 30, 50, 100], label: true },
+  frzr_total: { stops: [[0.2, '#FFE2C4', 150], [1, '#FFB066', 195], [3, '#F77D1D', 215], [6, '#C95209', 230], [12, '#883506', 242], [25, '#4F1F04', 250]],
+    floor: 0.2, discrete: true, ticks: [0.2, 1, 3, 6, 12, 25] },
+  icep_total: { stops: [[0.2, '#FFE2C4', 150], [1, '#FFB066', 195], [3, '#F77D1D', 215], [6, '#C95209', 230], [12, '#883506', 242], [25, '#4F1F04', 250]],
+    floor: 0.2, discrete: true, ticks: [0.2, 1, 3, 6, 12, 25] },
+  tt: { stops: [[40, '#cfe8f7', 0], [44, '#9fd3ef', 150], [48, '#efd23a', 200], [52, '#f08b2c', 225], [56, '#dc3a3a', 240], [60, '#a52284', 250]],
+    floor: 40, discrete: true, ticks: [40, 44, 48, 52, 56, 60] },
+  showalter: { stops: [[-9, '#6a1b9a', 245], [-6, '#d62828', 235], [-3, '#f4a261', 215], [0, '#ffd166', 185], [3, '#a9d8f7', 70], [6, '#2f6fd4', 0]], ticks: [-9, -6, -3, 0, 3] },
+  uv_index: { stops: [[0.5, '#4eb400', 120], [2.5, '#a0ce00', 170], [3, '#f7e400', 195], [5.5, '#f8b600', 205], [6, '#f88700', 215], [7.5, '#f85900', 222],
+    [8, '#e82c0e', 228], [10.5, '#d8001d', 236], [11, '#b54cff', 242], [14, '#998cff', 248]], floor: 0.5, ticks: [1, 3, 6, 8, 11, 14] },
+  /* layers made from other layers (tools/modeldata/mdata/recipes.py, 15 Nov 2026) */
+  tw2: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
+  humidex: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
+  apparent: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
+  td850: { stops: TEMP.map(([v, c, a]) => [v * 0.8 - 4, c, a]), ticks: [-20, -12, -6, -2, 0, 4, 8, 12, 16], zero: true },
+  dpd2: { stops: [[0, '#2f6fd4', 205], [2, '#5aa7e8', 190], [5, '#a9d8f7', 160], [10, '#efd23a', 190], [15, '#f08b2c', 215], [25, '#dc3a3a', 235]], ticks: [0, 2, 5, 10, 15, 20, 25] },
+  t2_change24: { stops: [[-15, '#1d3fa8', 240], [-8, '#2f6fd4', 222], [-3, '#a9d8f7', 175], [-0.5, '#eef4fb', 0], [0.5, '#fbeee4', 0], [3, '#f9c79a', 175],
+    [8, '#e2523a', 222], [15, '#a52284', 240]], ticks: [-15, -8, -3, 0, 3, 8, 15] },
+  inversion: { stops: [[-1, '#ffffff', 0], [0, '#fde68a', 110], [3, '#fbbf24', 180], [6, '#f97316', 212], [10, '#dc2626', 232], [15, '#7f1d1d', 245]], ticks: [0, 3, 6, 10, 15] },
+  lcl: { stops: [[0, '#5f6b7d', 225], [300, '#8592a4', 205], [600, '#b3becb', 175], [1000, '#dde4ec', 120], [1500, '#eef2f6', 50], [2500, '#ffffff', 0]],
+    ticks: [0, 300, 600, 1000, 1500, 2500] },
+  precip_6h: { stops: TOTAL, floor: 1, discrete: true, ticks: [1, 2, 5, 10, 15, 20, 30, 50, 75, 100] },
+  precip_24h: { stops: TOTAL, floor: 1, discrete: true, ticks: [1, 2, 5, 10, 15, 20, 30, 50, 75, 100] },
+  frost_risk: { stops: [[1, '#a9d8f7', 195], [2, '#5aa7e8', 222], [3, '#7b5cd6', 240]], floor: 1, discrete: true,
+    keySteps: [1, 2, 3], ticks: [1, 2, 3], keyLabel: (v) => ['', 'Low', 'Moderate', 'High'][Math.round(v)] },
+  ice_risk: { stops: [[1, '#cbd5e1', 195], [2, '#f59e0b', 225], [3, '#dc2626', 240]], floor: 1, discrete: true,
+    keySteps: [1, 2, 3], ticks: [1, 2, 3], keyLabel: (v) => ['', 'Low', 'Moderate', 'High'][Math.round(v)] },
+  beaufort: { stops: [[1, '#e0f2fe', 60], [2, '#bae6fd', 110], [3, '#7dd3fc', 150], [4, '#38bdf8', 175], [5, '#34d399', 190], [6, '#a3e635', 205],
+    [7, '#facc15', 215], [8, '#fb923c', 225], [9, '#f97316', 232], [10, '#ef4444', 238], [11, '#be123c', 244], [12, '#7e22ce', 250]], floor: 1, discrete: true,
+    keySteps: [...Array(12).keys()].map((k) => k + 1), ticks: [...Array(12).keys()].map((k) => k + 1),
+    keyLabel: (v) => ['Calm', 'F1 light air', 'F2 light breeze', 'F3 gentle', 'F4 moderate', 'F5 fresh', 'F6 strong', 'F7 near gale', 'F8 gale', 'F9 severe gale',
+      'F10 storm', 'F11 violent storm', 'F12 hurricane'][Math.round(v)] },
+  sea_effect: { stops: [[10, '#e0f2fe', 0], [13, '#a5f3fc', 160], [16, '#67e8f9', 195], [20, '#a78bfa', 218], [25, '#7c3aed', 235], [30, '#4c1d95', 246]],
+    floor: 10, ticks: [13, 16, 20, 25, 30] },
+  wind_power: { stops: [[50, '#e0f2fe', 0], [200, '#93c5fd', 150], [500, '#3b82f6', 192], [1000, '#10b981', 212], [2000, '#f59e0b', 230], [4000, '#dc2626', 245]],
+    floor: 50, ticks: [200, 500, 1000, 2000, 4000] },
+  mslp_change24: { stops: [[-30, '#7f1d1d', 245], [-15, '#dc2626', 230], [-5, '#fca5a5', 175], [-1, '#fff', 0], [1, '#fff', 0], [5, '#93c5fd', 175],
+    [15, '#2563eb', 230], [30, '#1e3a8a', 245]], ticks: [-30, -15, -5, 0, 5, 15, 30] },
+  mslp_tend3: { stops: [[-10, '#7f1d1d', 245], [-5, '#dc2626', 230], [-2, '#fca5a5', 175], [-0.4, '#fff', 0], [0.4, '#fff', 0], [2, '#93c5fd', 175],
+    [5, '#2563eb', 230], [10, '#1e3a8a', 245]], ticks: [-10, -5, -2, 0, 2, 5, 10] },
+  thetae850: { stops: [[270, '#3b2a8f', 222], [280, '#3d5fd0', 212], [290, '#3d93d8', 202], [300, '#9fdfc6', 195], [310, '#e4e581', 205], [320, '#f19a48', 218],
+    [330, '#e6683a', 230], [340, '#d03b34', 240], [350, '#a3163c', 246]], ticks: [280, 290, 300, 310, 320, 330, 340] },
+  lapse85: { stops: [[3, '#2f6fd4', 0], [5, '#a9d8f7', 140], [6, '#efd23a', 192], [7, '#f08b2c', 216], [8, '#dc3a3a', 235], [9.5, '#a52284', 246]], ticks: [5, 6, 7, 8, 9.5] },
+  lapse75: { stops: [[3, '#2f6fd4', 0], [5, '#a9d8f7', 140], [6, '#efd23a', 192], [7, '#f08b2c', 216], [8, '#dc3a3a', 235], [9.5, '#a52284', 246]], ticks: [5, 6, 7, 8, 9.5] },
   aod: { stops: [[0.05, '#e9e1c8', 0], [0.1, '#e9d9a8', 110], [0.2, '#e6c27a', 160], [0.4, '#d99a4a', 200], [0.7, '#b8662e', 225], [1.2, '#7a3a1c', 240]], floor: 0.05, ticks: [0.1, 0.2, 0.4, 0.7, 1.2] },
   pm25: { stops: [[5, '#7cc8a0', 0], [10, '#a6cf3e', 140], [20, '#efd23a', 180], [35, '#f08b2c', 205], [55, '#dc3a3a', 225], [100, '#a52284', 240]], floor: 5, ticks: [10, 20, 35, 55, 100] },
   /* added 26 Oct 2026 with the further fields of each model */
@@ -315,6 +360,11 @@ const SCALES = {
     ticks: [0, 150, 300, 600, 1200, 2500] },
   conv_top: { stops: [[1000, '#cfe3f7', 0], [2000, '#9fd3ef', 140], [4000, '#5aa7e8', 180], [6000, '#efd23a', 205], [8000, '#f08b2c', 222], [10000, '#dc3a3a', 235], [12000, '#a52284', 245]],
     ticks: [2000, 4000, 6000, 8000, 10000, 12000] },
+  /* MET Norway MEPS (15 Nov 2026): the tops of all cloud, and its own lightning index */
+  cloud_top: { stops: [[0, '#ffffff', 0], [1000, '#e3e6ea', 150], [2500, '#b8c4d6', 175], [4000, '#8aa0c0', 195], [6000, '#5a7aa8', 210], [8000, '#3d5fd0', 225], [10000, '#a52284', 240], [12000, '#dc3a3a', 250]],
+    ticks: [1000, 2500, 4000, 6000, 8000, 10000, 12000] },
+  lightning_index: { stops: [[0.5, '#fde68a', 150], [2, '#fbbf24', 200], [5, '#f97316', 225], [10, '#dc2626', 238], [20, '#a21caf', 248], [40, '#ffffff', 255]], floor: 0.5,
+    ticks: [0.5, 2, 5, 10, 20, 40] },
   thermal_top: { stops: [[100, '#2a3a5c', 0], [300, '#3d5fd0', 150], [600, '#3d93d8', 170], [1000, '#6cc04a', 185], [1500, '#efd23a', 200], [2200, '#f08b2c', 215], [3000, '#dc3a3a', 230]],
     ticks: [300, 600, 1000, 1500, 2200, 3000] },
   snow_line: { stops: HEIGHT, ticks: [0, 300, 600, 1000, 1500, 2200, 3000, 4000] },
@@ -668,7 +718,7 @@ function colourTable(frame, varKey) {
   }
   return out;
 }
-const CODES = new Set(['wx', 'ptype', 'radar_type', 'snow_risk', 'snow_cond']);                     // a code between two codes means nothing: never interpolated
+const CODES = new Set(['wx', 'ptype', 'radar_type', 'snow_risk', 'snow_cond', 'frost_risk', 'ice_risk', 'beaufort']);   // a code between two codes means nothing: never interpolated
 /* ...except the precipitation types' kind-and-strength bytes, which the graphics card smooths within
    each kind (lib/modelGL typed) when Smooth is on */
 const TYPED = new Set(['ptype', 'radar_type']);
@@ -1851,6 +1901,8 @@ function gridLabel(v, varKey, unit) {
   if (varKey === 'ptype' || varKey === 'radar_type') { const t = radarTypeOf(v); return t ? RADAR_FAMILIES[t.family].short : null; }
   if (varKey === 'snow_risk') return v >= 1 ? SNOW_RISK_LEVELS[Math.min(4, Math.round(v)) - 1].short : null;
   if (varKey === 'snow_cond') return v >= 1 ? ['', 'V low', 'Low', 'Mod', 'High', 'V high'][Math.min(5, Math.round(v))] : null;
+  if (varKey === 'frost_risk' || varKey === 'ice_risk') return v >= 1 ? ['', 'Low', 'Mod', 'High'][Math.min(3, Math.round(v))] : null;
+  if (varKey === 'beaufort') return v >= 1 ? `F${Math.round(v)}` : null;
   if (varKey === 'mwd' || varKey === 'wdir10') return ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(v / 22.5) % 16];
   if (sc.floor != null && v < sc.floor) return null;
   if (unit === '°C') return `${Math.round(v)}°`;
