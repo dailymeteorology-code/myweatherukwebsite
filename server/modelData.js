@@ -374,6 +374,26 @@ export function mountModelData(app) {
   refreshLive('sat');
   setInterval(() => refreshLive('sat'), 3 * 60 * 1000).unref();    // satellite imagery
 
+  /* Long range (15 Nov 2026): the stratospheric polar vortex and the MJO (mdata/longrange.py), made
+     again every 6 hours; what does not change (past days, a GEFS run already read) is kept, not fetched */
+  let longBusy = false;
+  const refreshLong = () => {
+    if (longBusy) return;
+    longBusy = true;
+    python(['mdata.longrange'], (code, err) => {
+      longBusy = false;
+      if (code) console.warn(`[modeldata] long range failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
+    }, { MDATA_GRID: 'eu', MDATA_LANE: 'background' });
+  };
+  setTimeout(refreshLong, 90 * 1000).unref();
+  setInterval(refreshLong, 6 * 3600 * 1000).unref();
+  app.get('/api/modeldata/longrange', (req, res) => {
+    const f = path.join(DATA, 'longrange.json');
+    if (!fs.existsSync(f)) { refreshLong(); return res.status(503).json({ error: 'the long-range charts are being made, try again in a few minutes' }); }
+    res.set('Cache-Control', 'no-cache');
+    res.sendFile(f);
+  });
+
   app.get('/api/modeldata/catalog', (req, res) => {
     const f = path.join(DATA, 'catalog.json');
     if (!fs.existsSync(f)) return res.status(503).json({ error: 'catalogue is being built, try again in a minute' });

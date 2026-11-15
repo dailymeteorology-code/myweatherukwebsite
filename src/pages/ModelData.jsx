@@ -37,6 +37,7 @@ import Timeline from '@/components/modeldata/Timeline';
 import { LAYER_DESC, POPULAR, probFamily, probLine, categoryOf } from '@/lib/modelLayers';
 import { withMorePlaces } from '@/lib/modelPlaces';
 import RegionPicker, { gridBox } from '@/components/modeldata/RegionPicker';
+import LongRange from '@/components/modeldata/LongRange';
 import { tweenFrame } from '@/lib/modelTween';
 import { GRIDS, gridOfModel, projection } from '@/lib/modelGrids';
 import { useAuth } from '@/lib/AuthContext';
@@ -79,7 +80,7 @@ const compass = (deg) => COMPASS[Math.round(deg / 22.5) % 16];
 /* the viewer's settings, remembered in this browser between visits */
 const PREFS_KEY = 'md-prefs-v1';
 const readPrefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; } };
-const MODES = ['forecast', 'prob', 'live', 'observed'];
+const MODES = ['forecast', 'prob', 'live', 'observed', 'long'];
 const OBS_PANEL_W = 320;                                    // the observed side panel, CSS px
 /* the four views: [key, name, what it is] (the phone's view menu says what each one is for) */
 const MODE_INFO = [
@@ -87,8 +88,9 @@ const MODE_INFO = [
   ['prob', 'Chances', 'The chance of rain, wind, frost and more, from ensembles'],
   ['live', 'Live', 'Radar, satellite, lightning and the weather now'],
   ['observed', 'Observed', 'Each day’s highs, lows and totals, kept day by day'],
+  ['long', 'Long range', 'The polar vortex and the MJO, weeks ahead'],
 ];
-const MODE_SHORT = { forecast: 'Forecast', prob: 'Chances', live: 'Live', observed: 'Observed' };
+const MODE_SHORT = { forecast: 'Forecast', prob: 'Chances', live: 'Live', observed: 'Observed', long: 'Long range' };
 /* playback speeds, in words (ms per step) */
 const SPEEDS = [[2000, 'Very slow'], [1300, 'Slower'], [900, 'Slow'], [650, 'Steady'], [450, 'Normal'], [300, 'Fast'], [200, 'Faster'], [120, 'Fastest']];
 const londonToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
@@ -628,6 +630,7 @@ export default function ModelData() {
   const isProb = mode === 'prob';
   const isLive = mode === 'live';
   const isObs = mode === 'observed';
+  const isLong = mode === 'long';          // Long range: the polar vortex and the MJO, as charts over the map (components/modeldata/LongRange)
   const obsItem = OBS[obsKey];
   const [liveKey, setLiveKey] = useState(LIVE[prefs.liveKey] ? prefs.liveKey : 'radar');
   const [liveCat, setLiveCat] = useState(null);
@@ -694,6 +697,7 @@ export default function ModelData() {
   useEffect(() => () => setTone('dark'), []);
   const [frameKey, setFrameKey] = useState(FRAMES[prefs.frameKey] ? prefs.frameKey : 'screen');
   const [view, setView] = useState(null);
+  const [fitAfter, setFitAfter] = useState(null);
   const [interacting, setInteracting] = useState(false);        // the map is being dragged or zoomed
   const interactingRef = useRef(false);
   const [size, setSize] = useState(0);
@@ -1285,6 +1289,11 @@ export default function ModelData() {
     setView({ cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 - (tight ? 0 : (R.h * 0.02) / s), s });
   }, [windowRects]);
   useEffect(() => { if (!view && size) fit(REGIONS.uk.box); }, [size, view, fit]);
+  useEffect(() => {
+    if (!fitAfter || isLong || gridName !== gridOfModel(modelId)) return;
+    fit(gridBox(fitAfter, gridName).box);
+    setFitAfter(null);
+  }, [fitAfter, isLong, gridName, modelId, fit]);
   /* a new frame shape (or the side panel opening) keeps the same area in view */
   const lastRect = useRef(null);
   useEffect(() => {
@@ -2028,6 +2037,7 @@ export default function ModelData() {
     if (name === 'mode') setModeOpen(true);
     if (name === 'shape') setShapeOpen(true);
   };
+  const showVortex = () => { setModeTo('forecast'); setModelId('gfs'); setRunIso(null); setVarKey('u10hpa'); setFitAfter([-180, 58, 180, 90]); };
   const setModeTo = (m) => { setMode(m); setVarOpen(false); setModeOpen(false); if (m === 'observed') setShowStar(true); };
   const layerLabel = isObs ? obsItem.label : isLive ? liveItem.label : isProb ? preset.label : vmeta?.label || 'Choose a layer';
   const liveTime = run ? new Date(run.run).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) : null;
@@ -2796,15 +2806,15 @@ export default function ModelData() {
               {cat ? (
                 <>
                   {modeSeg}
-                  {isObs
+                  {!isLong && (isObs
                     ? statusField('Archive', chipSub)
                     : isLive
                     ? statusField('Updated', <><span style={{ width: 8, height: 8, borderRadius: 99, background: '#ff4d4f', boxShadow: '0 0 8px #ff4d4f', flexShrink: 0 }} />{liveTime ? `Latest ${liveTime}` : 'Starting…'}</>)
                     : isProb
                     ? modelField(cat.ensembles, ensId)
-                    : modelField(cat.models, modelId)}
-                  {runField}
-                  {varButton}
+                    : modelField(cat.models, modelId))}
+                  {!isLong && runField}
+                  {!isLong && varButton}
                 </>
               ) : (
                 <span style={{ padding: '6px 10px', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', color: err ? '#fca5a5' : T.ink2 }}>
@@ -2813,14 +2823,14 @@ export default function ModelData() {
               )}
             </div>
             <div style={{ flex: 1 }} />
-            <div style={{ ...T.capsule, padding: 7, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{compareBtn}{layersBtn}</div>
+            {!isLong && <div style={{ ...T.capsule, padding: 7, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{compareBtn}{layersBtn}</div>}
           </>
         ) : (
           <div style={{ ...T.capsule, padding: phone ? 6 : 5, display: 'flex', alignItems: 'center', gap: phone ? 8 : 6, pointerEvents: 'auto', flex: 1, minWidth: 0 }}>
             {phone ? modeBtn : modeSeg}
-            {dataChip}
-            {!phone && compareBtn}
-            {!phone && layersBtn}
+            {!isLong && dataChip}
+            {!phone && !isLong && compareBtn}
+            {!phone && !isLong && layersBtn}
           </div>
         )}
         {probBar}
@@ -2842,7 +2852,7 @@ export default function ModelData() {
         + '.md-thr{height:28px;cursor:pointer}.md-thr::-webkit-slider-thumb{width:22px;height:22px}.md-thr::-moz-range-thumb{width:22px;height:22px}'}</style>
 
       {/* desktop: zoom buttons and regions (phones and tablets pinch, and have Regions on the bottom bar) */}
-      {layout === 'desktop' && (
+      {layout === 'desktop' && !isLong && (
         <div style={{ ...T.capsule, position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', padding: 5, display: 'flex', flexDirection: 'column', gap: 5 }}>
           <IconBtn title="Zoom in (+)" onClick={() => zoomBy(1.35)}><ZoomIn size={15} /></IconBtn>
           <IconBtn title="Zoom out (−)" onClick={() => zoomBy(1 / 1.35)}><ZoomOut size={15} /></IconBtn>
@@ -2888,20 +2898,23 @@ export default function ModelData() {
           <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />{liveProd.times?.length ? 'Loading the latest images…' : 'The first images are being fetched…'}
         </div>
       )}
-      {!frame && key && (
+      {!frame && key && !isLong && (
         <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', whiteSpace: 'nowrap' }}>
           <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />
           {!status ? 'Starting…' : `Fetching from ${fetchedFrom(model?.id)} · ${loadedCount}/${steps.length}`}
         </div>
       )}
 
-      {!exp.open && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || obsPanel || modeOpen || shapeOpen)) && pinCard}
+      {!exp.open && !isLong && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || obsPanel || modeOpen || shapeOpen)) && pinCard}
+
+      {/* Long range: the polar vortex and the MJO, over the map */}
+      {isLong && <LongRange t={T} phone={phone} onMap={showVortex} style={{ position: 'absolute', left: 10, right: 10, top: topH, bottom: phone ? 16 : 10, zIndex: 5 }} />}
 
       {/* desktop: the export card above the timeline */}
       {layout === 'desktop' && exp.open && card('Download', null, () => setExp((e) => ({ ...e, open: false })), exportBody, { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
 
       {/* bottom bar */}
-      {layout === 'desktop' ? (
+      {isLong ? null : layout === 'desktop' ? (
         <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'min(980px, calc(100% - 20px))', padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
           <IconBtn title="Previous step (←)" onClick={stepBack}><ChevronLeft size={16} /></IconBtn>
           {playBtn}
