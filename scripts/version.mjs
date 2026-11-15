@@ -9,7 +9,7 @@
      node scripts/version.mjs tag                        after committing: tag that commit with the version
 
    Every chat that saves the site bumps the version in the same commit, then tags it and pushes the tag
-   (git push origin main --tags). The site shows the version in the corner of every page (src/App.jsx,
+   (git push origin main <version>: never --tags, the release tags are moved by the cloud runs). The site shows the version in the corner of every page (src/App.jsx,
    from version.json at build time: vite.config.js). */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -70,7 +70,7 @@ if (!cmd) {
   const ver = show(now);
   try { git('rev-parse', '-q', '--verify', `refs/tags/${ver}`); console.error(`${ver} is already tagged`); process.exit(1); } catch { /* not yet: tag it */ }
   git('tag', ver);
-  console.log(`${ver} tagged on ${git('rev-parse', '--short', 'HEAD')}: git push origin main --tags`);
+  console.log(`${ver} tagged on ${git('rev-parse', '--short', 'HEAD')}: git push origin main ${ver}`);
 } else {
   console.error('node scripts/version.mjs [minor "What changed" | patch "What changed" | tag]');
   process.exit(2);

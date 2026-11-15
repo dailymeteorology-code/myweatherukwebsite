@@ -13,12 +13,13 @@ are tagged in git with their number, so `git checkout 5.50.003` opens that versi
 
 Each save bumps the number in the same commit: `node scripts/version.mjs minor "What changed"` for a big-ish
 update, `node scripts/version.mjs patch "What changed"` for a patch, then after committing
-`node scripts/version.mjs tag` and `git push origin main --tags`. The current version is in `version.json`;
+`node scripts/version.mjs tag` and `git push origin main 5.##.###` (that tag only). The current version is in `version.json`;
 the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.50.004 | 2026-11-15 | Patch | — | Site version numbers: 5.##.### in the corner of every page, every save of the site numbered (VERSIONS.md) | Location Weather overhaul (Nov) |
+| 5.50.005 | 2026-11-15 | Patch | — | Version tool: push only the new version's tag (the cloud runs' release tags stay put) | Location Weather overhaul (Nov) |
+| 5.50.004 | 2026-11-15 | Patch | cb861e2 | Site version numbers: 5.##.### in the corner of every page, every save of the site numbered (VERSIONS.md) | Location Weather overhaul (Nov) |
 | 5.50.003 | 2026-11-15 | Patch | 5a070f7 | Model Data: coded layers drawn in their own class; the timeline's arrow keys take one step | Model Data STRATA redesign (Nov) |
 | 5.50.002 | 2026-11-15 | Patch | 190807b | Location Weather cubes: read again a frame caught half-written; the Mix waits for its UKV run's amounts | Location Weather overhaul (Nov) |
 | 5.50.001 | 2026-11-15 | Patch | 7dc0e35 | Model Data: load count, satellite detail, more places, cm/h and in/h, a roomy phone layout | Model Data STRATA redesign (Nov) |
