@@ -1679,6 +1679,7 @@ export default function ModelData() {
   useEffect(() => {
     const onKey = (e) => {
       const tag = e.target?.tagName;
+      if (e.defaultPrevented) return;                               // already handled (the timeline's own keys)
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag) || e.target?.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
       const { n, zoomBy: z } = keyRef.current;
       if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {

@@ -653,9 +653,13 @@ export function frameCanvas(frame, varKey, cache) {
 /* the colours along a frame's bytes, for lib/modelGL: every step of the scale at its real value */
 function colourTable(frame, varKey) {
   const sc = scaleFor(varKey), t = frame.table, out = new Uint8Array(lutSize * 4);
+  /* a coded layer's class is its own byte, never a value between two: the graphics card reads byte q
+     at entry round(q x 2047/254), which sits a hair below q, and blending there drew every class
+     (snow conditions, TCM FROST's snow risk, the weather type) as the class below it */
+  const exact = CODES.has(varKey) && !TYPED.has(varKey);
   for (let i = 0; i < lutSize; i++) {
     const b = (i / (lutSize - 1)) * 254, k = Math.min(253, Math.floor(b));
-    const c = colourAt(sc, t[k] + (t[k + 1] - t[k]) * (b - k));
+    const c = colourAt(sc, exact ? t[Math.round(b)] : t[k] + (t[k + 1] - t[k]) * (b - k));
     if (c) out.set(c, i * 4);
   }
   return out;

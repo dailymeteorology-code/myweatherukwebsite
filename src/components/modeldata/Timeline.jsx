@@ -74,10 +74,11 @@ export default function Timeline({ times, idx, onPick, loaded, label }) {
       onPointerLeave={() => { if (!drag) setTip(null); }} role="slider" aria-label="Time" aria-valuemin={0} aria-valuemax={times.length - 1} aria-valuenow={idx}
       aria-valuetext={label(now)} tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === 'ArrowLeft') { e.preventDefault(); onPick(Math.max(0, idx - 1)); }
-        if (e.key === 'ArrowRight') { e.preventDefault(); onPick(Math.min(times.length - 1, idx + 1)); }
-        if (e.key === 'Home') { e.preventDefault(); onPick(0); }
-        if (e.key === 'End') { e.preventDefault(); onPick(times.length - 1); }
+        // handled here only: the page's own arrow keys would otherwise take a second step
+        const go = { ArrowLeft: Math.max(0, idx - 1), ArrowRight: Math.min(times.length - 1, idx + 1), Home: 0, End: times.length - 1 }[e.key];
+        if (go == null) return;
+        e.preventDefault(); e.stopPropagation();
+        onPick(go);
       }}>
       {segs.map((s, k) => {
         const left = pos(s.a), w = pos(s.b) - left, on = now >= s.a && (now < s.b || (k === segs.length - 1 && now <= s.b));
