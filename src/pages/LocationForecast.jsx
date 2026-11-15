@@ -7,8 +7,10 @@
      • the hourly strip to T+120 (hourly to T+54, then three-hourly, as UKV publishes)
      • precipitation, when there is any: the next hour minute by minute (the Met Office radar
        carried forward by the rain's own motion), or the next 12 hours from UKV
-     • rain splashing on the top row of cards while it rains (CardRain in SkyBackdrop.jsx), and
-       drops on every card's glass, as on a window (WindowRain)
+     • rain splashing on the top row of cards while it rains (CardRain in SkyBackdrop.jsx; the warnings
+       card when there is one), snow settling on them while it snows (CardSnow), frost on the glass
+       below freezing, more of it and on more cards the colder it is (CardFrost), and drops on every
+       card's glass, as on a window (WindowRain)
      • the days, with their ranges on one shared scale
      • the Met Office radar for the past three hours and UKV rain for the next hours
      • fourteen detail tiles and ten interactive charts
@@ -29,7 +31,7 @@ import LocationWarnings, { warningIcon, warningName, warningSpan, severityFill, 
 import LocationRadar from '@/components/location/LocationRadar';
 import LocationTiles from '@/components/location/LocationTiles';
 import LocationCharts, { tempColour } from '@/components/location/LocationCharts';
-import SkyBackdrop, { CardRain, WindowRain, skyDarkness } from '@/components/location/SkyBackdrop';
+import SkyBackdrop, { CardFrost, CardRain, CardSnow, WindowRain, skyDarkness } from '@/components/location/SkyBackdrop';
 import SkyPreview, { PREVIEW_START, previewSky } from '@/components/location/SkyPreview';
 import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
 import WxIcon from '@/components/location/WxIcon';
@@ -794,10 +796,13 @@ export default function LocationForecast() {
 
   /* the sky: the weather now at the place, or a mild default before a search */
   const sky = useMemo(() => {
-    if (preview) return previewSky(preview);
+    if (preview) { const p = previewSky(preview); return { ...p, snow: ['snow', 'heavySnow', 'snowShowers', 'blizzard'].includes(p.cond) ? Math.max(0.3, p.rate) : ['sleet', 'mix'].includes(p.cond) ? p.rate * 0.5 : 0 }; }
     if (model) {
       const n = model.now;
-      return { cond: n.cond, sun: n.sun, morning: hourOf(Date.now()) < 12, wind: n.wind ?? 8, wdir: n.wdir ?? 240, rate: n.span > 0 ? (n.precip ?? 0) / n.span : n.precipRate ?? 0, cloud: n.tcc ?? 60 };
+      const rate = n.span > 0 ? (n.precip ?? 0) / n.span : n.precipRate ?? 0;
+      /* the snow falling now (mm/h of water): the radar's rate times what of it is snow */
+      const snow = n.span > 0 && n.snow != null ? n.snow / n.span : n.snowRate ?? 0;
+      return { cond: n.cond, sun: n.sun, morning: hourOf(Date.now()) < 12, wind: n.wind ?? 8, wdir: n.wdir ?? 240, rate, snow, cloud: n.tcc ?? 60 };
     }
     const sun = sunElevation(Date.now(), 52.5, -1.5);
     return { cond: 'partly', sun, morning: hourOf(Date.now()) < 12, wind: 10, wdir: 240, rate: 0, cloud: 45 };
@@ -817,6 +822,9 @@ export default function LocationForecast() {
     <div className="lw-page" data-sky={dark < 0.3 ? 'bright' : dark < 0.55 ? 'mid' : 'dark'}>
       <SkyBackdrop {...sky} />
       {model && !hidePage && <CardRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
+      {model && !hidePage && <CardSnow cond={sky.cond} rate={sky.snow} wind={sky.wind} wdir={sky.wdir} />}
+      {/* frost on the glass below freezing: the temperature now (the sky preview's snowy skies at -3 C) */}
+      {model && !hidePage && <CardFrost temp={preview ? (sky.snow > 0 ? -3 : null) : model.now.t2} />}
       {model && !hidePage && <WindowRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
 
       {outside && (
@@ -893,7 +901,8 @@ export default function LocationForecast() {
             </header>
 
             {warnings.length > 0 && (
-              <div className="lw-glass lw-card" style={{ marginBottom: 14 }}>
+              /* lw-warn-card: the top card while there is a warning, the one the rain and snow land on */
+              <div className="lw-glass lw-card lw-warn-card" style={{ marginBottom: 14 }}>
                 <div className="lw-title"><AlertTriangle />Weather warnings<span className="lw-title-aside">{warnings.length === 1 ? '1 for this place' : `${warnings.length} for this place`}</span></div>
                 <LocationWarnings warnings={warnings} openId={openWarn} onToggle={setOpenWarn} />
               </div>

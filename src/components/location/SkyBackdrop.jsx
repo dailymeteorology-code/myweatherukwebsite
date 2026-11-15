@@ -639,15 +639,29 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
   );
 }
 
+/* ── the top cards: where the rain bounces and the snow settles ─────────────────────────────────
+   The page's first row of glass cards: the weather warnings card when the place has a warning in force
+   or coming (it sits above everything else), otherwise the hourly forecast and the first row of tiles
+   beside it on a wide screen, the hourly forecast alone on a phone. Whichever of these share the
+   highest top. (The rain stopped on 15 Nov 2026 when the page's layout changed under the selector it
+   used; these selectors follow the layout's own classes, LocationForecast.jsx and location.css.) */
+export const TOP_CARDS = '.lw-wrap > .lw-warn-card, .lw-layout .lw-slot > .lw-glass, .lw-layout .lw-tiles > .lw-glass';
+function topCards(selector) {
+  const all = [...document.querySelectorAll(selector)].filter((el) => el.offsetParent !== null);
+  if (!all.length) return [];
+  const tops = all.map((el) => el.getBoundingClientRect().top);
+  const min = Math.min(...tops);
+  return all.filter((_, i) => tops[i] - min < 6);
+}
+
 /* ── rain on the cards ──────────────────────────────────────────────────────────
-   While it rains, drops land on the top edge of the page's first row of glass cards and bounce
-   off it in a few fine beads, the way they do on the iPhone's weather cards: the three cards
-   side by side on a wide screen, the one card on a phone (whichever cards share the highest top).
-   One fixed canvas over the page draws them at the cards' edges as the page scrolls, with the
-   row found again every second, so a change of layout is followed. Nothing is drawn for snow,
-   or for readers who ask their system for reduced motion. */
-const SPLASH_CONDS = new Set(['rain', 'heavyRain', 'showers', 'heavyShowers', 'lightRain', 'drizzle', 'thunder', 'thunderShowers', 'hail', 'sleet', 'torrentialRain', 'freezingRain']);
-export function CardRain({ cond, rate = 0, wind = 0, wdir = 240, selector = '.lw-grid .lw-col > .lw-glass, .lw-grid .lw-tiles > .lw-glass' }) {
+   While it rains, drops land on the top edge of the page's first row of glass cards (TOP_CARDS) and
+   bounce off it in a few fine beads, the way they do on the iPhone's weather cards. One fixed canvas
+   over the page draws them at the cards' edges as the page scrolls, with the row found again every
+   second, so a change of layout (a warning appearing) is followed. Snow settles instead (CardSnow).
+   Nothing is drawn for readers who ask their system for reduced motion. */
+const SPLASH_CONDS = new Set(['rain', 'heavyRain', 'showers', 'heavyShowers', 'lightRain', 'drizzle', 'thunder', 'thunderShowers', 'hail', 'sleet', 'mix', 'torrentialRain', 'freezingRain']);
+export function CardRain({ cond, rate = 0, wind = 0, wdir = 240, selector = TOP_CARDS }) {
   const on = SPLASH_CONDS.has(cond);
   const cvRef = useRef(null);
   const pRef = useRef({ cond, rate, wind, wdir });
@@ -667,10 +681,7 @@ export function CardRain({ cond, rate = 0, wind = 0, wdir = 240, selector = '.lw
       cv.style.width = `${W}px`; cv.style.height = `${H}px`;
     };
     const find = () => {
-      const all = [...document.querySelectorAll(selector)];
-      const tops = all.map((el) => el.getBoundingClientRect().top);
-      const min = Math.min(...tops);
-      cards = all.filter((_, i) => tops[i] - min < 6);
+      cards = topCards(selector);
       if (cards[0]) radius = parseFloat(getComputedStyle(cards[0]).borderTopLeftRadius) || 22;
     };
     const splash = (e, x, inten, slant) => {
@@ -783,6 +794,288 @@ export function CardRain({ cond, rate = 0, wind = 0, wdir = 240, selector = '.lw
   }, [on, selector]);
   if (!on) return null;
   return <canvas ref={cvRef} aria-hidden="true" style={{ position: 'fixed', inset: 0, zIndex: 2, pointerEvents: 'none' }} />;
+}
+
+/* ── snow on the cards ───────────────────────────────────────────────────────────────────────────
+   While it snows, flakes drift down onto the top of the page's first row of glass cards (TOP_CARDS:
+   the warnings card when there is one) and settle there, building a ridge of snow along the edge:
+   slowly in light snow (about five minutes to its full depth), quickly in heavy snow (under a minute),
+   never deeper than SNOW_MAX. The snow sits on the card's own outline, curving round its rounded
+   corners and thinning as they steepen, so it wraps the top of the card rather than ending short of
+   it. Each card keeps its depth every few pixels; a flake adds a little where it lands, the less the
+   deeper it already is, and the ridge evens out a little as it grows. Every so often, once enough has
+   built up at an end, a clump slides off the corner and drops away in a puff of powder (the deeper the
+   snow and the harder it falls, the more often). When the snow stops it melts away over a couple of
+   minutes. `rate` is the snow falling (mm/h of water): sleet and rain-and-snow settle more slowly.
+   One fixed canvas over the page draws it at the cards' edges as the page scrolls. Nothing is drawn
+   for readers who ask their system for reduced motion. */
+const SNOW_CONDS = new Set(['snow', 'heavySnow', 'snowShowers', 'blizzard', 'sleet', 'mix']);
+const SNOW_MAX = 16;                                           // px: the deepest it gets on a card's edge
+const PILE_STEP = 3;                                           // px between the depths kept
+export function CardSnow({ cond, rate = 0, wind = 0, wdir = 240, selector = TOP_CARDS }) {
+  const snowing = SNOW_CONDS.has(cond) && rate >= 0.02;
+  const [live, setLive] = useState(snowing);                  // stays on after the snow while it melts
+  useEffect(() => { if (snowing) setLive(true); }, [snowing]);
+  const cvRef = useRef(null);
+  const pRef = useRef({ snowing, rate, wind, wdir });
+  useEffect(() => { pRef.current = { snowing, rate, wind, wdir }; }, [snowing, rate, wind, wdir]);
+  useEffect(() => {
+    const cv = cvRef.current;
+    if (!live || !cv || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return undefined;
+    const ctx = cv.getContext('2d');
+    let W = 0, H = 0, dpr = 1, raf = 0, last = performance.now();
+    let cards = [], R = 22, flakes = [], clumps = [];
+    const piles = new Map();                                   // card -> { w, d: depths every PILE_STEP px }
+    const resize = () => {
+      dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      W = window.innerWidth; H = window.innerHeight;
+      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+      cv.style.width = `${W}px`; cv.style.height = `${H}px`;
+    };
+    const pileFor = (w, old) => {
+      const d = new Float32Array(Math.ceil(w / PILE_STEP) + 1);
+      if (old) for (let i = 0; i < d.length; i++) d[i] = old.d[Math.min(old.d.length - 1, Math.round((i / (d.length - 1)) * (old.d.length - 1)))];
+      return { w, d };
+    };
+    const find = () => {
+      cards = topCards(selector);
+      if (cards[0]) R = parseFloat(getComputedStyle(cards[0]).borderTopLeftRadius) || 22;
+      for (const el of cards) {
+        const w = el.getBoundingClientRect().width, old = piles.get(el);
+        if (!old || Math.abs(old.w - w) > 1) piles.set(el, pileFor(w, old));
+      }
+      for (const el of [...piles.keys()]) if (!cards.includes(el)) piles.delete(el);   // no longer on top: its snow goes with it
+    };
+    /* the card's own outline: how far below its top edge it is at x (the rounded corners curve down),
+       and how level it is there (1 along the top, 0 down the sides) */
+    const off = (x, w) => (x < R ? R - x : x > w - R ? x - (w - R) : 0);
+    const edge = (x, w) => { const dx = off(x, w); return dx ? R - Math.sqrt(Math.max(0, R * R - dx * dx)) : 0; };
+    const level = (x, w) => { const dx = off(x, w); return dx ? Math.sqrt(Math.max(0, 1 - (dx / R) ** 2)) : 1; };
+    /* the snow's depth at x, thinner where the corner steepens */
+    const depthAt = (pile, x) => {
+      const f = x / PILE_STEP, i = Math.max(0, Math.min(pile.d.length - 2, Math.floor(f))), t = Math.min(1, Math.max(0, f - i));
+      return (pile.d[i] * (1 - t) + pile.d[i + 1] * t) * level(x, pile.w) ** 0.9;
+    };
+    /* a clump sliding off a corner: pieces of snow and a puff of powder, falling away */
+    const shed = (el, pile, side, inten) => {
+      const w = pile.w, zone = R + 20;
+      /* it leaves from the snow's surface on the corner, halfway into the depth there */
+      const x = side < 0 ? R * 0.45 : w - R * 0.45;
+      const y = edge(x, w) - depthAt(pile, x) * 0.5;
+      let gone = 0;
+      for (let i = 0; i < pile.d.length; i++) {
+        const at = i * PILE_STEP, from = side < 0 ? at : w - at;
+        if (from > zone) continue;
+        const take = 0.35 + 0.45 * (1 - from / zone);            // most at the very end
+        gone += pile.d[i] * take;
+        pile.d[i] *= 1 - take;
+      }
+      const n =Math.max(4, Math.min(14, Math.round(gone / 6)));
+      const pieces = Array.from({ length: n }, () => ({ dx: (Math.random() - 0.5) * 12, dy: (Math.random() - 0.5) * 6, r: 1.4 + Math.random() * 2.6, vx: side * (Math.random() * 18), vy: Math.random() * 20 }));
+      const powder = Array.from({ length: 10 + Math.round(10 * inten) }, () => ({ dx: (Math.random() - 0.5) * 10, dy: (Math.random() - 0.5) * 6, r: 0.5 + Math.random() * 0.9, vx: side * (5 + Math.random() * 40) + (Math.random() - 0.5) * 30, vy: -10 + Math.random() * 25 }));
+      clumps.push({ el, x, y, vx: side * (22 + Math.random() * 40), vy: 4 + Math.random() * 18, age: 0, pieces, powder });
+    };
+    const frame = (now) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const p = pRef.current;
+      const inten = Math.min(1, Math.sqrt(Math.max(0.02, p.rate ?? 0) / 2.5));   // 2.5 mm/h of water: heavy
+      const towards = Math.sin(((p.wdir ?? 240) + 180) * (Math.PI / 180)) >= 0 ? 1 : -1;
+      const drift = Math.min(1, (p.wind ?? 0) / 40) * towards * 70;              // px/s sideways
+      const rects = cards.map((el) => el.getBoundingClientRect());
+      /* how many flakes, and how much each leaves: full depth in about five minutes in light snow,
+         under a minute in heavy */
+      const dens = 0.012 + 0.07 * inten;                                         // flakes per px of edge per second
+      const fill = 300 - 250 * inten;                                            // s to full depth
+      const each = (SNOW_MAX / fill) / dens / PILE_STEP;                         // depth a flake leaves (spread over the depths kept every PILE_STEP px)
+      if (p.snowing) {
+        rects.forEach((r, e) => {
+          if (r.top < -40 || r.top > H + 20) return;
+          for (let n = r.width * dens * dt; n > 0 && flakes.length < 600; n -= 1) {
+            if (n < 1 && Math.random() > n) break;
+            const y = -(12 + Math.random() * 150);
+            flakes.push({ e, x: Math.random() * r.width - (drift * -y) / 60, y, vy: 32 + Math.random() * (30 + 50 * inten), r: 0.9 + Math.random() * (1.1 + 1.2 * inten), ph: Math.random() * 6.3, a: 0.65 + Math.random() * 0.35 });
+          }
+        });
+      }
+      for (const f of flakes) {
+        f.y += f.vy * dt;
+        f.x += (drift + Math.sin(now / 520 + f.ph) * 14) * dt;
+        const el = cards[f.e], pile = el && piles.get(el);
+        if (!pile) { f.dead = true; continue; }
+        /* blown past the card's end: it falls on down the side, fading out */
+        if (f.x < 0 || f.x > pile.w) { if (f.y > R + 40) f.dead = true; continue; }
+        /* it lands on the snow's surface, which follows the card's outline round the corners */
+        if (f.y >= edge(f.x, pile.w) - depthAt(pile, f.x)) {
+          /* it settles: a little more depth round where it landed, less the deeper it already is */
+          const c = f.x / PILE_STEP, sig = 2.2, room = (h) => Math.max(0, 1 - h / SNOW_MAX) ** 0.6;
+          for (let i = Math.max(0, Math.floor(c - 3 * sig)); i <= Math.min(pile.d.length - 1, Math.ceil(c + 3 * sig)); i++) {
+            const g = Math.exp(-((i - c) ** 2) / (2 * sig * sig)) / (sig * Math.sqrt(2 * Math.PI));
+            pile.d[i] = Math.min(SNOW_MAX, pile.d[i] + each * g * room(pile.d[i]) * (f.r / 1.6));
+          }
+          f.dead = true;
+        }
+      }
+      flakes = flakes.filter((f) => !f.dead);
+      /* the ridge evens out a little; when the snow has stopped, it melts away; every so often a clump
+         slides off an end that has built up (more often the deeper it is and the harder it snows) */
+      for (const [el, pile] of piles) {
+        const d = pile.d, k = Math.min(0.5, 2.5 * dt);
+        let prev = d[0];
+        for (let i = 1; i < d.length - 1; i++) { const cur = d[i]; d[i] = cur + k * 0.25 * (prev + d[i + 1] - 2 * cur); prev = cur; }
+        if (!p.snowing) for (let i = 0; i < d.length; i++) d[i] = Math.max(0, d[i] - (SNOW_MAX / 120) * dt);
+        if (clumps.length > 8) continue;
+        for (const side of [-1, 1]) {
+          let sum = 0, n = 0;
+          for (let x = R * 0.4; x <= R + 20; x += PILE_STEP) { const i = Math.round((side < 0 ? x : pile.w - x) / PILE_STEP); sum += d[Math.max(0, Math.min(d.length - 1, i))]; n++; }
+          const fullness = n ? sum / n / SNOW_MAX : 0;
+          if (fullness < 0.3) continue;
+          /* heavy snow, a full end: about every 25 s; light snow about every minute and a half */
+          if (Math.random() < dt * (0.01 + 0.05 * inten) * fullness) shed(el, pile, side, inten);
+        }
+      }
+      for (const c of clumps) {
+        c.age += dt;
+        c.vy += 680 * dt;
+        c.x += c.vx * dt;
+        c.y += c.vy * dt;
+        for (const q of c.pieces) { q.vy += 120 * dt; q.dx += q.vx * dt; q.dy += q.vy * dt; }
+        for (const q of c.powder) { q.vx *= 1 - 1.8 * dt; q.vy += 160 * dt; q.dx += q.vx * dt; q.dy += q.vy * dt; }
+      }
+      clumps = clumps.filter((c) => c.age < 1.6 && c.y < 320);
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      /* the snow on each card: a soft white ridge following its outline, a shade of blue underneath, a
+         faint shadow on the glass */
+      cards.forEach((el, e) => {
+        const r = rects[e], pile = piles.get(el);
+        if (!r || !pile || r.top < -SNOW_MAX - R || r.top > H + 4) return;
+        let any = false;
+        for (let i = 0; i < pile.d.length; i++) if (pile.d[i] > 0.15) { any = true; break; }
+        if (!any) return;
+        const w = r.width, xs = [];
+        for (let x = 0.5; x < R; x += 1.2) xs.push(x);                 // finer round the corners
+        for (let x = R; x <= w - R; x += PILE_STEP) xs.push(x);
+        for (let x = w - R + 1.2; x <= w - 0.5; x += 1.2) xs.push(x);
+        const topPts = xs.map((x) => [r.left + x, r.top + edge(x, w) + 0.4 - depthAt(pile, x)]);
+        ctx.save();
+        ctx.shadowColor = 'rgba(0, 12, 30, 0.22)';
+        ctx.shadowBlur = 4;
+        ctx.shadowOffsetY = 1.2;
+        const g = ctx.createLinearGradient(0, r.top - SNOW_MAX, 0, r.top + R * 0.6);
+        g.addColorStop(0, 'rgba(255,255,255,0.98)');
+        g.addColorStop(0.55, 'rgba(244,248,255,0.97)');
+        g.addColorStop(1, 'rgba(206,222,242,0.95)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(topPts[0][0], topPts[0][1]);
+        for (let i = 1; i < topPts.length - 1; i++) {
+          const mx = (topPts[i][0] + topPts[i + 1][0]) / 2, my = (topPts[i][1] + topPts[i + 1][1]) / 2;
+          ctx.quadraticCurveTo(topPts[i][0], topPts[i][1], mx, my);
+        }
+        ctx.lineTo(topPts[topPts.length - 1][0], topPts[topPts.length - 1][1]);
+        /* back along the card's own outline, under the snow */
+        for (let i = xs.length - 1; i >= 0; i--) ctx.lineTo(r.left + xs[i], r.top + edge(xs[i], w) + 0.8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      });
+      ctx.fillStyle = '#ffffff';
+      for (const f of flakes) {
+        const r = rects[f.e];
+        if (!r) continue;
+        /* one blown past the card's end fades as it falls on down the side */
+        const past = f.x < 0 || f.x > r.width;
+        ctx.globalAlpha = past && f.y > 0 ? f.a * Math.max(0, 1 - f.y / (R + 40)) : f.a;
+        ctx.beginPath();
+        ctx.arc(r.left + f.x, r.top + f.y, f.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      /* the clumps falling off the corners */
+      for (const c of clumps) {
+        const r = c.el.getBoundingClientRect();
+        const fade = Math.max(0, 1 - Math.max(0, c.age - 0.7) / 0.9);
+        ctx.globalAlpha = 0.95 * fade;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        for (const q of c.pieces) { const X = r.left + c.x + q.dx, Y = r.top + c.y + q.dy; ctx.moveTo(X + q.r, Y); ctx.arc(X, Y, q.r, 0, Math.PI * 2); }
+        ctx.fill();
+        ctx.globalAlpha = 0.7 * fade * Math.max(0, 1 - c.age / 1.2);
+        ctx.fillStyle = '#eef5ff';
+        ctx.beginPath();
+        for (const q of c.powder) { const X = r.left + c.x + q.dx, Y = r.top + c.y + q.dy; ctx.moveTo(X + q.r, Y); ctx.arc(X, Y, q.r, 0, Math.PI * 2); }
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      /* all melted and nothing falling: done until it snows again */
+      if (!p.snowing && !flakes.length && !clumps.length && [...piles.values()].every((q) => q.d.every((x) => x <= 0.01))) { raf = 0; setLive(false); return; }
+      raf = requestAnimationFrame(frame);
+    };
+    resize();
+    find();
+    const refind = setInterval(find, 1000);
+    const start = () => { if (!raf && !document.hidden) { last = performance.now(); raf = requestAnimationFrame(frame); } };
+    const onVis = () => { if (document.hidden) { cancelAnimationFrame(raf); raf = 0; } else start(); };
+    const onResize = () => { resize(); find(); };
+    window.addEventListener('resize', onResize);
+    document.addEventListener('visibilitychange', onVis);
+    start();
+    return () => {
+      cancelAnimationFrame(raf);
+      clearInterval(refind);
+      window.removeEventListener('resize', onResize);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [live, selector]);
+  if (!live) return null;
+  return <canvas ref={cvRef} aria-hidden="true" style={{ position: 'fixed', inset: 0, zIndex: 2, pointerEvents: 'none' }} />;
+}
+
+/* ── frost on the cards ──────────────────────────────────────────────────────────────────────────
+   Below freezing, the top of the glass frosts over: a band of ice crystals and white haze across the
+   top of the cards, fading down the glass, under their text so it stays readable (location.css
+   .lw-frosted). The colder it is, the more cards and the stronger: at or just below 0 C the top cards
+   only (TOP_CARDS), from -2 C the next two as well, from -4 C half of them, from -7 C every card on the
+   page, and the band grows deeper and whiter as it gets colder (full strength by about -6 C). The cards
+   are looked for again every second and a half, so a change of layout (a warning appearing) is
+   followed; above freezing it all goes. */
+export function CardFrost({ temp, selector = '.lw-wrap .lw-glass' }) {
+  const cold = temp != null && Number.isFinite(temp) && temp <= 0;
+  useEffect(() => {
+    if (!cold) return undefined;
+    const s = Math.min(1, 0.3 - temp / 8.5);                       // 0 C: 0.3 .. -6 C: 1
+    const apply = () => {
+      const all = [...document.querySelectorAll(selector)].filter((el) => el.offsetParent !== null);
+      const top = topCards(TOP_CARDS).filter((el) => all.includes(el));
+      const inOrder = all.map((el) => { const r = el.getBoundingClientRect(); return { el, y: r.top, x: r.left }; })
+        .sort((a, b) => a.y - b.y || a.x - b.x).map((c) => c.el).filter((el) => !top.includes(el));
+      const more = temp > -2 ? 0 : temp > -4 ? 2 : temp > -7 ? Math.ceil(all.length / 2) - top.length : inOrder.length;
+      const pick = new Map(top.map((el) => [el, s]));
+      inOrder.slice(0, Math.max(0, more)).forEach((el, i, list) => pick.set(el, s * (0.85 - 0.35 * (i / Math.max(1, list.length)))));
+      for (const el of all) {
+        const f = pick.get(el);
+        if (f) {
+          el.classList.add('lw-frosted');
+          el.style.setProperty('--frost', f.toFixed(2));
+          el.style.setProperty('--frost-h', `${Math.round(34 + 120 * f)}px`);
+        } else if (el.classList.contains('lw-frosted')) {
+          el.classList.remove('lw-frosted');
+          el.style.removeProperty('--frost'); el.style.removeProperty('--frost-h');
+        }
+      }
+    };
+    apply();
+    const id = setInterval(apply, 1500);
+    return () => {
+      clearInterval(id);
+      for (const el of document.querySelectorAll('.lw-frosted')) {
+        el.classList.remove('lw-frosted');
+        el.style.removeProperty('--frost'); el.style.removeProperty('--frost-h');
+      }
+    };
+  }, [cold, temp, selector]);
+  return null;
 }
 
 /* ── rain on the cards, as on a window ─────────────────────────────────────────

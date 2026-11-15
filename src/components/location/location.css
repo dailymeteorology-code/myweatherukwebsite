@@ -531,3 +531,25 @@
 .lw-hour.lw-h-mark { border-left: 1px dashed rgba(255, 255, 255, 0.35); border-radius: 0; justify-content: flex-start; }
 .lw-hour .lw-src-tag { margin-top: 8px; padding: 2px 6px; border-radius: 99px; font-size: 10px; font-weight: 800; letter-spacing: 0.03em; text-align: center; line-height: 1.2; color: #0b1a2c; background: rgba(255, 255, 255, 0.85); }
 .lw-hour .lw-src-sub { font-size: 10px; color: var(--ink3); text-align: center; line-height: 1.2; }
+
+/* ── frost on the cards (SkyBackdrop.jsx CardFrost): below freezing, the top of the glass frosts over,
+   ice crystals and a white haze fading down the card, under its text (z-index -1 inside the card's own
+   stacking context, which its backdrop blur gives it). --frost is the strength (0-1), --frost-h how far
+   down it reaches. The crystals: two layers of noise, fine bright speckles and soft feathery streaks. ── */
+.lw-glass.lw-frosted::after {
+  content: '';
+  position: absolute; left: 0; right: 0; top: 0; z-index: -1;
+  height: min(var(--frost-h, 60px), 55%);
+  border-radius: inherit; border-bottom-left-radius: 0; border-bottom-right-radius: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(180deg, rgba(244, 250, 255, 0.62) 0%, rgba(228, 242, 255, 0.22) 38%, rgba(228, 242, 255, 0) 100%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='180'%3E%3Cfilter id='a' x='0' y='0'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 2.6 -1.35'/%3E%3C/filter%3E%3Cfilter id='b' x='0' y='0'%3E%3CfeTurbulence type='turbulence' baseFrequency='0.014 0.075' numOctaves='3' seed='11'/%3E%3CfeColorMatrix values='0 0 0 0 0.92 0 0 0 0 0.97 0 0 0 0 1 0 0 0 1.5 -0.32'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23b)' opacity='0.75'/%3E%3Crect width='100%25' height='100%25' filter='url(%23a)'/%3E%3C/svg%3E");
+  background-size: 100% 100%, 260px 180px;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.78) 30%, rgba(0, 0, 0, 0.3) 70%, transparent 100%);
+          mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.78) 30%, rgba(0, 0, 0, 0.3) 70%, transparent 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), inset 0 8px 16px -8px rgba(255, 255, 255, 0.7);
+  opacity: var(--frost, 0.5);
+  transition: opacity 1.5s ease;
+}
+@media (prefers-reduced-motion: reduce) { .lw-glass.lw-frosted::after { transition: none; } }
