@@ -71,7 +71,7 @@ const KIND_ORDER = { county: 0, region: 1, place: 2 };
 const POSTCODE = /^([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})?$/i;
 const placeKind = (p) => (p.pop == null ? 'City' : p.pop >= 100000 ? 'City' : p.pop >= 5000 ? 'Town' : 'Village');
 
-export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, titled, cities, onCounty, onPlace, onDraw, canAdd, onAddCounty }) {
+export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, titled, cities, onCounty, onPlace, onDraw, canAdd, onAddCounty, myPlaces = [], onForget }) {
   const [areas, setAreas] = useState(null);
   const [post, setPost] = useState(null);                  // a postcode found: { name, sub, p }
   const [counties, setCounties] = useState(null);
@@ -165,6 +165,12 @@ export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, t
     onClose?.();
   };
 
+  /* the places saved from a pin that lie on this map */
+  const mine = useMemo(() => {
+    const P = projection(grid), g = GRIDS[grid];
+    return myPlaces.map((mp, i) => { const [x, y] = P.toGrid(mp.lon, mp.lat); return { mp, i, x, y }; })
+      .filter(({ x, y }) => x >= 0 && y >= 0 && x < g.nx && y < g.ny);
+  }, [myPlaces, grid]);
   const row = (key, label, sub, onClick, more, add) => (
     <div key={key} className="mdr-rowwrap">
       <button type="button" className="mdr-row" onClick={onClick}>
@@ -208,6 +214,16 @@ export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, t
             </>
           ) : (
             <>
+              {mine.length ? <div className="mdr-sub">Your places</div> : null}
+              {mine.map(({ mp, i, x, y }) => (
+                <div key={`mp${i}`} className="mdr-rowwrap">
+                  <button type="button" className="mdr-row" onClick={() => { onPlace?.({ name: mp.name, x, y }); onClose?.(); }}>
+                    <span className="mdr-name">{mp.name}<i>Saved in this browser</i></span>
+                  </button>
+                  {onForget ? <button type="button" className="mdr-back" onClick={() => onForget(i)} aria-label={`Forget ${mp.name}`} title="Forget this place"><X size={13} /></button> : null}
+                </div>
+              ))}
+              {mine.length ? <div className="mdr-sub">Everywhere</div> : null}
               {onDraw ? (
                 <button type="button" className="mdr-row mdr-draw" onClick={() => { onDraw(); onClose?.(); }}>
                   <span className="mdr-name"><span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><PenLine size={14} />Draw your own area</span><i>Its highest, lowest and average, like a county’s</i></span>

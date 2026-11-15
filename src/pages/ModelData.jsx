@@ -38,6 +38,8 @@ import { LAYER_DESC, POPULAR, probFamily, probLine, categoryOf } from '@/lib/mod
 import { withMorePlaces } from '@/lib/modelPlaces';
 import { areaStats, maskCells, typedShares } from '@/lib/areaStats';
 import { ESSENTIALS, MODEL_ABOUT, QUESTIONS } from '@/lib/modelHelp';
+import { readFavs, writeFavs, toggleLayer, addPlace, removePlace, addCompare, removeCompare } from '@/lib/modelFavs';
+import { ukZone } from '@/lib/ukZone';
 import { countyCells, describe } from '@/lib/mapCaption';
 import RegionPicker, { gridBox, loadCounties } from '@/components/modeldata/RegionPicker';
 import LongRange from '@/components/modeldata/LongRange';
@@ -442,6 +444,24 @@ function creditOf(m, rn, lead) {
 const runHour = (iso) => `${String(new Date(iso).getUTCHours()).padStart(2, '0')}Z`;
 const badgeOf = (m, rn, lead) => [`${SHORT_NAMES[m.id] || m.label}${rn ? ` ${runHour(rn.run)}` : ''}`.toUpperCase(), lead != null ? `T+${lead}` : ''];
 const sourceOf = (m) => MODEL_INFO[m.id]?.[2] || 'open data';
+/* the next run, in words (15 Nov 2026): its hour and, once the server has seen a few of the model's
+   runs land (server/modelData.js nextRuns), when it usually arrives and how long that is from now; a
+   run past its usual time is 'due now', and one well past it 'later than usual' */
+const ukClock = (ms) => `${new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })} ${ukZone(new Date(ms))}`;
+function nextRunText(nr, now) {
+  if (!nr?.next) return null;
+  const name = runHour(nr.next);
+  if (!nr.due) return { short: `next ${name}`, long: `Next run: ${name}. When its runs usually arrive is still being learned.` };
+  const due = Date.parse(nr.due), left = due - now, at = ukClock(due);
+  if (left > 0) {
+    const m = Math.ceil(left / 60e3), h = Math.floor(m / 60), mm = m % 60;
+    const wait = h ? `${h} h${mm ? ` ${mm} min` : ''}` : `${mm} min`;
+    return { short: `next ${name} in ${wait}`, long: `Next run: ${name}, usually here about ${at}, in ${wait}.` };
+  }
+  return -left < 90 * 60e3
+    ? { short: `${name} due now`, long: `Next run: ${name}, usually here about ${at}: due now.` }
+    : { short: `${name} later than usual`, long: `Next run: ${name}, usually here about ${at}: later than usual.` };
+}
 /* the line under a live layer's headline */
 const liveLine = (it) => (it.src === 'radar' || it.src === 'radar_type'
   ? `The Met Office 1 km rain radar, every 15 minutes${it.src === 'radar_type' ? ', each echo typed by the UKV and the station reports' : ''}`
@@ -687,6 +707,15 @@ export default function ModelData() {
   const setCmpK = (k, v) => setCmp((o) => ({ ...o, [k]: v }));
   const [cmpOpen, setCmpOpen] = useState(false);
   const [newRun, setNewRun] = useState(null);
+  /* favourites (lib/modelFavs, 15 Nov 2026): layers starred in the picker (per view), places saved
+     from a pin (in Zoom to) and comparisons saved from Compare, all kept in this browser */
+  const [favs, setFavs] = useState(readFavs);
+  const updFavs = (fn) => setFavs((f) => { const n = fn(f); writeFavs(n); return n; });
+  const favLayers = useMemo(() => favs.layers.filter((k) => k.startsWith(`${mode}:`)).map((k) => k.slice(mode.length + 1)), [favs.layers, mode]);
+  /* when each model's next run is due, and the clock the countdown runs on */
+  const [nextRuns, setNextRuns] = useState({});
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setClock(Date.now()), 30000); return () => clearInterval(t); }, []);
   const liveItem = LIVE[liveKey];
   const liveProd = liveCat?.products?.[liveItem.src];
   const preset = PRESET[presetKey];
@@ -915,8 +944,9 @@ export default function ModelData() {
     const get = () => fetch(`${API}/catalog`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`catalogue ${r.status}`))))
       .then((c) => { if (!stop) { setCat(c); setErr(null); } })
       .catch((e) => { if (!stop) { setErr(e.message); setTimeout(get, 15000); } });
-    get();
-    const t = setInterval(get, 2 * 60 * 1000);           // a new run shows up here within minutes of reaching AWS
+    const next = () => fetch(`${API}/nextruns`).then((r) => (r.ok ? r.json() : null)).then((n) => { if (!stop && n) setNextRuns(n); }).catch(() => {});
+    get(); next();
+    const t = setInterval(() => { get(); next(); }, 2 * 60 * 1000);           // a new run shows up here within minutes of reaching AWS
     return () => { stop = true; clearInterval(t); };
   }, []);
   useEffect(() => {
@@ -2505,9 +2535,21 @@ export default function ModelData() {
   const modelField = (list, value) => topField('Model', model ? modelText(model) : '', (
     <select className="md-field-sel" value={value} onChange={(e) => chooseModel(e.target.value)} aria-label="Model">{modelOptions(list)}</select>
   ), model ? `${model.label} · ${MODEL_INFO[model.id]?.[2] || model.source || ''}` : 'Model');
-  const runField = model && !timeSteps && run && topField('Run', runText(run, model.runs), (
+  const nr = model && !timeSteps ? nextRunText(nextRuns[model.id], clock) : null;
+  /* a newer run than the one on show: whole (green), or still arriving (amber: the page stays on the
+     last whole run until most of a new one is in) */
+  const newer = model && run && !timeSteps && model.runs?.[0] && Date.parse(model.runs[0].run) > Date.parse(run.run) ? model.runs[0] : null;
+  /* whole: as long as the last run from the same hour (the UKV's 18Z only ever reaches T+54), or, with
+     none to go by, most of the way to the longest run */
+  const sameHour = newer ? model.runs.slice(1).find((r) => runHour(r.run) === runHour(newer.run)) : null;
+  const newerWhole = newer && (sameHour ? newer.steps.length >= sameHour.steps.length
+    : newer.steps.length >= 0.6 * Math.max(0, ...model.runs.filter((r) => !r.kept).map((r) => r.steps.length)));
+  const runNote = newer
+    ? <span className={`md-field-note ${newerWhole ? 'is-new' : 'is-wait'}`}><i />{newerWhole ? `newer ${runHour(newer.run)}` : `${runHour(newer.run)} arriving`}</span>
+    : nr ? <span className="md-field-note">{nr.short}</span> : null;
+  const runField = model && !timeSteps && run && topField(<>Run{runNote}</>, runText(run, model.runs), (
     <select className="md-field-sel" value={run.run} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} aria-label="Run">{runOptions(model.runs)}</select>
-  ), 'When the model run started (UTC), and how far ahead it reaches');
+  ), `When the model run started (UTC), and how far ahead it reaches.${newer ? ` A newer run, ${runLabel(newer.run)}, is ${newerWhole ? 'in the list' : 'arriving'}.` : ''}${nr ? ` ${nr.long}` : ''}`);
   const runSelect = model && !timeSteps && (
     <div style={{ position: 'relative' }}>
       <select value={run?.run || ''} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} style={{ ...sel, ...(narrow ? { width: '100%', padding: '10px 34px 10px 14px', fontSize: 13.5 } : {}) }}
@@ -2523,11 +2565,25 @@ export default function ModelData() {
       {el}
     </div>
   );
+  /* a comparison as saved: the first window's model and layer, and the second window's choices (never
+     the runs, so a saved comparison always opens on the latest) */
+  const cmpSavable = !isProb && !timeSteps && cmp.on && model && (kindB === 'warnings' || modelB);
+  const cmpNow = cmpSavable ? {
+    name: `${SHORT_NAMES[model.id] || model.label} ${layerLabel} vs ${kindB === 'warnings' ? 'warnings'
+      : `${SHORT_NAMES[modelB.id] || modelB.label} ${(cmp.v && modelB.variables.includes(cmp.v) ? cat?.variables?.[cmp.v]?.label : null) || layerLabel}`}`,
+    modelId: model.id, varKey, cmp: { kind: cmp.kind, model: cmp.model, v: cmp.v, split: cmp.split, swap: cmp.swap },
+  } : null;
+  const cmpSaved = !!cmpNow && favs.compares.some((c) => c.name === cmpNow.name);
+  const openCompare = (c) => {
+    chooseModel(c.modelId);
+    setVarKey(c.varKey);
+    setCmp((o) => ({ ...o, ...c.cmp, on: true, run: null }));
+  };
   const compareBody = (
-    <div style={{ display: 'grid', gap: 10 }}>
+    <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <LayerRow icon={<Columns2 size={14} />} label="Two windows" note="in one frame, with a white line between them" on={cmp.on} onClick={() => setCmpK('on', !cmp.on)} />
       {cmp.on && (
-        <div style={{ display: 'grid', gap: 10, padding: '0 8px 4px' }}>
+        <div style={{ display: 'grid', gap: 10, padding: '0 8px 4px', gridTemplateColumns: 'minmax(0, 1fr)' }}>
           {!timeSteps && spec('Second window', <Seg small items={[['run', isProb ? 'Another run' : 'Run or layer'], ['warnings', 'Warnings']]} value={cmp.kind} onChange={(v) => setCmpK('kind', v)} />)}
           {kindB === 'warnings' && <div style={{ fontSize: 11.5, color: T.ink2, lineHeight: 1.4 }}>The Met Office warnings in force at the time on show, beside {layerLabel.toLowerCase()}.</div>}
           {kindB === 'run' && modelB && (
@@ -2558,6 +2614,25 @@ export default function ModelData() {
           {spec('Layout', <Seg small items={[['auto', 'Auto'], ['cols', 'Side by side'], ['rows', 'Stacked']]} value={cmp.split} onChange={(v) => setCmpK('split', v)} />)}
           <button onClick={() => setCmpK('swap', !cmp.swap)} style={{ ...sel, justifySelf: 'start', padding: '7px 12px', display: 'flex', gap: 6, alignItems: 'center', background: T.btn }}><ArrowLeftRight size={13} />Swap the windows</button>
           {kindB === 'run' && pendingB > 0 && <div style={{ fontSize: 11, color: T.ink2, display: 'flex', gap: 6, alignItems: 'center' }}><Loader2 className="animate-spin" style={{ width: 12, height: 12 }} />Fetching the second window from {fetchedFrom(modelB?.id)} · {pendingB} to go</div>}
+          {cmpSavable && (
+            <button onClick={() => updFavs((f) => addCompare(f, cmpNow))} disabled={cmpSaved}
+              style={{ ...sel, justifySelf: 'start', padding: '7px 12px', display: 'flex', gap: 6, alignItems: 'center', background: T.btn, opacity: cmpSaved ? 0.7 : 1, cursor: cmpSaved ? 'default' : 'pointer' }}>
+              <Star size={13} fill={cmpSaved ? '#f59e0b' : 'none'} style={{ color: cmpSaved ? '#d97706' : undefined }} />{cmpSaved ? 'Saved in your comparisons' : 'Save this comparison'}
+            </button>
+          )}
+        </div>
+      )}
+      {!isProb && !timeSteps && favs.compares.length > 0 && (
+        <div style={{ display: 'grid', gap: 4, gridTemplateColumns: 'minmax(0, 1fr)', borderTop: `1px solid ${T.line}`, paddingTop: 8 }}>
+          <span style={{ fontSize: 11, fontWeight: 650, color: T.ink2, padding: '0 8px' }}>Your comparisons</span>
+          {favs.compares.map((c, i) => (
+            <div key={`${c.name}${i}`} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button type="button" className="md-act" onClick={() => openCompare(c)} title="Open this comparison (latest runs)"
+                style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 'none', cursor: 'pointer', background: 'transparent', color: T.ink, fontFamily: FONT, fontSize: 12.5, fontWeight: 650,
+                  padding: '7px 8px', borderRadius: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</button>
+              <IconBtn title="Forget this comparison" onClick={() => updFavs((f) => removeCompare(f, i))} style={{ width: 26, height: 26 }}><X size={12} /></IconBtn>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -2587,7 +2662,8 @@ export default function ModelData() {
   /* the layer picker, where it opens */
   const browser = (pos, extra) => (
     <LayerBrowser items={shownItems} popular={isProb || timeSteps || simple ? [] : POPULAR} selected={isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey}
-      modelAbout={model && MODEL_ABOUT[model.id] ? { name: SHORT_NAMES[model.id] || model.label, text: MODEL_ABOUT[model.id] } : null}
+      modelAbout={model && MODEL_ABOUT[model.id] ? { name: SHORT_NAMES[model.id] || model.label, text: `${MODEL_ABOUT[model.id]}${nr ? ` ${nr.long}` : ''}` } : null}
+      favs={favLayers} onFav={(k) => updFavs((f) => toggleLayer(f, `${mode}:${k}`))}
       onPick={pickVar} onClose={closePanels} layout={layout} style={pos} query={q} setQuery={setQ} note={pickerNote} extra={extra}
       title={isObs ? 'Observed' : isLive ? 'Live' : isProb ? 'Chances' : 'Layers'}
       subtitle={!model ? '' : isProb ? `${model.label} · ${model.members} members` : timeSteps ? chipSub
@@ -2626,6 +2702,7 @@ export default function ModelData() {
         fit(gridBox(next.bbox, gridName).box);
       }}
       onDraw={() => { setHl(null); setPin(null); setDrawing({ pts: [] }); }}
+      myPlaces={favs.places} onForget={(i) => updFavs((f) => removePlace(f, i))}
       onPlace={(p) => {
         setHl(null);
         const hs = Math.max(8, 40000 / GRIDS[gridName].dx);
@@ -2850,12 +2927,19 @@ export default function ModelData() {
     const km = c ? (c.d * GRIDS[gridName].dx) / 1000 : null;          // cells to km on this grid (2 km or 10 km)
     /* a place or postcode picked from the search keeps its own name */
     const where = pin.label || (!c ? 'Picked point' : km < 6 ? c.n : km < 20 ? `Near ${c.n}` : `${Math.round(km)} km from ${c.n}`);
+    const [plon, plat] = projection(gridName).fromGrid(pin.gx, pin.gy);
+    const savedAt = favs.places.findIndex((p) => Math.hypot(p.lon - plon, p.lat - plat) <= 0.01);
     return (
       <div style={{ ...T.glass, borderRadius: 20, position: 'absolute', bottom: botH, zIndex: 4, padding: '10px 12px 12px', display: 'grid', gap: 6,
         ...(narrow ? { left: 10, right: 10, maxWidth: 520, margin: '0 auto' } : { right: 10, width: 300 }) }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <MapPin size={14} style={{ color: '#ffd23f', flexShrink: 0 }} />
           <span style={{ flex: 1, fontSize: 12.5, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{where}</span>
+          <IconBtn title={savedAt >= 0 ? 'In your places (Zoom to): press to forget it' : 'Save this place: it shows in Zoom to'}
+            onClick={() => updFavs((f) => (savedAt >= 0 ? removePlace(f, savedAt) : addPlace(f, { name: where, lon: Math.round(plon * 1e4) / 1e4, lat: Math.round(plat * 1e4) / 1e4 })))}
+            style={{ width: narrow ? 30 : 24, height: narrow ? 30 : 24, color: savedAt >= 0 ? '#d97706' : undefined }}>
+            <Star size={12} fill={savedAt >= 0 ? '#f59e0b' : 'none'} />
+          </IconBtn>
           <IconBtn title="Close (Esc)" onClick={() => setPin(null)} style={{ width: narrow ? 30 : 24, height: narrow ? 30 : 24 }}><X size={12} /></IconBtn>
         </div>
         {isImg

@@ -12,7 +12,7 @@
    An "i" on every card says what the layer shows, and one beside the title what the model is (15 Nov
    2026, at the user's request). */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, X } from 'lucide-react';
+import { Search, Star, X } from 'lucide-react';
 import { categoryOf } from '@/lib/modelLayers';
 
 const Badge = ({ icon }) => (
@@ -23,7 +23,7 @@ const Badge = ({ icon }) => (
  * items:   [{ key, label, group, desc, unit, ramp }] in the order they should be listed
  * popular: keys for the Popular category, most-used first (those present)
  */
-export default function LayerBrowser({ items, popular = [], selected, onPick, onClose, title, subtitle, note, layout, style, query, setQuery, extra, modelAbout }) {
+export default function LayerBrowser({ items, popular = [], selected, onPick, onClose, title, subtitle, note, layout, style, query, setQuery, extra, modelAbout, favs = [], onFav }) {
   const phone = layout === 'phone';
   const [info, setInfo] = useState(null);                  // the card whose "i" is open, or '__model'
   const byKey = useMemo(() => new Map(items.map((it) => [it.key, it])), [items]);
@@ -31,6 +31,8 @@ export default function LayerBrowser({ items, popular = [], selected, onPick, on
   /* the categories in their first-seen order, Popular first */
   const cats = useMemo(() => {
     const out = [];
+    const fav = favs.filter((k) => byKey.has(k));
+    if (fav.length) out.push({ id: '__favs', name: 'Your favourites', icon: 'mostlyClear', keys: fav });
     if (pop.length >= 4) out.push({ id: '__popular', name: 'Popular', icon: 'partly', keys: pop });
     const seen = new Map();
     for (const it of items) {
@@ -38,7 +40,7 @@ export default function LayerBrowser({ items, popular = [], selected, onPick, on
       seen.get(it.group).keys.push(it.key);
     }
     return out;
-  }, [items, pop]);
+  }, [items, pop, favs, byKey]);
   /* open on the category of the layer on show */
   const [cat, setCat] = useState(() => (byKey.get(selected)?.group) || cats[0]?.id);
   useEffect(() => { if (!cats.some((c) => c.id === cat)) setCat(cats[0]?.id); }, [cats, cat]);
@@ -64,6 +66,11 @@ export default function LayerBrowser({ items, popular = [], selected, onPick, on
         {withCat && <span className="mdb-cat-tag">{categoryOf(it.group).name}</span>}
         {it.ramp ? <i className="mdb-ramp" style={{ background: it.ramp }} /> : null}
       </button>
+      {onFav ? (
+        <button type="button" className={`mdb-star${favs.includes(it.key) ? ' is-on' : ''}`} onClick={() => onFav(it.key)}
+          aria-pressed={favs.includes(it.key)} aria-label={favs.includes(it.key) ? `Take ${it.label} out of your favourites` : `Add ${it.label} to your favourites`}
+          title={favs.includes(it.key) ? 'In your favourites' : 'Add to your favourites'}><Star size={12} /></button>
+      ) : null}
       <button type="button" className={`mdb-i${info === it.key ? ' is-on' : ''}`} onClick={() => setInfo((o) => (o === it.key ? null : it.key))}
         aria-expanded={info === it.key} aria-label={`What ${it.label} shows`} title={`What ${it.label} shows`}>i</button>
       {info === it.key && (

@@ -50,6 +50,14 @@
 /* a card with its "i" (what the layer shows), and the note it opens under the card */
 .mdb-cardwrap { position: relative; display: grid; }
 .mdb-cardwrap > .mdb-card { padding-right: 34px; }
+.mdb-star { all: unset; box-sizing: border-box; cursor: pointer; position: absolute; top: 9px; right: 33px; width: 20px; height: 20px; border-radius: 999px; display: grid; place-items: center;
+  color: var(--md-faint); opacity: 0.85; }
+.mdb-star:hover { color: #d97706; opacity: 1; }
+.mdb-star::before { content: ""; position: absolute; inset: -7px; }     /* a finger-sized target around the small star */
+.mdb-star.is-on { color: #d97706; opacity: 1; }
+.mdb-star.is-on svg { fill: #f59e0b; }
+.mdb-cardwrap > .mdb-card { padding-right: 58px; }
+.mdr-sub { padding: 8px 10px 2px; font-size: 10.5px; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; color: var(--md-faint); }
 .mdb-i { all: unset; box-sizing: border-box; cursor: pointer; position: absolute; top: 9px; right: 9px; width: 20px; height: 20px; border-radius: 999px; display: grid; place-items: center;
   font-family: Georgia, 'Times New Roman', serif; font-style: italic; font-weight: 700; font-size: 12px; line-height: 1; color: var(--md-accent);
   box-shadow: inset 0 0 0 1.3px var(--md-accent); background: var(--md-plate); opacity: 0.8; }
@@ -156,7 +164,12 @@
   transition: background 0.15s ease; box-sizing: border-box; }
 .md-field:hover { background: var(--md-hover); }
 .md-field:focus-within { box-shadow: inset 0 0 0 2px var(--md-accent); }
-.md-field > .md-field-lab { position: absolute; left: 14px; top: 8px; }
+.md-field > .md-field-lab { position: absolute; left: 14px; top: 8px; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; }
+/* the RUN field's note: the next run's countdown, or a newer run (green: in; amber: arriving) */
+.md-field-note { margin-left: 6px; font-size: 10px; text-transform: none; letter-spacing: 0; font-weight: 650; color: var(--md-muted); }
+.md-field-note.is-new { color: #16a34a; }
+.md-field-note.is-wait { color: #d97706; }
+.md-field-note i { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 99px; background: currentColor; box-shadow: 0 0 6px currentColor; vertical-align: 1px; }
 .md-field-lab { display: block; font-size: 9.5px; font-weight: 720; letter-spacing: 0.1em; text-transform: uppercase; line-height: 1; color: var(--md-muted); pointer-events: none; white-space: nowrap; }
 .md-field-val { display: block; margin-top: 4px; font-size: 13.5px; font-weight: 650; line-height: 1.15; white-space: nowrap; pointer-events: none; }
 /* the select fills the whole field, so a click anywhere on it opens the list; its text sits under the label */

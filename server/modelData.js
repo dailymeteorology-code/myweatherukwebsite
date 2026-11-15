@@ -244,6 +244,43 @@ function refreshLive(lane) {
   });
 }
 
+/* When each run first showed up (15 Nov 2026, the next-run countdown): learned run by run as the
+   catalogue lists them, so the page can say when the next run is due. Runs listed the first time the
+   record is made are marked unknown (0), not "now", so they never skew how late runs usually land. */
+const ARRIVALS_FILE = path.join(DATA, 'run_arrivals.json');
+let arrivals = readJson(ARRIVALS_FILE) || {};
+function noteArrivals(cat) {
+  const now = Date.now();
+  let changed = false;
+  for (const m of [...(cat?.models || []), ...(cat?.ensembles || [])]) {
+    const first = !arrivals[m.id];
+    const seen = (arrivals[m.id] ||= {});
+    for (const r of m.runs || []) if (seen[r.run] == null) { seen[r.run] = first ? 0 : now; changed = true; }
+    const keys = Object.keys(seen).sort();
+    for (const k of keys.slice(0, Math.max(0, keys.length - 40))) { delete seen[k]; changed = true; }
+  }
+  if (changed) fs.promises.writeFile(ARRIVALS_FILE, JSON.stringify(arrivals)).catch(() => {});
+}
+const median = (xs) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+/* each model's next run: when it starts (its usual spacing after the last) and, once two arrivals
+   have been seen, when it usually lands */
+function nextRuns() {
+  const out = {};
+  for (const [id, seen] of Object.entries(arrivals)) {
+    const runs = Object.keys(seen).sort();
+    const times = runs.map((r) => Date.parse(r));
+    const gaps = times.slice(1).map((t, i) => t - times[i]).filter((g) => g > 0);
+    const every = median(gaps);
+    if (!every) continue;
+    const late = runs.filter((r) => seen[r] > 0).map((r) => seen[r] - Date.parse(r)).filter((x) => x > 0);
+    const latency = late.length >= 2 ? median(late) : null;
+    const next = times[times.length - 1] + every;
+    out[id] = { next: new Date(next).toISOString(), every_h: every / 3600e3, due: latency != null ? new Date(next + latency).toISOString() : null,
+      latency_min: latency != null ? Math.round(latency / 60e3) : null, seen: late.length };
+  }
+  return out;
+}
+
 /* Météo-France's files have no index: each new ARPEGE and AROME run's files are walked in the
    background as soon as they are listed (mdata/mf.py prewalk), one run at a time, so the first
    layer opened (ARPEGE's upper air took about 90 s) finds them ready (15 Nov 2026) */
@@ -275,6 +312,7 @@ function refreshCatalog() {
     try {
       const cat = await readJsonAsync(path.join(DATA, 'catalog.json'));
       if (cat) catCache = { at: Date.now(), cat };
+      noteArrivals(cat);
       const warm = [];
       for (const m of cat?.models || []) {
         if (MIRRORED.has(m.id) || NO_WARM.has(m.id)) continue;
@@ -415,6 +453,12 @@ export function mountModelData(app) {
   };
   setTimeout(refreshLong, 90 * 1000).unref();
   setInterval(refreshLong, 6 * 3600 * 1000).unref();
+  /* each model's next run and when it usually lands (the countdown beside the run) */
+  app.get('/api/modeldata/nextruns', (req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.json(nextRuns());
+  });
+
   app.get('/api/modeldata/longrange', (req, res) => {
     const f = path.join(DATA, 'longrange.json');
     if (!fs.existsSync(f)) { refreshLong(); return res.status(503).json({ error: 'the long-range charts are being made, try again in a few minutes' }); }
