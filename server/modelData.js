@@ -341,10 +341,11 @@ async function refreshPoint(cat) {
       if (model === 'ukv' && have) await ensureJobAsync('ukv', tag, 'ptype', true);
       const want = model === 'mo_global' ? r.steps.filter((h) => h >= MOG_FROM).length : r.steps.length;
       if (have && have.steps.length >= want) continue;                   // built, and the run has not grown since
-      const vars = POINT2_VARS[model];
-      const sts = await Promise.all(vars.map((v) => readJsonAsync(path.join(frameDir(model, tag, v), 'status.json'))));
-      const ready = sts.every((st) => st?.state === 'complete' && !grown(model, tag, st));
-      if (!ready) { vars.forEach((v, i) => ensureJob(model, tag, v, 'point', null, sts[i])); continue; }
+      /* the Mix's step amounts are made from its UKV run's own (the same run, the same tag): those too */
+      const need = [...POINT2_VARS[model].map((v) => [model, v]), ...(model === 'mix' ? [['ukv', 'precip_step'], ['ukv', 'snow_step']] : [])];
+      const sts = await Promise.all(need.map(([m, v]) => readJsonAsync(path.join(frameDir(m, tag, v), 'status.json'))));
+      const ready = sts.every((st, i) => st?.state === 'complete' && !grown(need[i][0], tag, st));
+      if (!ready) { need.forEach(([m, v], i) => ensureJob(m, tag, v, 'point', null, sts[i])); continue; }
       if (pointBusy) return;
       pointBusy = true;
       python(['mdata.point', 'cube2', model, runIso(tag)], (code, err) => {

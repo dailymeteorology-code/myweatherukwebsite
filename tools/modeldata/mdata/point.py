@@ -64,6 +64,18 @@ def _raw(path: Path):
     return np.frombuffer(raw, np.uint8, h['nx'] * h['ny'], 4 + n).reshape(h['ny'], h['nx']), h
 
 
+def _raw_again(path: Path, tries=4):
+    """_raw, read again a moment later if the frame cannot be read whole: a frame the drive would not let be
+    renamed into place is written where it stands (common._replace) and can be caught half-way."""
+    for i in range(tries):
+        try:
+            return _raw(path)
+        except Exception:
+            if i == tries - 1:
+                raise
+            time.sleep(0.3 * (i + 1))
+
+
 def prune():
     tags = sorted(p.name for p in POINT.iterdir() if p.is_dir() and (p / 'manifest.json').exists())
     for t in tags[:-KEEP]:
@@ -249,7 +261,7 @@ def _direct(model, run, steps, all_steps, var, r0, r1, c0, c1):
         p = d / f'{h}.bin'
         if var != 'gust10' and p.exists():                       # (the frames' gust is the gust at the step, not its strongest)
             try:
-                q, _ = _raw(p)
+                q, _ = _raw_again(p)
                 return i, q[r0:r1, c0:c1]
             except Exception:
                 pass
@@ -282,8 +294,9 @@ def _mix_amounts(run, var, steps, all_steps, r0, r1, c0, c1):
     step amount, and ICON-EU's over the same hours, its mean rates over its own steps times their
     lengths (ICON's rates are its totals differenced, so this is its amount to rounding). Where ICON's
     steps do not fill the hours (the edge of its run) the UKV's amount stands alone."""
-    from .common import FRAMES, encode, read_frame
+    from .common import FRAMES, encode
     from .mix import MixModel, matched, weight
+    read = MixModel._read                                        # reads again when a frame is caught half-written
     u_run, i_run = MixModel().pair(run)
     off = (u_run - i_run).total_seconds() / 3600.0                # ICON's lead at a Mix lead: this much more
     idir = FRAMES / 'icon' / f'{i_run:%Y%m%dT%H%MZ}' / MIX_AMOUNTS[var]
@@ -297,13 +310,13 @@ def _mix_amounts(run, var, steps, all_steps, r0, r1, c0, c1):
         p = udir / f'{h}.bin'                                     # the Mix's run is its UKV run: the same lead
         if not p.exists():
             continue
-        a = read_frame(p)[0]
+        a = read(p)
         b, p0 = None, prev[h]
         if p0 is not None:
             lo, hi = p0 + off, h + off
             parts = [s for s in isteps if lo < s <= hi]
             if parts and iprev[parts[0]] is not None and abs(iprev[parts[0]] - lo) < 1e-6 and abs(parts[-1] - hi) < 1e-6:
-                b = sum(read_frame(idir / f'{s}.bin')[0] * (s - iprev[s]) for s in parts)
+                b = sum(read(idir / f'{s}.bin') * (s - iprev[s]) for s in parts)
         out[i] = encode(a if b is None else matched(a, b, weight(h)), enc)[r0:r1, c0:c1]
     return out
 
@@ -371,7 +384,7 @@ def cube2(model, run_s):
                 if not p.exists():
                     continue
                 try:
-                    q, head = _raw(p)
+                    q, head = _raw_again(p)
                 except Exception:
                     continue
                 arr[i] = q[r0:r1, c0:c1]
