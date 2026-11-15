@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.50.006 | 2026-11-15 | Patch | — | Version tool: tags only the save that carries the version (a failed commit cannot pass its number to the one before) | Location Weather overhaul (Nov) |
+| 5.51.000 | 2026-11-15 | Update | — | Location Weather: the freezing level read at the ground, the hours and detailed forecast to the last day (Saturday), the radar beside the days and the detailed forecast moved up | Location Weather overhaul (Nov) |
+| 5.50.006 | 2026-11-15 | Patch | 8d3fa4e | Version tool: tags only the save that carries the version (a failed commit cannot pass its number to the one before) | Location Weather overhaul (Nov) |
 | 5.50.005 | 2026-11-15 | Patch | f17be9c | Version tool: push only the new version's tag (the cloud runs' release tags stay put) | Location Weather overhaul (Nov) |
 | 5.50.004 | 2026-11-15 | Patch | cb861e2 | Site version numbers: 5.##.### in the corner of every page, every save of the site numbered (VERSIONS.md) | Location Weather overhaul (Nov) |
 | 5.50.003 | 2026-11-15 | Patch | 5a070f7 | Model Data: coded layers drawn in their own class; the timeline's arrow keys take one step | Model Data STRATA redesign (Nov) |

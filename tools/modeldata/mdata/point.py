@@ -145,8 +145,10 @@ POINT2 = DATA / 'point2'
 UKV_VARS2 = POINT_VARS + ['snow_cond']
 MIX_VARS = ['t2', 'td2', 'rh2', 'tskin', 'wind10', 'gust10', 'wdir10', 'mslp', 'precip_rate', 'precip_step',
             'snow_rate', 'snow_step', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'sw_down', 'snow_cond']
-MOG_VARS = ['t2', 'tmax_step', 'tmin_step', 'td2', 'wind10', 'gust10', 'wdir10', 'precip_rate', 'precip_step', 'snow_rate',
-            'tcc', 'vis', 'uv_down']
+# (the pressure, the cloud's layers, the sunshine and the ground temperature too: the detailed forecast's
+# charts reach the last day from these, 15 Nov 2026)
+MOG_VARS = ['t2', 'tmax_step', 'tmin_step', 'td2', 'tskin', 'wind10', 'gust10', 'wdir10', 'mslp', 'precip_rate', 'precip_step',
+            'snow_rate', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'sw_down', 'uv_down']
 # the Global's highest and lowest temperature over each step (3 or 6 hours this far out): the days'
 # highs and lows from those, not from the hours the steps happen to land on
 EXTRA_ENC = {'tmax_step': VARIABLES['t2'], 'tmin_step': VARIABLES['t2']}

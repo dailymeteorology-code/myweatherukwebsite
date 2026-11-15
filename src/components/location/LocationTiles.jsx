@@ -219,9 +219,12 @@ export default function LocationTiles({ model }) {
       )}
 
       <Tile icon={Snowflake} label="Snow & ice">
-        <div className="lw-big">{cur.frz == null ? '—' : Math.round(cur.frz / 10) * 10}<small>m</small></div>
-        <div className="lw-mini">freezing level</div>
+        {/* the freezing level as it reads here: the ground itself while the air at the ground is at or
+            below freezing (ukvLocation.js freezeLevel), with any milder air above it said in words */}
+        <div className="lw-big">{now.freeze == null ? '—' : Math.round(now.freeze / 10) * 10}<small>m</small></div>
+        <div className="lw-mini">freezing level{now.freeze === 0 ? ': at the ground' : ' above the ground'}</div>
         <div className="lw-foot">
+          {now.warmAloft != null ? `Milder air above: freezing again by about ${Math.round(now.warmAloft / 10) * 10} m. ` : ''}
           {frost && frost.ground <= 0 ? `Ground frost likely by ${hhmm(frost.t)} (${deg(frost.ground)}).` : `No frost expected; the ground stays above ${deg(frost?.ground)}.`}
           {lying > 0.5 ? ` Lying snow: ${Math.round(lying)} mm of water.` : ''}
         </div>

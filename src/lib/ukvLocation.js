@@ -173,6 +173,19 @@ export function classify(h) {
 }
 export const isWet = (k) => RANK[k] >= 2 && !['fog', 'mist'].includes(k);
 
+/* ── the freezing level as it reads at the place ──────────────────────────────
+   The UKV's freezing level is the height above the ground of the 0 C level in the air. On a frosty
+   night under milder air (an inversion) that level sits hundreds of metres up while the air at the
+   ground is below freezing (Aviemore, 16 Nov 2026: -2.2 C with the freezing level at 315 m). Read at
+   the place, the freezing level is then the ground itself: 0 m. The height the model gives is kept as
+   warmAloft, where it is worth saying (100 m or more): air above freezing over freezing ground, the
+   layer that turns rain into freezing rain. Air within 0.3 C of freezing counts as freezing: under
+   such a layer the 2 m temperature flickers either side of 0, and the level with it, between the ground
+   and hundreds of metres (Aviemore 16 Nov 22:00, +0.1 C: 400 m for one hour between hours at 0 m). */
+const AT_FREEZING = 0.3;
+export const freezeLevel = (t2, frz) => (t2 != null && t2 <= AT_FREEZING ? 0 : frz ?? null);
+export const warmAloft = (t2, frz) => (t2 != null && t2 <= AT_FREEZING && (frz ?? 0) >= 100 ? frz : null);
+
 /* ── the response -> hours and days ──────────────────────────────────────── */
 export async function fetchLocation(params, signal, raw = false) {
   const key = placeKey(params);
@@ -318,6 +331,21 @@ export function shape(resp) {
     for (const f of full) if (!best || Math.abs(f.t - h.t) < Math.abs(best.t - h.t)) best = f;
     if (best) { h.cond = best.cond; h.windy = best.windy; }
   }
+  /* ...and its feels-like from the wind and dew point drawn between the full hours either side (past
+     T+54 the UKV gives them every three hours, the temperature every hour): worked out as if calm, the
+     feels-like line saw-toothed (-1.9 between hours of -3.9) */
+  hours.forEach((h, i) => {
+    if (h.full || h.t2 == null) return;
+    let a = i - 1, b = i + 1;
+    while (a >= 0 && !hours[a].full) a--;
+    while (b < hours.length && !hours[b].full) b++;
+    const A = hours[a], B = hours[b];
+    if (!A && !B) return;
+    const f = A && B ? (h.t - A.t) / (B.t - A.t) : 0;
+    const mix = (k) => (A && B && A[k] != null && B[k] != null ? A[k] + (B[k] - A[k]) * f : (A || B)[k]);
+    h.feels = feelsLike(h.t2, mix('td'), mix('wind'));
+  });
+  for (const h of hours) { h.freeze = freezeLevel(h.t2, h.frz); h.warmAloft = warmAloft(h.t2, h.frz); }
 
   const nowMs = Date.now();
   const nowIdx = Math.max(0, hours.findIndex((h) => h.t >= nowMs - 30 * 60e3));
@@ -350,11 +378,28 @@ export function shape(resp) {
   nowHour.cond = classify(nowHour);
   nowHour.windy = windyOf(nowHour);
   nowHour.kind = kind0 || kindOf(snowShareOf(nowHour), nowHour.t2, nowHour.hailRate, nowHour.precipRate ?? 0);
+  nowHour.freeze = freezeLevel(nowHour.t2, cur.frz);
+  nowHour.warmAloft = warmAloft(nowHour.t2, cur.frz);
+
+  /* the days, Day and Night: the MWUK Mix, then the Met Office Global (outlookOf), from the UKV's own
+     hours (for the UV), TCM NOVA, TCM FROST and today so far */
+  const novaModel = nova ? { ...nova, hours: nova.times.map((t, k) => ({ t, p: nova.p[k], src: nova.src[k], nb: nova.nb_km[k] })) } : null;
+  let outlook = null;
+  try { outlook = outlookOf(resp, { hours, nova: novaModel, frost: resp.frost || null, observed }, nowMs); } catch { outlook = null; }
+  /* The hours past the UKV's end (T+120): the outlook's own steps, three- and six-hourly from the Met
+     Office Global, so the hourly strip and the detailed forecast reach the last day too (the user:
+     "add Saturday"). Marked `ext`, with the model they came from. */
+  const lastT = hours.length ? hours[hours.length - 1].t : 0;
+  const ext = (outlook?.steps || []).filter((x) => x.t > lastT && x.full).map((x) => ({
+    ...x, i: -1, day: ukDay(x.t), run: null, ext: true, src: x.model, nova: novaAt.get(x.t) ?? null,
+    pThunder: null, lightning: null, cloudBase: null, frz: null, freeze: null, warmAloft: null, snowLying: null,
+  }));
+  const allHours = [...hours, ...ext], allFull = [...full, ...ext];
 
   /* days, in UK time */
   const today = ukDay(nowMs);
   const byDay = new Map();
-  for (const h of hours) {
+  for (const h of allHours) {
     if (h.day < today) continue;
     if (!byDay.has(h.day)) byDay.set(h.day, []);
     byDay.get(h.day).push(h);
@@ -406,19 +451,17 @@ export function shape(resp) {
       uvi: max('uvi'), cape: max('cape'), sun: sunTimes(day, lat, lon), hours: hs,
       partial: hs.length && (hs[hs.length - 1].t - hs[0].t) < 18 * 36e5 && !isToday,
     };
-  });
+  /* a day the forecast only touches (the last step at midnight) is no day to show */
+  }).filter((d) => d.isToday || (d.hours[d.hours.length - 1].t - d.hours[0].t) >= 6 * 36e5);
 
-  const model = {
-    location: loc, hours, full, days, now: nowHour, nowIdx, observed, analysis: an, minutely,
-    runs: fc.runs, cell: fc.cell, lat, lon, anchor: fc.anchor || null,
+  return {
+    location: loc, hours: allHours, full: allFull, days, now: nowHour, nowIdx, observed, analysis: an, minutely,
+    runs: fc.runs, cell: fc.cell, lat, lon, anchor: fc.anchor || null, outlook,
     /* every NOVA hour (not only the UKV's: hourly to the end of the Main Run) */
-    nova: nova ? { ...nova, hours: nova.times.map((t, k) => ({ t, p: nova.p[k], src: nova.src[k], nb: nova.nb_km[k] })) } : null,
+    nova: novaModel,
     /* the place's snow from TCM FROST, MyWeatherUK's snow model (server/tcmFrost.js frostPoint) */
     frost: resp.frost || null,
   };
-  /* the days, Day and Night: the MWUK Mix, then the Met Office Global (outlookOf) */
-  try { model.outlook = outlookOf(resp, model, nowMs); } catch { model.outlook = null; }
-  return model;
 }
 
 /* ── the next hour, minute by minute (the radar nowcast) ────────────────────
@@ -607,15 +650,18 @@ function partOfDay(kind, from, to, ctx, start = from) {
   const full = inst.filter((s) => s.cond);
   const wet = amt.filter((s) => s.cond && isWet(s.cond));
   const wetHours = wet.reduce((s, x) => s + (x.span || 1), 0);
-  let cond = full.length ? skyCond(full) : 'cloudy';
-  if (wet.length && (rain >= 0.5 || wetHours >= 2)) cond = wet.reduce((a, b) => (RANK[b.cond] > RANK[a.cond] ? b : a)).cond;
-  else if (full.filter((s) => s.cond === 'fog').length >= Math.max(1, full.length / 2)) cond = 'fog';
-  else if (full.filter((s) => s.cond === 'windy').length >= 2) cond = 'windy';
-  const strongest = inst.reduce((a, b) => ((b.wind ?? -1) > (a?.wind ?? -1) ? b : a), null);
   const kinds = amt.filter((s) => (s.precip ?? 0) >= 0.1);
   const byKind = {};
   for (const s of kinds) byKind[s.kind] = (byKind[s.kind] || 0) + s.precip;
   const fallKind = Object.keys(byKind).sort((a, b) => byKind[b] - byKind[a])[0] || null;
+  /* the part's weather: its most telling wet hour of what falls most (a night of sleet with an hour of
+     snow said "Snow" over "0.7 mm, falling as sleet"), else the sky */
+  let cond = full.length ? skyCond(full) : 'cloudy';
+  const mostly = wet.filter((s) => s.kind === fallKind);
+  if (wet.length && (rain >= 0.5 || wetHours >= 2)) cond = (mostly.length ? mostly : wet).reduce((a, b) => (RANK[b.cond] > RANK[a.cond] ? b : a)).cond;
+  else if (full.filter((s) => s.cond === 'fog').length >= Math.max(1, full.length / 2)) cond = 'fog';
+  else if (full.filter((s) => s.cond === 'windy').length >= 2) cond = 'windy';
+  const strongest = inst.reduce((a, b) => ((b.wind ?? -1) > (a?.wind ?? -1) ? b : a), null);
   /* the UV from the UKV's own hours where they reach (the Mix has none), the Global's beyond */
   const uvH = (base.hours || []).filter((h) => h.t >= from && h.t <= to && h.uvi != null).map((h) => h.uvi);
   const uvi = kind === 'day' ? max(uvH.length ? uvH : vals('uvi')) : null;
@@ -645,6 +691,7 @@ export function outlookOf(resp, base, nowMs = Date.now()) {
       mslp: at('mslp', i), precipRate: at('precip_rate', i), precip: at('precip_step', i), snowRate: at('snow_rate', i), snow: at('snow_step', i),
       hailRate: at('hail_rate', i), tcc: at('tcc', i), lcc: at('lcc', i), mcc: at('mcc', i), hcc: at('hcc', i), vis: at('vis', i),
       fog: at('fog', i), uvi: uvIndex(at('uv_down', i)), snowCond: at('snow_cond', i), pRain: ol.p_rain?.[i] ?? null,
+      sw: at('sw_down', i), cape: at('cape_mu', i),
     };
     /* a field the Mix has no step amount for yet: its rate over the step */
     if (s.precip == null && s.precipRate != null) s.precip = s.precipRate * s.span;

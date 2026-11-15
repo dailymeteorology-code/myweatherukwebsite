@@ -72,8 +72,12 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
     for (const h of hs) if (open.has(h.t)) for (const q of quarters.get(h.t) || []) qs.push({ q, t: q.t, o: 1, of: h.t });
     /* a sunrise or sunset in an hour that is open belongs with its quarters */
     for (const sn of suns) { const h = hs.find((x) => open.has(x.t) && sn.t >= x.t && sn.t < x.t + 36e5); if (h) sn.of = h.t; }
+    /* where the hours go on past the UKV's end (to the last day of the outlook): a slim column naming
+       the model they come from, three- and six-hourly from there */
+    const first = hs.find((h) => h.ext);
+    const mark = first ? [{ srcMark: first.src, t: first.t - 1, o: -1 }] : [];
     /* in time; an hour before its own quarters, a sunrise among the quarters it falls in */
-    return [...hs.map((h) => ({ h, t: h.t, o: 0 })), ...suns, ...qs].sort((a, b) => a.t - b.t || a.o - b.o);
+    return [...hs.map((h) => ({ h, t: h.t, o: 0 })), ...suns, ...qs, ...mark].sort((a, b) => a.t - b.t || a.o - b.o);
   }, [model, hs, open, quarters]);
   /* Each warning as a bar in its colour under exactly the columns it covers: an hour column covers
      its hour (three hours beyond T+54), a quarter its fifteen minutes, a sunrise or sunset column its
@@ -148,6 +152,16 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
           const day = new Date(it.t).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'Europe/London' });
           const dayStart = it.h && lastDay !== null && it.h.day !== lastDay;
           if (it.h) lastDay = it.h.day;
+          if (it.srcMark) {
+            return (
+              <div key={`m${it.t}`} className="lw-hour lw-h-mark" title={`From here: ${sourceName(it.srcMark)}, every three or six hours`}>
+                <span className="lw-h-day" />
+                <span className="lw-h-time">then</span>
+                <span className="lw-src-tag">{sourceName(it.srcMark).replace('Met Office ', 'MO ')}</span>
+                <span className="lw-src-sub">3–6 hourly</span>
+              </div>
+            );
+          }
           if (it.sun) {
             return (
               <div key={`s${it.t}`} className={`lw-hour${it.of ? ' is-quarter' : ''}${it.of && items[k + 1]?.of !== it.of ? ' is-qend' : ''}`}>
@@ -885,27 +899,33 @@ export default function LocationForecast() {
               </div>
             )}
 
-            <div className="lw-grid">
+            {/* The layout (15 Nov 2026, the user's: the radar to the right of the days, the detailed
+                forecast moved up). On a computer: the hours, the precipitation, the detailed forecast and
+                the thunderstorm risk beside the tiles; then the days with the radar to their right; then
+                the snow. On a phone one column, in the order of the lw-o-* classes (location.css). A
+                card that has nothing to show leaves its slot empty, and an empty slot takes no room. */}
+            <div className="lw-layout">
               <div className="lw-col">
-                <HourlyCard model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} />
-                <PrecipCard model={model} />
-                <LocationThunder model={model} />
-                <LocationSnow model={model} />
+                <div className="lw-slot lw-o-hourly"><HourlyCard model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} /></div>
+                <div className="lw-slot lw-o-precip"><PrecipCard model={model} /></div>
+                <div className="lw-slot lw-o-detail"><LocationCharts model={model} dayIdx={dayIdx} onDay={pickDay} /></div>
+                <div className="lw-slot lw-o-thunder"><LocationThunder model={model} /></div>
+              </div>
+              <div className="lw-col">
+                <div className="lw-slot lw-o-tiles"><LocationTiles model={model} /></div>
+              </div>
+              <div className="lw-slot lw-o-days">
                 {model.outlook?.days?.length
                   ? <OutlookCard model={model} T={T} selected={openDay} onDay={openOutlookDay} warnings={warnings} onWarning={showWarning} />
                   : <DaysCard model={model} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />}
+              </div>
+              <div className="lw-slot lw-o-radar">
                 <div className="lw-glass lw-card">
                   <div className="lw-title"><Radar />Rain radar<span className="lw-title-aside">Met Office 1 km · then UKV</span></div>
                   <LocationRadar lat={model.lat} lon={model.lon} />
                 </div>
               </div>
-              <div className="lw-col">
-                <LocationTiles model={model} />
-              </div>
-            </div>
-
-            <div style={{ marginTop: 14 }}>
-              <LocationCharts model={model} dayIdx={dayIdx} onDay={pickDay} />
+              <div className="lw-slot lw-o-snow"><LocationSnow model={model} /></div>
             </div>
 
             <p className="lw-source">

@@ -8,7 +8,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useUnits } from '@/components/useUnits';
 import { ChartSpline } from 'lucide-react';
-import { compass, condLabel, hhmm, hourOf, longDay, uvWord, visWord } from '@/lib/ukvLocation';
+import { compass, condLabel, hhmm, hourOf, longDay, uvWord, visWord, PRECIP_KINDS, KIND_KEYS, SNOW_CHANCE, snowChance, sourceName } from '@/lib/ukvLocation';
 import WxIcon from '@/components/location/WxIcon';
 
 /* ── temperature colours (shared with the day rows) ── */
@@ -163,6 +163,10 @@ function Plot({ width, x0, x1, nowMs, left, right, items, range, tip, band = 0 }
             if (it.type === 'bars') {
               return <g key={k}>{it.bars.map(([a, b, v, c]) => (v > 0 ? <rect key={a} x={X(a) + 0.8} y={Y(v, ax)} width={Math.max(1.5, X(b) - X(a) - 1.6)} height={Math.max(0, Y(ax.lo, ax) - Y(v, ax))} rx="2" fill={c} opacity={hover != null && !(hover > a && hover <= b) ? 0.55 : 1} /> : null))}</g>;
             }
+            if (it.type === 'cells') {
+              /* in the band above the plot: each hour's cell in its colour (the snow chance) */
+              return <g key={k}>{it.cells.map(([a, b, c]) => <rect key={a} x={X(a) + 0.5} y={5} width={Math.max(1.5, X(b) - X(a) - 1)} height={Math.max(6, band - 13)} rx="3" fill={c} />)}</g>;
+            }
             if (it.type === 'arrows') {
               /* in their own strip, as many as fit without crowding */
               let last = -Infinity;
@@ -289,15 +293,18 @@ export default function LocationCharts({ model, dayIdx, onDay }) {
     plot = {
       left,
       items: [
-        { type: 'line', pts: hs.map((h) => [h.t, T(h.td)]), colour: '#7fe0cf', width: 1.6 },
-        { type: 'line', pts: hs.map((h) => [h.t, T(h.feels)]), colour: 'rgba(255,255,255,0.75)', width: 1.8, dash: '4 4' },
+        /* past T+54 the dew point is three-hourly: drawn through the hours that have it, not broken up */
+        { type: 'line', pts: hs.filter((h) => h.td != null).map((h) => [h.t, T(h.td)]), colour: '#7fe0cf', width: 1.6 },
+        { type: 'line', pts: hs.filter((h) => h.feels != null).map((h) => [h.t, T(h.feels)]), colour: 'rgba(255,255,255,0.75)', width: 1.8, dash: '4 4' },
         { type: 'line', pts: hs.map((h) => [h.t, T(h.t2)]), gradient: (x) => tempColour(U.isF ? ((x - 32) * 5) / 9 : x), width: 3.2 },
       ],
-      tip: (t) => <>{tipHead(t)}<div>Temperature <b>{deg(v('t2', t, hs, T))}</b></div><div>Feels like {deg(v('feels', t, hs, T))}</div><div>Dew point {deg(v('td', t, hs, T))}</div></>,
+      tip: (t) => <>{tipHead(t)}<div>Temperature <b>{deg(v('t2', t, hs, T))}</b></div><div>Feels like {deg(v('feels', t, hs.filter((h) => h.feels != null), T))}</div><div>Dew point {deg(v('td', t, hs.filter((h) => h.td != null), T))}</div></>,
     };
     legend = [['Temperature', 'linear-gradient(90deg,#4fc8f0,#f2d43c,#ff7a2f)'], ['Feels like', 'rgba(255,255,255,0.75)'], ['Dew point', '#7fe0cf']];
   } else if (metric === 'rain') {
-    const bars = fs.filter((h) => h.span > 0).map((h) => [h.t - h.span * 36e5, h.t, U.precip((h.precip ?? 0) / h.span), (h.snow ?? 0) > (h.precip ?? 0) / 2 ? '#eef5ff' : '#4cb0ff']);
+    /* each bar in the colour of what is falling (PRECIP_KINDS, as on the precipitation card) */
+    const bars = fs.filter((h) => h.span > 0).map((h) => [h.t - h.span * 36e5, h.t, U.precip((h.precip ?? 0) / h.span), (PRECIP_KINDS[h.kind] || PRECIP_KINDS.rain).bottom]);
+    const kinds = KIND_KEYS.filter((k) => fs.some((h) => h.span > 0 && (h.precip ?? 0) >= 0.05 && h.kind === k));
     const left = domain(bars.map((b) => b[2]), { min: 0, span: U.precipUnit === 'in' ? 0.04 : 1 });
     left.fmt = (x) => (x ? `${x}` : '0');
     const right = { lo: 0, hi: 100, ticks: [0, 50, 100], fmt: (x) => `${x}%` };
@@ -308,14 +315,14 @@ export default function LocationCharts({ model, dayIdx, onDay }) {
         const h = fs.find((x) => x.span > 0 && t > x.t - x.span * 36e5 && t <= x.t) || hourAt(t);
         return (
           <>{tipHead(t)}
-            <div><b>{U.fmtRain(h.precip ?? 0)}</b> {h.span > 1 ? `in the three hours to ${hhmm(h.t)}` : `in the hour to ${hhmm(h.t)}`}{(h.snow ?? 0) > 0.05 ? ` (${U.fmtRain(h.snow)} as snow)` : ''}</div>
+            <div><b>{U.fmtRain(h.precip ?? 0)}</b> {h.span > 1 ? `in the ${h.span === 6 ? 'six' : 'three'} hours to ${hhmm(h.t)}` : `in the hour to ${hhmm(h.t)}`}{(h.precip ?? 0) >= 0.05 ? ` · ${(PRECIP_KINDS[h.kind] || PRECIP_KINDS.rain).long || (PRECIP_KINDS[h.kind] || PRECIP_KINDS.rain).name}` : ''}</div>
             <div>Chance within 10 km {rnd(v('pRain', t))}%</div>
           </>
         );
       },
     };
-    legend = [[`Rain per hour (${U.precipUnit})`, '#4cb0ff'], ['Snow', '#eef5ff'], ['Chance of rain', '#9fd8ff']];
-    note = `Bars show each hour’s rain in ${U.precipUnit} per hour; past T+54 UKV gives three-hour totals, spread over the three hours.`;
+    legend = [...(kinds.length ? kinds : ['rain']).map((k) => [`${PRECIP_KINDS[k].name} (${U.precipUnit} per hour)`, PRECIP_KINDS[k].bottom]), ['Chance within 10 km', '#9fd8ff']];
+    note = `Bars show each hour’s precipitation in ${U.precipUnit} per hour, coloured by what falls; three- and six-hour totals further ahead are spread over their hours.`;
   } else if (metric === 'wind') {
     const left = domain(fs.flatMap((h) => [U.windSpeed(h.wind), U.windSpeed(h.gust)]), { min: 0, span: 10 });
     left.fmt = (x) => `${x}`;
@@ -333,11 +340,14 @@ export default function LocationCharts({ model, dayIdx, onDay }) {
   } else if (metric === 'cloud') {
     const cells = (k) => fs.map((h, i) => [h.t - (i ? (h.t - fs[i - 1].t) / 2 : 18e5), h.t + (i < fs.length - 1 ? (fs[i + 1].t - h.t) / 2 : 18e5), Math.min(1, (h[k] ?? 0) / 100)]);
     /* the rows named down the left, where a value axis would be */
-    const left = { lo: 0, hi: 3, ticks: [0.5, 1.5, 2.5], noGrid: true, fmt: (x) => ({ 2.5: 'High', 1.5: 'Mid', 0.5: 'Low' }[x]) };
+    const layered = fs.some((h) => h.lcc != null || h.mcc != null || h.hcc != null);
+    const left = layered ? { lo: 0, hi: 3, ticks: [0.5, 1.5, 2.5], noGrid: true, fmt: (x) => ({ 2.5: 'High', 1.5: 'Mid', 0.5: 'Low' }[x]) }
+      : { lo: 0, hi: 1, ticks: [0.5], noGrid: true, fmt: () => 'Total' };
     plot = {
       left,
-      items: [{ type: 'strips', rows: [{ label: 'High', colour: '#dfe8f3', cells: cells('hcc') }, { label: 'Middle', colour: '#c4d1df', cells: cells('mcc') }, { label: 'Low', colour: '#aebccb', cells: cells('lcc') }] }],
-      tip: (t) => { const h = hourAt(t); return <>{tipHead(t)}<div>Total <b>{rnd(v('tcc', t))}%</b></div><div>High {rnd(v('hcc', t))}% · middle {rnd(v('mcc', t))}% · low {rnd(v('lcc', t))}%</div>{h.cloudBase != null && <div>Cloud base {Math.round(h.cloudBase / 10) * 10} m</div>}</>; },
+      items: [{ type: 'strips', rows: layered ? [{ label: 'High', colour: '#dfe8f3', cells: cells('hcc') }, { label: 'Middle', colour: '#c4d1df', cells: cells('mcc') }, { label: 'Low', colour: '#aebccb', cells: cells('lcc') }]
+        : [{ label: 'Total', colour: '#c4d1df', cells: cells('tcc') }] }],
+      tip: (t) => { const h = hourAt(t); return <>{tipHead(t)}<div>Total <b>{rnd(v('tcc', t))}%</b></div>{layered && <div>High {rnd(v('hcc', t))}% · middle {rnd(v('mcc', t))}% · low {rnd(v('lcc', t))}%</div>}{h.cloudBase != null && <div>Cloud base {Math.round(h.cloudBase / 10) * 10} m</div>}</>; },
     };
     legend = [['High cloud', '#dfe8f3'], ['Middle', '#c4d1df'], ['Low', '#aebccb']];
     note = 'Each row is a layer of the sky; the brighter the block, the more of that layer is covered.';
@@ -345,7 +355,7 @@ export default function LocationCharts({ model, dayIdx, onDay }) {
     const left = { lo: 0, hi: 100, ticks: [0, 25, 50, 75, 100], fmt: (x) => `${x}%` };
     plot = {
       left,
-      items: [{ type: 'area', pts: fs.map((h) => [h.t, h.rh]), colour: '#7cc4ff', opacity: 0.4 }, { type: 'line', pts: fs.map((h) => [h.t, h.rh]), colour: '#7cc4ff', width: 2.6 }],
+      items: [{ type: 'area', pts: fs.filter((h) => h.rh != null).map((h) => [h.t, h.rh]), colour: '#7cc4ff', opacity: 0.4 }, { type: 'line', pts: fs.filter((h) => h.rh != null).map((h) => [h.t, h.rh]), colour: '#7cc4ff', width: 2.6 }],
       tip: (t) => <>{tipHead(t)}<div>Humidity <b>{rnd(v('rh', t))}%</b></div><div>Dew point {deg(v('td', t, fs, T))}</div></>,
     };
     legend = [['Relative humidity', '#7cc4ff']];
@@ -354,7 +364,7 @@ export default function LocationCharts({ model, dayIdx, onDay }) {
     left.fmt = (x) => `${Math.round(x)}`;
     plot = {
       left,
-      items: [{ type: 'line', pts: fs.map((h) => [h.t, h.mslp]), colour: '#c9b8ff', width: 2.8 }],
+      items: [{ type: 'line', pts: fs.filter((h) => h.mslp != null).map((h) => [h.t, h.mslp]), colour: '#c9b8ff', width: 2.8 }],
       tip: (t) => <>{tipHead(t)}<div>Pressure <b>{rnd(v('mslp', t))} hPa</b></div></>,
     };
     legend = [['Mean sea-level pressure (hPa)', '#c9b8ff']];
@@ -362,7 +372,7 @@ export default function LocationCharts({ model, dayIdx, onDay }) {
     const left = { lo: 0, hi: 40, ticks: [0, 10, 20, 30, 40], fmt: (x) => `${x}` };
     plot = {
       left,
-      items: [{ type: 'area', pts: fs.map((h) => [h.t, Math.min(40, h.vis ?? 0)]), colour: '#d5dde6', opacity: 0.35 }, { type: 'line', pts: fs.map((h) => [h.t, Math.min(40, h.vis ?? 0)]), colour: '#e8eef4', width: 2.4 }],
+      items: [{ type: 'area', pts: fs.filter((h) => h.vis != null).map((h) => [h.t, Math.min(40, h.vis)]), colour: '#d5dde6', opacity: 0.35 }, { type: 'line', pts: fs.filter((h) => h.vis != null).map((h) => [h.t, Math.min(40, h.vis)]), colour: '#e8eef4', width: 2.4 }],
       tip: (t) => { const vis = v('vis', t), fog = v('fog', t); return <>{tipHead(t)}<div>Visibility <b>{vis == null ? '—' : vis >= 10 ? Math.round(vis) : vis.toFixed(1)} km</b> · {visWord(vis)}</div>{(fog ?? 0) >= 10 && <div>Fog chance {Math.round(fog)}%</div>}</>; },
     };
     legend = [['Visibility (km, top 40)', '#e8eef4']];
@@ -372,7 +382,7 @@ export default function LocationCharts({ model, dayIdx, onDay }) {
     const right = { lo: 0, hi: 8, ticks: [0, 2, 4, 6, 8], fmt: (x) => `${x}` };
     plot = {
       left, right,
-      items: [{ type: 'area', pts: fs.map((h) => [h.t, h.sw]), colour: '#ffd36b', opacity: 0.55 }, { type: 'line', pts: fs.map((h) => [h.t, h.sw]), colour: '#ffd36b', width: 2 }, { type: 'line', axis: 'right', pts: fs.map((h) => [h.t, h.uvi]), colour: '#ff9f5a', width: 2.2, dash: '4 3' }],
+      items: [{ type: 'area', pts: fs.filter((h) => h.sw != null).map((h) => [h.t, h.sw]), colour: '#ffd36b', opacity: 0.55 }, { type: 'line', pts: fs.filter((h) => h.sw != null).map((h) => [h.t, h.sw]), colour: '#ffd36b', width: 2 }, { type: 'line', axis: 'right', pts: fs.filter((h) => h.uvi != null).map((h) => [h.t, h.uvi]), colour: '#ff9f5a', width: 2.2, dash: '4 3' }],
       tip: (t) => { const uv = v('uvi', t); return <>{tipHead(t)}<div>Sunshine power <b>{rnd(Math.max(0, v('sw', t) ?? 0))} W/m²</b></div><div>UV index {rnd(uv == null ? null : Math.max(0, uv))} · {uvWord(uv)}</div></>; },
     };
     legend = [['Solar radiation (W/m²)', '#ffd36b'], ['UV index (right)', '#ff9f5a']];
@@ -398,21 +408,51 @@ export default function LocationCharts({ model, dayIdx, onDay }) {
     note = nova.length ? 'Thunderstorm risk from MyWeatherUK’s TCM NOVA model, to the end of its Main Run (4 days); storm fuel from the UKV.'
       : 'UKV forecasts lightning to T+54; beyond that only the storm fuel (CAPE) is shown.';
   } else if (metric === 'snow') {
-    const left = domain(fs.map((h) => h.frz), { min: 0, span: 500 });
+    /* The freezing level read at the place: 0 m, the ground, whenever the air there is at or below
+       freezing. The UKV's own 0 C height stays a few hundred metres up on a frosty night under milder air
+       (Aviemore, 16 Nov 2026: -2 C with it at 315 m), shown dashed as milder air aloft. Temperatures on
+       the right; along the top, each hour's snow chance (MyWeatherUK's snow conditions index). */
+    const fz = fs.filter((h) => h.freeze != null);
+    const left = domain(fz.flatMap((h) => [h.freeze, h.warmAloft]), { min: 0, span: 500 });
     left.fmt = (x) => `${x}`;
     const right = domain(hs.flatMap((h) => [T(h.ground), T(h.t2)]), { span: 6 });
     right.fmt = (x) => `${Math.round(x)}°`;
+    const cells = fs.map((h, i) => {
+      const sc = snowChance(h.snowCond);
+      return sc ? [h.t - (i ? (h.t - fs[i - 1].t) / 2 : 18e5), h.t + (i < fs.length - 1 ? (fs[i + 1].t - h.t) / 2 : 18e5), sc.colour] : null;
+    }).filter(Boolean);
+    const anyWarm = fs.some((h) => h.warmAloft != null);
     plot = {
-      left, right,
+      left, right, band: cells.length ? 22 : 0,
       items: [
-        { type: 'area', pts: fs.map((h) => [h.t, h.frz]), colour: '#9fd8ff', opacity: 0.35 },
-        { type: 'line', pts: fs.map((h) => [h.t, h.frz]), colour: '#9fd8ff', width: 2.4 },
-        { type: 'line', axis: 'right', pts: fs.map((h) => [h.t, T(h.ground)]), colour: '#f0f6ff', width: 1.8, dash: '4 3' },
+        ...(cells.length ? [{ type: 'cells', cells }] : []),
+        { type: 'area', pts: fz.map((h) => [h.t, h.freeze]), colour: '#9fd8ff', opacity: 0.35 },
+        { type: 'line', pts: fz.map((h) => [h.t, h.freeze]), colour: '#9fd8ff', width: 2.4 },
+        ...(anyWarm ? [{ type: 'line', pts: fs.map((h) => [h.t, h.warmAloft]), colour: '#ffb37a', width: 1.8, dash: '5 4', noDot: true }] : []),
+        { type: 'line', axis: 'right', pts: hs.filter((h) => h.t2 != null).map((h) => [h.t, T(h.t2)]), colour: '#ffffff', width: 1.6 },
+        { type: 'line', axis: 'right', pts: fs.filter((h) => h.ground != null).map((h) => [h.t, T(h.ground)]), colour: '#f0f6ff', width: 1.6, dash: '4 3' },
       ],
-      tip: (t) => { const h = hourAt(t), frz = v('frz', t); return <>{tipHead(t)}<div>Freezing level <b>{frz == null ? '—' : Math.round(Math.max(0, frz) / 10) * 10} m</b></div><div>Ground {deg(v('ground', t, fs, T))}</div>{(h.snowLying ?? 0) > 0.5 && <div>Lying snow {Math.round(h.snowLying)} mm water</div>}</>; },
+      tip: (t) => {
+        const h = hourAt(t), sc = snowChance(h.snowCond), t2 = v('t2', t, hs.filter((x) => x.t2 != null)), frz = v('freeze', t, fz);
+        return (
+          <>{tipHead(t)}
+            <div>Freezing level <b>{h.freeze === 0 ? 'at the ground' : frz == null ? '—' : `${Math.round(Math.max(0, frz) / 10) * 10} m`}</b></div>
+            {h.warmAloft != null && <div>Milder air above, freezing again by about {Math.round(h.warmAloft / 10) * 10} m</div>}
+            <div>Air {deg(t2 == null ? null : T(t2))} · ground {deg(v('ground', t, fs.filter((x) => x.ground != null), T))}</div>
+            {sc && <div>Snow chance <b>{sc.word}</b></div>}
+            {(h.snowLying ?? 0) > 0.5 && <div>Lying snow {Math.round(h.snowLying)} mm of water</div>}
+          </>
+        );
+      },
     };
-    legend = [['Freezing level (m)', '#9fd8ff'], ['Ground temperature (right)', '#f0f6ff']];
+    legend = [...(fz.length ? [['Freezing level (m)', '#9fd8ff']] : []), ...(anyWarm ? [['Milder air aloft: freezing again by (m)', '#ffb37a']] : []), ['Air temperature (right)', '#ffffff'], ['Ground (right)', '#f0f6ff'],
+      ...(cells.length ? [['Snow chance (top): very low to very high', `linear-gradient(90deg,${SNOW_CHANCE.map((x) => x.colour).join(',')})`]] : [])];
+    note = 'The freezing level is measured from the ground: when the air at the ground is at (or within a few tenths of) 0 °C, it is the ground itself. The dashed line shows milder air above freezing ground, where rain can fall and freeze.';
   }
+  /* a day past the UKV (the outlook's Met Office Global): three- and six-hourly, with fewer measures */
+  const ext = hs.filter((h) => h.ext);
+  if (ext.length && !note) note = `From ${sourceName(ext[0].src)} past the UKV's last hour: every three or six hours, with fewer measures.`;
+  else if (ext.length) note += ` Later hours from ${sourceName(ext[0].src)}, every three or six hours.`;
 
   return (
     <div className="lw-glass lw-card">

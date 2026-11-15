@@ -513,3 +513,21 @@
 }
 /* the snow card's days: every other one on a phone, where ten names do not fit */
 @media (max-width: 480px) { .lw-saxis span.is-odd { display: none; } }
+
+/* ── the layout (15 Nov 2026): the hours, precipitation and detailed forecast beside the tiles, then the
+   days with the radar to their right, then thunderstorms and snow. A phone has one column in the order
+   below; an empty slot (a card with nothing to show) takes no room. ── */
+.lw-layout { display: flex; flex-direction: column; gap: 14px; }
+.lw-layout > .lw-col { display: contents; }
+.lw-slot { min-width: 0; }
+.lw-slot:empty { display: none; }
+.lw-o-hourly { order: 1; } .lw-o-precip { order: 2; } .lw-o-detail { order: 3; } .lw-o-days { order: 4; }
+.lw-o-radar { order: 5; } .lw-o-thunder { order: 6; } .lw-o-snow { order: 7; } .lw-o-tiles { order: 8; }
+@media (min-width: 1024px) {
+  .lw-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .lw-layout > .lw-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+}
+/* the hourly strip: where the hours carry on from the outlook's model past the UKV's end */
+.lw-hour.lw-h-mark { border-left: 1px dashed rgba(255, 255, 255, 0.35); border-radius: 0; justify-content: flex-start; }
+.lw-hour .lw-src-tag { margin-top: 8px; padding: 2px 6px; border-radius: 99px; font-size: 10px; font-weight: 800; letter-spacing: 0.03em; text-align: center; line-height: 1.2; color: #0b1a2c; background: rgba(255, 255, 255, 0.85); }
+.lw-hour .lw-src-sub { font-size: 10px; color: var(--ink3); text-align: center; line-height: 1.2; }
