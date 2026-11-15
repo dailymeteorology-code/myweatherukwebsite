@@ -63,9 +63,12 @@ export default function Timeline({ times, idx, onPick, loaded, label }) {
     setTip(n);
   };
   const up = () => { setDrag(false); };
-  /* with little room a label is left out rather than squeezed */
+  /* with little room a label is left out rather than squeezed: where the segments are narrower than a
+     label (ten days in a phone's bar), every second or third one is labelled instead */
   const width = ref.current?.clientWidth || 600;
   const gap = 4;
+  const need = unit === 'hour' ? 44 : unit === 'day' ? 60 : 40;     // a label's width, and air before the next
+  const stride = Math.max(1, Math.ceil(need / Math.max(1, width / Math.max(1, segs.length))));
   return (
     <div ref={ref} className={`mdt${drag ? ' is-drag' : ''}`} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
       onPointerLeave={() => { if (!drag) setTip(null); }} role="slider" aria-label="Time" aria-valuemin={0} aria-valuemax={times.length - 1} aria-valuenow={idx}
@@ -79,10 +82,11 @@ export default function Timeline({ times, idx, onPick, loaded, label }) {
       {segs.map((s, k) => {
         const left = pos(s.a), w = pos(s.b) - left, on = now >= s.a && (now < s.b || (k === segs.length - 1 && now <= s.b));
         const fill = now >= s.b ? 100 : now <= s.a ? 0 : ((now - s.a) / (s.b - s.a)) * 100;
-        const px = (w / 100) * width;
+        const px = (w / 100) * width, x0 = (left / 100) * width;
+        const labelled = (stride === 1 ? px >= need - 12 : k % stride === 0) && x0 + need - 12 <= width;
         return (
           <div key={s.key} className="mdt-seg" style={{ left: `${left}%`, width: `calc(${w}% - ${k < segs.length - 1 ? gap : 0}px)` }}>
-            {px >= (unit === 'hour' ? 40 : 46) && <span className={`mdt-lab${on ? ' is-on' : ''}`}>{s.label}</span>}
+            {labelled && <span className={`mdt-lab${on ? ' is-on' : ''}`}>{s.label}</span>}
             <div className="mdt-track"><div className={`mdt-fill${on ? ' is-on' : ''}`} style={{ width: `${fill}%` }} /></div>
           </div>
         );

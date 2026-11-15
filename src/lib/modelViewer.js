@@ -2066,9 +2066,11 @@ function glassPanel(ctx, x, y, w, h, r, u, theme) {
    (C.brand, C.time); both have their own headline, badge and key. */
 const STRATA = {
   light: { ink: '#0B1A31', sub: 'rgba(11,26,49,0.84)', muted: 'rgba(11,26,49,0.64)', faint: 'rgba(11,26,49,0.4)', air: '236,242,249', halo: 'rgba(255,255,255,0.92)',
-    plate: '#ffffff', stroke: 'rgba(11,26,49,0.14)', clearing: 'rgba(246,249,253,0.68)', casing: 'rgba(255,255,255,0.96)', shadow: 'rgba(11,26,49,0.22)', accent: ACCENT },
+    plate: '#ffffff', stroke: 'rgba(11,26,49,0.14)', clearing: 'rgba(246,249,253,0.68)', casing: 'rgba(255,255,255,0.96)', shadow: 'rgba(11,26,49,0.22)', accent: ACCENT,
+    ring: 'rgba(11,26,49,0.36)' },
   dark: { ink: '#F5F8FC', sub: 'rgba(236,242,250,0.86)', muted: 'rgba(228,236,247,0.74)', faint: 'rgba(228,236,247,0.46)', air: '6,10,20', halo: 'rgba(0,0,0,0.62)',
-    plate: 'rgba(10,16,28,0.84)', stroke: 'rgba(255,255,255,0.2)', clearing: 'rgba(6,10,20,0.52)', casing: 'rgba(0,0,0,0.55)', shadow: 'rgba(0,0,0,0.4)', accent: '#56C8FF' },
+    plate: 'rgba(10,16,28,0.84)', stroke: 'rgba(255,255,255,0.2)', clearing: 'rgba(6,10,20,0.52)', casing: 'rgba(0,0,0,0.55)', shadow: 'rgba(0,0,0,0.4)', accent: '#56C8FF',
+    ring: 'rgba(255,255,255,0.45)' },
 };
 const themeOf = (st) => STRATA[st.glass === 'light' ? 'light' : 'dark'];
 const spacing = (ctx, px) => { if ('letterSpacing' in ctx) ctx.letterSpacing = `${px}px`; };
@@ -2107,7 +2109,71 @@ export function chromeTop(R, u, C) { return C ? headLayout(R, u, C).bottom : R.y
 function keyHeight(K, u) {
   const sc = K.scale || {};
   if (sc.families) return 18 * u + 12 * u + (sc.order || sc.families).length * 21 * u + 22 * u;
+  if (isCatKey(sc)) return 23 * u + catRows(sc, u).length * 24 * u;
   return (sc.keySteps || sc.ticks || []).length > 1 ? 64 * u : 30 * u;
+}
+
+/* a key of named classes (the snow conditions index, TCM FROST's snow risk, the weather type): a swatch
+   and its name for every class, in rows that wrap, so every name shows (on one shared bar each class had
+   66 units, and most of the names were dropped to stop them overlapping) */
+const KEY_W = 620;
+const isCatKey = (sc) => !!(sc.discrete && sc.keyLabel && (sc.keySteps || sc.ticks || []).length > 1);
+let measureCtx = null;
+function catRows(sc, u) {
+  measureCtx ||= document.createElement('canvas').getContext('2d');
+  measureCtx.font = `600 ${15 * u}px ${FONT}`;
+  const sw = 16 * u, gap = 7 * u, pad = 18 * u, maxW = KEY_W * u;
+  const rows = [[]];
+  let at = 0;
+  for (const v of sc.keySteps || sc.ticks) {
+    const txt = String(sc.keyLabel(v) || '');
+    if (!txt) continue;
+    const w = sw + gap + measureCtx.measureText(txt).width;
+    if (at > 0 && at + w > maxW) { rows.push([]); at = 0; }
+    rows[rows.length - 1].push({ v, txt, x: at, w });
+    at += w + pad;
+  }
+  return rows;
+}
+function drawCatKey(ctx, R, u, K, foot, M, th) {
+  const sc = K.scale, rows = catRows(sc, u), kh = keyHeight(K, u);
+  const titleSize = 18 * u, labSize = 15 * u, sw = 16 * u, sh = 11 * u, gap = 7 * u, rowH = 24 * u;
+  ctx.font = `650 ${titleSize}px ${FONT}`;
+  const title = K.keyTitle || K.variable || '';
+  const titleW = ctx.measureText(title).width;
+  ctx.font = `600 ${labSize}px ${FONT}`;
+  const unitW = K.unit ? ctx.measureText(K.unit).width + 8 * u : 0;
+  const rowsW = Math.max(0, ...rows.map((r) => (r.length ? r[r.length - 1].x + r[r.length - 1].w : 0)));
+  const w = Math.min(Math.min(R.w - 2 * M, KEY_W * u), Math.max(rowsW, titleW + unitW));
+  const x = R.x + M, top = foot - kh;
+  clearing(ctx, x - 14 * u, top - 10 * u, w + 28 * u, kh + 18 * u, u, th);
+  const tb = top + 15 * u;
+  ctx.font = `650 ${titleSize}px ${FONT}`;
+  const shownTitle = fitText(ctx, title, Math.max(60 * u, w - unitW));
+  inkText(ctx, shownTitle, x, tb, th.ink, th.halo, 4 * u);
+  if (K.unit) {
+    const at = x + ctx.measureText(shownTitle).width + 8 * u;
+    ctx.font = `600 ${labSize}px ${FONT}`;
+    inkText(ctx, K.unit, at, tb, th.muted, th.halo, 4 * u);
+  }
+  ctx.font = `600 ${labSize}px ${FONT}`;
+  rows.forEach((row, ri) => {
+    const cy = tb + 20 * u + ri * rowH;
+    for (const it of row) {
+      const c = colourAt({ ...sc, floor: null }, it.v) || [120, 130, 140, 255];
+      const sx = x + it.x;
+      ctx.save();
+      ctx.shadowColor = th.shadow; ctx.shadowBlur = 3 * u; ctx.shadowOffsetY = 1 * u;
+      roundRect(ctx, sx, cy - sh / 2, sw, sh, 3.5 * u);
+      ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+      ctx.fill();
+      ctx.restore();
+      roundRect(ctx, sx, cy - sh / 2, sw, sh, 3.5 * u);
+      ctx.lineWidth = 1.2 * u; ctx.strokeStyle = th.ring; ctx.stroke();
+      inkText(ctx, it.txt, sx + sw + gap, cy + 5.2 * u, th.sub, th.halo, 3.5 * u);
+    }
+  });
+  return { h: kh, right: x + w };
 }
 /** How much of the foot of a graphic the keys take. */
 export function chromeFoot(u, C) {
@@ -2337,6 +2403,7 @@ function drawWarnKey(ctx, R, u, C, M, th) {
 function drawKey(ctx, R, u, K, foot, M, th) {
   const sc = K.scale || {};
   if (sc.families) return drawFamiliesKey(ctx, R, u, K, foot, M, th);
+  if (isCatKey(sc)) return drawCatKey(ctx, R, u, K, foot, M, th);
   const ticks = sc.ticks || [];
   const steps = sc.keySteps || ticks;
   const hasBar = steps.length > 1;
