@@ -487,6 +487,15 @@ const PROB_FAMILIES = {
   sky: ['#F1F5F9', '#E2E8F0', '#CBD5E1', '#B6C2D2', '#94A3B8', '#7C8BA1', '#64748B', '#526079', '#475569', '#334155'],
 };
 for (const [k, cols] of Object.entries(PROB_FAMILIES)) SCALES[`prob_${k}`] = chance(cols);
+/* the ensembles in Forecast mode (15 Nov 2026): their means use the field's own colours, the most
+   extreme member too; the spread between the members goes from calm blue to an uncertain red */
+const SPREAD = (top) => ({ stops: [[0, '#ffffff', 0], [top * 0.05, '#e0f2fe', 120], [top * 0.1, '#bae6fd', 160], [top * 0.2, '#7dd3fc', 190], [top * 0.3, '#38bdf8', 210],
+  [top * 0.4, '#fbbf24', 225], [top * 0.6, '#f97316', 238], [top * 0.8, '#dc2626', 248], [top, '#7f1d1d', 255]],
+ticks: [0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8].map((f) => +(top * f).toFixed(1)) });
+Object.assign(SCALES, {
+  t2_spread: SPREAD(10), mslp_spread: SPREAD(20),
+  gust_ensmax: SCALES.gust10, precip_24h_ensmax: SCALES.precip_24h, runoff_24h: SCALES.precip_24h, snow_24h: SCALES.snow_acc,
+});
 
 /* On the light map (the STRATA look) white has nothing to stand out against: cloud is a cool grey
    veil, deeper where it is thicker; snow cover lilac; the simulated satellite and outgoing longwave

@@ -454,3 +454,9 @@ from .mf import DIFFERENCED_MF, MODELS_MF, SOURCES_MF   # noqa: E402
 SOURCES_MORE.update(SOURCES_MF)
 MODELS_MORE += MODELS_MF
 DIFFERENCED_MORE |= DIFFERENCED_MF
+
+# the ensembles' means (and spreads) in Forecast mode (mdata/ensmean.py)
+from .ensmean import MODELS_ENS, SOURCES_ENS, VARIABLES_ENS   # noqa: E402
+SOURCES_MORE.update(SOURCES_ENS)
+MODELS_MORE += MODELS_ENS
+VARIABLES_MORE.update(VARIABLES_ENS)

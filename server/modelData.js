@@ -33,13 +33,14 @@ const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg',
    both read the same DWD files (mdata/models.py ICON keeps each on D: once fetched) */
 const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer', 'frost', 'icon', 'icon_europe', 'mix',
   'aigfs', 'gdps', 'meps',               // 15 Nov 2026: NOAA AIGFS, ECCC GDPS, MET Norway MEPS (mdata/models_more.py)
-  'arpege', 'arome']);                   // Météo-France ARPEGE (wide grid) and AROME (the UK's 2 km grid): mdata/mf.py
+  'arpege', 'arome',                     // Météo-France ARPEGE (wide grid) and AROME (the UK's 2 km grid): mdata/mf.py
+  'ecmwf_ensm', 'aifs_ensm']);           // the ensembles' means in Forecast mode, from the Chances view's members (mdata/ensmean.py)
 /* ICON's files are each the whole of Europe (~1 MB a field a step), so every layer of a run is
    ~5 GB: only the much-used layers are warmed for it; the rest are made when someone opens them */
 const WARM_FIRST_ONLY = new Set(['icon', 'icon_europe', 'aigfs', 'gdps', 'meps', 'arpege', 'arome']);   // the new models too: the wide grid is bigger now
 /* MWUK Mix (mdata/mix.py) is made from the UKV's and ICON's own frames when someone opens it: never warmed, so it
    never adds downloads of its own in the background */
-const NO_WARM = new Set(['mix']);
+const NO_WARM = new Set(['mix', 'ecmwf_ensm', 'aifs_ensm']);   // the ensemble means: 50 members a field, made only when opened
 /* TCM FROST, MyWeatherUK's snow model: its runs come from its own mirror (server/tcmFrost.js),
    already made, on the 2 km grid; nothing is ever fetched for it here */
 const MIRRORED = new Set(['frost']);

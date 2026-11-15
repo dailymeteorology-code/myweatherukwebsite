@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.52.003 | 2026-11-15 | Patch | — | Model Data: Météo-France's ARPEGE (0.1° over Europe, 79 layers with its own precipitation type and upper air) and AROME (2.5 km on the UK map, south of 55.4°N, 42 layers) | Model Data STRATA redesign (Nov) |
+| 5.52.004 | 2026-11-15 | Patch | — | Model Data: ECMWF ENS and AIFS ENS in Forecast mode, as the mean of their 50 members, with the spread between them, the strongest gust and the wettest member | Model Data STRATA redesign (Nov) |
+| 5.52.003 | 2026-11-15 | Patch | 73ab61b | Model Data: Météo-France's ARPEGE (0.1° over Europe, 79 layers with its own precipitation type and upper air) and AROME (2.5 km on the UK map, south of 55.4°N, 42 layers) | Model Data STRATA redesign (Nov) |
 | 5.52.002 | 2026-11-15 | Patch | d904f9c | Model Data: three new models (NOAA's AI GFS, Canada's GDPS, MET Norway's HARMONIE at 2.5 km) and 25 layers worked out from other layers (wet-bulb, humidex, frost and icy-surface risk, Beaufort force, lapse rates, pressure and temperature changes and more) | Model Data STRATA redesign (Nov) |
 | 5.52.001 | 2026-11-15 | Patch | 7c7a694 | Location Weather: rain splashing on the top card again (the warnings card when there is one), snow that settles along it, round its corners and now and then off its ends, and frost on the glass below freezing | Location Weather overhaul (Nov) |
 | 5.52.000 | 2026-11-15 | Update | 21c6708 | Model Data: the wide map grown to Alaska, Canada, Greenland, all of Scandinavia and North Africa; a region picker (the UK and Ireland, Europe, North Africa and North America, down to countries and regions); no descriptions under layer names; the radar's rain, sleet, snow and ice steered by what the airports report | Model Data STRATA redesign (Nov) |

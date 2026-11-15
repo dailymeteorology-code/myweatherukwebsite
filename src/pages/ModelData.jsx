@@ -48,7 +48,7 @@ import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES, SNOW_AMOUNT_LEVELS, cmText } from '@
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Screen', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE', arpege: 'ARPEGE', arome: 'AROME' };
+const SHORT_NAMES = { frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE', arpege: 'ARPEGE', arome: 'AROME', ecmwf_ensm: 'ECMWF ENS mean', aifs_ensm: 'AIFS ENS mean' };
 /* who makes each model, its grid, and where the files come from (picker groups and the credit line) */
 const MODEL_INFO = {
   frost: ['MyWeatherUK', '2 km', 'MyWeatherUK’s own snow model'],
@@ -66,6 +66,8 @@ const MODEL_INFO = {
   meps: ['MET Norway', '2.5 km', 'MET Norway MEPS (HARMONIE-AROME)', 'MET Norway'],
   /* Météo-France: ARPEGE over Europe on the wide grid, AROME at 2.5 km on the UK's 2 km grid (south of 55.4°N) */
   arpege: ['Météo-France', '0.1°', 'Météo-France open data', 'Météo-France'], arome: ['Météo-France', '2.5 km', 'Météo-France open data', 'Météo-France'],
+  /* the ensembles in Forecast mode: the mean of their 50 members (tools/modeldata/mdata/ensmean.py) */
+  ecmwf_ensm: ['ECMWF', '0.25°', 'ECMWF open data, the mean of 50 members', 'ECMWF'], aifs_ensm: ['ECMWF', '0.25°', 'ECMWF open data, the mean of 50 members', 'ECMWF'],
 };
 /* a regional model's own area (west, south, east, north), brought into view when it is picked while
    the map is somewhere else: MEPS covers the Nordic countries and the Baltic only */
