@@ -15,8 +15,9 @@ export const GRIDS = {
   eu: { name: 'eu', lat0: 50, lon0: -12, nx: 1083, ny: 708, dx: 8000, x0: -4428000, yTop: 2924000 },
 };
 /** The grid a model's frames are on (mdata/common.py MODEL_GRID; TCM FROST, MyWeatherUK's snow
-    model, is made on the UKV's). */
-export const gridOfModel = (id) => (id === 'ukv' || id === 'frost' || !id ? 'uk' : 'eu');
+    model, is made on the UKV's, and so is DWD ICON-EU's UK view, 'icon': its Europe view,
+    'icon_europe', is on the wide grid). */
+export const gridOfModel = (id) => (id === 'ukv' || id === 'frost' || id === 'icon' || !id ? 'uk' : 'eu');
 
 const D = Math.PI / 180;
 const A = 6378137, FL = 1 / 298.257223563, E2 = FL * (2 - FL), E = Math.sqrt(E2);

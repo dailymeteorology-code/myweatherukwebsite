@@ -64,9 +64,47 @@ def frost_entry():
             'variables': ['snow_risk', 'snow_chance', 'snow_expected', 'snow_24h'], 'runs': runs}
 
 
+def prune_icon_raw(keep_hours=30, cap_gb=40.0):
+    """ICON-EU's fetched files (models.ICON._msg): runs older than `keep_hours` go (DWD itself keeps
+    about a day), then the oldest runs until the whole is under `cap_gb`; half-written files go too."""
+    import shutil
+    from .models import ICON_RAW
+    if not ICON_RAW.exists():
+        return
+    now = datetime.now(timezone.utc)
+    runs = []
+    for p in ICON_RAW.iterdir():
+        if p.is_dir() and len(p.name) == 10 and p.name.isdigit():
+            age = (now - datetime.strptime(p.name, '%Y%m%d%H').replace(tzinfo=timezone.utc)).total_seconds() / 3600
+            if age > keep_hours:
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                runs.append(p)
+        elif p.name.endswith('.tmp') and time.time() - p.stat().st_mtime > 3600:
+            p.unlink(missing_ok=True)
+    import os
+    # scandir: on Windows each entry's size comes with the directory listing, no file is opened
+    sizes = {p: sum(e.stat().st_size for e in os.scandir(p) if e.is_file()) for p in runs}
+    total = sum(sizes.values())
+    for p in sorted(runs, key=lambda x: x.name):                 # oldest first, never the newest run
+        if total <= cap_gb * 1e9 or p == max(runs, key=lambda x: x.name):
+            break
+        shutil.rmtree(p, ignore_errors=True)
+        total -= sizes[p]
+    for p in runs:
+        if p.exists():
+            for f in p.glob('*.tmp'):
+                if time.time() - f.stat().st_mtime > 3600:
+                    f.unlink(missing_ok=True)
+
+
 def prune(keep_hours=36):
     """Frames of runs older than `keep_hours` (relative to the newest run of that model)."""
     import shutil
+    try:
+        prune_icon_raw()
+    except Exception:
+        pass
     model_dirs = []
     for g in GRIDS:                                        # every grid keeps its own frames
         root = frames_root(g)

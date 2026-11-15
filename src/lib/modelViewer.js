@@ -24,7 +24,8 @@ const FRAME_V = 3;
 /* and per layer, when one layer's frames change: ptype v2 (12 Nov 2026) carries its kind and strength */
 const VAR_V = { ptype: 2 };
 /* and per model, when a model's frames change: AIFS v2 (13 Nov 2026) its precipitation no longer 1000x */
-const MODEL_V = { aifs: 2 };
+/* ICON-EU 2: its weather symbols and precipitation types remade with rounded edges (15 Nov 2026) */
+const MODEL_V = { aifs: 2, icon: 2, icon_europe: 2 };
 
 /* The display grid in use (lib/modelGrids): the UKV's 2 km grid or the global models' wide 8 km
    one. NX, NY, GRID and REGIONS are live bindings: setGrid() switches them for every importer. */
@@ -279,6 +280,63 @@ const SCALES = {
   soil_t: { stops: TEMP, ticks: [-10, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
   soil_m: { stops: [[5, '#8c5a2b', 200], [15, '#c99b54', 190], [25, '#d8c27a', 180], [35, '#9fce8a', 175], [45, '#4fa3c7', 195], [60, '#2a5fa8', 215],
     [80, '#1d3f80', 230]], ticks: [5, 15, 25, 35, 45, 60, 80] },
+  /* added 15 Nov 2026 with DWD ICON-EU's further fields */
+  sp: { stops: [[700, '#5b2a86', 200], [850, '#3d5fd0', 185], [950, '#3d93d8', 165], [990, '#6cc04a', 150], [1010, '#efd23a', 160], [1030, '#f08b2c', 180]],
+    ticks: [700, 850, 950, 990, 1010, 1030] },
+  q2: { stops: [[1, '#8c5a2b', 190], [3, '#c99b54', 180], [5, '#9fce8a', 175], [8, '#4fa3c7', 190], [12, '#2a5fa8', 210], [16, '#5b2a86', 225], [20, '#e05cb4', 240]],
+    ticks: [1, 3, 5, 8, 12, 16, 20] },
+  t2max6: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
+  t2min6: { stops: TEMP, ticks: [-15, -8, -3, 0, 3, 6, 10, 14, 18, 22, 26, 30], zero: true },
+  cape_con: { stops: CAPE, floor: 50, ticks: [100, 300, 600, 1000, 1500, 2500, 4000] },
+  /* the lightning potential index (J/kg): where ICON's convection makes lightning likely, from about 1 */
+  lpi: { stops: [[0.5, '#fde68a', 0], [1, '#fde68a', 160], [3, '#fbbf24', 200], [7, '#f97316', 225], [15, '#dc2626', 238], [30, '#a21caf', 248], [60, '#ffffff', 255]],
+    floor: 0.5, discrete: true, ticks: [1, 3, 7, 15, 30, 60] },
+  conv_base: { stops: [[0, '#ffffff', 230], [150, '#e3e6ea', 200], [300, '#b8c4d6', 170], [600, '#8aa0c0', 140], [1200, '#5a7aa8', 100], [2500, '#3d5fd0', 60], [5000, '#2a3a5c', 0]],
+    ticks: [0, 150, 300, 600, 1200, 2500] },
+  conv_top: { stops: [[1000, '#cfe3f7', 0], [2000, '#9fd3ef', 140], [4000, '#5aa7e8', 180], [6000, '#efd23a', 205], [8000, '#f08b2c', 222], [10000, '#dc3a3a', 235], [12000, '#a52284', 245]],
+    ticks: [2000, 4000, 6000, 8000, 10000, 12000] },
+  thermal_top: { stops: [[100, '#2a3a5c', 0], [300, '#3d5fd0', 150], [600, '#3d93d8', 170], [1000, '#6cc04a', 185], [1500, '#efd23a', 200], [2200, '#f08b2c', 215], [3000, '#dc3a3a', 230]],
+    ticks: [300, 600, 1000, 1500, 2200, 3000] },
+  snow_line: { stops: HEIGHT, ticks: [0, 300, 600, 1000, 1500, 2200, 3000, 4000] },
+  cloud_water: { stops: [[0.01, '#e9eef5', 0], [0.05, '#e9eef5', 110], [0.1, '#cfdcea', 150], [0.25, '#a8bdd8', 180], [0.5, '#7f9cc8', 205], [1, '#5a7aa8', 220], [2, '#2a3a5c', 235]],
+    floor: 0.01, ticks: [0.05, 0.1, 0.25, 0.5, 1, 2] },
+  cloud_ice: { stops: [[0.005, '#eef4fb', 0], [0.02, '#dfe9f5', 120], [0.05, '#c3d3f2', 160], [0.1, '#9fb0ea', 190], [0.25, '#8a7fe0', 215], [0.5, '#a35ad2', 230], [1, '#e05cb4', 240]],
+    floor: 0.005, ticks: [0.02, 0.05, 0.1, 0.25, 0.5, 1] },
+  col_rain: { stops: [[0.01, '#a9d8f7', 0], [0.05, '#a9d8f7', 140], [0.1, '#5aa7e8', 180], [0.25, '#2f6fd4', 205], [0.5, '#1d9f8e', 220], [1, '#6cc04a', 230], [2, '#efd23a', 240], [4, '#dc3a3a', 250]],
+    floor: 0.01, ticks: [0.05, 0.1, 0.25, 0.5, 1, 2, 4] },
+  col_snow: { stops: [[0.01, '#dfe9f5', 0], [0.05, '#dfe9f5', 140], [0.1, '#c3d3f2', 180], [0.25, '#9fb0ea', 205], [0.5, '#8a7fe0', 220], [1, '#a35ad2', 232], [2, '#e05cb4', 242], [4, '#ffffff', 252]],
+    floor: 0.01, ticks: [0.05, 0.1, 0.25, 0.5, 1, 2, 4] },
+  /* ICON's own picture of the clouds as a satellite would see them: infrared (cold tops white, like
+     a real infrared image) and water vapour (moist air white and blue, dry air dark and brown) */
+  sim_ir: { stops: [[-70, '#ffffff', 245], [-55, '#e8edf4', 235], [-40, '#c3ccd8', 210], [-25, '#97a3b3', 170], [-10, '#6f7b8b', 110], [0, '#4a5563', 50], [15, '#2a313a', 0]],
+    ticks: [-70, -55, -40, -25, -10, 0, 15] },
+  sim_wv: { stops: [[-65, '#ffffff', 235], [-55, '#cfe3f7', 210], [-48, '#7fb6f0', 180], [-42, '#3d7fe0', 150], [-36, '#2a3a5c', 120], [-28, '#8c5a2b', 160], [-20, '#c99b54', 190]],
+    ticks: [-65, -55, -48, -42, -36, -28, -20] },
+  sw_diffuse: { stops: RAD, ticks: [0, 50, 100, 200, 300, 500] },
+  lw_net: { stops: DIVERGE(-150, 50), ticks: [-150, -100, -50, 0, 25, 50] },
+  albedo: { stops: [[5, '#1f2f5c', 0], [10, '#3d5fd0', 120], [20, '#6cc04a', 160], [35, '#cfe3f7', 190], [60, '#eef4fb', 220], [85, '#ffffff', 240]],
+    ticks: [10, 20, 35, 60, 85] },
+  runoff_total: { stops: TOTAL, floor: 1, discrete: true, ticks: [1, 2, 5, 10, 15, 20, 30, 50, 75, 100] },
+  soil_t18: { stops: TEMP, ticks: [-3, 0, 3, 6, 10, 14, 18, 22, 26], zero: true },
+  soil_t54: { stops: TEMP, ticks: [0, 3, 6, 10, 14, 18, 22, 26] },
+  soil_t162: { stops: TEMP, ticks: [3, 6, 10, 14, 18, 22] },
+  soil_m27: { stops: [[5, '#8c5a2b', 200], [15, '#c99b54', 190], [25, '#d8c27a', 180], [35, '#9fce8a', 175], [45, '#4fa3c7', 195], [60, '#2a5fa8', 215],
+    [80, '#1d3f80', 230]], ticks: [5, 15, 25, 35, 45, 60, 80] },
+  soil_m81: { stops: [[5, '#8c5a2b', 200], [15, '#c99b54', 190], [25, '#d8c27a', 180], [35, '#9fce8a', 175], [45, '#4fa3c7', 195], [60, '#2a5fa8', 215],
+    [80, '#1d3f80', 230]], ticks: [5, 15, 25, 35, 45, 60, 80] },
+  /* the model's own hills, smoothed to its 6.5 km grid (Ben Nevis is about 900 m in ICON-EU) */
+  orog: { stops: [[0, '#2a5fa8', 0], [50, '#6cc04a', 150], [200, '#a6cf3e', 165], [400, '#efd23a', 180], [700, '#c99b54', 195], [1000, '#8c5a2b', 210], [1500, '#ffffff', 225]],
+    ticks: [50, 200, 400, 700, 1000, 1500] },
+  t300: { stops: TEMP.map(([v, c, a]) => [v * 0.8 - 52, c, a]), ticks: [-64, -58, -54, -50, -46, -40] },
+  rh925: { stops: PCT_DRY, ticks: [0, 20, 40, 60, 80, 100] },
+  rh500: { stops: PCT_DRY, ticks: [0, 20, 40, 60, 80, 100] },
+  wind200: { stops: JET, ticks: [80, 100, 120, 140, 160, 180, 210, 250] },
+  w500: { stops: [[-3, '#2b4fb3', 230], [-1.5, '#3d7fe0', 210], [-0.6, '#7fb6f0', 170], [-0.2, '#cfe3f7', 90], [0.2, '#ffffff', 0], [0.6, '#f6d3a3', 90], [1.5, '#f0a050', 170], [3, '#c2552a', 210]],
+    ticks: [-3, -1.5, -0.6, 0, 0.6, 1.5, 3] },
+  cloud850: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
+  cloud700: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
+  cloud500: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
+  cloud300: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
   /* TCM FROST, MyWeatherUK's snow model (lib/frostKey): its four risk levels, the chance of snow
      falling in each period, and the snow expected to fall, since the run began and in 24 hours */
   snow_risk: { stops: SNOW_RISK_LEVELS.map((l, i) => [l.level, l.colour, [150, 190, 215, 235][i]]), floor: 1, discrete: true,
@@ -331,7 +389,11 @@ const BANDS = { t2: 1, t2max: 1, t2min: 1, t2max3: 1, t2min3: 1, td2: 1, tskin: 
   rh2: 5, rh700: 5, rh850: 5, wind10: 5, gust10: 5, gust_max: 5, gust_peak: 5, wind100: 5, wind925: 5, wind850: 10, wind700: 10, wind500: 10, wind300: 10, wind250: 10,
   mslp: 2, z500: 4, z850: 2, thick: 3, trop_p: 25, tcc: 10, lcc: 10, mcc: 10, hcc: 10, cloud_1000ft: 10, conv_cloud: 10, pw: 2, frz: 100, wbfz: 100, hpbl: 100,
   cape_mu: 100, cape_sb: 100, cape_ml: 100, cin_sb: 25, cin_mu: 25, cin_ml: 25, li: 1, srh3: 25, sw_down: 50, sw_direct: 50, lw_down: 10, uv_down: 0.1, shf: 25, lhf: 25,
-  olr: 10, vort500: 2, w700: 0.25, mwp: 1, pp1d: 1, frozen_pct: 10 };
+  olr: 10, vort500: 2, w700: 0.25, mwp: 1, pp1d: 1, frozen_pct: 10,
+  /* DWD ICON-EU's further fields (15 Nov 2026) */
+  t2max6: 1, t2min6: 1, sp: 2, q2: 0.5, t300: 2, rh925: 5, rh500: 5, wind200: 10, w500: 0.25, cape_con: 100, snow_line: 100, thermal_top: 100,
+  conv_top: 500, sim_ir: 2, sim_wv: 1, sw_diffuse: 25, lw_net: 10, albedo: 5, orog: 50, soil_t18: 1, soil_t54: 1, soil_t162: 1,
+  cloud850: 10, cloud700: 10, cloud500: 10, cloud300: 10 };
 for (const [k, band] of Object.entries(BANDS)) SCALES[k].band = band;
 export const scaleFor = (key) => SCALES[key] || { stops: TEMP, ticks: [] };
 /** Does this scale paint the whole map nearly solid (temperature, wind, humidity…)? Rain and the like

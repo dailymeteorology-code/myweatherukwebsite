@@ -29,13 +29,18 @@ const TOOL = path.resolve(HERE, '..', 'tools', 'modeldata');
 const DATA = process.env.MODELDATA_DIR || (fs.existsSync('D:/') ? 'D:/MyWeatherUK-data/modeldata' : path.join(HERE, 'data', 'modeldata'));
 export const MODELDATA_DIR = DATA;
 const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg', 'night_lights.png', 'lines.json', 'cities.json', 'grid.json', 'roads.json', 'roads.bin']);
-const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer', 'frost']);
+/* DWD ICON-EU (15 Nov 2026) twice: 'icon' on the UKV's 2 km grid, 'icon_europe' on the wide one;
+   both read the same DWD files (mdata/models.py ICON keeps each on D: once fetched) */
+const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer', 'frost', 'icon', 'icon_europe']);
+/* ICON's files are each the whole of Europe (~1 MB a field a step), so every layer of a run is
+   ~5 GB: only the much-used layers are warmed for it; the rest are made when someone opens them */
+const WARM_FIRST_ONLY = new Set(['icon', 'icon_europe']);
 /* TCM FROST, MyWeatherUK's snow model: its runs come from its own mirror (server/tcmFrost.js),
    already made, on the 2 km grid; nothing is ever fetched for it here */
 const MIRRORED = new Set(['frost']);
 const ENS_MODELS = new Set(['ecmwf_ens', 'aifs_ens', 'gefs']);
 /* each model's grid (mdata/common.py MODEL_GRID): its frames are kept apart, per grid */
-export const gridOf = (model) => (model === 'ukv' || model === 'frost' ? 'uk' : 'eu');
+export const gridOf = (model) => (model === 'ukv' || model === 'frost' || model === 'icon' ? 'uk' : 'eu');
 const GRIDS = new Set(['uk', 'eu']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
@@ -244,7 +249,7 @@ function refreshCatalog() {
         if (!r) continue;
         const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';
         const first = PREFETCH.filter((x) => m.variables?.includes(x));
-        const rest = r.complete ? (m.variables || []).filter((x) => !first.includes(x)) : [];
+        const rest = r.complete && !WARM_FIRST_ONLY.has(m.id) ? (m.variables || []).filter((x) => !first.includes(x)) : [];
         for (const v of [...first, ...rest]) warm.push([m.id, tag, v]);
       }
       const wanted = new Set(warm.map(([mid, tag, v]) => `${mid}/${tag}/${v}`));

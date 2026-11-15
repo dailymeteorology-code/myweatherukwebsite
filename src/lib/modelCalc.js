@@ -114,13 +114,25 @@ export function calcCentres(a) {
       v[y * w + x] = Number.isNaN(t) ? -9999 : t;
     }
   }
+  /* No centre beside missing data. Where a model's own area ends (ICON-EU's at 23.5 W, 15 Nov 2026)
+     a low cut off by the edge has its lowest point on the edge, not its centre, and was marked
+     there. The cells within two (~80 km) of missing data are never a centre themselves, but they
+     still count against their neighbours, so the cell just inside the edge is not taken for the
+     lowest either. */
+  const near = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (v[y * w + x] > -9000) continue;
+      for (let yy = Math.max(0, y - 2); yy <= Math.min(h - 1, y + 2); yy++) for (let xx = Math.max(0, x - 2); xx <= Math.min(w - 1, x + 2); xx++) near[yy * w + xx] = 1;
+    }
+  }
   v = boxBlur(v, w, h, 1);
   const R = Math.max(3, Math.round(600 / ((S * a.dx) / 1000)));          // ~600 km in coarse cells
   const out = [];
   for (let y = 2; y < h - 2; y++) {
     for (let x = 2; x < w - 2; x++) {
       const i = y * w + x, c = v[i];
-      if (c < -9000) continue;
+      if (c < -9000 || near[i]) continue;
       let isMin = true, isMax = true, sum = 0, n = 0;
       for (let dy = -R; dy <= R && (isMin || isMax); dy++) {
         const yy = y + dy;

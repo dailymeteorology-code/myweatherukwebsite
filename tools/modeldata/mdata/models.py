@@ -15,15 +15,19 @@ UKV IS the display grid and is never resampled.
 """
 from __future__ import annotations
 
+import bz2
 import concurrent.futures as cf
 import io
+import os
 import re
+import threading
+import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
-from .common import NC_LOCK, NX, NY, X0, DX, RUN_WINDOW_H, recent_runs, regular_frac, smooth_sample
+from .common import DATA, NC_LOCK, NX, NY, X0, DX, RUN_WINDOW_H, _replace, recent_runs, regular_frac, smooth_sample
 
 from nova.io_aws import decode_grib, ecmwf_index, exists, fetch_ranges, get, open_nc   # noqa: E402
 
@@ -248,6 +252,42 @@ VARIABLES = {
     'sw_direct':    dict(label='Direct sunshine (radiation)', unit='W/m²', group='Radiation & surface', lo=0, hi=1100),
     'lhf':          dict(label='Latent heat flux (evaporation)', unit='W/m²', group='Radiation & surface', lo=-100, hi=600),
     'olr':          dict(label='Outgoing longwave (satellite-like cloud tops)', unit='W/m²', group='Radiation & surface', lo=80, hi=340),
+    # added 15 Nov 2026 with DWD ICON-EU: every further field it publishes that makes a map
+    'sp':           dict(label='Surface pressure', unit='hPa', group='Wind & pressure', lo=600, hi=1060),
+    'q2':           dict(label='Specific humidity (2 m)', unit='g/kg', group='Temperature', lo=0, hi=25),
+    't2max6':       dict(label='Max temperature (past 6 h)', unit='°C', group='Temperature', lo=-35, hi=45),
+    't2min6':       dict(label='Min temperature (past 6 h)', unit='°C', group='Temperature', lo=-35, hi=45),
+    'cape_con':     dict(label='CAPE (convection scheme)', unit='J/kg', group='Convection', lo=0, hi=5000, scale='sqrt'),
+    'lpi':          dict(label='Lightning potential index', unit='J/kg', group='Convection', lo=0, hi=150, scale='sqrt'),
+    'conv_base':    dict(label='Shower cloud base (above ground)', unit='m', group='Convection', lo=0, hi=5000, scale='sqrt'),
+    'conv_top':     dict(label='Shower cloud tops (above sea level)', unit='m', group='Convection', lo=0, hi=15000),
+    'thermal_top':  dict(label='Thermal tops (dry convection, above sea level)', unit='m', group='Convection', lo=0, hi=4000),
+    'snow_line':    dict(label='Snow line (snowfall limit, above sea level)', unit='m', group='Snow & ice', lo=0, hi=4000),
+    'cloud_water':  dict(label='Cloud water (whole column)', unit='kg/m²', group='Cloud & visibility', lo=0, hi=3, scale='sqrt'),
+    'cloud_ice':    dict(label='Cloud ice (whole column)', unit='kg/m²', group='Cloud & visibility', lo=0, hi=1.5, scale='sqrt'),
+    'col_rain':     dict(label='Rain in the air (whole column)', unit='kg/m²', group='Precipitation', lo=0, hi=5, scale='sqrt'),
+    'col_snow':     dict(label='Snow in the air (whole column)', unit='kg/m²', group='Snow & ice', lo=0, hi=5, scale='sqrt'),
+    'sim_ir':       dict(label='Simulated satellite: infrared (10.8 µm)', unit='°C', group='Cloud & visibility', lo=-90, hi=40),
+    'sim_wv':       dict(label='Simulated satellite: water vapour (6.2 µm)', unit='°C', group='Cloud & visibility', lo=-80, hi=-5),
+    'sw_diffuse':   dict(label='Diffuse solar radiation', unit='W/m²', group='Radiation & surface', lo=0, hi=700),
+    'lw_net':       dict(label='Net longwave radiation (negative: heat lost)', unit='W/m²', group='Radiation & surface', lo=-250, hi=100),
+    'albedo':       dict(label='Surface albedo (share of sunlight reflected)', unit='%', group='Radiation & surface', lo=0, hi=100),
+    'runoff_total': dict(label='Water running off (since the run began)', unit='mm', group='Precipitation', lo=0, hi=300, scale='sqrt'),
+    'soil_t18':     dict(label='Soil temperature (18 cm down)', unit='°C', group='Radiation & surface', lo=-30, hi=50),
+    'soil_t54':     dict(label='Soil temperature (54 cm down)', unit='°C', group='Radiation & surface', lo=-30, hi=50),
+    'soil_t162':    dict(label='Soil temperature (1.6 m down)', unit='°C', group='Radiation & surface', lo=-30, hi=50),
+    'soil_m27':     dict(label='Soil moisture (9-27 cm)', unit='%', group='Radiation & surface', lo=0, hi=100),
+    'soil_m81':     dict(label='Soil moisture (27-81 cm)', unit='%', group='Radiation & surface', lo=0, hi=100),
+    'orog':         dict(label="Model's ground height", unit='m', group='Radiation & surface', lo=-450, hi=4500),
+    't300':         dict(label='Temperature 300 hPa', unit='°C', group='Upper air', lo=-70, hi=-10),
+    'rh925':        dict(label='Relative humidity 925 hPa', unit='%', group='Upper air', lo=0, hi=100),
+    'rh500':        dict(label='Relative humidity 500 hPa', unit='%', group='Upper air', lo=0, hi=100),
+    'wind200':      dict(label='Wind 200 hPa', unit='mph', group='Upper air', lo=0, hi=280),
+    'w500':         dict(label='Vertical motion 500 hPa (negative = rising)', unit='Pa/s', group='Upper air', lo=-4, hi=4),
+    'cloud850':     dict(label='Cloud at 850 hPa (about 1.5 km)', unit='%', group='Cloud & visibility', lo=0, hi=100),
+    'cloud700':     dict(label='Cloud at 700 hPa (about 3 km)', unit='%', group='Cloud & visibility', lo=0, hi=100),
+    'cloud500':     dict(label='Cloud at 500 hPa (about 5.5 km)', unit='%', group='Cloud & visibility', lo=0, hi=100),
+    'cloud300':     dict(label='Cloud at 300 hPa (about 9 km)', unit='%', group='Cloud & visibility', lo=0, hi=100),
     # air quality (NOAA GEFS-Aerosols)
     'aod':          dict(label='Aerosol optical depth (all, 550 nm)', unit='', group='Air quality', lo=0, hi=4, scale='sqrt'),
     'dust_aod':     dict(label='Saharan dust (optical depth)', unit='', group='Air quality', lo=0, hi=4, scale='sqrt'),
@@ -1302,7 +1342,384 @@ class GEFSAerosol(GFS):
         return a                                     # PMTF/PMTC are published in micrograms/m3
 
 
-MODELS = {m.id: m for m in (UKV(), MOGlobal(), ECMWF(), AIFS(), GFS(), GEFSMean(), GEFSAerosol())}
+# ── DWD ICON-EU (6.5 km) ─────────────────────────────────────────────────────────────────
+# From DWD's own open-data server (not AWS, which does not carry ICON; the user's rule for such
+# models is "anything except Open-Meteo"). One field a file, bz2-compressed GRIB2 (CCSDS packing)
+# on a regular 0.0625° grid: 1377 x 657 cells from 23.5 W to 62.5 E (the first longitude is given
+# as 336.5) and from 29.5 N to 70.5 N, rows south to north. Runs every 3 hours: 00/06/12/18Z hourly
+# to T+78 and 3-hourly to T+120, the others hourly to T+30 then 36/42/48. DWD keeps only the newest
+# run of each hour, so about 24 h of runs. A file is the whole of Europe (about 1 MB), so no part of
+# it can be read alone: every file fetched is kept on D: (icon_raw, pruned by catalog.py) and the
+# other layers made from the same fields read it from there.
+#
+# Field meanings checked on the 06Z run of 15 Nov 2026: TMAX_2M/TMIN_2M are the extreme since the
+# last 6-hourly reset (step ranges 6-7, 6-8 ... 6-12), so they are whole 6-hour values at T+6, 12 ...;
+# VMAX_10M is the past hour's strongest gust at every step (80-81 at T+81); TOT_PREC, RAIN_*, SNOW_*
+# and RUNOFF_* are totals since T+0; the A* radiation and heat fluxes are means since T+0, positive
+# downwards; CEILING, HBAS_CON, HTOP_CON, HTOP_DC, HZEROCL and SNOWLMT are above sea level (CEILING
+# sits ~150 m over the model's own hills under low cloud); MH is above the ground. Sentinels:
+# -500 no convective cloud, CIN -999.9 no parcel, SNOWLMT 9999 none, CEILING ~16-20 km no ceiling.
+DWD_ICON = 'https://opendata.dwd.de/weather/nwp/icon-eu/grib'
+ICON_NI, ICON_NJ, ICON_LAT0, ICON_LON0, ICON_D = 1377, 657, 29.5, 336.5, 0.0625
+ICON_RAW = DATA / 'icon_raw'
+_ICON_LIST = {'at': 0.0, 'runs': None}
+_ICON_LIST_LOCK = threading.Lock()
+_MONTHS = {m: i + 1 for i, m in enumerate(('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'))}
+_ICON_ROW = re.compile(r'href="icon-eu_europe_regular-lat-lon_single-level_(\d{10})_(\d{3})_T_2M\.grib2\.bz2">[^<]*</a>\s+'
+                       r'(\d{2})-(\w{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2})')
+
+
+def _icon_listing():
+    """Every ICON-EU run on DWD's server, newest first, with the steps it has published: those whose
+    2 m temperature file is over two minutes old (a step's fields all arrive within about 30 s of
+    each other). One listing a minute, shared by both ICON entries."""
+    with _ICON_LIST_LOCK:
+        if _ICON_LIST['runs'] is not None and time.time() - _ICON_LIST['at'] < 60:
+            return _ICON_LIST['runs']
+        now = datetime.now(timezone.utc)
+
+        def page(hh):
+            try:
+                return get(f'{DWD_ICON}/{hh:02d}/t_2m/', tries=3, timeout=30).decode('utf-8', 'replace')
+            except Exception:
+                return ''
+        with cf.ThreadPoolExecutor(8) as ex:
+            pages = list(ex.map(page, range(0, 24, 3)))
+        runs = {}
+        for txt in pages:
+            for m in _ICON_ROW.finditer(txt):
+                at = datetime(int(m[5]), _MONTHS.get(m[4], 1), int(m[3]), int(m[6]), int(m[7]), int(m[8]), tzinfo=timezone.utc)
+                if (now - at).total_seconds() >= 120:
+                    run = datetime.strptime(m[1], '%Y%m%d%H').replace(tzinfo=timezone.utc)
+                    runs.setdefault(run, set()).add(int(m[2]))
+        if not any(pages):
+            raise OSError('DWD open data is not answering')
+        out = sorted(((r, sorted(s)) for r, s in runs.items() if 0 in s), reverse=True)
+        _ICON_LIST.update(at=time.time(), runs=out)
+        return out
+
+
+# ICON's present weather (WMO ww) -> the weather symbols' codes (derived.py WX_NAMES): 0 clear,
+# 1 partly cloudy, 2 cloudy, 3 overcast, 4 fog, 5 drizzle, 6/7/8 light/moderate/heavy rain, 9 sleet,
+# 10/11/12 light/moderate/heavy snow, 13 thunderstorm, 14 hail
+WW_WX = {0: 0, 1: 1, 2: 2, 3: 3, 45: 4, 48: 4, 51: 5, 53: 5, 55: 5, 56: 5, 57: 5, 61: 6, 63: 7, 65: 8, 66: 6, 67: 7,
+         68: 9, 69: 9, 71: 10, 73: 11, 75: 12, 77: 10, 80: 6, 81: 7, 82: 8, 83: 9, 84: 9, 85: 10, 86: 12, 95: 13, 96: 14, 99: 14}
+# ww -> the precipitation types ECMWF codes (derived.typed_rate): only what ww alone can say; the
+# rest is rain, sleet or snow by the share of the step's precipitation that fell as snow
+WW_TYPE = {56: 12, 57: 12, 66: 3, 67: 3, 96: 10, 99: 10}
+WW_PRECIP = {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 68, 69, 71, 73, 75, 77, 80, 81, 82, 83, 84, 85, 86, 95, 96, 99}
+_K = lambda a: a - 273.15                     # noqa: E731
+_SAME = lambda a: a                           # noqa: E731
+
+try:
+    from numba import njit as _njit
+except Exception:                             # no numba: ICON._vote falls back on numpy
+    _njit = None
+_vote_kernel = None
+if _njit:
+    @_njit(cache=True, nogil=True)
+    def _vote_kernel(a, fj, fi):
+        """For each display cell (fractional row fj, column fi in a), the code of the four cells round
+        it with the most bilinear weight; NaN off the grid."""
+        ny, nx = a.shape
+        out = np.empty(fj.size, np.float32)
+        for k in range(fj.size):
+            y, x = fj[k], fi[k]
+            if not (y >= 0.0 and y <= ny - 1 and x >= 0.0 and x <= nx - 1):
+                out[k] = np.nan
+                continue
+            j0 = min(int(np.floor(y)), ny - 2)
+            i0 = min(int(np.floor(x)), nx - 2)
+            ty, tx = y - j0, x - i0
+            c0, c1, c2, c3 = a[j0, i0], a[j0, i0 + 1], a[j0 + 1, i0], a[j0 + 1, i0 + 1]
+            w0, w1, w2, w3 = (1 - ty) * (1 - tx), (1 - ty) * tx, ty * (1 - tx), ty * tx
+            best, top = c0, -1.0
+            for c in (c0, c1, c2, c3):
+                s = (w0 if c0 == c else 0.0) + (w1 if c1 == c else 0.0) + (w2 if c2 == c else 0.0) + (w3 if c3 == c else 0.0)
+                if s > top:
+                    best, top = c, s
+            out[k] = best
+        return out
+
+
+class ICON:
+    id, label, res_km = 'icon', 'DWD ICON-EU', 6.5
+    OWN_WX = True                             # its weather symbols come from its own present weather (job.py)
+    # fields taken as they are, converted on the model's grid: key -> (DWD name, conversion)
+    DIRECT = {
+        't2': ('T_2M', _K), 'td2': ('TD_2M', _K), 'rh2': ('RELHUM_2M', _SAME), 'q2': ('QV_2M', lambda a: a * 1000.0),
+        'tskin': ('T_G', _K), 'mslp': ('PMSL', lambda a: a / 100.0), 'sp': ('PS', lambda a: a / 100.0),
+        'gust10': ('VMAX_10M', lambda a: a * MPH), 'tcc': ('CLCT', _SAME), 'lcc': ('CLCL', _SAME), 'mcc': ('CLCM', _SAME),
+        'hcc': ('CLCH', _SAME), 'vis': ('VIS', lambda a: a / 1000.0), 'cape_ml': ('CAPE_ML', lambda a: np.maximum(a, 0)),
+        'cape_con': ('CAPE_CON', lambda a: np.maximum(a, 0)), 'cin_ml': ('CIN_ML', lambda a: np.where(a < -900, np.nan, -np.abs(a))),
+        'lpi': ('LPI_CON_MAX', lambda a: np.maximum(a, 0)), 'pw': ('TQV', _SAME), 'cloud_water': ('TQC', _SAME),
+        'cloud_ice': ('TQI', _SAME), 'col_rain': ('TQR', _SAME), 'col_snow': ('TQS', _SAME), 'hpbl': ('MH', _SAME),
+        'frz': ('HZEROCL', lambda a: np.maximum(a, 0)), 'snow_line': ('SNOWLMT', lambda a: np.where(a > 9000, np.nan, a)),
+        'snow_depth': ('H_SNOW', lambda a: a * 100.0), 'snow_swe': ('W_SNOW', _SAME), 'albedo': ('ALB_RAD', _SAME),
+        'sim_ir': ('SYNMSG_BT_CL_IR10.8', _K), 'sim_wv': ('SYNMSG_BT_CL_WV6.2', _K),
+        'conv_top': ('HTOP_CON', lambda a: np.where(a < -400, np.nan, a)), 'precip_total': ('TOT_PREC', _SAME),
+    }
+    # totals since T+0 (several summed): the running totals as they are, the rates differenced in job.py
+    TOTALS = {'snow_total': ('SNOW_GSP', 'SNOW_CON'), 'conv_total': ('RAIN_CON', 'SNOW_CON'), 'runoff_total': ('RUNOFF_S', 'RUNOFF_G'),
+              'precip_rate': ('TOT_PREC',), 'rain_rate': ('RAIN_GSP', 'RAIN_CON'), 'snow_rate': ('SNOW_GSP', 'SNOW_CON'),
+              'conv_rain': ('RAIN_CON',)}
+    # means since T+0 (W/m2, positive downwards) -> energy since T+0 (J/m2), differenced in job.py into each step's mean; sign
+    # turned for the outgoing ones (the upward heat fluxes, the longwave leaving the top of the atmosphere)
+    MEANS = {'sw_down': (('ASWDIR_S', 'ASWDIFD_S'), 1), 'sw_direct': (('ASWDIR_S',), 1), 'sw_diffuse': (('ASWDIFD_S',), 1),
+             'lw_net': (('ATHB_S',), 1), 'olr': (('ATHB_T',), -1), 'shf': (('ASHFL_S',), -1), 'lhf': (('ALHFL_S',), -1)}
+    # pressure levels: key -> (DWD name, level hPa, conversion)
+    LEVEL = {
+        't925': ('T', 925, _K), 't850': ('T', 850, _K), 't700': ('T', 700, _K), 't500': ('T', 500, _K), 't300': ('T', 300, _K),
+        'z850': ('FI', 850, lambda a: a / 98.0665), 'z500': ('FI', 500, lambda a: a / 98.0665),
+        'rh925': ('RELHUM', 925, _SAME), 'rh850': ('RELHUM', 850, _SAME), 'rh700': ('RELHUM', 700, _SAME), 'rh500': ('RELHUM', 500, _SAME),
+        'w700': ('OMEGA', 700, _SAME), 'w500': ('OMEGA', 500, _SAME),
+        'cloud850': ('CLC', 850, _SAME), 'cloud700': ('CLC', 700, _SAME), 'cloud500': ('CLC', 500, _SAME), 'cloud300': ('CLC', 300, _SAME),
+    }
+    WINDS = {'wind925': 925, 'wind850': 850, 'wind700': 700, 'wind500': 500, 'wind300': 300, 'wind250': 250, 'wind200': 200}
+    # soil temperature levels (cm) and moisture layers: key -> (layer tops, total depth in m)
+    SOIL_T = {'soil_t': 2, 'soil_t18': 18, 'soil_t54': 54, 'soil_t162': 162}
+    SOIL_M = {'soil_m': ((0, 1, 3), 0.09), 'soil_m27': ((9,), 0.18), 'soil_m81': ((27,), 0.54)}
+    variables = [
+        'precip_rate', 'rain_rate', 'conv_rain', 'precip_total', 'conv_total', 'ptype', 'col_rain', 'runoff_total',
+        't2', 't2max6', 't2min6', 'td2', 'rh2', 'q2', 'tskin', 'feels', 'windchill',
+        'wind10', 'wdir10', 'gust10', 'gust_peak', 'mslp', 'sp',
+        'tcc', 'lcc', 'mcc', 'hcc', 'cloud850', 'cloud700', 'cloud500', 'cloud300', 'cloud_base', 'vis', 'fog_vis', 'cloud_water',
+        'cloud_ice', 'sim_ir', 'sim_wv', 'wx',
+        'cape_ml', 'cape_con', 'cin_ml', 'li', 'kindex', 'lpi', 'conv_base', 'conv_top', 'thermal_top', 'pw', 'hpbl',
+        'snow_rate', 'frozen_pct', 'snow_total', 'snow_acc', 'snow_depth', 'snow_swe', 'snow_line', 'frz', 'col_snow',
+        'wbpt850', 't925', 't850', 't700', 't500', 't300', 'z850', 'z500', 'thick', 'rh925', 'rh850', 'rh700', 'rh500',
+        'wind925', 'wind850', 'wind700', 'wind500', 'wind300', 'wind250', 'wind200', 'w700', 'w500', 'vort500',
+        'sw_down', 'sw_direct', 'sw_diffuse', 'lw_net', 'olr', 'shf', 'lhf', 'albedo',
+        'soil_t', 'soil_t18', 'soil_t54', 'soil_t162', 'soil_m', 'soil_m27', 'soil_m81', 'orog']
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._frac = None
+        self._static = {}
+        self._inflight = {}
+
+    def schedule(self, run):
+        return list(range(0, 79)) + list(range(81, 121, 3)) if run.hour % 6 == 0 else list(range(0, 31)) + [36, 42, 48]
+
+    def runs(self, n=None):
+        out = []
+        for r, steps in _icon_listing():
+            if out and (len(out) >= n if n is not None else (out[0][0] - r).total_seconds() > RUN_WINDOW_H * 3600):
+                break
+            out.append((r, steps))
+        return out
+
+    # ── one field from DWD (or the copy kept on D:) ──
+    def _msg(self, run, step, name, kind='single-level', lev=None):
+        """A field's GRIB message. Fetched once: kept in icon_raw, and two threads wanting the same
+        file at once share one download."""
+        if kind == 'time-invariant':
+            p = ICON_RAW / f'static_{name}.grib2'                 # the model's hills and land never change
+            url = f'{DWD_ICON}/{run:%H}/{name.lower()}/icon-eu_europe_regular-lat-lon_time-invariant_{run:%Y%m%d%H}_{name}.grib2.bz2'
+        else:
+            lv = f'{lev}_' if lev is not None else ''
+            p = ICON_RAW / f'{run:%Y%m%d%H}' / f'{kind}_{step:03d}_{lv}{name}.grib2'
+            url = (f'{DWD_ICON}/{run:%H}/{name.lower()}/icon-eu_europe_regular-lat-lon_{kind}_'
+                   f'{run:%Y%m%d%H}_{step:03d}_{lv}{name}.grib2.bz2')
+        try:
+            return p.read_bytes()
+        except OSError:
+            pass
+        with self._lock:
+            ev = self._inflight.get(p)
+            mine = ev is None
+            if mine:
+                ev = self._inflight[p] = threading.Event()
+        if not mine:
+            ev.wait(240)
+            try:
+                return p.read_bytes()
+            except OSError:
+                pass                                              # that fetch failed: try again here
+        try:
+            blob = bz2.decompress(get(url, tries=4, timeout=120))
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                tmp = p.with_name(f'{p.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+                tmp.write_bytes(blob)
+                _replace(tmp, p)
+            except OSError:
+                pass                                              # not kept: the next layer fetches it again
+            return blob
+        finally:
+            if mine:
+                with self._lock:
+                    self._inflight.pop(p, None)
+                ev.set()
+
+    def _native(self, run, step, name, kind='single-level', lev=None):
+        """A field on ICON's own grid, (657, 1377) float32, rows south to north."""
+        a, meta = decode_grib(self._msg(run, step, name, kind, lev))
+        if a.shape != (ICON_NJ, ICON_NI):
+            raise ValueError(f'ICON-EU {name}: unexpected grid {a.shape}')
+        return a
+
+    def _const(self, run, name):
+        """A time-invariant field (HSURF the model's ground height, FR_LAND its land share): any run's."""
+        if name not in self._static:
+            last = None
+            for r in [run] + [x for x, _ in (_ICON_LIST['runs'] or []) if x != run]:
+                try:
+                    self._static[name] = self._native(r, 0, name, 'time-invariant')
+                    break
+                except Exception as e:
+                    last = e
+            else:
+                raise FileNotFoundError(f'ICON-EU {name}: {last}')
+        return self._static[name]
+
+    # ── onto the display grid ──
+    def _geo(self):
+        with self._lock:
+            if self._frac is None:
+                lats = ICON_LAT0 + ICON_D * np.arange(ICON_NJ)
+                lons = ICON_LON0 + ICON_D * np.arange(ICON_NI)
+                fj, fi, _ = regular_frac(lats, lons)
+                out = (fi < 0) | (fi > ICON_NI - 1) | (fj < 0) | (fj > ICON_NJ - 1)
+                self._off = out.reshape(NY, NX)
+                self._frac = (fj, fi, False)                     # a regional grid: never wraps round the globe
+        return self._frac
+
+    def _disp(self, a):
+        """Smoothly onto the display grid (clamped cubic, as the other models); nothing outside ICON-EU's area."""
+        out = smooth_sample(np.asarray(a, np.float32), self._geo())
+        out[self._off] = np.nan
+        return out
+
+    def _vote(self, a):
+        """A code field (present weather) onto the display grid. Codes are never blended: of the four
+        ICON cells round each display cell, the code with the most (bilinear) weight wins, which
+        rounds the edges between codes; taking the nearest cell drew 6.5 km blocks on the 2 km grid."""
+        fj, fi, _ = self._geo()
+        if _vote_kernel is not None:                              # compiled: ~1 s a frame in numpy on a busy PC
+            return np.where(self._off, np.nan, _vote_kernel(np.ascontiguousarray(a, np.float32), fj, fi).reshape(NY, NX)).astype(np.float32)
+        j0 = np.clip(np.floor(fj).astype(np.int64), 0, ICON_NJ - 2)
+        i0 = np.clip(np.floor(fi).astype(np.int64), 0, ICON_NI - 2)
+        ty, tx = np.clip(fj - j0, 0, 1), np.clip(fi - i0, 0, 1)
+        a = np.asarray(a, np.float32)
+        codes = (a[j0, i0], a[j0, i0 + 1], a[j0 + 1, i0], a[j0 + 1, i0 + 1])
+        ws = ((1 - ty) * (1 - tx), (1 - ty) * tx, ty * (1 - tx), ty * tx)
+        best, top = codes[0], np.full(fj.shape, -1.0)
+        for c in codes:
+            score = sum(np.where(c2 == c, w, 0.0) for c2, w in zip(codes, ws))
+            take = score > top
+            best, top = np.where(take, c, best), np.where(take, score, top)
+        return np.where(self._off, np.nan, best.reshape(NY, NX)).astype(np.float32)
+
+    def field(self, run, h, var, prev_h, prev_raw=None):
+        F = lambda name, step=h: self._native(run, step, name)                         # noqa: E731
+        P = lambda name, lev: self._native(run, h, name, 'pressure-level', lev)        # noqa: E731
+        D = self._disp
+        if var in self.DIRECT:
+            name, conv = self.DIRECT[var]
+            return D(conv(F(name)))
+        if var in self.TOTALS:                                    # kg m-2 since T+0, which is mm
+            return D(sum(F(n) for n in self.TOTALS[var]))
+        if var in self.MEANS:
+            names, sign = self.MEANS[var]
+            return D(sign * sum(F(n) for n in names)) * (h * 3600.0)
+        if var in self.LEVEL:
+            name, lev, conv = self.LEVEL[var]
+            return D(conv(P(name, lev)))
+        if var in self.WINDS:
+            lev = self.WINDS[var]
+            return D(np.hypot(P('U', lev), P('V', lev)) * MPH)
+        if var in ('wind10', 'wdir10', 'feels', 'windchill'):
+            u, v = F('U_10M'), F('V_10M')
+            if var == 'wdir10':                                   # a direction: from its components, sampled apart
+                return _wdir(D(u), D(v))
+            w = D(np.hypot(u, v) * MPH)
+            if var == 'wind10':
+                return w
+            t = D(_K(F('T_2M')))
+            return _windchill(t, w) if var == 'windchill' else _feels(t, D(_K(F('TD_2M'))), w)
+        if var in ('t2max6', 't2min6'):                           # whole 6-hour extremes at T+6, 12, 18 ...
+            if not h or h % 6:
+                raise KeyError(f'{var} is a 6-hour value: none at T+{h}')
+            return D(_K(F('TMAX_2M' if var == 't2max6' else 'TMIN_2M')))
+        if var in ('cloud_base', 'conv_base', 'thermal_top', 'orog'):
+            hs = self._const(run, 'HSURF')
+            if var == 'orog':
+                return D(hs)
+            if var == 'cloud_base':                               # the ceiling (broken cloud or more), above the ground;
+                a = F('CEILING')                                  # 'none' comes as ~15-20 km, so anything over 12 km is none
+                return D(np.where(a >= 12000, np.nan, np.maximum(a - hs, 0)))
+            if var == 'conv_base':
+                a = F('HBAS_CON')
+                return D(np.where(a < -400, np.nan, np.maximum(a - hs, 0)))
+            a = F('HTOP_DC')                                      # 0 (or below the hills) where there are no thermals
+            return D(np.where(a > hs + 20, a, np.nan))
+        if var in self.SOIL_T or var in self.SOIL_M:
+            land = self._const(run, 'FR_LAND') >= 0.5
+            if var in self.SOIL_T:
+                a = _K(self._native(run, h, 'T_SO', 'soil-level', self.SOIL_T[var]))
+            else:                                                 # water in the layers (kg/m2) -> volumetric %
+                tops, depth = self.SOIL_M[var]
+                a = sum(self._native(run, h, 'W_SO', 'soil-level', t) for t in tops) / (depth * 10.0)
+            return D(np.where(land, a, np.nan))
+        if var == 'thick':
+            return D((P('FI', 500) - P('FI', 1000)) / 98.0665)
+        if var == 'vort500':
+            return D(self._vorticity(P('U', 500), P('V', 500)) * 1e5)
+        if var == 'wbpt850':
+            t, rh = P('T', 850), P('RELHUM', 850)
+            return D(_theta_w(_theta_e(t, _q_from_rh(t - 273.15, rh, 850.0), 850.0)))
+        if var == 'kindex':
+            return D(_kindex(_K(P('T', 850)), _K(P('T', 700)), _K(P('T', 500)), P('RELHUM', 850), P('RELHUM', 700)))
+        if var == 'li':
+            return D(_lifted_index(_K(F('T_2M')), _K(F('TD_2M')), F('PS') / 100.0, _K(P('T', 500))).astype(np.float32))
+        if var == 'wx':
+            # what falls (and fog, thunder) from ICON's present weather; the sky from its total cloud by
+            # the thresholds every model's symbols use (derived.weather_type): ICON's own cloud classes
+            # (ww 0-3) change from cell to cell in broken cloud and speckled the map
+            ww = self._vote(F('WW'))
+            lut = np.zeros(100, np.float32)
+            for code, wx in WW_WX.items():
+                lut[code] = wx
+            ok = np.isfinite(ww)
+            w = np.clip(np.nan_to_num(ww), 0, 99).astype(np.int64)
+            c = np.nan_to_num(D(F('CLCT')))
+            sky = np.select([c >= 87.5, c >= 55, c >= 20], [3, 2, 1], 0)
+            return np.where(ok, np.where(w <= 3, sky, lut[w]), np.nan).astype(np.float32)
+        if var in ('ptype', 'frozen_pct'):
+            if not h or prev_h is None:
+                return np.zeros((NY, NX), np.float32) if var == 'ptype' else np.full((NY, NX), np.nan, np.float32)
+            dp = np.maximum(F('TOT_PREC') - F('TOT_PREC', prev_h), 0)
+            ds = np.maximum(F('SNOW_GSP') + F('SNOW_CON') - F('SNOW_GSP', prev_h) - F('SNOW_CON', prev_h), 0)
+            share = np.where(dp > 1e-6, np.clip(ds / np.maximum(dp, 1e-6), 0, 1), 0)
+            if var == 'frozen_pct':
+                return np.where(D(dp) >= 0.1, 100.0 * D(share), np.nan).astype(np.float32)
+            from .derived import SLEET_SHARE, SNOW_SHARE, typed_rate
+            share, rate = D(share), D(dp / (h - prev_h))
+            code = np.select([share >= SNOW_SHARE, share >= SLEET_SHARE], [5, 7], 1)
+            ww = np.nan_to_num(self._vote(F('WW')), nan=0).astype(np.int64)
+            for w, c in WW_TYPE.items():                          # freezing drizzle and rain, hail: ww's own word
+                code = np.where(ww == w, c, code)
+            return typed_rate(rate, code)
+        raise KeyError(f'{var} is not an ICON-EU layer')
+
+    @staticmethod
+    def _vorticity(u, v):
+        """Relative vorticity (1/s) on the 0.0625° grid, lightly smoothed (one cell)."""
+        from scipy import ndimage
+        R, d = 6371000.0, np.radians(ICON_D)
+        lat = np.radians(ICON_LAT0 + ICON_D * np.arange(ICON_NJ))[:, None]
+        zeta = np.gradient(v, axis=1) / (R * np.cos(lat) * d) - np.gradient(u, axis=0) / (R * d) + u * np.tan(lat) / R
+        return ndimage.gaussian_filter(zeta, 1.0)
+
+
+class ICONEurope(ICON):
+    """The same model on the wide grid (Europe, the eastern Atlantic, North Africa): ICON-EU's own
+    area, nothing west of 23.5 W or north of 70.5 N. Its files are the UK view's, read from D:."""
+    id, label = 'icon_europe', 'DWD ICON-EU (Europe)'
+
+
+MODELS = {m.id: m for m in (UKV(), MOGlobal(), ECMWF(), AIFS(), GFS(), GEFSMean(), GEFSAerosol(), ICON(), ICONEurope())}
 SOURCES = {
     'ukv': 'Met Office UKV 2 km — AWS open data (uk-deterministic-2km)',
     'mo_global': 'Met Office Global 10 km — AWS open data (global-deterministic-10km)',
@@ -1311,11 +1728,16 @@ SOURCES = {
     'gfs': 'NOAA GFS 0.25° — AWS open data (noaa-gfs-bdp-pds); waves from GFS-Wave (WAVEWATCH III)',
     'gefs_mean': 'NOAA GEFS 0.5° ensemble mean of 31 members, to 16 days — AWS open data (noaa-gefs-pds)',
     'gefs_aer': 'NOAA GEFS-Aerosols 0.25°: dust, smoke, sea salt and fine particles — AWS open data (noaa-gefs-pds, chem)',
+    'icon': 'DWD ICON-EU 0.0625° (6.5 km) — Source: Deutscher Wetterdienst (DWD open data, opendata.dwd.de)',
+    'icon_europe': 'DWD ICON-EU 0.0625° (6.5 km), its whole area — Source: Deutscher Wetterdienst (DWD open data, opendata.dwd.de)',
 }
 # variables whose frames are differences of an accumulation between consecutive steps
 DIFFERENCED = {('ifs', 'precip_rate'), ('aifs', 'precip_rate'), ('ifs', 'sw_down'), ('aifs', 'sw_down'),
                ('ifs', 'lw_down'), ('aifs', 'lw_down'), ('ifs', 'olr'),
                ('aifs', 'snow_rate'), ('aifs', 'rain_rate'), ('aifs', 'conv_rain')}
+# ICON-EU: its rates from its totals since T+0, its radiation and heat fluxes from their means since T+0
+DIFFERENCED |= {(m, v) for m in ('icon', 'icon_europe') for v in ('precip_rate', 'rain_rate', 'snow_rate', 'conv_rain', 'sw_down', 'sw_direct',
+                                                                 'sw_diffuse', 'lw_net', 'olr', 'shf', 'lhf')}
 # of those, the ones that are mm since the start, differenced into mm/h
 RATE_DIFF = {'precip_rate', 'snow_rate', 'rain_rate', 'conv_rain'}
 # running totals made in job.py from 6-hour buckets (the GEFS mean's APCP: 0-3, 0-6, 6-9, 6-12, ...)

@@ -41,7 +41,7 @@ import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES, SNOW_AMOUNT_LEVELS, cmText } from '@
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Fit', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS' };
+const SHORT_NAMES = { frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe' };
 /* who makes each model, its grid, and where the files come from (picker groups and the credit line) */
 const MODEL_INFO = {
   frost: ['MyWeatherUK', '2 km', 'MyWeatherUK’s own snow model'],
@@ -49,7 +49,11 @@ const MODEL_INFO = {
   ifs: ['ECMWF', '0.25°', 'ECMWF open data'], aifs: ['ECMWF', '0.25°', 'ECMWF open data'],
   gfs: ['NOAA', '0.25°', 'NOAA via AWS'], gefs_mean: ['NOAA', '0.5°', 'NOAA via AWS'], gefs_aer: ['NOAA', '0.25°', 'NOAA via AWS'],
   ecmwf_ens: ['ECMWF', '0.25°', 'ECMWF open data'], aifs_ens: ['ECMWF', '0.25°', 'ECMWF open data'], gefs: ['NOAA', '0.25°', 'NOAA via AWS'],
+  /* DWD ICON-EU: the UK on the 2 km grid, or its whole area (Europe, North Africa, the eastern Atlantic) */
+  icon: ['DWD', '6.5 km', 'Source: Deutscher Wetterdienst'], icon_europe: ['DWD', '6.5 km', 'Source: Deutscher Wetterdienst'],
 };
+/* where a model's frames are being fetched from, for the loading notices: DWD's own server for ICON */
+const fetchedFrom = (id) => (MODEL_INFO[id]?.[0] === 'DWD' ? 'DWD' : 'AWS');
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
 const compass = (deg) => COMPASS[Math.round(deg / 22.5) % 16];
 /* the viewer's settings, remembered in this browser between visits */
@@ -1394,7 +1398,7 @@ export default function ModelData() {
     if (!modelB || !metaB || ms == null) return null;
     const lacks = !(modelB.variables || modelB.fields)?.includes(fieldB);
     const notice = lacks ? `${SHORT_NAMES[modelB.id] || modelB.label} has no ${(isProb ? preset.label : metaB.label).toLowerCase()}` : f ? null
-      : stepsB.length && nearestStep(stepsB, runMsB, ms) == null ? `The ${runLabel(runB.run)} run does not cover this time` : 'Fetching from AWS…';
+      : stepsB.length && nearestStep(stepsB, runMsB, ms) == null ? `The ${runLabel(runB.run)} run does not cover this time` : `Fetching from ${fetchedFrom(modelB.id)}…`;
     return {
       variable: underMetaB ? `${metaB.label} · colours: ${underMetaB.label.toLowerCase()}` : metaB.label, unit: underMetaB ? underMetaB.unit : metaB.unit,
       valid: f ? f.head.valid : new Date(ms).toISOString(), logo: staticsBy[gridB]?.logo, ...creditOf(modelB, runB, f?.head.step), notice,
@@ -2279,7 +2283,7 @@ export default function ModelData() {
     </Pill>
   );
   /* the models, grouped by who makes them: a picker on desktops, buttons on phones and tablets */
-  const modelGroups = (list) => ['MyWeatherUK', 'Met Office', 'ECMWF', 'NOAA'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
+  const modelGroups = (list) => ['MyWeatherUK', 'Met Office', 'ECMWF', 'DWD', 'NOAA'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
   const chooseModel = (id) => (isProb ? (setEnsId(id), setEnsRunIso(null)) : (setModelId(id), setRunIso(null)));
   const modelPicker = (list, value, onChange, wide) => (
     <div style={{ position: 'relative', flexShrink: 0 }}>
@@ -2342,7 +2346,7 @@ export default function ModelData() {
           )}
           {spec('Layout', <Seg small items={[['auto', 'Auto'], ['cols', 'Side by side'], ['rows', 'Stacked']]} value={cmp.split} onChange={(v) => setCmpK('split', v)} />)}
           <button onClick={() => setCmpK('swap', !cmp.swap)} style={{ ...sel, justifySelf: 'start', padding: '7px 12px', display: 'flex', gap: 6, alignItems: 'center', background: T.btn }}><ArrowLeftRight size={13} />Swap the windows</button>
-          {kindB === 'run' && pendingB > 0 && <div style={{ fontSize: 11, color: T.ink2, display: 'flex', gap: 6, alignItems: 'center' }}><Loader2 className="animate-spin" style={{ width: 12, height: 12 }} />Fetching the second window from AWS · {pendingB} to go</div>}
+          {kindB === 'run' && pendingB > 0 && <div style={{ fontSize: 11, color: T.ink2, display: 'flex', gap: 6, alignItems: 'center' }}><Loader2 className="animate-spin" style={{ width: 12, height: 12 }} />Fetching the second window from {fetchedFrom(modelB?.id)} · {pendingB} to go</div>}
         </div>
       )}
     </div>
@@ -2754,7 +2758,7 @@ export default function ModelData() {
       {(!frame || pending > 0) && key && (
         <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '6px 14px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', whiteSpace: 'nowrap' }}>
           <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />
-          {!status ? 'Starting…' : `Fetching from AWS · ${loadedCount}/${steps.length}`}
+          {!status ? 'Starting…' : `Fetching from ${fetchedFrom(model?.id)} · ${loadedCount}/${steps.length}`}
         </div>
       )}
 

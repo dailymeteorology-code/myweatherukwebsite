@@ -244,7 +244,8 @@ def main(model, run_s, var, first=None):
               'state': 'running', 'started': time.time()}
     write_json(d / 'status.json', status)
     made_here = var == 'ptype' and model in ('ukv', 'mo_global', 'aifs')     # the Met Office models and AIFS give rates, not a type
-    if var in ('wx', 'gust_peak', 'fog_vis') or var in ALIASES or made_here:
+    own_wx = var == 'wx' and getattr(M, 'OWN_WX', False)                       # ICON-EU: from its own present weather
+    if (var in ('wx', 'gust_peak', 'fog_vis') and not own_wx) or var in ALIASES or made_here:
         if var == 'fog_vis':
             fog_area(model, run_s, var, steps, d, status, first)
         else:

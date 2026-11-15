@@ -40,8 +40,9 @@ GRIDS = {
     'uk': dict(lat0=54.9, lon0=-2.5, nx=1042, ny=970, dx=2000.0, x0=-1158000.0, y_top=902000.0),
     'eu': dict(lat0=50.0, lon0=-12.0, nx=1083, ny=708, dx=8000.0, x0=-4428000.0, y_top=2924000.0),
 }
-# every model's grid: the UKV (and everything live and observed) on its own, the rest on the wide one
-MODEL_GRID = {'ukv': 'uk'}
+# every model's grid: the UKV (and everything live and observed) on its own, the rest on the wide one;
+# DWD ICON-EU (6.5 km) on both, as two entries: 'icon' on the UKV's 2 km grid, 'icon_europe' wide
+MODEL_GRID = {'ukv': 'uk', 'icon': 'uk'}
 grid_of = lambda model: MODEL_GRID.get(model, 'eu')   # noqa: E731
 GRID = os.environ.get('MDATA_GRID', 'uk')
 if GRID not in GRIDS:
