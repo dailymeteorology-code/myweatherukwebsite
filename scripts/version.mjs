@@ -69,6 +69,10 @@ if (!cmd) {
 } else if (cmd === 'tag') {
   const ver = show(now);
   try { git('rev-parse', '-q', '--verify', `refs/tags/${ver}`); console.error(`${ver} is already tagged`); process.exit(1); } catch { /* not yet: tag it */ }
+  /* only the save that carries this version: a commit that failed must not leave its number on the one before */
+  let saved = null;
+  try { saved = JSON.parse(git('show', 'HEAD:version.json')).version; } catch { /* no version.json in it */ }
+  if (saved !== ver) { console.error(`The last save is ${saved || 'unnumbered'}, not ${ver}: commit first, then tag`); process.exit(1); }
   git('tag', ver);
   console.log(`${ver} tagged on ${git('rev-parse', '--short', 'HEAD')}: git push origin main ${ver}`);
 } else {
