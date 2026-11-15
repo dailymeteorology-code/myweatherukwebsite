@@ -553,3 +553,69 @@
   transition: opacity 1.5s ease;
 }
 @media (prefers-reduced-motion: reduce) { .lw-glass.lw-frosted::after { transition: none; } }
+
+/* ── the Today card (TodayCard.jsx, 15 Nov 2026): the forecast in words, and what matters today ── */
+.lw-today { margin-bottom: 14px; }
+.lw-today-text p { margin: 0 0 7px; font-size: 14.5px; line-height: 1.5; color: var(--ink); }
+.lw-today-text p:last-child { margin-bottom: 0; }
+.lw-today-text b { display: inline-block; min-width: 74px; margin-right: 6px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink3); }
+.lw-today-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.lw-today-chip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 7px 8px 7px 10px; border-radius: 14px; cursor: pointer; text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.08); color: var(--ink); font: inherit;
+  transition: background 0.15s ease;
+}
+.lw-today-chip:hover { background: rgba(255, 255, 255, 0.14); }
+.lw-today-chip span { display: flex; flex-direction: column; line-height: 1.2; }
+.lw-today-chip b { font-size: 13px; font-weight: 650; }
+.lw-today-chip small { font-size: 11.5px; color: var(--ink3); }
+.lw-today-chip.is-warning { background: color-mix(in srgb, var(--chip) 30%, transparent); border-color: var(--chip); }
+.lw-today-go { opacity: 0.55; }
+/* a card that matters today comes up under the hourly forecast on a phone (one column) */
+@media (max-width: 1023px) { .lw-layout .lw-slot.is-lifted { order: 1; } }
+/* a chip, or a link (…&card=radar), scrolls a card to just under the search bar */
+[id^='lw-card-'] { scroll-margin-top: 132px; }
+
+/* ── the hourly strip's hours open the hour sheet ── */
+.lw-hour.is-tap { cursor: pointer; border-radius: 12px; transition: background 0.15s ease; }
+.lw-hour.is-tap:hover { background: rgba(255, 255, 255, 0.06); }
+.lw-hour.is-sel { background: rgba(255, 255, 255, 0.14); }
+.lw-hour.is-tap:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.7); outline-offset: -2px; }
+
+/* ── the hour sheet (HourSheet.jsx): a side sheet on a computer, from the bottom on a phone ── */
+.lw-sh-wrap { position: fixed; inset: 0; z-index: 70; background: rgba(4, 10, 20, 0.3); animation: lw-fade 0.2s ease both; }
+.lw-sh {
+  position: absolute; top: 76px; right: 14px; bottom: 14px; width: min(400px, calc(100% - 28px));
+  display: flex; flex-direction: column; overflow: hidden; border-radius: 24px;
+  --tint: rgba(16, 24, 38, 0.97); --tint2: rgba(16, 24, 38, 0.94);
+  animation: lw-sh-in 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes lw-sh-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+@keyframes lw-sh-up { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: none; } }
+.lw-sh-grab { display: none; }
+.lw-sh-head { display: flex; align-items: center; gap: 10px; padding: 14px 12px 10px 12px; flex: none; }
+.lw-sh-when { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.lw-sh-when b { font-size: 17px; font-weight: 700; }
+.lw-sh-when span { font-size: 13px; color: var(--ink2); }
+.lw-sh-temp { font-size: 30px; font-weight: 300; line-height: 1; text-align: right; margin-right: 4px; }
+.lw-sh-temp small { display: block; margin-top: 4px; font-size: 11.5px; font-weight: 500; color: var(--ink3); }
+.lw-sh-nav { display: flex; justify-content: space-between; gap: 6px; padding: 0 12px 10px; border-bottom: 1px solid var(--line); flex: none; }
+.lw-sh-nav .lw-chip:disabled { opacity: 0.35; cursor: default; }
+.lw-sh-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 14px 6px; -webkit-overflow-scrolling: touch; }
+.lw-sh-row { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.lw-sh-row:last-child { border-bottom: 0; }
+.lw-sh-ico { display: grid; place-items: center; color: var(--ink3); }
+.lw-sh-label { font-size: 13.5px; color: var(--ink2); }
+.lw-sh-val { display: flex; flex-direction: column; align-items: flex-end; text-align: right; font-size: 15px; font-weight: 600; }
+.lw-sh-v { display: inline-flex; align-items: center; gap: 6px; }
+.lw-sh-val small { margin-top: 2px; font-size: 11.5px; font-weight: 500; color: var(--ink3); }
+.lw-sh-kind { display: inline-block; width: 10px; height: 10px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15); }
+.lw-sh-arrow { color: var(--ink2); }
+.lw-sh-src { margin: 0; padding: 8px 14px 12px; font-size: 11.5px; line-height: 1.4; color: var(--ink3); border-top: 1px solid var(--line); flex: none; }
+@media (max-width: 640px) {
+  .lw-sh { top: auto; left: 0; right: 0; bottom: 0; width: 100%; height: 62%; min-height: 320px; border-radius: 24px 24px 0 0; animation-name: lw-sh-up; }
+  .lw-sh-grab { display: flex; justify-content: center; padding: 8px 0 0; flex: none; touch-action: none; cursor: grab; }
+  .lw-sh-grab i { width: 40px; height: 5px; border-radius: 99px; background: var(--ink3); opacity: 0.75; }
+  .lw-sh-head { padding-top: 6px; touch-action: none; }
+}
+@media (prefers-reduced-motion: reduce) { .lw-sh, .lw-sh-wrap { animation: none; } }

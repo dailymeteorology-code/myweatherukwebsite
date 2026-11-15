@@ -4,7 +4,12 @@
    in liquid glass over a live animated sky:
      • the hero: the temperature now, from the 15-minute UKV + station analysis
      • weather warnings whose area covers the place
-     • the hourly strip to T+120 (hourly to T+54, then three-hourly, as UKV publishes)
+     • the Today card: the forecast in words for today, tonight and tomorrow, and the few things that
+       matter most today as chips to their cards, which also come up the page on a phone (TodayCard.jsx,
+       src/lib/location/forecastText.js)
+     • the hourly strip to T+120 (hourly to T+54, then three-hourly, as UKV publishes); tapping an hour
+       opens the hour sheet with everything for it (HourSheet.jsx), and a link can open one directly:
+       …&at=2026-11-21T15:00 (UK time), …&card=radar to go to a card
      • precipitation, when there is any: the next hour minute by minute (the Met Office radar
        carried forward by the rain's own motion), or the next 12 hours from UKV
      • rain splashing on the top row of cards while it rains (CardRain in SkyBackdrop.jsx; the warnings
@@ -33,6 +38,9 @@ import LocationTiles from '@/components/location/LocationTiles';
 import LocationCharts, { tempColour } from '@/components/location/LocationCharts';
 import SkyBackdrop, { CardFrost, CardRain, CardSnow, WindowRain, skyDarkness } from '@/components/location/SkyBackdrop';
 import SkyPreview, { PREVIEW_START, previewSky } from '@/components/location/SkyPreview';
+import TodayCard from '@/components/location/TodayCard';
+import HourSheet, { hourFor, momentParam, parseMoment } from '@/components/location/HourSheet';
+import { mattersToday } from '@/lib/location/forecastText';
 import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
 import WxIcon from '@/components/location/WxIcon';
 import '@/components/location/location.css';
@@ -55,7 +63,8 @@ const runName = (iso) => {
 const COL_W = 58;                                  // every column of the strip (.lw-hour, border-box)
 const LANE_H = 24;                                 // one warning bar, with its gap
 const QUARTER_HOURS = 12;                          // the hours that open into their quarters: the next twelve
-function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
+/* `onHour`: tapping an hour (or one of its quarters) opens the hour sheet for it; `sheetT` marks it */
+function HourlyCard({ model, T, stripRef, warnings, onWarning, onHour, sheetT }) {
   const U = useUnits();
   /* the hours opened into their quarters (by the hour's time), and each of the next twelve hours' quarters */
   const [open, setOpen] = useState(() => new Set());
@@ -185,16 +194,21 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning }) {
           const isOpen = !q && open.has(h.t);
           const lastQ = q && items[k + 1]?.of !== it.of;
           const label = k === 0 ? 'Now' : q ? hhmm(q.t) : h.span > 1 ? hhmm(h.t) : String(hourOf(h.t)).padStart(2, '0');
+          const hourT = q ? it.of : h.t;   // a quarter opens the sheet of the hour it belongs to
+          const open1 = () => onHour?.(hourT);
           return (
             <div key={q ? `q${q.t}` : h.t}
-              className={`lw-hour${k === 0 ? ' is-now' : ''}${dayStart ? ' is-day-start' : ''}${q ? ' is-quarter' : ''}${lastQ ? ' is-qend' : ''}${isOpen ? ' is-open' : ''}`}
-              data-day={q ? undefined : h.day}>
+              className={`lw-hour is-tap${k === 0 ? ' is-now' : ''}${dayStart ? ' is-day-start' : ''}${q ? ' is-quarter' : ''}${lastQ ? ' is-qend' : ''}${isOpen ? ' is-open' : ''}${!q && sheetT === h.t ? ' is-sel' : ''}`}
+              data-day={q ? undefined : h.day} data-t={q ? undefined : h.t}
+              role="button" tabIndex={0} onClick={open1}
+              onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open1(); } }}
+              aria-label={`${k === 0 ? 'Now' : `${day} ${hhmm(q ? q.t : h.t)}`}: everything for this hour`}>
               <span className="lw-h-day">{dayStart ? day : ''}</span>
               <span className="lw-h-time">
                 {label}
                 {qs?.length > 0 && (
                   /* the quarters: a small arrow pointing right to open them, pointing down to close them */
-                  <button type="button" className="lw-qbtn" onClick={() => toggle(h.t)} aria-expanded={isOpen}
+                  <button type="button" className="lw-qbtn" onClick={(e) => { e.stopPropagation(); toggle(h.t); }} aria-expanded={isOpen}
                     aria-label={`${isOpen ? 'Close' : 'Show'} the ${qs.length === 4 ? '' : 'rest of the '}15-minute forecast for ${k === 0 ? 'this hour' : hhmm(h.t)}`}
                     title={isOpen ? 'Close the 15-minute forecast' : 'Every 15 minutes'}>
                     {isOpen ? <ChevronDown size={12} strokeWidth={2.8} /> : <ChevronRight size={12} strokeWidth={2.8} />}
@@ -652,7 +666,10 @@ export default function LocationForecast() {
   /* showing what was last fetched for the place while the fresh forecast loads */
   const [refreshing, setRefreshing] = useState(false);
   const [tick, setTick] = useState(0);
-  const { temp } = useUnits();
+  const U = useUnits();
+  const { temp } = U;
+  /* the hour sheet: the hour open in it (its time), or null */
+  const [sheetT, setSheetT] = useState(null);
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [recent, setRecent] = useState([]);
@@ -695,7 +712,7 @@ export default function LocationForecast() {
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
-    if (!quiet) { setLoading(true); setError(null); setOutside(null); setGeoError(''); }
+    if (!quiet) { setLoading(true); setError(null); setOutside(null); setGeoError(''); setSheetT(null); }
     /* a place opened in the last 20 minutes shows at once from what was fetched then, and is brought up
        to date in place (ukvLocation.js cachedLocation) */
     const cached = !quiet && cachedLocation({ lat: p.lat, lon: p.lon, name });
@@ -769,6 +786,52 @@ export default function LocationForecast() {
   }, [resp, tick]);
   const T = temp;
   const deg = (c) => (c == null ? '—' : `${Math.round(T(c))}°`);
+
+  /* ── the hour sheet, links to a moment, and cards to go to ── */
+  const placeLink = useCallback((extra = '') => (model
+    ? `${window.location.origin}/LocationWeather?lat=${model.lat.toFixed(4)}&lon=${model.lon.toFixed(4)}&name=${encodeURIComponent(model.location.name)}${extra}`
+    : null), [model]);
+  const linkFor = useCallback((t) => placeLink(`&at=${momentParam(t)}`), [placeLink]);
+  /* a card by name (…&card=radar, or a Today chip): scrolled to just under the search bar; a card with
+     nothing to show today has no room, so the chip goes to the tiles instead */
+  const goCard = useCallback((name) => {
+    const find = (n) => { const el = document.getElementById(`lw-card-${n}`); return el && el.offsetParent !== null && el.childElementCount ? el : null; };
+    (find(name) || find('tiles'))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+  const scrollStripTo = useCallback((t) => {
+    const el = stripRef.current?.querySelector(`[data-t="${t}"]`);
+    if (el) stripRef.current.scrollTo({ left: Math.max(0, el.offsetLeft - 8), behavior: 'smooth' });
+  }, []);
+  /* a link to a moment (…&at=2026-11-21T15:00) opens that hour's sheet, and …&card=radar goes to a
+     card: once for each link, not again every time the forecast refreshes */
+  const linkDone = useRef('');
+  useEffect(() => {
+    if (!model) return;
+    const key = routerLocation.search;
+    if (linkDone.current === key) return;
+    linkDone.current = key;
+    const q = new URLSearchParams(key);
+    const at = parseMoment(q.get('at'));
+    const h = at != null ? hourFor(model, at) : null;
+    if (h) { setSheetT(h.t); setTimeout(() => scrollStripTo(h.t), 250); }
+    if (q.get('card')) setTimeout(() => goCard(q.get('card')), 400);
+  }, [model, routerLocation.search, goCard, scrollStripTo]);
+  /* while an hour is open, the address bar is a link to it (shared as it is); closing takes the hour off */
+  useEffect(() => {
+    if (!model) return;
+    const url = new URL(window.location.href);
+    if (sheetT != null) {
+      url.searchParams.set('lat', model.lat.toFixed(4));
+      url.searchParams.set('lon', model.lon.toFixed(4));
+      url.searchParams.set('name', model.location.name);
+      url.searchParams.delete('location');
+      url.searchParams.set('at', momentParam(sheetT));
+    } else url.searchParams.delete('at');
+    if (url.href !== window.location.href) window.history.replaceState(window.history.state, '', url.href);
+  }, [sheetT, model]);
+  /* the cards that matter most today (the Today card's chips) come up the page on a phone */
+  const lifted = useMemo(() => new Set(model ? mattersToday(model, warnings, U).map((m) => m.card) : []), [model, warnings, U]);
+  const slot = (name) => `lw-slot lw-o-${name}${lifted.has(name) ? ' is-lifted' : ''}`;
 
   /* back from a forecast goes to the search; from the search, to the previous page */
   const backOut = () => {
@@ -844,6 +907,12 @@ export default function LocationForecast() {
         <SkyPreview value={preview} onChange={setPreview} onClose={togglePreview} hidePage={hidePage} onHidePage={setHidePage} />
       )}
 
+      {/* everything for one hour (HourSheet.jsx): from the hourly strip, or a link to the moment */}
+      {model && sheetT != null && !hidePage && (
+        <HourSheet model={model} t={sheetT} linkFor={linkFor}
+          onClose={() => setSheetT(null)} onMove={(t) => { setSheetT(t); scrollStripTo(t); }} />
+      )}
+
       {/* one glass bar: back, the search, my location, and a menu for the rest */}
       <div className="lw-head" style={hidePage ? { visibility: 'hidden' } : undefined}>
         <div className="lw-bar">
@@ -902,11 +971,14 @@ export default function LocationForecast() {
 
             {warnings.length > 0 && (
               /* lw-warn-card: the top card while there is a warning, the one the rain and snow land on */
-              <div className="lw-glass lw-card lw-warn-card" style={{ marginBottom: 14 }}>
+              <div id="lw-card-warnings" className="lw-glass lw-card lw-warn-card" style={{ marginBottom: 14 }}>
                 <div className="lw-title"><AlertTriangle />Weather warnings<span className="lw-title-aside">{warnings.length === 1 ? '1 for this place' : `${warnings.length} for this place`}</span></div>
                 <LocationWarnings warnings={warnings} openId={openWarn} onToggle={setOpenWarn} />
               </div>
             )}
+
+            {/* the forecast in words, and what matters most today (TodayCard.jsx) */}
+            <TodayCard model={model} warnings={warnings} onCard={goCard} />
 
             {/* The layout (15 Nov 2026, the user's: the radar to the right of the days, the detailed
                 forecast moved up). On a computer: the hours, the precipitation, the detailed forecast and
@@ -915,26 +987,28 @@ export default function LocationForecast() {
                 card that has nothing to show leaves its slot empty, and an empty slot takes no room. */}
             <div className="lw-layout">
               <div className="lw-col">
-                <div className="lw-slot lw-o-hourly"><HourlyCard model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} /></div>
-                <div className="lw-slot lw-o-precip"><PrecipCard model={model} /></div>
-                <div className="lw-slot lw-o-detail"><LocationCharts model={model} dayIdx={dayIdx} onDay={pickDay} /></div>
-                <div className="lw-slot lw-o-thunder"><LocationThunder model={model} /></div>
+                <div id="lw-card-hourly" className={slot('hourly')}>
+                  <HourlyCard model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} onHour={setSheetT} sheetT={sheetT} />
+                </div>
+                <div id="lw-card-precip" className={slot('precip')}><PrecipCard model={model} /></div>
+                <div id="lw-card-detail" className={slot('detail')}><LocationCharts model={model} dayIdx={dayIdx} onDay={pickDay} /></div>
+                <div id="lw-card-thunder" className={slot('thunder')}><LocationThunder model={model} /></div>
               </div>
               <div className="lw-col">
-                <div className="lw-slot lw-o-tiles"><LocationTiles model={model} /></div>
+                <div id="lw-card-tiles" className={slot('tiles')}><LocationTiles model={model} /></div>
               </div>
-              <div className="lw-slot lw-o-days">
+              <div id="lw-card-days" className={slot('days')}>
                 {model.outlook?.days?.length
                   ? <OutlookCard model={model} T={T} selected={openDay} onDay={openOutlookDay} warnings={warnings} onWarning={showWarning} />
                   : <DaysCard model={model} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />}
               </div>
-              <div className="lw-slot lw-o-radar">
+              <div id="lw-card-radar" className={slot('radar')}>
                 <div className="lw-glass lw-card">
                   <div className="lw-title"><Radar />Rain radar<span className="lw-title-aside">Met Office 1 km · then UKV</span></div>
                   <LocationRadar lat={model.lat} lon={model.lon} />
                 </div>
               </div>
-              <div className="lw-slot lw-o-snow"><LocationSnow model={model} /></div>
+              <div id="lw-card-snow" className={slot('snow')}><LocationSnow model={model} /></div>
             </div>
 
             <p className="lw-source">

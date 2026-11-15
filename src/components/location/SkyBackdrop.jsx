@@ -645,7 +645,7 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
    beside it on a wide screen, the hourly forecast alone on a phone. Whichever of these share the
    highest top. (The rain stopped on 15 Nov 2026 when the page's layout changed under the selector it
    used; these selectors follow the layout's own classes, LocationForecast.jsx and location.css.) */
-export const TOP_CARDS = '.lw-wrap > .lw-warn-card, .lw-layout .lw-slot > .lw-glass, .lw-layout .lw-tiles > .lw-glass';
+export const TOP_CARDS = '.lw-wrap > .lw-warn-card, .lw-wrap > .lw-today, .lw-layout .lw-slot > .lw-glass, .lw-layout .lw-tiles > .lw-glass';
 function topCards(selector) {
   const all = [...document.querySelectorAll(selector)].filter((el) => el.offsetParent !== null);
   if (!all.length) return [];

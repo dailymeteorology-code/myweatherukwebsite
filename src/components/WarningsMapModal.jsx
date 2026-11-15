@@ -412,7 +412,10 @@ export default function WarningsMapModal({ isOpen, onClose, warnings = [], focus
   const dayWord = dayIdx < 2 ? dayLabel(days[dayIdx], dayIdx).toLowerCase() : days[dayIdx].toLocaleDateString('en-GB', { weekday: 'long' });
 
   return createPortal(
-    <div className={`wg wg-mapmodal${isDark ? '' : ' is-light'}`} role="dialog" aria-modal="true" aria-label="UK weather warnings map" onClick={onClose}>
+    /* touches stay in the map: the site's pull-to-refresh (GlobalPullToRefresh) would take a drag down
+       (panning the map, or putting the details away) near the top of the page as a reload */
+    <div className={`wg wg-mapmodal${isDark ? '' : ' is-light'}`} role="dialog" aria-modal="true" aria-label="UK weather warnings map" onClick={onClose}
+      onTouchStart={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()} onTouchEnd={(e) => e.stopPropagation()}>
       <div className="wg-sheet wg-glass" onClick={(e) => e.stopPropagation()}>
         {/* the map fills the whole sheet; everything else floats on it in glass */}
         <div ref={mapRef} className="wg-map" />

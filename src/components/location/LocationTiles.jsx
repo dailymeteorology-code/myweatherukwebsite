@@ -168,7 +168,7 @@ export default function LocationTiles({ model }) {
         </div>
       </Tile>
 
-      <Tile icon={Sun} label="Solar power">
+      <Tile icon={Droplets} label="Humidity">
         <div className="lw-big">{now.rh == null ? '—' : `${Math.round(now.rh)}%`}</div>
         <div className="lw-foot">The dew point is {deg(now.td)} right now{now.rh >= 95 ? ' and the air is close to saturated.' : now.rh <= 45 ? ', fairly dry air.' : '.'}</div>
       </Tile>
