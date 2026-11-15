@@ -7,6 +7,7 @@
    the Met Office Global: 06:00-18:00 and 18:00-06:00); the times inside them are the UKV's hours
    (hourly to T+54, then three-hourly), which carry the visibility, the ground temperature and TCM NOVA. */
 import { condLabel, isWet, hhmm, thunderRisk, snowChance, rateOf, bandOf, uvWord } from '@/lib/ukvLocation';
+import { roadIce, fogSpells } from '@/lib/location/situations';
 
 const DIRS = ['northerly', 'north-easterly', 'easterly', 'south-easterly', 'southerly', 'south-westerly', 'westerly', 'north-westerly'];
 const dirWord = (deg) => (deg == null ? '' : DIRS[Math.round((((deg % 360) + 360) % 360) / 45) % 8]);
@@ -100,7 +101,10 @@ function partWords(model, part, from, to, U) {
     out.push(`Highs of ${deg(hi)}${feels != null && warm.t2 - feels >= 4 ? `, feeling more like ${deg(feels)} in the wind` : ''}.`);
   } else if (!isDay && lo != null && Number.isFinite(lo)) {
     const frost = lo <= -3 ? 'A hard frost' : lo <= 0 ? 'A frost' : hs.some((h) => (h.ground ?? 9) <= 0) ? 'A ground frost' : null;
-    out.push(`${frost ? `${frost}, with lows` : 'Lows'} of ${deg(lo)}.`);
+    /* a night too warm to sleep well: a low of 20 C or more (16 C: a warm, uncomfortable night) */
+    if (lo >= 20) out.push(`Too warm for many to sleep, with lows of ${deg(lo)}.`);
+    else if (lo >= 16) out.push(`A warm night, lows of ${deg(lo)}.`);
+    else out.push(`${frost ? `${frost}, with lows` : 'Lows'} of ${deg(lo)}.`);
   }
 
   /* the wind, when it is worth a mention */
@@ -176,22 +180,25 @@ export function mattersToday(model, warnings, U) {
   if (storm && storm.p >= 15) out.push({ key: 'thunder', kind: 'thunder', label: `Thunderstorms: ${thunderRisk(storm.p).word.toLowerCase()} risk`, sub: `around ${clock(storm.t)}`, card: 'thunder', rank: 1 });
   const scH = maxBy(hs, (h) => h.snowCond ?? 0);
   const sc = snowChance(scH?.snowCond);
-  if (sc && sc.level >= 3) out.push({ key: 'snow', kind: 'snow', label: `Snow: ${sc.word.toLowerCase()} chance`, sub: `around ${clock(scH.t)}`, card: 'snow', rank: 2 });
-  const icy = hs.find((h, i) => (h.ground ?? 9) <= 0 && hs.slice(Math.max(0, i - 3), i + 1).some((x) => (x.precip ?? 0) >= 0.2 || (x.rh ?? 0) >= 97));
-  if (icy) out.push({ key: 'ice', kind: 'ice', label: 'Icy patches', sub: `from ${clock(icy.t)}`, card: 'snow', rank: 3 });
+  if (sc && sc.level >= 3) out.push({ key: 'snow', kind: 'snow', label: `Snow: ${sc.word.toLowerCase()} chance`, sub: `around ${clock(scH.t)}`, card: 'settle|snow', rank: 2 });
+  /* ice and fog as their own card sees them (situations.js), before 06:00 tomorrow */
+  const ice = roadIce(model, nowMs)?.spells.find((s) => s.from < end);
+  if (ice) out.push({ key: 'ice', kind: 'ice', label: ice.level >= 2 ? 'Icy roads and paths' : 'Frost or ice in places', sub: `from ${clock(Math.max(ice.from, nowMs))}`, card: 'roads', rank: 3 });
   const wetPeak = maxBy(hs, rateOf);
   const total = sum(hs, 'precip');
   if (rateOf(wetPeak) >= 4 || total >= 15) out.push({ key: 'rain', kind: 'rain', label: 'Heavy rain', sub: `around ${clock(wetPeak.t)}`, card: 'precip', rank: 4 });
-  const fog = hs.find((h) => h.vis != null && h.vis < 1);
-  if (fog) out.push({ key: 'fog', kind: 'fog', label: fog.vis < 0.2 || hs.some((h) => h.vis != null && h.vis < 0.2) ? 'Dense fog' : 'Fog', sub: `from ${clock(fog.t)}`, card: 'tiles', rank: 5 });
+  const fog = fogSpells(model, nowMs)?.spells.find((s) => s.from < end);
+  if (fog) out.push({ key: 'fog', kind: 'fog', label: fog.level >= 2 ? 'Dense fog' : 'Fog', sub: `from ${clock(Math.max(fog.from, nowMs))}`, card: 'roads', rank: 5 });
   const gusty = maxBy(hs, (h) => h.gust);
   if ((gusty.gust ?? 0) >= 50) out.push({ key: 'gale', kind: 'wind', label: `Gusts of ${U.fmtWind(gusty.gust)}`, sub: `around ${clock(gusty.t)}`, card: 'tiles', rank: 6 });
   const hot = maxBy(hs, (h) => h.t2);
   if ((hot.t2 ?? 0) >= 27) out.push({ key: 'heat', kind: 'heat', label: `Hot: up to ${deg(hot.t2)}`, sub: `around ${clock(hot.t)}`, card: 'tiles', rank: 7 });
+  const tonightLo = today?.nightPart?.lo;
+  if (tonightLo != null && tonightLo >= 20) out.push({ key: 'warmnight', kind: 'heat', label: 'Too warm to sleep well', sub: `low of ${deg(tonightLo)}`, card: 'days', rank: 7.5 });
   const cold = hs.reduce((a, b) => ((b.feels ?? 99) < (a.feels ?? 99) ? b : a), hs[0]);
   if ((cold.feels ?? 99) <= -5) out.push({ key: 'cold', kind: 'cold', label: `Feels like ${deg(cold.feels)}`, sub: `around ${clock(cold.t)}`, card: 'tiles', rank: 8 });
   const frost = hs.find((h) => (h.t2 ?? 9) <= 0);
-  if (frost && !icy) out.push({ key: 'frost', kind: 'frost', label: 'Frost', sub: `from ${clock(frost.t)}`, card: 'tiles', rank: 9 });
+  if (frost && !ice) out.push({ key: 'frost', kind: 'frost', label: 'Frost', sub: `from ${clock(frost.t)}`, card: 'tiles', rank: 9 });
   if ((gusty.gust ?? 0) >= 40 && (gusty.gust ?? 0) < 50) out.push({ key: 'gusts', kind: 'wind', label: `Gusts of ${U.fmtWind(gusty.gust)}`, sub: `around ${clock(gusty.t)}`, card: 'tiles', rank: 10 });
   const uvH = maxBy(hs, (h) => h.uvi ?? 0);
   if ((uvH.uvi ?? 0) >= 6) out.push({ key: 'uv', kind: 'uv', label: `UV ${uvWord(uvH.uvi).toLowerCase()}`, sub: `around ${clock(uvH.t)}`, card: 'tiles', rank: 11 });

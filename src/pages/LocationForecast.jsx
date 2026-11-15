@@ -39,6 +39,7 @@ import LocationCharts, { tempColour } from '@/components/location/LocationCharts
 import SkyBackdrop, { CardFrost, CardRain, CardSnow, WindowRain, skyDarkness } from '@/components/location/SkyBackdrop';
 import SkyPreview, { PREVIEW_START, previewSky } from '@/components/location/SkyPreview';
 import TodayCard from '@/components/location/TodayCard';
+import SituationCards from '@/components/location/SituationCards';
 import HourSheet, { hourFor, momentParam, parseMoment } from '@/components/location/HourSheet';
 import { mattersToday } from '@/lib/location/forecastText';
 import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
@@ -796,7 +797,9 @@ export default function LocationForecast() {
      nothing to show today has no room, so the chip goes to the tiles instead */
   const goCard = useCallback((name) => {
     const find = (n) => { const el = document.getElementById(`lw-card-${n}`); return el && el.offsetParent !== null && el.childElementCount ? el : null; };
-    (find(name) || find('tiles'))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    /* 'settle|snow': the first of them on the page */
+    const el = [...String(name).split('|'), 'tiles'].map(find).find(Boolean);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
   const scrollStripTo = useCallback((t) => {
     const el = stripRef.current?.querySelector(`[data-t="${t}"]`);
@@ -830,8 +833,11 @@ export default function LocationForecast() {
     if (url.href !== window.location.href) window.history.replaceState(window.history.state, '', url.href);
   }, [sheetT, model]);
   /* the cards that matter most today (the Today card's chips) come up the page on a phone */
-  const lifted = useMemo(() => new Set(model ? mattersToday(model, warnings, U).map((m) => m.card) : []), [model, warnings, U]);
-  const slot = (name) => `lw-slot lw-o-${name}${lifted.has(name) ? ' is-lifted' : ''}`;
+  /* (not the tiles or the days: those are the general cards, and a cold-feel or frost chip pointing
+     at the tiles would lift fourteen of them up the page) */
+  const lifted = useMemo(() => new Set(model ? mattersToday(model, warnings, U).flatMap((m) => m.card.split('|')).filter((n) => n !== 'tiles' && n !== 'days') : []), [model, warnings, U]);
+  /* a slot comes up when its card, or one of the cards it holds, matters today */
+  const slot = (name, holds = [name]) => `lw-slot lw-o-${name}${holds.some((n) => lifted.has(n)) ? ' is-lifted' : ''}`;
 
   /* back from a forecast goes to the search; from the search, to the previous page */
   const backOut = () => {
@@ -991,6 +997,9 @@ export default function LocationForecast() {
                   <HourlyCard model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} onHour={setSheetT} sheetT={sheetT} />
                 </div>
                 <div id="lw-card-precip" className={slot('precip')}><PrecipCard model={model} /></div>
+                {/* road ice and fog, snow settling, the night sky, event days: each only when it has
+                    something to say (SituationCards.jsx) */}
+                <div id="lw-card-situations" className={`${slot('situations', ['roads', 'settle', 'nightsky', 'events'])} lw-situations`}><SituationCards model={model} /></div>
                 <div id="lw-card-detail" className={slot('detail')}><LocationCharts model={model} dayIdx={dayIdx} onDay={pickDay} /></div>
                 <div id="lw-card-thunder" className={slot('thunder')}><LocationThunder model={model} /></div>
               </div>
