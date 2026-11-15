@@ -47,6 +47,18 @@
 .mdb-sect { font-size: 11px; font-weight: 720; letter-spacing: 0.09em; text-transform: uppercase; color: var(--md-muted); margin: 4px 2px 9px; display: flex; align-items: center; gap: 8px; }
 .mdb-sect + .mdb-grid { margin-bottom: 18px; }
 .mdb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 10px; }
+/* a card with its "i" (what the layer shows), and the note it opens under the card */
+.mdb-cardwrap { position: relative; display: grid; }
+.mdb-cardwrap > .mdb-card { padding-right: 34px; }
+.mdb-i { all: unset; box-sizing: border-box; cursor: pointer; position: absolute; top: 9px; right: 9px; width: 20px; height: 20px; border-radius: 999px; display: grid; place-items: center;
+  font-family: Georgia, 'Times New Roman', serif; font-style: italic; font-weight: 700; font-size: 12px; line-height: 1; color: var(--md-accent);
+  box-shadow: inset 0 0 0 1.3px var(--md-accent); background: var(--md-plate); opacity: 0.8; }
+.mdb-i:hover, .mdb-i.is-on { opacity: 1; }
+.mdb-i.is-on { color: var(--md-on-ink); background: var(--md-on); box-shadow: none; }
+.mdb-i.is-inline { position: static; width: 18px; height: 18px; font-size: 11px; }
+.mdb-info { margin-top: 6px; padding: 9px 11px; border-radius: 12px; background: var(--md-track); display: grid; gap: 3px; font-size: 12px; line-height: 1.45; color: var(--md-sub); }
+.mdb-info b { font-size: 12.5px; color: var(--md-ink); }
+.mdb-info.is-model { margin: 0 16px 8px; }
 .mdb-card { all: unset; box-sizing: border-box; cursor: pointer; display: grid; gap: 6px; align-content: start; padding: 12px 14px 13px; border-radius: 18px;
   background: var(--md-card); box-shadow: inset 0 0 0 1px var(--md-stroke); transition: box-shadow 0.15s ease, transform 0.15s ease, background 0.15s ease; }
 .mdb-card:hover { box-shadow: inset 0 0 0 1px var(--md-stroke), 0 8px 20px var(--md-lift); transform: translateY(-1px); }

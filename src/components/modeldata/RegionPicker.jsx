@@ -40,7 +40,7 @@ const norm = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 /* the counties, with their outlines as lon/lat rings */
 let countiesP = null;
 const unflat = (f) => { const out = []; for (let i = 0; i < f.length; i += 2) out.push([f[i], f[i + 1]]); return out; };
-const loadCounties = () => (countiesP ||= fetch('/geo/uk-ie-counties.json').then((r) => r.json())
+export const loadCounties = () => (countiesP ||= fetch('/geo/uk-ie-counties.json').then((r) => r.json())
   .then((d) => (d.areas || []).map((a) => ({ id: a.id, name: a.name, group: a.group, country: a.country, bbox: a.bbox, polys: a.polys.map((poly) => poly.map(unflat)) })))
   .catch(() => { countiesP = null; return []; }));
 /* is a point in a county (even-odd over its rings, so lakes and enclaves are outside)? */

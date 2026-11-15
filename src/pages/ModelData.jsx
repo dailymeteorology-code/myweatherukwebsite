@@ -37,7 +37,9 @@ import Timeline from '@/components/modeldata/Timeline';
 import { LAYER_DESC, POPULAR, probFamily, probLine, categoryOf } from '@/lib/modelLayers';
 import { withMorePlaces } from '@/lib/modelPlaces';
 import { areaStats, maskCells, typedShares } from '@/lib/areaStats';
-import RegionPicker, { gridBox } from '@/components/modeldata/RegionPicker';
+import { ESSENTIALS, MODEL_ABOUT, QUESTIONS } from '@/lib/modelHelp';
+import { countyCells, describe } from '@/lib/mapCaption';
+import RegionPicker, { gridBox, loadCounties } from '@/components/modeldata/RegionPicker';
 import LongRange from '@/components/modeldata/LongRange';
 import { tweenFrame } from '@/lib/modelTween';
 import { GRIDS, gridOfModel, projection } from '@/lib/modelGrids';
@@ -604,6 +606,10 @@ export default function ModelData() {
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(prefs.speed || 450);
+  /* Simple mode (15 Nov 2026, at the user's request; off unless turned on in Map): questions to start
+     with, the main layers only, and the map described in words under the top bar */
+  const [simple, setSimple] = useState(!!prefs.simple);
+  const [nowAfter, setNowAfter] = useState(false);          // after a question: go to the step nearest now
   const [smooth, setSmooth] = useState(prefs.smooth ?? true);
   const [showContours, setShowContours] = useState(prefs.showContours ?? true);
   const [showCities, setShowCities] = useState(prefs.showCities ?? true);
@@ -759,9 +765,9 @@ export default function ModelData() {
   useEffect(() => {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({ ui: 2, mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours,
-        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov, sn, msl, wn, cmp, extras: extrasBy, layerAlpha, palette }));
+        showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov, sn, msl, wn, cmp, extras: extrasBy, layerAlpha, palette, simple }));
     } catch { /* private window: nothing to remember */ }
-  }, [mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours, showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, msl,
+  }, [simple, mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours, showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, msl,
     strikeStyle, ov, sn, wn, cmp, extrasBy, layerAlpha, palette]);
 
   /* the overlay's runs (the last 48 hours), the newest Main Run chosen unless one already is */
@@ -1316,6 +1322,15 @@ export default function ModelData() {
     setView({ cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 - (tight ? 0 : (R.h * 0.02) / s), s });
   }, [windowRects]);
   useEffect(() => { if (!view && size) fit(REGIONS.uk.box); }, [size, view, fit]);
+  /* after a question: the step nearest the hour now (the run's own steps, once they are listed) */
+  useEffect(() => {
+    if (!nowAfter || !run || !steps.length || timeSteps) return;
+    const t0 = Date.parse(run.run), now = Date.now();
+    let best = 0;
+    steps.forEach((st, k) => { if (Math.abs(t0 + st * 3600e3 - now) < Math.abs(t0 + steps[best] * 3600e3 - now)) best = k; });
+    setIdx(best);
+    setNowAfter(false);
+  }, [nowAfter, run, steps, timeSteps]);
   useEffect(() => {
     if (!fitAfter || isLong || gridName !== gridOfModel(modelId)) return;
     fit(gridBox(fitAfter, gridName).box);
@@ -2034,6 +2049,8 @@ export default function ModelData() {
     })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, cat, isProb, isLive, isObs, style, palette]);
+  const shownItems = useMemo(() => (simple && !isProb && !isLive && !isObs
+    ? browserItems.filter((it) => ESSENTIALS.includes(it.key) || it.key === varKey) : browserItems), [simple, browserItems, isProb, isLive, isObs, varKey]);
   const pending = key && status && status.state !== 'complete' ? Math.max(0, steps.length - loadedCount) : 0;
   /* a new set of steps starts the export range afresh */
   useEffect(() => { setExp((e) => (e.from || e.to != null ? { ...e, from: 0, to: null } : e)); }, [mode, key, liveSrc, obsKey]);
@@ -2076,6 +2093,16 @@ export default function ModelData() {
     if (name === 'summary') setObsPanel(true);
     if (name === 'mode') setModeOpen(true);
     if (name === 'shape') setShapeOpen(true);
+  };
+  const ask = (qn) => {
+    const ms = cat?.models || [];
+    let pick = null;
+    for (const v of [qn.v, qn.alt].filter(Boolean)) {
+      for (const id of qn.models) { const m = ms.find((x) => x.id === id && x.runs?.length && x.variables.includes(v)); if (m) { pick = [m.id, v]; break; } }
+      if (pick) break;
+    }
+    if (!pick) return;
+    setModeTo('forecast'); setModelId(pick[0]); setRunIso(null); setVarKey(pick[1]); setNowAfter(true);
   };
   const showVortex = () => { setModeTo('forecast'); setModelId('gfs'); setRunIso(null); setVarKey('u10hpa'); setFitAfter([-180, 58, 180, 90]); };
   const setModeTo = (m) => { setMode(m); setVarOpen(false); setModeOpen(false); if (m === 'observed') setShowStar(true); };
@@ -2402,6 +2429,9 @@ export default function ModelData() {
         {style === 'satellite' && <span className="md-sec-n" style={{ marginTop: 0 }}>{SAT_CREDIT}</span>}
       </div>
       <div className="md-sec">
+        <LayerRow icon={<Star size={14} />} label="Simple mode" note="questions to start with, the main layers only, and the map in words" on={simple} onClick={() => setSimple((x) => !x)} />
+      </div>
+      <div className="md-sec">
         <span className="md-sec-t">Show on the map</span>
         {layerRows}
       </div>
@@ -2538,7 +2568,7 @@ export default function ModelData() {
     color: on ? T.onInk : T.ink3, background: on ? T.on : T.chip, boxShadow: on ? T.onShadow : T.chipShadow,
   });
   const pickVar = (k) => { if (isObs) setObsKey(k); else if (isLive) setLiveKey(k); else if (isProb) choosePreset(k); else setVarKey(k); setVarOpen(false); };
-  const pickerNote = !model ? '' : isObs
+  const pickerNote = !model ? '' : simple && !isProb && !isLive && !isObs ? 'Simple mode: the main layers. Turn it off in Map to see all of them.' : isObs
     ? "Each day's highs, lows and totals across the UK and Ireland, kept from 20 October 2026 onwards: step back through the days on the timeline. Temperature, wind, pressure and humidity come from a 15-minute analysis that starts from the Met Office UKV model and is pulled to what the airport weather stations (METAR) measured; rainfall is the Met Office radar's own total."
     : isLive
       ? "Live, observed: Met Office 1 km rain radar every 15 minutes (AWS), Meteosat-12 imagery every 10 minutes and Meteosat 0° every 15 (EUMETSAT), lightning from the Met Office LEELA network. 'Now' layers are a 15-minute analysis: the Met Office UKV model corrected to the UK and Irish airport weather reports (METAR), with the radar's rain and LEELA lightning for the weather symbols."
@@ -2556,7 +2586,8 @@ export default function ModelData() {
   );
   /* the layer picker, where it opens */
   const browser = (pos, extra) => (
-    <LayerBrowser items={browserItems} popular={isProb || timeSteps ? [] : POPULAR} selected={isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey}
+    <LayerBrowser items={shownItems} popular={isProb || timeSteps || simple ? [] : POPULAR} selected={isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey}
+      modelAbout={model && MODEL_ABOUT[model.id] ? { name: SHORT_NAMES[model.id] || model.label, text: MODEL_ABOUT[model.id] } : null}
       onPick={pickVar} onClose={closePanels} layout={layout} style={pos} query={q} setQuery={setQ} note={pickerNote} extra={extra}
       title={isObs ? 'Observed' : isLive ? 'Live' : isProb ? 'Chances' : 'Layers'}
       subtitle={!model ? '' : isProb ? `${model.label} · ${model.members} members` : timeSteps ? chipSub
@@ -2732,6 +2763,12 @@ export default function ModelData() {
   /* the outlined area's numbers (15 Nov 2026): its cells on this grid, the frame on show over them,
      and the whole run's extremes from every step loaded so far */
   const areaCells = useMemo(() => (hlRings ? maskCells(hlRings[gridName] || [], gridName) : null), [hlRings, gridName]);
+  const [counties, setCounties] = useState(null);
+  useEffect(() => { let on = true; loadCounties().then((c) => on && setCounties(c)); return () => { on = false; }; }, []);
+  const caption = useMemo(() => {
+    if (!counties || !frame || isImg || isLong) return '';
+    try { return describe(disp(frame), scaleKey, vmeta, countyCells(counties, gridName), gridName); } catch { return ''; }
+  }, [counties, frame, disp, scaleKey, vmeta, gridName, isImg, isLong]);
   const areaWet = RAINY.has(scaleKey) || /^(precip|snow|rain|frzr|icep|conv)_(total|1h|6h|24h|acc)$/.test(scaleKey) ? 0.1 : null;
   const areaNow = useMemo(() => {
     if (!areaCells?.length || !frame) return null;
@@ -3000,6 +3037,14 @@ export default function ModelData() {
           </div>
         )}
         {probBar}
+        {/* Simple mode: questions to start with, as a row of the top bar (so the map starts below them) */}
+        {simple && !isLong && !isLive && !isObs && !isProb && cat && (
+          <div className="md-noscroll" style={{ flexBasis: '100%', display: 'flex', gap: 6, overflowX: 'auto', pointerEvents: 'auto' }}>
+            {QUESTIONS.map((qn) => (
+              <button key={qn.key} type="button" className="md-act" onClick={() => ask(qn)} style={{ flexShrink: 0, ...T.capsule, padding: '7px 13px', fontWeight: 700 }}>{qn.label}</button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* desktop: the layer picker and the layers, as cards under the top bar */}
@@ -3086,6 +3131,13 @@ export default function ModelData() {
         </div>
       )}
 
+      {/* Simple mode: questions to start with, and the map in words (screen readers always hear the words) */}
+      {simple && caption && !isLong && !drawing && !phone && (
+        <div style={{ ...T.capsule, borderRadius: 14, position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: topH, zIndex: 3,
+          maxWidth: 'min(640px, calc(100% - 20px))', padding: '6px 13px', fontSize: 12.5, fontWeight: 600, lineHeight: 1.4, color: T.ink3, textAlign: 'center' }}>{caption}</div>
+      )}
+      <div aria-live="polite" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}>{caption}</div>
+
       {/* Long range: the polar vortex and the MJO, over the map */}
       {isLong && <LongRange t={T} phone={phone} onMap={showVortex} style={{ position: 'absolute', left: 10, right: 10, top: topH, bottom: phone ? 16 : 10, zIndex: 5 }} />}
 
@@ -3137,6 +3189,10 @@ export default function ModelData() {
             {playBtn}
             <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>{slider}</div>
           </div>
+          {/* Simple mode: the map in words, two lines at most */}
+          {simple && caption && !isLong && (
+            <div style={{ fontSize: 12, lineHeight: 1.35, color: T.ink3, textAlign: 'center', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', padding: '0 4px' }}>{caption}</div>
+          )}
           <div style={{ display: 'flex', gap: 4, borderTop: `1px solid ${T.line}`, paddingTop: 6, marginTop: 2 }}>
             {tool(<Layers size={19} />, 'Map', mapOpen, () => openPanel('layers'), layerCount)}
             {tool(<Ratio size={19} />, frameKey === 'screen' ? 'Shape' : FRAMES[frameKey].label, shapeOpen, () => openPanel('shape'))}

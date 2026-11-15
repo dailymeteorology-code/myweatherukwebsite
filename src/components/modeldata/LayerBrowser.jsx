@@ -7,7 +7,10 @@
 
    Desktop and tablet: a large card under the top bar, the categories down its side. Phones: a solid
    sheet from the bottom with every category in one list that scrolls up and down (headings stay in
-   view), a "Jump to" menu beside the search, and nothing that has to be swiped sideways. Esc closes it. */
+   view), a "Jump to" menu beside the search, and nothing that has to be swiped sideways. Esc closes it.
+
+   An "i" on every card says what the layer shows, and one beside the title what the model is (15 Nov
+   2026, at the user's request). */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { categoryOf } from '@/lib/modelLayers';
@@ -20,8 +23,9 @@ const Badge = ({ icon }) => (
  * items:   [{ key, label, group, desc, unit, ramp }] in the order they should be listed
  * popular: keys for the Popular category, most-used first (those present)
  */
-export default function LayerBrowser({ items, popular = [], selected, onPick, onClose, title, subtitle, note, layout, style, query, setQuery, extra }) {
+export default function LayerBrowser({ items, popular = [], selected, onPick, onClose, title, subtitle, note, layout, style, query, setQuery, extra, modelAbout }) {
   const phone = layout === 'phone';
+  const [info, setInfo] = useState(null);                  // the card whose "i" is open, or '__model'
   const byKey = useMemo(() => new Map(items.map((it) => [it.key, it])), [items]);
   const pop = useMemo(() => popular.filter((k) => byKey.has(k)).slice(0, 12), [popular, byKey]);
   /* the categories in their first-seen order, Popular first */
@@ -51,14 +55,24 @@ export default function LayerBrowser({ items, popular = [], selected, onPick, on
   const shown = cats.find((c) => c.id === cat) || cats[0];
 
   const card = (it, withCat) => (
-    <button key={`${withCat ? 'f' : 'c'}${it.key}`} type="button" className="mdb-card" aria-pressed={it.key === selected} onClick={() => onPick(it.key)} title={it.desc || it.label}>
-      <span className="mdb-card-top">
-        <span className="mdb-name">{it.label}</span>
-        {it.unit ? <span className="mdb-unit">{it.unit}</span> : null}
-      </span>
-      {withCat && <span className="mdb-cat-tag">{categoryOf(it.group).name}</span>}
-      {it.ramp ? <i className="mdb-ramp" style={{ background: it.ramp }} /> : null}
-    </button>
+    <div key={`${withCat ? 'f' : 'c'}${it.key}`} className="mdb-cardwrap">
+      <button type="button" className="mdb-card" aria-pressed={it.key === selected} onClick={() => onPick(it.key)} title={it.desc || it.label}>
+        <span className="mdb-card-top">
+          <span className="mdb-name">{it.label}</span>
+          {it.unit ? <span className="mdb-unit">{it.unit}</span> : null}
+        </span>
+        {withCat && <span className="mdb-cat-tag">{categoryOf(it.group).name}</span>}
+        {it.ramp ? <i className="mdb-ramp" style={{ background: it.ramp }} /> : null}
+      </button>
+      <button type="button" className={`mdb-i${info === it.key ? ' is-on' : ''}`} onClick={() => setInfo((o) => (o === it.key ? null : it.key))}
+        aria-expanded={info === it.key} aria-label={`What ${it.label} shows`} title={`What ${it.label} shows`}>i</button>
+      {info === it.key && (
+        <div className="mdb-info" role="note">
+          <b>{it.label}{it.unit ? ` (${it.unit})` : ''}</b>
+          <span>{it.desc || `${it.label}, in ${categoryOf(it.group).name.toLowerCase()}.`}</span>
+        </div>
+      )}
+    </div>
   );
 
   const section = (c) => (
@@ -82,7 +96,15 @@ export default function LayerBrowser({ items, popular = [], selected, onPick, on
   return (
     <div className={`mdb${phone ? ' is-phone' : ''}`} role="dialog" aria-modal="false" aria-label={title} style={style}>
       <div className="mdb-head">
-        <div className="mdb-title"><b>{title}</b>{subtitle ? <span>{subtitle}</span> : null}</div>
+        <div className="mdb-title">
+          <b>{title}</b>
+          {subtitle ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{subtitle}
+              {modelAbout ? <button type="button" className={`mdb-i is-inline${info === '__model' ? ' is-on' : ''}`} onClick={() => setInfo((o) => (o === '__model' ? null : '__model'))}
+                aria-expanded={info === '__model'} aria-label={`What ${modelAbout.name} is`} title={`What ${modelAbout.name} is`}>i</button> : null}
+            </span>
+          ) : null}
+        </div>
         <label className="mdb-search">
           <Search size={15} style={{ opacity: 0.6, flexShrink: 0 }} />
           <input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search rain, snow, wind, cloud…" aria-label="Search the layers" />
@@ -98,6 +120,7 @@ export default function LayerBrowser({ items, popular = [], selected, onPick, on
         )}
         <button type="button" className="mdb-x" onClick={onClose} aria-label="Close"><X size={16} /></button>
       </div>
+      {info === '__model' && modelAbout ? <div className="mdb-info is-model" role="note"><b>{modelAbout.name}</b><span>{modelAbout.text}</span></div> : null}
       {/* phones and tablets: the model and the run, above the layers */}
       {extra ? <div className="mdb-extra">{extra}</div> : null}
       <div className="mdb-body">
