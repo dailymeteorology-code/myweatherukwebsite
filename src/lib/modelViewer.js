@@ -25,7 +25,8 @@ const FRAME_V = 4;                                        // 4: the wide grid gr
 const VAR_V = { ptype: 2 };
 /* and per model, when a model's frames change: AIFS v2 (13 Nov 2026) its precipitation no longer 1000x */
 /* ICON-EU 2: its weather symbols and precipitation types remade with rounded edges (15 Nov 2026) */
-const MODEL_V = { aifs: 2, icon: 2, icon_europe: 2 };
+/* GDPS 3: its rain rates no longer 1000x at most steps, its own type codes read right (15 Nov 2026) */
+const MODEL_V = { aifs: 2, icon: 2, icon_europe: 2, gdps: 3 };
 
 /* The display grid in use (lib/modelGrids): the UKV's 2 km grid or the global models' wide 8 km
    one. NX, NY, GRID and REGIONS are live bindings: setGrid() switches them for every importer. */
@@ -438,6 +439,15 @@ const SCALES = {
   vort500: { stops: [[-20, '#2b4fb3', 170], [-8, '#7fb6f0', 110], [0, '#ffffff', 0], [6, '#f6d3a3', 120], [12, '#f0a050', 170], [20, '#dc3a3a', 205], [35, '#a52284', 230]],
     ticks: [-20, -8, 0, 6, 12, 20, 35], contours: [10, 20, 30], line: 'rgba(236,243,250,0.7)' },
   trop_t: { stops: TEMP.map(([v, c, a]) => [v * 0.7 - 58, c, a]), ticks: [-75, -68, -62, -56, -50, -44] },
+  /* the stratosphere (15 Nov 2026): the polar vortex at 10 hPa (about 30 km up) and 50 hPa (about 20 km) */
+  z10hpa: { stops: [[2850, '#5b2a86', 175], [2900, '#3d5fd0', 165], [2950, '#3d93d8', 155], [3000, '#6cc04a', 150], [3050, '#efd23a', 160], [3100, '#f08b2c', 170], [3150, '#dc3a3a', 180]],
+    ticks: [2900, 2950, 3000, 3050, 3100, 3150] },
+  z50hpa: { stops: [[1950, '#5b2a86', 175], [1980, '#3d5fd0', 165], [2000, '#3d93d8', 155], [2020, '#6cc04a', 150], [2040, '#efd23a', 160], [2060, '#f08b2c', 170], [2080, '#dc3a3a', 180]],
+    ticks: [1980, 2000, 2020, 2040, 2060, 2080] },
+  t10hpa: { stops: TEMP.map(([v, c, a]) => [v * 1.2 - 55, c, a]), ticks: [-80, -70, -60, -50, -40, -30, -20] },
+  t50hpa: { stops: TEMP.map(([v, c, a]) => [v * 0.5 - 62, c, a]), ticks: [-75, -70, -65, -60, -55, -50] },
+  u10hpa: { stops: [[-40, '#7f1d1d', 240], [-20, '#dc2626', 225], [-5, '#fca5a5', 190], [0, '#ffffff', 110], [10, '#bae6fd', 165], [25, '#38bdf8', 200],
+    [40, '#2563eb', 220], [60, '#4338ca', 235], [80, '#6b21a8', 245]], ticks: [-40, -20, 0, 20, 40, 60, 80] },
   /* K-index: above 20 thundery showers possible, above 30 likely, above 40 widespread */
   kindex: { stops: [[15, '#cfe8f7', 0], [20, '#9fd3ef', 150], [25, '#6cc04a', 190], [30, '#efd23a', 215], [35, '#f08b2c', 230], [40, '#dc3a3a', 242], [45, '#a52284', 250]],
     floor: 15, discrete: true, ticks: [15, 20, 25, 30, 35, 40, 45] },

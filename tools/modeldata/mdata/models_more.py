@@ -147,6 +147,20 @@ class AIGFS(GFS):
 GDPS_BASE = 'https://dd.weather.gc.ca/{day:%Y%m%d}/WXO-DD/model_gdps/15km/{run:%H}/{h:03d}/'
 
 
+# GDPS's precipitation type is Environment Canada's own code, not WMO table 4.201 (worked out from its
+# own hourly rain, snow, freezing rain and ice pellets on 15 Nov 2026): 1 rain (all rain, 16 C), 2 rain
+# and snow together (half snow, 2 C), 3 freezing rain (over half of it freezing rain), 4 ice pellets
+# (half ice pellets), 5 snow (all snow, -4 C), 6 nothing falling (nine cells in ten). Taking 6 for wet
+# snow drew a pink edge round every patch of rain. -> the ECMWF codes typed_rate takes; 0 none
+GDPS_PTYPE = {1: 1, 2: 7, 3: 3, 4: 8, 5: 5, 6: 0}
+
+
+def _per_hour(meta):
+    """A precipitation rate's factor to mm/h, from its GRIB units (kg m-2 s-1 is mm/s; m/s is metres)."""
+    u = str(meta.get('units', '')).replace(' ', '')
+    return 3.6e6 if u in ('ms**-1', 'm/s', 'ms-1') else 3600.0
+
+
 def _gdps_lev(p):
     return f'IsbL-{p:04d}'
 
@@ -155,14 +169,15 @@ class GDPS(GFS):
     id, label, res_km = 'gdps', 'ECCC GDPS (Canada)', 15.0
     SPEC = {
         't2': ['AirTemp_AGL-2m'], 'td2': ['DewPoint_AGL-2m'], 'rh2': ['RelativeHumidity_AGL-2m'], 'q2': ['SpecificHumidity_AGL-2m'],
-        't2max': ['AirTemp-Max_AGL-2m'], 't2min': ['AirTemp-Min_AGL-2m'], 'tskin': ['SoilTemp_Sfc'],
+        't2max6': ['AirTemp-Max_AGL-2m'], 't2min6': ['AirTemp-Min_AGL-2m'], 'tskin': ['SoilTemp_Sfc'],
         'windchill': ['WindChill_Sfc'], 'wind10': ['WindSpeed_AGL-10m'], 'wdir10': ['WindDir_AGL-10m'],
         'gust10': ['WindGust_AGL-10m'], 'gust_max': ['WindGust-Max_AGL-10m'],
         'mslp': ['Pressure_MSL'], 'sp': ['Pressure_Sfc'],
         'precip_rate': ['PrecipRate_Sfc'], 'precip_total': ['Precip-Accum_Sfc'], 'precip_1h': ['Precip-Accum1h_Sfc'],
         'rain_1h': ['Rain-Accum1h_Sfc'], 'snow_1h': ['Snow-Accum1h_Sfc'], 'snow_total': ['Snow-Accum_Sfc'],
         'rain_total': ['Rain-Accum_Sfc'], 'frzr_total': ['FreezingRain-Accum_Sfc'], 'icep_total': ['IcePellets-Accum_Sfc'],
-        'conv_total': ['ConvectivePrecip-Accum_Sfc'], 'ptype': ['PrecipType-Instant_Sfc', 'PrecipRate_Sfc'],
+        'conv_total': ['ConvectivePrecip-Accum_Sfc'],
+        'ptype': ['PrecipType-Instant_Sfc', 'PrecipRate_Sfc', 'Snow-Accum1h_Sfc', 'Precip-Accum1h_Sfc'],
         'tcc': ['TotalCloudCover_Sfc'], 'cape_sb': ['CAPE_Sfc'], 'cin_sb': ['CIN_Sfc'], 'li': ['LiftedIndex-MU-VT_IsbL-0500'],
         'kindex': ['KIndex_Sfc'], 'tt': ['TotalTotalsIndex_Sfc'], 'showalter': ['ShowalterIndex_IsbL-0500'],
         'hpbl': ['PlanetaryBoundaryLayerHeight_Sfc'], 'snow_depth': ['SnowDepth_Sfc'], 'uv_index': ['UVIndex_Sfc'],
@@ -176,13 +191,16 @@ class GDPS(GFS):
         **{f'rh{p}': [f'RelativeHumidity_{_gdps_lev(p)}'] for p in (925, 850, 700, 500)},
         **{f'wind{p}': [f'WindSpeed_{_gdps_lev(p)}'] for p in _LEVELS},
         **{f'w{p}': [f'VerticalVelocity_{_gdps_lev(p)}'] for p in (700, 500)},
+        # the stratosphere: the polar vortex at 10 hPa, and 50 hPa
+        'z10hpa': [f'GeopotentialHeight_{_gdps_lev(10)}'], 't10hpa': [f'AirTemp_{_gdps_lev(10)}'], 'u10hpa': [f'WindU_{_gdps_lev(10)}'],
+        'z50hpa': [f'GeopotentialHeight_{_gdps_lev(50)}'], 't50hpa': [f'AirTemp_{_gdps_lev(50)}'],
     }
     variables = ['precip_rate', 'precip_1h', 'precip_total', 'rain_1h', 'rain_total', 'conv_total', 'ptype', 'snow_1h', 'snow_total',
-                 'snow_acc', 'frzr_total', 'icep_total', 'snow_depth', 't2', 't2max', 't2min', 'td2', 'rh2', 'q2', 'tskin', 'windchill',
+                 'snow_acc', 'frzr_total', 'icep_total', 'snow_depth', 't2', 't2max6', 't2min6', 'td2', 'rh2', 'q2', 'tskin', 'windchill',
                  'wind10', 'wdir10', 'gust10', 'gust_max', 'mslp', 'sp', 'tcc', 'cape_sb', 'cin_sb', 'li', 'kindex', 'tt', 'showalter',
                  'hpbl', 'uv_index', 'lhf', 'shf', 'olr', 'soil_t', 'soil_m', 'albedo', 't925', 't850', 't700', 't500', 't300',
                  'z850', 'z500', 'thick', 'rh925', 'rh850', 'rh700', 'rh500', 'wbpt850', 'wind925', 'wind850', 'wind700', 'wind500',
-                 'wind300', 'wind250', 'wind200', 'w700', 'w500', 'vort500']
+                 'wind300', 'wind250', 'wind200', 'w700', 'w500', 'vort500', 'z10hpa', 't10hpa', 'u10hpa', 'z50hpa', 't50hpa']
 
     def schedule(self, run):
         return list(range(0, 49)) + list(range(51, 241, 3))
@@ -222,23 +240,38 @@ class GDPS(GFS):
             got = list(ex.map(lambda nm: self._get(run, h, nm), names))
         meta = got[0][1]
         cat = var == 'ptype'
+        if var == 'li':                                                  # 99.99 (no parcel to lift): no value, before
+            got = [(np.where(a > 50, np.nan, a), m) for a, m in got]      # it is smoothed into its neighbours
         A = [ECMWF._to_display(self, a, m, nearest=(cat and i == 0)) for i, (a, m) in enumerate(got)]
         C = lambda a: a - 273.15 if np.nanmax(a) > 150 else a          # noqa: E731  (kelvin where it is)
-        if var in ('t2', 'td2', 't2max', 't2min', 'tskin', 'windchill', 'soil_t') or (var.startswith('t') and var[1:].isdigit()):
+        if var in ('t2', 'td2', 't2max6', 't2min6', 'tskin', 'windchill', 'soil_t', 't10hpa', 't50hpa') or (var.startswith('t') and var[1:].isdigit()):
             return C(A[0])
+        if var in ('z10hpa', 'z50hpa'):
+            return A[0] / 10.0
         if var in ('wind10', 'gust10', 'gust_max') or var.startswith('wind'):
             return A[0] * MPH
         if var in ('mslp', 'sp'):
             return A[0] / 100.0
-        if var == 'precip_rate':                                        # kg m-2 s-1 (mm/s), or m/s where it is
-            return A[0] * (3.6e6 if np.nanmax(A[0]) < 0.01 else 3600.0)
+        if var == 'precip_rate':                                        # by the file's own units: kg m-2 s-1 is mm/s
+            return A[0] * _per_hour(meta)
         if var in ('precip_total', 'precip_1h', 'rain_1h', 'snow_1h', 'snow_total', 'rain_total', 'frzr_total', 'icep_total', 'conv_total'):
-            return np.clip(A[0] * (1000.0 if np.nanmax(A[0]) < 5 and h > 6 else 1.0), 0, None)
-        if var == 'ptype':
+            return np.clip(A[0], 0, None)                                # mm (kg m-2) already: never scaled by a guess
+        if var == 'ptype':                                              # its own type (GDPS_PTYPE), at its own rate
             from .derived import typed_rate
             code = np.nan_to_num(A[0]).astype(np.int16)
-            rate = A[1] * (3.6e6 if np.nanmax(A[1]) < 0.01 else 3600.0)
-            return typed_rate(rate, np.where(rate >= 0.05, code, 0))
+            rate = A[1] * _per_hour(got[1][1])
+            with np.errstate(invalid='ignore', divide='ignore'):
+                share = np.clip(A[2] / np.where(A[3] > 0, A[3], np.nan), 0, 1)
+            own = np.select([share >= 0.7, share >= 0.15], [5, 7], 1)  # where its type says none but it is falling:
+            ecm = np.zeros(code.shape, np.int16)                         # the hour's own snow share
+            for c, e in GDPS_PTYPE.items():
+                ecm[code == c] = e
+            ecm = np.where(ecm == 0, own, ecm)
+            return typed_rate(rate, np.where(rate >= 0.05, ecm, 0))
+        if var == 'li':                                                 # 99.99: no parcel to lift
+            return np.where(A[0] > 50, np.nan, A[0]).astype(np.float32)
+        if var in ('cape_sb', 'cin_sb'):                                 # left empty where there is none
+            return np.where(np.isfinite(A[0]), A[0], 0).astype(np.float32)
         if var == 'snow_depth':
             return A[0] * 100.0
         if var == 'q2':
@@ -435,6 +468,12 @@ class MEPS:
 
 # layers only the newer models have
 VARIABLES_MORE = {
+    # the stratosphere (15 Nov 2026: the polar vortex), GFS and GDPS
+    'z10hpa': dict(label='10 hPa height (polar vortex)', unit='dam', group='Upper air', lo=2750, hi=3250),
+    't10hpa': dict(label='10 hPa temperature (stratosphere)', unit='°C', group='Upper air', lo=-95, hi=5),
+    'u10hpa': dict(label='10 hPa westerly wind (polar vortex)', unit='m/s', group='Upper air', lo=-70, hi=120),
+    'z50hpa': dict(label='50 hPa height', unit='dam', group='Upper air', lo=1850, hi=2100),
+    't50hpa': dict(label='50 hPa temperature', unit='°C', group='Upper air', lo=-95, hi=-25),
     'cloud_top': dict(label='Cloud top height', unit='m', group='Cloud & visibility', lo=0, hi=14000, scale='sqrt'),
     'lightning_index': dict(label='Lightning index', unit='', group='Convection', lo=0, hi=50, scale='sqrt'),
 }

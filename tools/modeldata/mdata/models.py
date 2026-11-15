@@ -1059,6 +1059,9 @@ class GFS:
         'wind850': [('UGRD', '850 mb'), ('VGRD', '850 mb')], 'wind500': [('UGRD', '500 mb'), ('VGRD', '500 mb')],
         'wind250': [('UGRD', '250 mb'), ('VGRD', '250 mb')], 'sw_down': [('DSWRF', 'surface')],
         'frz': [('HGT', '0C isotherm')], 'trop_p': [('PRES', 'tropopause')],
+        # the stratosphere: the polar vortex at 10 hPa, and 50 hPa (15 Nov 2026)
+        'z10hpa': [('HGT', '10 mb')], 't10hpa': [('TMP', '10 mb')], 'u10hpa': [('UGRD', '10 mb')],
+        'z50hpa': [('HGT', '50 mb')], 't50hpa': [('TMP', '50 mb')],
         'wdir10': [('UGRD', '10 m above ground'), ('VGRD', '10 m above ground')],
         'windchill': [('TMP', '2 m above ground'), ('UGRD', '10 m above ground'), ('VGRD', '10 m above ground')],
         # NOAA GFS-Wave (WAVEWATCH III), its own file beside the atmosphere
@@ -1085,7 +1088,7 @@ class GFS:
                  'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'fog_vis', 'cape_sb', 'cape_ml', 'cape_mu', 'cin_sb', 'cin_ml', 'cin_mu', 'li', 'kindex',
                  'srh3', 'pw', 'hpbl', 't925', 't850', 't700', 't500', 'z850', 'z500', 'thick', 'rh850', 'rh700', 'wind925', 'wind850',
                  'wind700', 'wind500', 'wind300', 'wind250', 'w700', 'vort500', 'trop_p', 'sw_down', 'lw_down', 'olr', 'shf', 'lhf', 'wx',
-                 'swh', 'pp1d', 'mwd']
+                 'swh', 'pp1d', 'mwd', 'z10hpa', 't10hpa', 'u10hpa', 'z50hpa', 't50hpa']
 
     def __init__(self):
         self._idx, self._ix = {}, None
@@ -1156,8 +1159,10 @@ class GFS:
             # sea, step after step, adds up to snow that is not there
             pct = np.clip(np.nan_to_num(A[1]), 0, 100)
             return {'apcp': A[0] if h else np.zeros_like(A[0]), 'frac': np.where(pct >= 50, pct / 100.0, 0.0)}
-        if var in ('t2', 'td2', 'tskin', 'feels', 't850', 't500', 't925', 't700', 't2max3', 't2min3', 'soil_t'):
+        if var in ('t2', 'td2', 'tskin', 'feels', 't850', 't500', 't925', 't700', 't2max3', 't2min3', 'soil_t', 't10hpa', 't50hpa'):
             return A[0] - 273.15
+        if var in ('z10hpa', 'z50hpa'):                    # gpm -> dam
+            return A[0] / 10.0
         if var == 'soil_m':
             return np.clip(A[0] * 100.0, 0, 100).astype(np.float32)
         if var == 'wdir10':
