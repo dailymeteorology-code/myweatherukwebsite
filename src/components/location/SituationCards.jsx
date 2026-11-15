@@ -8,6 +8,7 @@ import { useUnits } from '@/components/useUnits';
 import { hhmm, hourOf } from '@/lib/ukvLocation';
 import { roadIce, fogSpells, snowSettle, nightSky, eventsAhead, when } from '@/lib/location/situations';
 import { fetchKp, fetchBankHolidays } from '@/lib/location/feeds';
+import { ChangesCard } from '@/components/location/StormWatch';
 
 /* the next hours as a strip of cells, coloured by level, with the time every six hours under it */
 function Strip({ cells, colours, label }) {
@@ -137,6 +138,7 @@ export default function SituationCards({ model }) {
     <>
       <RoadsCard model={model} />
       <SettleCard model={model} />
+      <ChangesCard model={model} />
       <NightSkyCard model={model} />
       <EventsCard model={model} />
     </>

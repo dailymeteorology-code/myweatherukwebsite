@@ -40,6 +40,9 @@ import SkyBackdrop, { CardFrost, CardRain, CardSnow, WindowRain, skyDarkness } f
 import SkyPreview, { PREVIEW_START, previewSky } from '@/components/location/SkyPreview';
 import TodayCard from '@/components/location/TodayCard';
 import SituationCards from '@/components/location/SituationCards';
+import StormWatch from '@/components/location/StormWatch';
+import { SaveStar, PlacesStrip, CompareSheet, CommuteCard } from '@/components/location/YourPlaces';
+import { loadPlaces, savePlaces, placeWith, samePlace, DEFAULT_COMMUTE } from '@/lib/location/places';
 import HourSheet, { hourFor, momentParam, parseMoment } from '@/components/location/HourSheet';
 import { mattersToday } from '@/lib/location/forecastText';
 import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
@@ -671,6 +674,9 @@ export default function LocationForecast() {
   const { temp } = U;
   /* the hour sheet: the hour open in it (its time), or null */
   const [sheetT, setSheetT] = useState(null);
+  /* your places (src/lib/location/places.js): kept places, Home and Work, the commute; and Compare */
+  const [placesData, setPlacesData] = useState({ places: [], commute: DEFAULT_COMMUTE });
+  const [comparing, setComparing] = useState(false);
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [recent, setRecent] = useState([]);
@@ -700,6 +706,7 @@ export default function LocationForecast() {
       const me = await currentUser();
       if (cancelled) return;
       setUser(me); userRef.current = me; setAuthChecked(true);
+      loadPlaces(me).then((d) => { if (!cancelled) setPlacesData(d); });
       if (me) { const list = await loadRecent(me); if (!cancelled) setRecent(list); }
     })();
     return () => { cancelled = true; };
@@ -832,6 +839,15 @@ export default function LocationForecast() {
     } else url.searchParams.delete('at');
     if (url.href !== window.location.href) window.history.replaceState(window.history.state, '', url.href);
   }, [sheetT, model]);
+  /* your places: shown at once, kept in this browser and the account */
+  const changePlaces = useCallback((d) => {
+    setPlacesData(d);
+    savePlaces(userRef.current, d).then(setPlacesData);
+  }, []);
+  const openPlace = useCallback((p) => { setQuery(p.name); run({ lat: p.lat, lon: p.lon, name: p.name, region: p.region }); window.scrollTo({ top: 0, behavior: 'smooth' }); }, [run]);
+  const home = placeWith(placesData, 'home'), work = placeWith(placesData, 'work');
+  const atCommutePlace = !!place && (samePlace(place, home) || samePlace(place, work));
+
   /* the cards that matter most today (the Today card's chips) come up the page on a phone */
   /* (not the tiles or the days: those are the general cards, and a cold-feel or frost chip pointing
      at the tiles would lift fourteen of them up the page) */
@@ -913,6 +929,8 @@ export default function LocationForecast() {
         <SkyPreview value={preview} onChange={setPreview} onClose={togglePreview} hidePage={hidePage} onHidePage={setHidePage} />
       )}
 
+      {comparing && <CompareSheet data={placesData} current={place} onClose={() => setComparing(false)} />}
+
       {/* everything for one hour (HourSheet.jsx): from the hourly strip, or a link to the moment */}
       {model && sheetT != null && !hidePage && (
         <HourSheet model={model} t={sheetT} linkFor={linkFor}
@@ -945,6 +963,10 @@ export default function LocationForecast() {
         {error && <div className="lw-error" role="alert">{error}</div>}
         {geoError && model && <div className="lw-error" role="alert">{geoError}</div>}
 
+        {/* your places, one tap away (YourPlaces.jsx); on the search page your commute too */}
+        <PlacesStrip data={placesData} current={place} onOpen={openPlace} onChange={changePlaces} onCompare={() => setComparing(true)} />
+        {!model && !loading && <CommuteCard data={placesData} onChange={changePlaces} />}
+
         {loading && !model && (
           <div className="lw-loading"><div className="lw-spinner" /><span>Reading the forecast…</span></div>
         )}
@@ -964,7 +986,7 @@ export default function LocationForecast() {
         {model && (
           <>
             <header className="lw-hero" aria-live="polite">
-              <div className="lw-hero-name">{model.location.name}</div>
+              <div className="lw-hero-name"><span translate="no">{model.location.name}</span><SaveStar place={place} data={placesData} onChange={changePlaces} /></div>
               <div className="lw-hero-temp">{deg(model.now.t2)}</div>
               <div className="lw-hero-cond">{condLabel(model.now.cond, model.now.isDay, model.now.windy)}</div>
               {today && <div className="lw-hero-hl">H:{deg(today.hi)}&nbsp;&nbsp;L:{deg(today.lo)}</div>}
@@ -999,8 +1021,14 @@ export default function LocationForecast() {
                 <div id="lw-card-precip" className={slot('precip')}><PrecipCard model={model} /></div>
                 {/* road ice and fog, snow settling, the night sky, event days: each only when it has
                     something to say (SituationCards.jsx) */}
-                <div id="lw-card-situations" className={`${slot('situations', ['roads', 'settle', 'nightsky', 'events'])} lw-situations`}><SituationCards model={model} /></div>
+                <div id="lw-card-situations" className={`${slot('situations', ['roads', 'settle', 'nightsky', 'events'])} lw-situations`}>
+                  {atCommutePlace && <CommuteCard data={placesData} onChange={changePlaces} />}
+                  <SituationCards model={model} />
+                </div>
                 <div id="lw-card-detail" className={slot('detail')}><LocationCharts model={model} dayIdx={dayIdx} onDay={pickDay} /></div>
+                {/* lightning near here, heavy rain on its way, the AI lightning warning, the storm type and
+                    hail: only when there is something to watch (StormWatch.jsx) */}
+                <div id="lw-card-storm" className={slot('storm', ['storm', 'thunder'])}><StormWatch model={model} /></div>
                 <div id="lw-card-thunder" className={slot('thunder')}><LocationThunder model={model} /></div>
               </div>
               <div className="lw-col">

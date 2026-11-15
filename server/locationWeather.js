@@ -14,6 +14,10 @@
      GET /api/location/radar/frame?src=radar&t=YYYYmmddTHHMM&lat=&lon=
      GET /api/location/radar/frame?src=ukv&run=YYYYmmddTHHMMZ&h=N&lat=&lon=
                                                                 a 400 km crop round the place, gzip
+     GET /api/location/lightning?lat=&lon=                      strikes within 60 km in the last hour
+     GET /api/location/storm?lat=&lon=                          the nearest heavy cell coming this way (radar), and
+                                                                the storm environment now (CAPE, shear: AIW's GFS)
+     GET /api/location/changes?lat=&lon=                        the newest UKV run against the one before, here
 */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,6 +27,8 @@ import { geocode, reverseName } from './functions/getMetOfficeLocationWeather.js
 import { searchPlaces } from './placeSearch.js';
 import { novaThunderAt } from './novaPoint.js';
 import { frostPoint } from './tcmFrost.js';
+import { haversineKm, bearingDeg, kmPerDegLon } from './aiw/geometry.js';
+import { envPeek } from './aiw/env.js';
 
 const LIVE = path.join(MODELDATA_DIR, 'live');
 const OBS = path.join(MODELDATA_DIR, 'observed');
@@ -744,6 +750,84 @@ function cropFrame(f, lat, lon, halfKm = HALF_KM, step = 1) {
   return zlib.gzipSync(Buffer.concat([len, head, body]), { level: 5 });
 }
 
+/* ── storm tools (Location Weather, 15 Nov 2026) ─────────────────────────────────────────────────── */
+
+/* The nearest heavy cell coming this way: from the newest radar scan and the rain's own motion round
+   the place (motionAt, as the nowcast), walk upwind from the place up to 150 km, across a band 8 km
+   either side; the first cell of heavy rain (4 mm/h and over, the page's "heavy") is the one coming.
+   It arrives at its distance over the motion's speed, less the scan's age. One local motion and no
+   growth or decay, so an estimate for the next hour or two. */
+const HEAVY = 4;
+function stormArrival(lat, lon) {
+  const times = liveIndex('radar')?.times || [];
+  const t0 = times.at(-1);
+  if (!t0 || Date.now() - Date.parse(t0) > NC_MAX_AGE * 60e3) return null;
+  const f = frameAt(radarFile(t0));
+  if (!f) return null;
+  const [row, col] = cellOf(lon, lat, f.dx);
+  if (row < 0 || col < 0 || row >= f.ny || col >= f.nx || f.q[row * f.nx + col] === 255) return null;
+  const at = (r, c) => { const R = Math.round(r), C = Math.round(c); return R < 0 || C < 0 || R >= f.ny || C >= f.nx ? NaN : f.lut[f.q[R * f.nx + C]]; };
+  const scan = Date.parse(t0), ageMin = (Date.now() - scan) / 60e3;
+  const here = at(row, col);
+  const mv = motionAt(times, row, col);
+  const speed = mv ? Math.hypot(mv.vr, mv.vc) : 0;                     // km a minute (1 km cells)
+  if (!mv || speed < 0.05) return { scan: t0, motion: null, here: Number.isNaN(here) ? null : r2(here), cell: null };
+  const ur = -mv.vr / speed, uc = -mv.vc / speed;                      // upwind, rows running south
+  let hit = null;
+  for (let d = 0; d <= 150 && !hit; d++) {
+    let best = null;
+    for (let s = -8; s <= 8; s++) {
+      const v = at(row + ur * d - uc * s, col + uc * d + ur * s);
+      if (v >= HEAVY && (!best || v > best.v)) best = { v, s };
+    }
+    if (best) hit = { km: d, rate: best.v };
+  }
+  /* compass bearings: where the rain comes from, and where it goes */
+  const from = Math.round(((Math.atan2(uc, -ur) * 180) / Math.PI + 360) % 360);
+  return {
+    scan: t0, here: Number.isNaN(here) ? null : r2(here),
+    motion: { kmh: Math.round(speed * 60), from, towards: (from + 180) % 360 },
+    cell: hit ? { km: hit.km, rate: r2(hit.rate), etaMin: Math.round(hit.km / speed - ageMin) } : null,
+  };
+}
+
+/* Lightning near a place: every strike in the last hour within 60 km (the Met Office over the UK and
+   Ireland, Blitzortung beyond: server/lightning), as [minutes ago, km, bearing]. The last hour is
+   collected once every 30 s for every place, then cut to each. */
+let ltgHour = { at: 0, strikes: [] };
+function strikesNear(lightning, lat, lon, km = 60) {
+  const now = Date.now();
+  if (now - ltgHour.at > 30e3) {
+    try { ltgHour = { at: now, strikes: lightning.collect(now - 3600e3, now + 60e3, 'uk', 'mo', 400000).strikes || [] }; } catch { ltgHour = { at: now, strikes: [] }; }
+  }
+  const s = ltgHour.strikes, dLat = km / 111.32 + 0.02, dLon = km / kmPerDegLon(lat) + 0.02;
+  const out = [];
+  for (let i = 0; i + 2 < s.length; i += 4) {
+    const la = s[i + 1], lo = s[i + 2];
+    if (Math.abs(la - lat) > dLat || Math.abs(lo - lon) > dLon) continue;
+    const d = haversineKm(lat, lon, la, lo);
+    if (d > km) continue;
+    out.push([Math.round((now - s[i]) / 6e3) / 10, Math.round(d * 10) / 10, Math.round(bearingDeg(lat, lon, la, lo))]);
+  }
+  out.sort((a, b) => a[0] - b[0]);
+  return { now, km, strikes: out.slice(0, 1500), total: out.length };
+}
+
+/* What changed: the newest UKV run here against the one before it, over the hours both still cover
+   from now (the first time rain or snow comes, each day's high and low, the rain, the strongest gust).
+   The page puts it in words. */
+async function changesAt(lat, lon) {
+  const list = await cubes2('ukv');
+  if (list.length < 2) return null;
+  const [cur, prev] = list;
+  const [a, b] = await Promise.all([layered([{ c: cur, keep: () => true }], lat, lon), layered([{ c: prev, keep: () => true }], lat, lon)]);
+  if (!a?.times?.length || !b?.times?.length) return null;
+  const now = Date.now(), end = Math.min(cur.end, prev.end);
+  const series = (x) => x.times.map((t, i) => ({ t, t2: x.v.t2?.[i] ?? null, precip: x.v.precip_step?.[i] ?? null, snow: x.v.snow_step?.[i] ?? null, gust: x.v.gust10?.[i] ?? null, span: x.span[i] }))
+    .filter((h) => h.t > now && h.t <= end);
+  return { cur: { run: cur.man.run, tag: cur.tag }, prev: { run: prev.man.run, tag: prev.tag }, end, now: series(a), before: series(b) };
+}
+
 /* JSON, gzipped when the browser takes it (a forecast is ~60 kB, ~12 kB gzipped: on a phone's
    connection most of the wait was the download) */
 const gzipAsync = (buf) => new Promise((ok, no) => zlib.gzip(buf, { level: 6 }, (e, r) => (e ? no(e) : ok(r))));
@@ -761,7 +845,39 @@ async function sendJson(req, res, obj) {
   return res.end(body);
 }
 
-export function mountLocationWeather(app) {
+/* `lightning`: the lightning archive (server/lightning, index.js), for the strikes near a place */
+export function mountLocationWeather(app, { lightning = null } = {}) {
+  const point = (req, res) => {
+    const lat = Number(req.query.lat), lon = Number(req.query.lon);
+    if (!(Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) { res.status(400).json({ error: 'lat and lon are needed' }); return null; }
+    return { lat, lon };
+  };
+  app.get('/api/location/lightning', (req, res) => {
+    const p = point(req, res);
+    if (!p) return undefined;
+    if (!lightning) return res.status(503).json({ error: 'The lightning archive is not running' });
+    res.set('Cache-Control', 'no-cache');
+    return sendJson(req, res, strikesNear(lightning, p.lat, p.lon));
+  });
+  app.get('/api/location/storm', (req, res) => {
+    const p = point(req, res);
+    if (!p) return undefined;
+    let cell = null, env = null;
+    try { cell = stormArrival(p.lat, p.lon); } catch { cell = null; }
+    try { env = envPeek(p.lat, p.lon); } catch { env = null; }
+    res.set('Cache-Control', 'no-cache');
+    return sendJson(req, res, { radar: cell, env });
+  });
+  app.get('/api/location/changes', async (req, res) => {
+    const p = point(req, res);
+    if (!p) return undefined;
+    try {
+      const out = await changesAt(p.lat, p.lon);
+      res.set('Cache-Control', 'public, max-age=300');
+      return sendJson(req, res, out || { none: true });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
   /* inflate each new NOVA run's frames before anyone asks (the first place after a run costs ~1 s) */
   const warm = () => { try { novaThunderAt(52.5, -1.5); } catch { /* no NOVA yet */ } };
   setTimeout(warm, 5e3).unref?.();

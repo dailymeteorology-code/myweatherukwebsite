@@ -592,7 +592,7 @@ mountScenarios(app);
 mountPastFuture(app);
 mountModelData(app);
 mountStudioTemperature(app);
-mountLocationWeather(app);
+mountLocationWeather(app, { lightning });
 mountWorldConditions(app);
 mountPatterns(app);
 mountImageSizes(app, UPLOAD_DIR);
