@@ -1,0 +1,196 @@
+/* What each Model Data layer is, in plain words, and how the layer picker sorts them (15 Nov 2026,
+   the STRATA redesign): every layer has one line saying what it shows; the picker groups them into
+   categories with the website's own weather icons, and puts the most-used ones first. Used by
+   components/modeldata/LayerBrowser.jsx and for the line under the headline of every graphic. */
+
+/** One line for each forecast layer (tools/modeldata/mdata/models.py VARIABLES). */
+export const LAYER_DESC = {
+  precip_rate: 'How hard rain, sleet or snow is falling, in millimetres an hour',
+  precip_1h: 'Rain and snow (as water) in the hour to the time on show',
+  precip_total: 'All the rain and snow (as water) since the run began',
+  precip_step: 'Rain and snow since the step before',
+  rain_rate: 'How hard rain alone is falling',
+  rain_1h: 'Rain in the past hour',
+  conv_rain: 'Rain from showers and thunderstorms',
+  conv_total: 'Rain and snow from showers since the run began',
+  refc: 'The model’s own radar picture: what a radar would see',
+  hail_rate: 'How hard hail is falling',
+  hail_1h: 'Hail in the past hour',
+  ptype: 'Rain, sleet, snow and ice, each by how heavy it is',
+  col_rain: 'Rain falling through the air above a place',
+  runoff_total: 'Rain running off the ground since the run began',
+  snow_rate: 'How hard snow is falling, as melted water',
+  snow_1h: 'Snow in the past hour, as melted water',
+  snow_total: 'All the snow since the run began, as melted water',
+  snow_step: 'Snow since the step before, as melted water',
+  snow_acc: 'Snowfall as a depth: 10 cm of snow for each 1 cm of water',
+  snow_swe: 'Snow lying on the ground, as melted water',
+  snow_depth: 'How deep the lying snow is',
+  snow_cover: 'How much of the ground is under snow',
+  frozen_pct: 'How much of what falls is frozen',
+  snow_line: 'The lowest height snow reaches before it melts',
+  col_snow: 'Snow falling through the air above a place',
+  frz: 'The height of the 0 °C level: snow can fall from above it',
+  wbfz: 'Where the wet-bulb temperature reaches 0 °C: a good guide to the snow line',
+  snow_risk: 'TCM FROST’s risk of snow: Low, Moderate, High or Severe',
+  snow_cond: 'Where the ingredients and the temperatures favour snow: a conditions estimate, not a probability',
+  snow_chance: 'The chance of snow falling, from 136 forecasts',
+  snow_expected: 'The snow TCM FROST expects to fall since the run began',
+  snow_24h: 'Snow in the 24 hours to the time on show',
+  t2: 'Air temperature 2 m above the ground',
+  t2max: 'The highest temperature in the past hour',
+  t2min: 'The lowest temperature in the past hour',
+  t2max3: 'The highest temperature in the past 3 hours',
+  t2min3: 'The lowest temperature in the past 3 hours',
+  t2max6: 'The highest temperature in the past 6 hours',
+  t2min6: 'The lowest temperature in the past 6 hours',
+  td2: 'Dew point: how cold the air must get to be saturated',
+  rh2: 'How close the air is to saturation',
+  q2: 'How much water vapour the air holds, by weight',
+  tskin: 'The temperature of the ground and the sea surface',
+  feels: 'How cold or hot it feels, with the wind and the humidity',
+  windchill: 'How cold the wind makes it feel',
+  wind10: 'The mean wind 10 m above the ground',
+  wdir10: 'The direction the wind blows from',
+  gust10: 'The strongest gusts',
+  gust_max: 'The strongest gust in the past hour',
+  gust_peak: 'The strongest gust so far this run, up to the time on show',
+  wind100: 'Wind 100 m up: the height of wind turbines',
+  mslp: 'Air pressure at sea level, with the highs and lows',
+  sp: 'Air pressure at the ground, not at sea level',
+  tcc: 'How much of the sky is covered by cloud',
+  lcc: 'Cloud below about 2 km',
+  mcc: 'Cloud from about 2 to 6 km',
+  hcc: 'Cloud above about 6 km: cirrus',
+  cloud850: 'Cloud at about 1.5 km',
+  cloud700: 'Cloud at about 3 km',
+  cloud500: 'Cloud at about 5.5 km',
+  cloud300: 'Cloud at about 9 km',
+  cloud_1000ft: 'Cloud below 1000 ft: hill fog and low stratus',
+  cloud_base: 'How high the base of the cloud is above the ground',
+  conv_cloud: 'Cloud from showers and thunderstorms',
+  cloud_water: 'Liquid water in the clouds above a place',
+  cloud_ice: 'Ice in the clouds above a place',
+  vis: 'How far you can see',
+  fog: 'The chance of fog in each grid box',
+  fog_vis: 'The fog alone, by how far you can see in it',
+  sim_ir: 'What a satellite would see in infrared: high, cold cloud tops white',
+  sim_wv: 'What a satellite would see in water vapour: moist air white, dry air dark',
+  wx: 'The weather in one symbol: sun, cloud, rain, snow or thunder',
+  cape_mu: 'Energy for storms in the most unstable air: the higher, the stronger the updraughts',
+  cape_sb: 'Energy for storms in air lifted from the ground',
+  cape_ml: 'Energy for storms in the lowest layer of air, mixed',
+  cape_con: 'Energy for storms as ICON’s convection sees it',
+  cin_sb: 'The lid holding storms back: the more negative, the harder they form',
+  cin_mu: 'The lid holding storms back: the more negative, the harder they form',
+  cin_ml: 'The lid holding storms back: the more negative, the harder they form',
+  li: 'Lifted index: below 0 the air is unstable, below −4 strongly so',
+  kindex: 'K-index: thunderstorm potential from the warmth and moisture aloft',
+  srh3: 'How much spin a storm could take in: high values favour supercells',
+  lightning: 'Lightning flashes in the past hour',
+  lpi: 'Lightning potential: where ICON’s showers are likely to make lightning',
+  conv_base: 'The base of shower clouds above the ground',
+  conv_top: 'How tall shower clouds grow (their tops above sea level)',
+  thermal_top: 'How high thermals reach: for glider pilots',
+  pw: 'All the water vapour above a place, as if it fell as rain',
+  hpbl: 'How deep the air near the ground is mixed',
+  wbpt850: 'The air mass at 1.5 km: warm, moist air red, cold air blue',
+  t925: 'Temperature at about 750 m (925 hPa)',
+  t850: 'Temperature at 1.5 km (850 hPa): the air mass, and a guide to snow',
+  t700: 'Temperature at 3 km (700 hPa)',
+  t500: 'Temperature at 5.5 km (500 hPa): cold air aloft makes showers',
+  t300: 'Temperature at about 9 km (300 hPa)',
+  z850: 'The height of the 850 hPa level',
+  z500: 'The 500 hPa height: the ridges and troughs that steer the weather',
+  thick: '1000–500 hPa thickness: the warmth of the lower air; under 528 dam snow is likely',
+  rh925: 'Moisture at about 750 m',
+  rh850: 'Moisture at 1.5 km',
+  rh700: 'Moisture at 3 km',
+  rh500: 'Moisture at 5.5 km',
+  wind925: 'Wind at about 750 m',
+  wind850: 'Wind at 1.5 km',
+  wind700: 'Wind at 3 km',
+  wind500: 'Wind at 5.5 km',
+  wind300: 'Wind at about 9 km',
+  wind250: 'The jet stream, at about 10 km',
+  wind200: 'Wind at about 12 km',
+  w700: 'Rising air (blue) and sinking air (orange) at 3 km',
+  w500: 'Rising air (blue) and sinking air (orange) at 5.5 km',
+  vort500: 'Spin in the air at 5.5 km: troughs and lows',
+  trop_p: 'The height of the tropopause, as pressure: low where cold air reaches down',
+  trop_t: 'The temperature at the tropopause',
+  sw_down: 'Sunshine reaching the ground',
+  sw_direct: 'Direct sunshine, not through cloud',
+  sw_diffuse: 'Daylight scattered by cloud and sky',
+  lw_down: 'Heat radiated down by the cloud and the air',
+  lw_net: 'Heat the ground gains or loses by radiation: most lost on clear nights',
+  uv_down: 'Ultraviolet light reaching the ground',
+  olr: 'Heat leaving the top of the atmosphere: cold cloud tops white, as from a satellite',
+  shf: 'Heat the ground gives to the air',
+  lhf: 'Heat taken up by evaporation',
+  albedo: 'How much sunlight the ground reflects: snow is bright',
+  soil_t: 'The temperature of the soil near the surface',
+  soil_t18: 'The soil temperature 18 cm down',
+  soil_t54: 'The soil temperature 54 cm down',
+  soil_t162: 'The soil temperature 1.6 m down',
+  soil_m: 'How wet the soil is near the surface',
+  soil_m27: 'How wet the soil is 9–27 cm down',
+  soil_m81: 'How wet the soil is 27–81 cm down',
+  orog: 'The hills as the model sees them',
+  swh: 'The height of the bigger waves',
+  mwp: 'The average time between waves',
+  pp1d: 'The time between the most powerful waves',
+  mwd: 'The direction the waves come from',
+  aod: 'How hazy the air is with dust, smoke and fine particles',
+  dust_aod: 'Saharan dust in the air',
+  pm25: 'Fine particles near the ground',
+  pm10: 'Coarse particles near the ground',
+};
+
+/* The picker's categories: the layer groups of the catalogue, in plain words, each with one of the
+   website's weather icons (public/icons/wx) on a navy badge. Groups of the other views (chances,
+   live, observed) find their icon by what they are about. */
+export const CATEGORY = {
+  Precipitation: { name: 'Rain & snow', icon: 'heavyRain' },
+  'Snow & ice': { name: 'Snow & ice', icon: 'heavySnow' },
+  Temperature: { name: 'Temperature', icon: 'hot' },
+  'Wind & pressure': { name: 'Wind & pressure', icon: 'mostlyCloudy-windy' },
+  'Cloud & visibility': { name: 'Cloud & fog', icon: 'cloudy' },
+  Convection: { name: 'Storms', icon: 'thunder' },
+  'Upper air': { name: 'Upper air', icon: 'overcast' },
+  'Radiation & surface': { name: 'Sun & ground', icon: 'clear' },
+  'Sea & waves': { name: 'Sea & waves', icon: 'showers-windy' },
+  'Air quality': { name: 'Air quality', icon: 'mist' },
+};
+const ICON_BY_WORD = [[/snow|ice|frost/i, 'heavySnow'], [/rain|flood/i, 'heavyRain'], [/wind/i, 'mostlyCloudy-windy'], [/storm|lightning|radar/i, 'thunder'],
+  [/temperature/i, 'hot'], [/sky|visib|cloud|fog/i, 'cloudy'], [/satellite/i, 'partly'], [/now/i, 'mostlyClear'], [/moisture|pressure/i, 'drizzle']];
+/** A group's name and icon in the picker. */
+export function categoryOf(group) {
+  if (CATEGORY[group]) return CATEGORY[group];
+  const hit = ICON_BY_WORD.find(([re]) => re.test(group));
+  return { name: group, icon: hit ? hit[1] : 'partly' };
+}
+
+/** The most-used layers, first in the picker under Popular (those the model has). */
+export const POPULAR = ['ptype', 'precip_rate', 'precip_total', 't2', 'feels', 'gust10', 'wind10', 'mslp', 'tcc', 'wx', 'snow_cond', 'snow_acc', 'snow_depth',
+  'snow_risk', 'snow_chance', 'cape_mu', 'cape_ml', 'lpi', 'sim_ir', 't850', 'z500'];
+
+/** The colours a chance is shown in, by what it is about (lib/modelViewer probScaleKey). */
+export function probFamily(p) {
+  if (!p) return null;
+  if (['frzr', 'icep'].includes(p.key)) return 'ice';
+  if (p.group === 'Snow & ice') return 'snow';
+  if (p.group === 'Rain & flooding') return p.key === 'dry' ? 'heat' : 'rain';
+  if (p.group === 'Wind') return 'wind';
+  if (p.group === 'Temperature') return ['warm_max', 'tabove', 'heat', 'muggy'].includes(p.key) ? 'heat' : 'cold';
+  if (p.group === 'Storms') return p.key === 'deeplow' ? 'wind' : 'storm';
+  if (p.group === 'Sky & visibility') return p.key === 'clear' ? 'heat' : 'sky';
+  return null;
+}
+
+/** The line under a chance's headline. */
+export function probLine(p, dir, thr, unit, members) {
+  if (!p) return '';
+  const what = dir === 'below' ? `at or below ${thr}${unit ? ` ${unit}` : ''}` : `at or above ${thr}${unit ? ` ${unit}` : ''}`;
+  return `The share of ${members || 'the'} ensemble forecasts ${what}`;
+}

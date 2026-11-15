@@ -119,8 +119,10 @@ const RADAR_KEY = { stops: RADAR_STOPS, floor: 0.05, discrete: true, keySteps: R
 /* Precipitation by type and strength (tools/modeldata/mdata/derived.py typed_rate): every model's ptype
    and the radar's radar_type, one byte a cell: 0 dry, else 1 + 63 x kind + level; kind 0 rain, 1 sleet,
    2 snow, 3 ice, and level 0-62 the rate on a log scale from 0.05 to 128 mm/h. Four kinds, each with
-   its own colours from light to heavy: rain the radar's, sleet purples, snow white to slate, ice reds,
-   chosen apart from the rain colours they could be mistaken for at the rates each falls at. */
+   its own colours from light to heavy: rain the radar's, and since 15 Nov 2026 the STRATA motion
+   graphics' scales for the rest (mwuk-graphics src/strata/palettes.ts, the user's choice): sleet
+   turquoise, snow pink to purple, freezing rain and ice orange, told apart at a glance and none of them
+   white, which vanished on the light map. */
 const RT_LO = 0.05, RT_HI = 128, RT_LEVELS = 62;
 /** A radar_type value as { family, rate } (null when dry). */
 export function radarTypeOf(v) {
@@ -132,9 +134,12 @@ const rtAlpha = (v) => Math.round(255 * (v < 0.2 ? 0.8 : v < 0.6 ? 0.88 : 0.95))
 const family = (steps) => ({ stops: steps.map(([v, c]) => [v, c, rtAlpha(v)]), floor: 0.05, discrete: true });
 export const RADAR_FAMILIES = [
   { name: 'Rain', short: 'rain', scale: RADAR_KEY },
-  { name: 'Sleet', short: 'sleet', scale: family([[0.05, '#F1EBFC'], [0.2, '#E2D6F9'], [0.6, '#CDB9F3'], [1.2, '#B49AEB'], [2.5, '#9A7FE0'], [4, '#7F5FD0'], [8, '#6644B8']]) },
-  { name: 'Snow', short: 'snow', scale: family([[0.05, '#FFFFFF'], [0.2, '#F4F6FA'], [0.5, '#E3E8F0'], [1, '#CDD5E2'], [2, '#B4BFD1'], [4, '#98A5BD'], [8, '#7D8BA6']]) },
-  { name: 'Ice', short: 'ice', scale: family([[0.05, '#FFD3C4'], [0.2, '#FFAF96'], [0.6, '#FF8664'], [1.2, '#F55B3A'], [2.5, '#DB3622'], [5, '#B51A12']]) },
+  { name: 'Sleet', short: 'sleet', scale: family([[0.05, '#B9F3E6'], [0.2, '#8FEBD9'], [0.4, '#5FDFCB'], [0.8, '#33D0BA'], [1.4, '#17BCA6'], [2.5, '#0BA392'],
+    [4, '#078A7D'], [7, '#067168'], [12, '#055B55'], [20, '#044744'], [40, '#033533']]) },
+  { name: 'Snow', short: 'snow', scale: family([[0.05, '#F9DDF6'], [0.2, '#F2BEEE'], [0.4, '#E99CE6'], [0.8, '#DC7ADD'], [1.4, '#CB5DD3'], [2.5, '#B545C3'],
+    [4, '#9C33B0'], [7, '#82249B'], [12, '#691884'], [20, '#520F6C'], [40, '#3D0A55']]) },
+  { name: 'Ice', short: 'ice', scale: family([[0.05, '#FFE2C4'], [0.2, '#FFCA95'], [0.4, '#FFB066'], [0.8, '#FF963B'], [1.4, '#F77D1D'], [2.5, '#E5660E'],
+    [4, '#C95209'], [7, '#A84307'], [12, '#883506'], [20, '#6A2905'], [40, '#4F1F04']]) },
 ];
 /** The kinds in the order the keys list them. */
 export const KIND_ORDER = [0, 2, 1, 3];                        // rain, snow, sleet, ice
@@ -163,8 +168,9 @@ const CLOUD = [[5, '#ffffff', 0], [25, '#e9eef5', 70], [50, '#f4f7fb', 130], [75
 const CAPE = [[50, '#fff3b0', 0], [100, '#fff3b0', 140], [300, '#ffd166', 185], [600, '#f4a261', 205], [1000, '#e76f51', 220],
   [1500, '#d62828', 232], [2500, '#9d0208', 242], [4000, '#6a1b9a', 250]];
 const PCT_DRY = [[0, '#8c5a2b', 200], [30, '#c99b54', 190], [60, '#9fce8a', 170], [80, '#4fa3c7', 190], [100, '#2a5fa8', 210]];
+/* the deepest snow deep plum, not white (white vanished on the light map; STRATA SNOWACC_STEPS) */
 const SNOW = [[0.1, '#dfe9f5', 120], [1, '#c3d3f2', 180], [3, '#9fb0ea', 210], [6, '#8a7fe0', 225], [12, '#a35ad2', 235],
-  [25, '#e05cb4', 245], [50, '#ffffff', 255]];
+  [25, '#e05cb4', 245], [50, '#8e1e6e', 250]];
 const HEIGHT = [[0, '#5b2a86', 210], [300, '#3d5fd0', 200], [600, '#3d93d8', 190], [1000, '#6cc04a', 185],
   [1500, '#efd23a', 190], [2200, '#f08b2c', 200], [3000, '#dc3a3a', 210], [4000, '#f2e6ff', 220]];
 /* visibility: each band its own colour, thick fog the hottest, and the map clearing as it gets better */
@@ -341,6 +347,10 @@ const SCALES = {
      falling in each period, and the snow expected to fall, since the run began and in 24 hours */
   snow_risk: { stops: SNOW_RISK_LEVELS.map((l, i) => [l.level, l.colour, [150, 190, 215, 235][i]]), floor: 1, discrete: true,
     keySteps: [1, 2, 3, 4], ticks: [1, 2, 3, 4], keyLabel: (v) => SNOW_RISK_NAMES[Math.round(v)] },
+  /* the snow risk as a conditions index (mdata/derived.py snow_conditions), in the colours of the user's
+     chart: very low grey, low white, moderate red, high purple, very high green. Conditions, not a probability */
+  snow_cond: { stops: [[1, '#9ca3af', 205], [2, '#ffffff', 232], [3, '#d9363e', 236], [4, '#8e3fbf', 240], [5, '#7cc47f', 244]], floor: 1, discrete: true,
+    keySteps: [1, 2, 3, 4, 5], ticks: [1, 2, 3, 4, 5], keyLabel: (v) => ['', 'Very low', 'Low', 'Moderate', 'High', 'Very high'][Math.round(v)] },
   snow_chance: { stops: [[5, '#dfe9f5', 110], [10, '#c3d3f2', 150], [20, '#9fb0ea', 180], [30, '#7f9be6', 200], [40, '#8a7fe0', 212],
     [50, '#9a6ee0', 222], [60, '#a35ad2', 230], [70, '#c25ac8', 236], [80, '#e05cb4', 242], [90, '#ffffff', 250]], floor: 5, discrete: true,
   ticks: [5, 10, 20, 30, 40, 50, 60, 70, 80, 90] },
@@ -394,8 +404,64 @@ const BANDS = { t2: 1, t2max: 1, t2min: 1, t2max3: 1, t2min3: 1, td2: 1, tskin: 
   t2max6: 1, t2min6: 1, sp: 2, q2: 0.5, t300: 2, rh925: 5, rh500: 5, wind200: 10, w500: 0.25, cape_con: 100, snow_line: 100, thermal_top: 100,
   conv_top: 500, sim_ir: 2, sim_wv: 1, sw_diffuse: 25, lw_net: 10, albedo: 5, orog: 50, soil_t18: 1, soil_t54: 1, soil_t162: 1,
   cloud850: 10, cloud700: 10, cloud500: 10, cloud300: 10 };
-for (const [k, band] of Object.entries(BANDS)) SCALES[k].band = band;
-export const scaleFor = (key) => SCALES[key] || { stops: TEMP, ticks: [] };
+/* Chances (15 Nov 2026): each kind of question in its own colours, as the STRATA graphics show them,
+   instead of one rainbow for all. Snow in the snow-chance colours (STRATA CHANCE_STEPS, pale blue
+   through violet to plum), rain in blues, wind in teals, frost in icy blues, warmth in ambers, storms
+   from yellow to magenta, ice in oranges, the sky in slate greys. Ten steps of 10 %, the 50 % line drawn. */
+const CHANCE_AT = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90];
+const CHANCE_A = [110, 150, 180, 198, 210, 220, 228, 234, 240, 246];
+const chance = (cols) => ({ stops: cols.map((c, i) => [CHANCE_AT[i], c, CHANCE_A[i]]), floor: 5, discrete: true, ticks: CHANCE_AT, contours: [50], label: true,
+  line: 'rgba(255,255,255,0.95)', pct: true });
+const PROB_FAMILIES = {
+  snow: ['#DFE9F5', '#C3D3F2', '#9FB0EA', '#7F9BE6', '#8A7FE0', '#9A6EE0', '#A35AD2', '#C25AC8', '#E05CB4', '#8E1E6E'],
+  rain: ['#DBEAFE', '#BFDBFE', '#93C5FD', '#60A5FA', '#3B82F6', '#2563EB', '#1D4ED8', '#1E40AF', '#1E3A8A', '#172554'],
+  wind: ['#CCFBF1', '#99F6E4', '#5EEAD4', '#2DD4BF', '#14B8A6', '#0D9488', '#0F766E', '#115E59', '#134E4A', '#042F2E'],
+  cold: ['#E0F2FE', '#BAE6FD', '#7DD3FC', '#38BDF8', '#0EA5E9', '#0284C7', '#0369A1', '#075985', '#0C4A6E', '#082F49'],
+  heat: ['#FEF3C7', '#FDE68A', '#FCD34D', '#FBBF24', '#F59E0B', '#F97316', '#EA580C', '#DC2626', '#B91C1C', '#7F1D1D'],
+  storm: ['#FEF9C3', '#FEF08A', '#FDE047', '#FACC15', '#FB923C', '#F97316', '#EF4444', '#DC2626', '#A21CAF', '#701A75'],
+  ice: ['#FFE2C4', '#FFCA95', '#FFB066', '#FF963B', '#F77D1D', '#E5660E', '#C95209', '#A84307', '#883506', '#6A2905'],
+  sky: ['#F1F5F9', '#E2E8F0', '#CBD5E1', '#B6C2D2', '#94A3B8', '#7C8BA1', '#64748B', '#526079', '#475569', '#334155'],
+};
+for (const [k, cols] of Object.entries(PROB_FAMILIES)) SCALES[`prob_${k}`] = chance(cols);
+
+/* On the light map (the STRATA look) white has nothing to stand out against: cloud is a cool grey
+   veil, deeper where it is thicker; snow cover lilac; the simulated satellite and outgoing longwave
+   pictures cover the map as a real satellite picture does (dark ground, white cloud tops). */
+const CLOUD_LIGHT = [[5, '#ffffff', 0], [25, '#b9c4d0', 64], [50, '#a0adbc', 112], [75, '#8896a7', 160], [100, '#717f92', 200]];
+const SAT_PICTURE = [[-70, '#ffffff', 255], [-55, '#e8edf4', 250], [-40, '#c3ccd8', 245], [-25, '#8e99a8', 240], [-10, '#5d6876', 236], [0, '#3c4552', 236], [15, '#2a313a', 236]];
+const LIGHT_SCALES = {
+  ...Object.fromEntries(['tcc', 'lcc', 'mcc', 'hcc', 'cloud_1000ft', 'conv_cloud', 'cloud850', 'cloud700', 'cloud500', 'cloud300']
+    .map((k) => [k, { ...SCALES[k], stops: CLOUD_LIGHT }])),
+  snow_cover: { ...SCALES.snow_cover, stops: [[5, '#e8e4f4', 90], [25, '#d6cdee', 140], [50, '#c3b5e6', 185], [75, '#ae9bdc', 215], [95, '#9a83d2', 235]] },
+  sim_ir: { ...SCALES.sim_ir, stops: SAT_PICTURE },
+  olr: { ...SCALES.olr, stops: [[100, '#ffffff', 255], [150, '#e8edf4', 250], [190, '#c3ccd8', 245], [220, '#8e99a8', 240], [250, '#5d6876', 236], [280, '#3c4552', 236], [310, '#2a313a', 236]] },
+};
+/* ...and every temperature layer takes the MyWeatherUK graphics' temperature colours (mwuk-graphics
+   core/tokens PALETTES.temperature): blues, teals and greens through the UK's usual 0-15 °C, where the
+   dark map's pale mid-tones wash out on light land. Layers that shift the scale (850 hPa, 500 hPa…)
+   keep their shift. */
+const TEMP_MWUK = [[-20, '#1B1447'], [-14, '#2C2276'], [-9, '#3B34A6'], [-5, '#3F55C9'], [-2, '#3F78DA'],
+  [0, '#3C99E0'], [3, '#39B6DA'], [6, '#43CBC4'], [9, '#74D7AE'], [12, '#B5DE95'],
+  [14, '#DDE08A'], [16, '#F4D27A'], [18, '#F8B864'], [20, '#F59A52'], [22, '#EE7A47'],
+  [25, '#E25A45'], [28, '#CC3D52'], [32, '#A82A68'], [36, '#7D1E73'], [40, '#521660']];
+for (const [k, sc] of Object.entries(SCALES)) {
+  const s = sc.stops;
+  if (LIGHT_SCALES[k] || !Array.isArray(s) || s.length !== TEMP.length || s.some((x, i) => x[1] !== TEMP[i][1])) continue;
+  const m = (s[1][0] - s[0][0]) / (TEMP[1][0] - TEMP[0][0]), o = s[0][0] - m * TEMP[0][0];
+  LIGHT_SCALES[k] = { ...sc, stops: TEMP_MWUK.map(([v, c]) => [v * m + o, c, 240]) };
+}
+for (const [k, band] of Object.entries(BANDS)) { SCALES[k].band = band; if (LIGHT_SCALES[k]) LIGHT_SCALES[k].band = band; }
+
+/* the map's tone ('light' for the Light map, 'dark' otherwise): drawScene sets it from the map style,
+   and the page sets it for its previews, so every colour table knows which scales to use */
+let TONE = 'dark';
+export function setTone(t) { TONE = t === 'light' ? 'light' : 'dark'; }
+export const toneOf = () => TONE;
+/* what a cached colour table was made with: the colours chosen and the map's tone */
+const palId = () => `${PALETTE}|${TONE}`;
+export const scaleFor = (key) => (TONE === 'light' && LIGHT_SCALES[key]) || SCALES[key] || { stops: TEMP, ticks: [] };
+/** The chance colours for a kind of question: snow, rain, wind, cold, heat, storm, ice or sky. */
+export const probScaleKey = (family) => (PROB_FAMILIES[family] ? `prob_${family}` : 'prob');
 /** Does this scale paint the whole map nearly solid (temperature, wind, humidity…)? Rain and the like
     leave most of the map clear, and cloud and pressure are see-through already. */
 export function coversMap(key) {
@@ -427,9 +493,37 @@ export function scaleSwatch(key, pale) {
   }).filter(Boolean);
   return parts.length > 1 ? `linear-gradient(90deg, ${parts.join(', ')})` : null;
 }
+/** A layer's colours as a CSS gradient for the layer picker (lib components/modeldata/LayerBrowser):
+    in hard steps where the map is drawn in steps, smooth where it is smooth; precipitation by type
+    as its kinds side by side. Null for a layer with no colour scale. */
+export function scaleRamp(key) {
+  const sc = scaleFor(key);
+  const css = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
+  const stepped = (cols) => `linear-gradient(90deg, ${cols.map((c, i) => `${css(c)} ${((i / cols.length) * 100).toFixed(1)}%, ${css(c)} ${(((i + 1) / cols.length) * 100).toFixed(1)}%`).join(', ')})`;
+  if (sc.families) {
+    const fams = (sc.order || sc.families.map((_, i) => i)).map((i) => sc.families[i]);
+    return stepped(fams.flatMap((f) => [0.3, 1.2, 4, 12].map((r) => colourAt({ ...f.scale, floor: null }, r)).filter(Boolean)));
+  }
+  const steps = sc.swatch || sc.keySteps || sc.ticks || [];
+  if (steps.length < 2) return null;
+  if (sc.discrete) {
+    const cols = steps.map((v) => colourAt({ ...sc, floor: null }, v)).filter(Boolean);
+    return cols.length > 1 ? stepped(cols) : null;
+  }
+  return scaleSwatch(key, PALETTE === 'pale');
+}
+/* On the light map a whole-map layer (temperature, wind, humidity…) is drawn nearly solid: at the
+   dark map's 82 % the pale land shows through and every colour turns pastel. */
+const solidCache = new WeakMap();
+const solidOnLight = (sc) => {
+  let s = solidCache.get(sc);
+  if (s == null) { s = !sc.code && !sc.discrete && sc.stops.reduce((n, x) => n + (x[2] ?? 210), 0) / sc.stops.length >= 140; solidCache.set(sc, s); }
+  return s;
+};
 /** A value's colour on a scale, in the colours chosen (null for none). */
 export function colourAt(sc, v) {
-  const c = baseColour(sc, v);
+  let c = baseColour(sc, v);
+  if (c && TONE === 'light' && c[3] < 255 && solidOnLight(sc)) c = [c[0], c[1], c[2], Math.round(c[3] + (255 - c[3]) * 0.72)];
   return c && PALETTE === 'pale' ? paled(c) : c;
 }
 
@@ -515,7 +609,7 @@ export function frameCanvas(frame, varKey, cache) {
   if (!onGrid(frame)) return null;                       // a frame from the other grid, still on its way out
   if (frame.mix) return mixCanvas(frame, varKey, cache);
   const hit = cache?.get(frame);
-  if (hit && hit.palette === PALETTE) return hit;
+  if (hit && hit.palette === palId()) return hit;
   if (frame.img) return imageCanvas(frame, varKey, cache);
   if (frame.nx && frame.k < 1) return fineCanvas(frame, varKey, cache);
   if (frame.nx) return coarseCanvas(frame, varKey, cache);
@@ -534,7 +628,7 @@ export function frameCanvas(frame, varKey, cache) {
   const q = frame.q;
   for (let i = 0; i < q.length; i++) d[i] = l32[q[i]];
   ctx.putImageData(img, 0, 0);
-  cv.palette = PALETTE;
+  cv.palette = palId();
   if (cache) {
     cache.set(frame, cv);
     if (cache.size > 14) cache.delete(cache.keys().next().value);
@@ -552,7 +646,7 @@ function colourTable(frame, varKey) {
   }
   return out;
 }
-const CODES = new Set(['wx', 'ptype', 'radar_type', 'snow_risk']);                     // a code between two codes means nothing: never interpolated
+const CODES = new Set(['wx', 'ptype', 'radar_type', 'snow_risk', 'snow_cond']);                     // a code between two codes means nothing: never interpolated
 /* ...except the precipitation types' kind-and-strength bytes, which the graphics card smooths within
    each kind (lib/modelGL typed) when Smooth is on */
 const TYPED = new Set(['ptype', 'radar_type']);
@@ -610,7 +704,7 @@ function fineCanvas(frame, varKey, cache) {
   for (let i = 0; i < d.length; i++) d[i] = lut[frame.q[i]];
   ctx.putImageData(img, 0, 0);
   cv.dataK = frame.k;
-  cv.palette = PALETTE;
+  cv.palette = palId();
   if (cache) { cache.set(frame, cv); if (cache.size > 14) cache.delete(cache.keys().next().value); }
   return cv;
 }
@@ -643,7 +737,7 @@ function imageCanvas(frame, varKey, cache) {
   }
   cv.dataK = frame.k || 0.5;
   cv.picture = true;
-  cv.palette = PALETTE;
+  cv.palette = palId();
   if (cache) { cache.set(frame, cv); if (cache.size > 10) cache.delete(cache.keys().next().value); }
   return cv;
 }
@@ -699,7 +793,7 @@ function coarseCanvas(frame, varKey, cache) {
   }
   ctx.putImageData(img, 0, 0);
   cv.dataK = (frame.k || 8) / UP;                       // display cells per canvas pixel
-  cv.palette = PALETTE;
+  cv.palette = palId();
   if (cache) {
     cache.set(frame, cv);
     if (cache.size > 14) cache.delete(cache.keys().next().value);
@@ -874,9 +968,12 @@ function drawPressure(ctx, P, X, Y, R, u, st) {
 /* realtime = the motion-graphics look: NASA Blue Marble by day, NASA Black Marble city lights
    (sodium gold) by night, lit by the real sun for each frame's valid time, with the blue hour
    and golden hour around the terminator. */
+/* Light is the STRATA look of the motion graphics (15 Nov 2026): pale land lit by the real terrain, a
+   soft sea deepening off the shelf (mdata/static.py strata_basemap), ink coastlines and names on white
+   halos. `?v=` in the file name makes browsers fetch the new picture (the server ignores it). */
 export const MAP_STYLES = {
+  light: { label: 'Light', base: 'basemap_light.png?v=strata1', glass: 'light', coast: 'rgba(11,26,49,0.5)', border: 'rgba(11,26,49,0.32)', text: '#0B1A31', halo: 'rgba(255,255,255,0.94)', bg: '#9fbbd8' },
   dark: { label: 'Dark', base: 'basemap.png', glass: 'dark', coast: 'rgba(226,236,248,0.62)', border: 'rgba(226,236,248,0.42)', text: '#f2f6fb', halo: 'rgba(6,10,18,0.8)', bg: '#0e1b2a' },
-  light: { label: 'Light', base: 'basemap_light.png', glass: 'light', coast: 'rgba(38,52,68,0.6)', border: 'rgba(38,52,68,0.42)', text: '#17202b', halo: 'rgba(255,255,255,0.85)', bg: '#c9d9e7' },
   satellite: { label: 'Satellite', base: 'sat_day.jpg', glass: 'dark', coast: 'rgba(255,255,255,0.5)', border: 'rgba(255,255,255,0.4)', text: '#ffffff', halo: 'rgba(0,0,0,0.75)', bg: '#06111f' },
   realtime: { label: 'Real-time', base: null, glass: 'dark', coast: 'rgba(255,255,255,0.45)', border: 'rgba(255,255,255,0.35)', text: '#ffffff', halo: 'rgba(0,0,0,0.75)', bg: '#050a14' },
 };
@@ -1065,6 +1162,11 @@ export const fmtValue = (v, unit) => {
 };
 const timeFmt = (iso, opts) => new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/London', ...opts });
 export const FONT = '"Inter", -apple-system, "SF Pro Display", "Segoe UI", system-ui, sans-serif';
+/* the STRATA display face for headlines and big numbers (public/fonts, the motion graphics' own) */
+export const DISPLAY = '"Inter Tight", "Inter", -apple-system, "SF Pro Display", "Segoe UI", system-ui, sans-serif';
+/* STRATA ink and accent (mwuk-graphics src/strata/ui.ts LIGHT) */
+export const INK = '#0B1A31';
+export const ACCENT = '#0A6FDB';
 
 /* rect = the graphic's frame on this canvas; view = { cx, cy, s }: the grid point at the
    frame's centre and canvas px per grid cell. Everything else scales with the frame
@@ -1078,6 +1180,7 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   const X = (gx) => (gx - cx) * s + ox;
   const Y = (gy) => (gy - cy) * s + oy;
   const st = MAP_STYLES[L.style] || MAP_STYLES.dark;
+  setTone(st.glass);                                      // the colour scales for this map's tone
   const clip = opts.clip || rect;
   ctx.save();
   ctx.beginPath();
@@ -1095,7 +1198,7 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
       const x1 = Math.ceil(Math.min(clip.x + clip.w, X(W * K))), y1 = Math.ceil(Math.min(clip.y + clip.h, Y(H * K)));
       if (x1 <= x0 || y1 <= y0) return;
       const w = x1 - x0, h = y1 - y0;
-      const out = drawCells({ frame: f, q: f.q, W, H, K, lutKey: `${cv.key}|${PALETTE}|${f.prob ? 'chance' : `${f.head?.lo}|${f.head?.hi}|${f.head?.scale}`}`, lut: () => colourTable(f, cv.key),
+      const out = drawCells({ frame: f, q: f.q, W, H, K, lutKey: `${cv.key}|${palId()}|${f.prob ? 'chance' : `${f.head?.lo}|${f.head?.hi}|${f.head?.scale}`}`, lut: () => colourTable(f, cv.key),
         x: x0, y: y0, w, h, ox, oy, s, cx, cy, nearest: cv.nearest || opts.coarse, soft: cv.soft, typed: cv.typed });
       if (out) {
         ctx.imageSmoothingEnabled = false;
@@ -1175,7 +1278,7 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   if (G?.frame || A?.frame || K?.areas?.length || Wn?.areas?.length || L.strikes?.length || labels || P || L.cities || T) {
     layer('over', [G?.frame, G?.varKey, G?.unit, A?.frame, K?.areas, K?.alpha, Wn?.areas, Wn?.alpha, Wn?.look, Wn?.labels, L.strikes, L.strikesDaily, L.strikeStyle, labels,
       P?.lines, P?.list, P?.symbols, P?.centres, L.cities, Wx?.frame, Wx?.utcMs, T?.frame, T?.unit, T?.floor,
-      T?.at?.gx, T?.at?.gy, T?.at?.v, T?.at?.place, !!L.chrome, L.style], (c) => {
+      T?.at?.gx, T?.at?.gy, T?.at?.v, T?.at?.place, !!L.chrome, L.chrome?.sub ? 1 : 0, (L.chrome?.extras || []).length, L.chrome?.brand, L.chrome?.time, L.style], (c) => {
       if (G?.frame) drawValueGrid(c, G, X, Y, ...box, s, u, st);
       if (A?.frame) drawArrows(c, A, X, Y, ...box, s, u, st);
       if (K?.areas?.length) drawRisk(c, K, X, Y, u);
@@ -1183,11 +1286,11 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
       if (L.strikes?.length) drawStrikes(c, L.strikes, X, Y, u, L.strikesDaily, L.strikeStyle);
       if (labels) drawContourLabels(c, labels, X, Y, rect, u, st);
       if (P) drawPressure(c, P, X, Y, rect, u, st);
-      if (L.cities) drawCities(c, L.cities, X, Y, rect, zk, u, st, L.chrome ? 150 * u : 0, Wx);
+      if (L.cities) drawCities(c, L.cities, X, Y, rect, zk, u, st, L.chrome ? chromeTop(rect, u, L.chrome) : rect.y, L.chrome ? chromeFoot(u, L.chrome) : 0, Wx);
       if (Wn?.areas?.length && Wn.labels) drawWarningLabels(c, Wn, X, Y, rect, u);
       if (T) {
         /* the highest value in view, kept clear of the title card and the key */
-        const top = L.chrome ? 150 * u : 20 * u, bot = L.chrome ? 104 * u : 20 * u;
+        const top = L.chrome ? chromeTop(rect, u, L.chrome) - rect.y + 10 * u : 20 * u, bot = L.chrome ? chromeFoot(u, L.chrome) : 20 * u;
         const m = T.at || frameMax(T.frame, (rect.x + 20 * u - ox) / s + cx, (rect.y + top - oy) / s + cy,
           (rect.x + rect.w - 20 * u - ox) / s + cx, (rect.y + rect.h - bot - oy) / s + cy);
         if (m && !(T.floor != null && m.v < T.floor)) drawStar(c, X(m.gx), Y(m.gy), u, st, `${fmtValue(m.v, T.unit)}${m.place ? ` · ${m.place}` : ''}`, rect);
@@ -1529,7 +1632,7 @@ export function sampleFrame(f, gx, gy) {
 export function smoothCanvas(frame, varKey, cache) {
   if (!onGrid(frame)) return null;
   const hit = cache?.get(frame);
-  if (hit && hit.palette === PALETTE) return hit;
+  if (hit && hit.palette === palId()) return hit;
   const sc = scaleFor(varKey);
   const W = frame.nx || NX, H = frame.ny || NY, K = frame.nx ? frame.k || 1 : 1, q = frame.q;
   const lut = new Uint32Array(256);
@@ -1543,7 +1646,7 @@ export function smoothCanvas(frame, varKey, cache) {
     for (let i = 0; i < W; i++) if (lut[q[row + i]]) { if (i < x0) x0 = i; if (i > x1) x1 = i; if (j < y0) y0 = j; if (j > y1) y1 = j; }
   }
   const cv = document.createElement('canvas');
-  if (x1 < 0) { cv.width = 1; cv.height = 1; cv.dataK = K; cv.dataX0 = 0; cv.dataY0 = 0; cv.palette = PALETTE; return cv; }
+  if (x1 < 0) { cv.width = 1; cv.height = 1; cv.dataK = K; cv.dataX0 = 0; cv.dataY0 = 0; cv.palette = palId(); return cv; }
   x0 = Math.max(0, x0 - 3); y0 = Math.max(0, y0 - 3); x1 = Math.min(W - 1, x1 + 3); y1 = Math.min(H - 1, y1 + 3);
   const bw = x1 - x0 + 1, bh = y1 - y0 + 1, F = K < 1 ? 2 : 3;
   // values in the encoded domain (monotonic in the value; no-data counts as dry), blurred [1 2 1]
@@ -1571,7 +1674,7 @@ export function smoothCanvas(frame, varKey, cache) {
     }
   }
   ctx.putImageData(img, 0, 0);
-  cv.dataK = K / F; cv.dataX0 = x0 * K; cv.dataY0 = y0 * K; cv.palette = PALETTE;
+  cv.dataK = K / F; cv.dataX0 = x0 * K; cv.dataY0 = y0 * K; cv.palette = palId();
   if (cache) { cache.set(frame, cv); if (cache.size > 6) cache.delete(cache.keys().next().value); }
   return cv;
 }
@@ -1585,6 +1688,7 @@ function gridLabel(v, varKey, unit) {
   if (varKey === 'wx') return ['Clear', 'Pt cloud', 'Cloudy', 'Dull', 'Fog', 'Drizzle', 'Lt rain', 'Rain', 'Heavy', 'Sleet', 'Lt snow', 'Snow', 'Hvy snow', 'Thunder', 'Hail'][Math.round(v)] ?? null;
   if (varKey === 'ptype' || varKey === 'radar_type') { const t = radarTypeOf(v); return t ? RADAR_FAMILIES[t.family].short : null; }
   if (varKey === 'snow_risk') return v >= 1 ? SNOW_RISK_LEVELS[Math.min(4, Math.round(v)) - 1].short : null;
+  if (varKey === 'snow_cond') return v >= 1 ? ['', 'V low', 'Low', 'Mod', 'High', 'V high'][Math.min(5, Math.round(v))] : null;
   if (varKey === 'mwd' || varKey === 'wdir10') return ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(v / 22.5) % 16];
   if (sc.floor != null && v < sc.floor) return null;
   if (unit === '°C') return `${Math.round(v)}°`;
@@ -1802,17 +1906,23 @@ function drawStar(ctx, x, y, u, st, label, R) {
   ctx.strokeStyle = 'rgba(40,24,0,0.85)';
   ctx.stroke();
   ctx.restore();
-  // value capsule beside the star (flips left near the right edge)
-  ctx.font = `800 ${16 * u}px ${FONT}`;
+  // the value on a STRATA tag beside the star (white plate, ink, a fine edge; flips left near the right edge)
+  const th = themeOf(st);
+  ctx.font = `680 ${17 * u}px ${DISPLAY}`;
   const tw = ctx.measureText(label).width;
-  const w = tw + 22 * u, h = 30 * u;
+  const w = tw + 24 * u, h = 32 * u;
   const right = x + r + 8 * u + w < R.x + R.w - 10 * u;
   const bx = right ? x + r + 8 * u : x - r - 8 * u - w, by = y - h / 2;
-  glassPanel(ctx, bx, by, w, h, h / 2, u, st.glass);
-  ctx.fillStyle = st.glass === 'light' ? '#111820' : '#ffffff';
+  ctx.save();
+  ctx.shadowColor = th.shadow; ctx.shadowBlur = 12 * u; ctx.shadowOffsetY = 3 * u;
+  roundRect(ctx, bx, by, w, h, h / 2); ctx.fillStyle = th.plate; ctx.fill();
+  ctx.restore();
+  ctx.lineWidth = Math.max(1, 1.1 * u); ctx.strokeStyle = th.stroke; roundRect(ctx, bx, by, w, h, h / 2); ctx.stroke();
+  ctx.fillStyle = th.ink;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  ctx.fillText(label, bx + 11 * u, by + h / 2 + 1 * u);
+  ctx.fillText(label, bx + 12 * u, by + h / 2 + 1 * u);
+  ctx.textBaseline = 'alphabetic';
 }
 
 function haloText(ctx, t, x, y, st, w) {
@@ -1844,42 +1954,69 @@ function drawContourLabels(ctx, contours, X, Y, R, u, st) {
 
 /* place labels; with `wx` (a weather-type frame and its time) each place gets its symbol
    above the name, the sun or the moon by the real sun at that place */
-function drawCities(ctx, cities, X, Y, R, cellPx, u, st, footer, wx) {
+/* ── place names and weather symbols, as the STRATA graphics show them (15 Nov 2026): a dot in a
+   white halo, the name in ink on a soft halo (the biggest places a little larger), and the website's
+   own weather icons (public/icons/wx, the Location page's set) on a deep-navy badge above the place,
+   which keeps the white clouds visible on the light map ── */
+const WX_ICONS = ['clear', 'partly', 'cloudy', 'overcast', 'fog', 'drizzle', 'lightRain', 'rain', 'heavyRain', 'sleet', 'snow', 'snow', 'heavySnow', 'thunder', 'hail'];
+const wxImgs = {};
+let wxLoaded = null;
+/** The page's redraw, called when a weather icon has arrived. */
+export function onWxIcons(cb) { wxLoaded = cb; }
+function wxImage(name) {
+  if (typeof Image === 'undefined') return null;
+  let im = wxImgs[name];
+  if (!im) {
+    im = wxImgs[name] = new Image();
+    im.onload = () => wxLoaded?.();
+    im.src = `/icons/wx/${name}.svg`;
+  }
+  return im.complete && im.naturalWidth ? im : null;
+}
+function wxBadge(ctx, code, cx, cy, r, night, u) {
+  const im = wxImage(`${WX_ICONS[code] || 'cloudy'}${night ? '-night' : ''}`);
+  ctx.save();
+  const g = ctx.createLinearGradient(cx, cy - r, cx, cy + r);
+  g.addColorStop(0, '#24467A');
+  g.addColorStop(1, '#0F2342');
+  ctx.shadowColor = 'rgba(11,26,49,0.3)'; ctx.shadowBlur = r * 0.32; ctx.shadowOffsetY = r * 0.1;
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = Math.max(1, r * 0.06); ctx.stroke();
+  ctx.restore();
+  if (im) { const s = r * 1.72; ctx.drawImage(im, cx - s / 2, cy - s / 2 + r * 0.04, s, s); }
+  else drawWxIcon(ctx, code, cx, cy, r * 0.82, night, u);
+}
+
+function drawCities(ctx, cities, X, Y, R, cellPx, u, st, top, footer, wx) {
   /* by map scale (cellPx is screen px per 2 km on either grid), then the bigger places first
      and no label over another: the wide map has far more places than fit when zoomed out */
+  const th = themeOf(st);
   const pxKm = cellPx / 2;
   const maxRank = pxKm > 3 ? 4 : pxKm > 1.6 ? 3 : pxKm > 0.75 ? 2 : 1;
   const placed = [];
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  ctx.font = `600 ${19 * u}px ${FONT}`;
   for (const c of [...cities].sort((a, b) => a.rank - b.rank)) {
     if (c.rank > maxRank) continue;
-    const x = X(c.x), y = Y(c.y);
-    if (x < R.x + 10 * u || y < R.y + 170 * u || x > R.x + R.w - 120 * u || y > R.y + R.h - footer) continue;
-    const box = [x - 6 * u, y - (wx?.frame ? 46 : 13) * u, x + 14 * u + ctx.measureText(c.name).width, y + 13 * u];
+    const x = X(c.x), y = Y(c.y), big = c.rank === 1;
+    ctx.font = big ? `650 ${20 * u}px ${FONT}` : `600 ${18.5 * u}px ${FONT}`;
+    const tw = ctx.measureText(c.name).width;
+    if (x < R.x + 12 * u || y < top + (wx?.frame ? 52 : 16) * u || x + 14 * u + tw > R.x + R.w - 12 * u || y > R.y + R.h - footer) continue;
+    const box = [x - 8 * u, y - (wx?.frame ? 50 : 14) * u, x + 16 * u + tw, y + 14 * u];
     if (placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) continue;
     placed.push(box);
     const code = wx?.frame ? sampleFrame(wx.frame, c.x, c.y) : NaN;
     if (Number.isFinite(code) && code >= 0 && code < WX_NAMES.length) {
       const [lon, lat] = gridLonLat(c.x, c.y);
-      const r = 17 * u, ix = x + 4 * u, iy = y - 27 * u;
-      ctx.save();
-      ctx.beginPath(); ctx.arc(ix, iy, r * 1.08, 0, Math.PI * 2);
-      ctx.fillStyle = st.glass === 'light' ? 'rgba(30,48,72,0.55)' : 'rgba(6,12,22,0.48)'; ctx.fill();
-      ctx.restore();
-      drawWxIcon(ctx, Math.round(code), ix, iy, r * 0.82, sunElev(lon, lat, wx.utcMs) < -0.833, u);
+      wxBadge(ctx, Math.round(code), x + 2 * u, y - 30 * u, 17 * u, sunElev(lon, lat, wx.utcMs) < -0.833, u);
     }
-    ctx.font = `600 ${19 * u}px ${FONT}`;
-    ctx.beginPath();
-    ctx.arc(x, y, 4 * u, 0, Math.PI * 2);
-    ctx.fillStyle = st.text;
-    ctx.fill();
-    ctx.lineWidth = 2 * u;
-    ctx.strokeStyle = st.halo;
-    ctx.stroke();
-    haloText(ctx, c.name, x + 9 * u, y, st, 5 * u);
+    ctx.beginPath(); ctx.arc(x, y, 5.6 * u, 0, Math.PI * 2); ctx.fillStyle = th.halo; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 3.3 * u, 0, Math.PI * 2); ctx.fillStyle = th.ink; ctx.fill();
+    inkText(ctx, c.name, x + 11 * u, y + 0.5 * u, th.ink, th.halo, 4.6 * u);
   }
+  ctx.textBaseline = 'alphabetic';
 }
 
 /* frosted glass inside a canvas: the scene under the panel, blurred, then a tint, a top
@@ -1916,6 +2053,111 @@ function glassPanel(ctx, x, y, w, h, r, u, theme) {
   ctx.restore();
 }
 
+/* ── the graphic's furniture, in the STRATA look of the motion graphics (15 Nov 2026) ─────────────
+   As mwuk-graphics src/strata/ui.ts: words live in the sky, the data on the land.
+     • a soft shade of light (or, on the dark maps, dark) air behind the words at the top: no panel
+     • one brand line: the logo, MyWeather and UK in the accent; on its right the model badge (white:
+       the model and run; the accent: the lead time, LIVE or OBSERVED)
+     • the clock line: the day in the accent, the hour in ink
+     • the layer as the headline (Inter Tight), and one quiet line under it
+     • the keys low on the left on a feathered clearing: thin stepped bars in a white casing
+     • the source, small, low on the right
+   In a two-window graphic each window is told which of the brand and the clock it carries
+   (C.brand, C.time); both have their own headline, badge and key. */
+const STRATA = {
+  light: { ink: '#0B1A31', sub: 'rgba(11,26,49,0.84)', muted: 'rgba(11,26,49,0.64)', faint: 'rgba(11,26,49,0.4)', air: '236,242,249', halo: 'rgba(255,255,255,0.92)',
+    plate: '#ffffff', stroke: 'rgba(11,26,49,0.14)', clearing: 'rgba(246,249,253,0.68)', casing: 'rgba(255,255,255,0.96)', shadow: 'rgba(11,26,49,0.22)', accent: ACCENT },
+  dark: { ink: '#F5F8FC', sub: 'rgba(236,242,250,0.86)', muted: 'rgba(228,236,247,0.74)', faint: 'rgba(228,236,247,0.46)', air: '6,10,20', halo: 'rgba(0,0,0,0.62)',
+    plate: 'rgba(10,16,28,0.84)', stroke: 'rgba(255,255,255,0.2)', clearing: 'rgba(6,10,20,0.52)', casing: 'rgba(0,0,0,0.55)', shadow: 'rgba(0,0,0,0.4)', accent: '#56C8FF' },
+};
+const themeOf = (st) => STRATA[st.glass === 'light' ? 'light' : 'dark'];
+const spacing = (ctx, px) => { if ('letterSpacing' in ctx) ctx.letterSpacing = `${px}px`; };
+
+/* text with a soft halo, so small type reads over any weather */
+function inkText(ctx, t, x, y, fill, halo, hw) {
+  if (halo && hw > 0) { ctx.lineJoin = 'round'; ctx.lineWidth = hw; ctx.strokeStyle = halo; ctx.strokeText(t, x, y); }
+  ctx.fillStyle = fill;
+  ctx.fillText(t, x, y);
+}
+/* a feathered clearing behind small type on the map: blurred light (or dark) air, no edge */
+function clearing(ctx, x, y, w, h, u, th) {
+  ctx.save();
+  if (FILTER_OK && !glassCheap) ctx.filter = `blur(${(14 * u).toFixed(1)}px)`;
+  ctx.fillStyle = th.clearing;
+  roundRect(ctx, x, y, w, h, 18 * u);
+  ctx.fill();
+  ctx.restore();
+}
+
+/* where each line of the words at the top sits (baselines), and where they end */
+function headLayout(R, u, C) {
+  const M = 40 * u;
+  const brand = C.brand !== false, clock = C.time !== false;
+  let y = R.y + M;
+  const brandBase = brand ? (y += 22 * u) : null;
+  const clockBase = clock ? (y += (brand ? 46 : 22) * u) : null;
+  const headBase = (y += (brand || clock ? 58 : 44) * u);
+  const subBase = C.sub ? (y += 31 * u) : null;
+  return { M, brandBase, clockBase, headBase, subBase, bottom: y + 16 * u };
+}
+/** Where the words at the top of a graphic end: places and the star keep below it. */
+export function chromeTop(R, u, C) { return C ? headLayout(R, u, C).bottom : R.y; }
+
+/* one key's height (the families' key is a row per kind) */
+function keyHeight(K, u) {
+  const sc = K.scale || {};
+  if (sc.families) return 18 * u + 12 * u + (sc.order || sc.families).length * 21 * u + 22 * u;
+  return (sc.keySteps || sc.ticks || []).length > 1 ? 64 * u : 30 * u;
+}
+/** How much of the foot of a graphic the keys take. */
+export function chromeFoot(u, C) {
+  if (!C) return 0;
+  if (C.warnList) return 160 * u;
+  return 40 * u + [C, ...(C.extras || [])].reduce((n, K) => n + keyHeight(K, u) + 16 * u, 0);
+}
+
+/* the model badge: white for the model and run, the accent for the lead time; returns its left edge */
+function badgeWidth(ctx, u, b) {
+  ctx.font = `720 ${14.5 * u}px ${FONT}`;
+  spacing(ctx, 0.06 * 14.5 * u);
+  const w = (b[0] ? ctx.measureText(b[0]).width + 26 * u : 0) + (b[1] ? ctx.measureText(b[1]).width + 26 * u : 0);
+  spacing(ctx, 0);
+  return w;
+}
+function drawBadge(ctx, xRight, cy, u, b, th) {
+  const [left, right] = b, h = 30 * u, pad = 13 * u;
+  ctx.font = `720 ${14.5 * u}px ${FONT}`;
+  spacing(ctx, 0.06 * 14.5 * u);
+  const wl = left ? ctx.measureText(left).width + 2 * pad : 0, wr = right ? ctx.measureText(right).width + 2 * pad : 0;
+  const x0 = xRight - wl - wr, y = cy - h / 2;
+  ctx.save();
+  ctx.shadowColor = th.shadow; ctx.shadowBlur = 10 * u; ctx.shadowOffsetY = 2 * u;
+  roundRect(ctx, x0, y, wl + wr, h, h / 2);
+  ctx.fillStyle = th.plate;
+  ctx.fill();
+  ctx.restore();
+  if (wr) {
+    ctx.save();
+    roundRect(ctx, x0, y, wl + wr, h, h / 2);
+    ctx.clip();
+    ctx.fillStyle = th.accent;
+    ctx.fillRect(x0 + wl, y, wr, h);
+    ctx.restore();
+  }
+  ctx.lineWidth = Math.max(1, 1.1 * u);
+  ctx.strokeStyle = th.stroke;
+  roundRect(ctx, x0, y, wl + wr, h, h / 2);
+  ctx.stroke();
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  if (left) { ctx.fillStyle = th.ink; ctx.fillText(left, x0 + wl / 2, y + h / 2 + 0.6 * u); }
+  if (right) { ctx.fillStyle = '#ffffff'; ctx.fillText(right, x0 + wl + wr / 2, y + h / 2 + 0.6 * u); }
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  spacing(ctx, 0);
+  return x0;
+}
+
 /* text cut to a width, with an ellipsis */
 function fitText(ctx, t, w) {
   if (ctx.measureText(t).width <= w) return t;
@@ -1924,247 +2166,293 @@ function fitText(ctx, t, w) {
   return `${t.slice(0, n).trimEnd()}…`;
 }
 
-/* the graphic's furniture: the time, a logo capsule and a compact key. What the layer is and which
-   run it comes from live in the key; the time card is only the time. In a two-window graphic each
-   window is told which of them it carries (C.time, C.brand). */
 function drawChrome(ctx, R, u, C, st) {
-  const light = st.glass === 'light';
-  const ink = light ? '#0f1722' : '#ffffff';
-  const sub = light ? 'rgba(15,23,34,0.62)' : 'rgba(255,255,255,0.74)';
-  const ukBlue = light ? '#1d6fc0' : '#3f8fdc';          // the "UK" of MyWeatherUK: a darker, light-ish blue
-  const pad = 26 * u, gap = 14 * u;
+  const th = themeOf(st), H = headLayout(R, u, C), M = H.M, W = R.w - 2 * M;
+  ctx.save();
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
-  if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+  spacing(ctx, 0);
 
-  // ── brand: a large logo and the MyWeatherUK wordmark, top right ──
-  const bh = 84 * u, logoD = bh - 14 * u, by = R.y + pad;
-  let bw = 0;
-  if (C.brand !== false) {
-    ctx.font = `800 ${31 * u}px ${FONT}`;
-    const wMy = ctx.measureText('MyWeather').width, wUK = ctx.measureText('UK').width;
-    bw = 7 * u + logoD + 14 * u + wMy + wUK + 26 * u;
-    const bx = R.x + R.w - pad - bw;
-    glassPanel(ctx, bx, by, bw, bh, bh / 2, u, st.glass);
+  // ── the air behind the words ──
+  const airTo = H.bottom + 60 * u;
+  const g = ctx.createLinearGradient(0, R.y, 0, airTo);
+  g.addColorStop(0, `rgba(${th.air},0.9)`);
+  g.addColorStop(0.55, `rgba(${th.air},0.6)`);
+  g.addColorStop(1, `rgba(${th.air},0)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(R.x, R.y, R.w, airTo - R.y);
+
+  // ── brand line: logo · MyWeather UK, the badge on the right ──
+  let brandRight = R.x + M;
+  if (H.brandBase != null) {
+    const ls = 30 * u, cy = H.brandBase - 9 * u;
+    let x = R.x + M;
     if (C.logo) {
       ctx.save();
-      ctx.beginPath();
-      ctx.arc(bx + 7 * u + logoD / 2, by + bh / 2, logoD / 2, 0, Math.PI * 2);
-      ctx.clip();
-      ctx.drawImage(C.logo, bx + 7 * u, by + 7 * u, logoD, logoD);
+      ctx.beginPath(); ctx.arc(x + ls / 2, cy, ls / 2, 0, Math.PI * 2); ctx.clip();
+      ctx.drawImage(C.logo, x, cy - ls / 2, ls, ls);
       ctx.restore();
+      x += ls + 9 * u;
     }
-    const tx0 = bx + 7 * u + logoD + 14 * u, ty0 = by + bh / 2 + 11 * u;
-    ctx.fillStyle = ink;
-    ctx.fillText('MyWeather', tx0, ty0);
-    ctx.fillStyle = ukBlue;
-    ctx.fillText('UK', tx0 + wMy, ty0);
+    ctx.font = `760 ${25 * u}px ${DISPLAY}`;
+    spacing(ctx, -0.012 * 25 * u);
+    ctx.fillStyle = th.ink; ctx.fillText('MyWeather', x, H.brandBase);
+    x += ctx.measureText('MyWeather').width;
+    ctx.fillStyle = th.accent; ctx.fillText('UK', x, H.brandBase);
+    brandRight = x + ctx.measureText('UK').width;
+    spacing(ctx, 0);
+  }
+  /* the badge on the brand line, or on the clock line when the brand leaves no room, or none */
+  let clockRoom = R.x + R.w - M;
+  if (C.badge && (C.badge[0] || C.badge[1])) {
+    const bw = badgeWidth(ctx, u, C.badge);
+    if (H.brandBase != null && R.x + R.w - M - bw >= brandRight + 18 * u) drawBadge(ctx, R.x + R.w - M, H.brandBase - 9 * u, u, C.badge, th);
+    else if (H.clockBase != null) clockRoom = drawBadge(ctx, R.x + R.w - M, H.clockBase - 8 * u, u, C.badge, th) - 16 * u;
+    else if (R.x + R.w - M - bw >= R.x + M + 220 * u) drawBadge(ctx, R.x + R.w - M, H.headBase - 18 * u, u, C.badge, th);
   }
 
-  // ── the time, top left (below the brand when the frame is too narrow for both) ──
-  if (C.time !== false) {
-    const day = timeFmt(C.valid, { weekday: 'short', day: 'numeric', month: 'short' });
-    const hour = C.dayOnly ? '' : `${timeFmt(C.valid, { hour: '2-digit', minute: '2-digit' })} ${ukZone(C.valid)}`;
-    ctx.font = `800 ${36 * u}px ${FONT}`;
-    const dw = ctx.measureText(hour ? `${day}  ` : day).width;
-    ctx.font = `400 ${36 * u}px ${FONT}`;
-    const hw = ctx.measureText(hour).width;
-    const want = dw + hw + 56 * u;
-    const room = R.w - 2 * pad - (bw ? bw + gap : 0);
-    const stacked = room < Math.min(want, 440 * u);
-    const tw = Math.min(stacked ? R.w - 2 * pad : room, want);
-    const tx = R.x + pad, ty = stacked && bw ? by + bh + gap : by;
-    glassPanel(ctx, tx, ty, tw, bh, bh / 2, u, st.glass);
-    const x = tx + 28 * u, y = ty + bh / 2 + 13 * u;
+  // ── clock: the day in the accent, the hour in ink ──
+  if (H.clockBase != null && C.valid) {
+    const dow = timeFmt(C.valid, { weekday: 'long' }), dn = timeFmt(C.valid, { day: 'numeric' });
+    const day = C.dayOnly ? `${dow} ${dn} ${timeFmt(C.valid, { month: 'long' })}` : `${dow} ${dn}`;
+    let x = R.x + M;
     ctx.save();
-    ctx.beginPath();
-    ctx.rect(tx, ty, tw - 12 * u, bh);
-    ctx.clip();
-    ctx.fillStyle = ink;
-    ctx.font = `800 ${36 * u}px ${FONT}`;
-    ctx.fillText(day, x, y);
-    ctx.fillStyle = sub;
-    ctx.font = `400 ${36 * u}px ${FONT}`;
-    ctx.fillText(hour, x + dw, y);
+    ctx.beginPath(); ctx.rect(R.x, H.clockBase - 30 * u, clockRoom - R.x, 40 * u); ctx.clip();
+    ctx.font = `650 ${23 * u}px ${FONT}`;
+    ctx.fillStyle = th.accent; ctx.fillText(day, x, H.clockBase);
+    x += ctx.measureText(day).width;
+    if (!C.dayOnly) {
+      ctx.fillStyle = th.faint; ctx.fillText('  ·  ', x, H.clockBase);
+      x += ctx.measureText('  ·  ').width;
+      ctx.font = `560 ${23 * u}px ${FONT}`;
+      const hm = timeFmt(C.valid, { hour: '2-digit', minute: '2-digit' });
+      ctx.fillStyle = th.ink; ctx.fillText(hm, x, H.clockBase);
+      x += ctx.measureText(hm).width + 6 * u;
+      ctx.font = `620 ${16 * u}px ${FONT}`;
+      ctx.fillStyle = th.muted; ctx.fillText(ukZone(C.valid), x, H.clockBase);
+    }
     ctx.restore();
   }
 
-  // a word in the middle of a window with nothing to show yet, or nothing for this time
+  // ── headline: the layer, as large as fits on one line ──
+  let hs = 50 * u;
+  ctx.font = `650 ${hs}px ${DISPLAY}`;
+  spacing(ctx, -0.022 * hs);
+  const tw = ctx.measureText(C.variable || '').width;
+  if (tw > W) {
+    hs = Math.max(30 * u, hs * (W / tw));
+    ctx.font = `650 ${hs}px ${DISPLAY}`;
+    spacing(ctx, -0.022 * hs);
+  }
+  ctx.fillStyle = th.ink;
+  ctx.fillText(fitText(ctx, C.variable || '', W), R.x + M, H.headBase);
+  spacing(ctx, 0);
+  if (C.sub && H.subBase != null) {
+    ctx.font = `500 ${20 * u}px ${FONT}`;
+    ctx.fillStyle = th.muted;
+    ctx.fillText(fitText(ctx, C.sub, W), R.x + M, H.subBase);
+  }
+
+  // ── a word in the middle of a window with nothing to show yet, or nothing for this time ──
   if (C.notice) {
-    ctx.font = `700 ${16 * u}px ${FONT}`;
-    const w = Math.min(R.w - 2 * pad, ctx.measureText(C.notice).width + 44 * u), h = 46 * u;
+    ctx.font = `650 ${16 * u}px ${FONT}`;
+    const w = Math.min(R.w - 2 * M, ctx.measureText(C.notice).width + 44 * u), h = 44 * u;
     const x = R.x + (R.w - w) / 2, y = R.y + (R.h - h) / 2;
-    glassPanel(ctx, x, y, w, h, h / 2, u, st.glass);
-    ctx.fillStyle = ink;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    ctx.save();
+    ctx.shadowColor = th.shadow; ctx.shadowBlur = 14 * u; ctx.shadowOffsetY = 3 * u;
+    roundRect(ctx, x, y, w, h, h / 2); ctx.fillStyle = th.plate; ctx.fill();
+    ctx.restore();
+    ctx.lineWidth = Math.max(1, 1.1 * u); ctx.strokeStyle = th.stroke; roundRect(ctx, x, y, w, h, h / 2); ctx.stroke();
+    ctx.fillStyle = th.ink;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(fitText(ctx, C.notice, w - 28 * u), x + w / 2, y + h / 2 + 1 * u);
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   }
 
-  // ── a warnings window's key: what is in force, and when ──
+  // ── the keys (or a warnings window's list), low on the left; the source low on the right ──
+  let keysTop = R.y + R.h - M, keysRight = R.x + M;
   if (C.warnList) {
-    const list = C.warnList, shown = list.slice(0, list.length > 5 ? 4 : 5), more = list.length - shown.length;
-    const rowH = 27 * u, rows = Math.max(1, shown.length) + (more ? 1 : 0);
-    const kw = Math.min(R.w - 2 * pad, 620 * u), kh = 42 * u + rows * rowH + 8 * u;
-    const kx = R.x + pad, ky = R.y + R.h - pad - kh;
-    glassPanel(ctx, kx, ky, kw, kh, 22 * u, u, st.glass);
-    ctx.font = `700 ${13 * u}px ${FONT}`;
-    ctx.fillStyle = sub;
-    ctx.fillText(C.variable, kx + 20 * u, ky + 26 * u);
-    ctx.textAlign = 'right';
-    ctx.fillText(C.credit || '', kx + kw - 20 * u, ky + 26 * u);
-    ctx.textAlign = 'left';
-    let y = ky + 42 * u;
-    if (!shown.length) {
-      ctx.font = `600 ${15 * u}px ${FONT}`;
-      ctx.fillStyle = ink;
-      ctx.fillText('No warnings in force at this time', kx + 20 * u, y + 18 * u);
+    const r = drawWarnKey(ctx, R, u, C, M, th);
+    keysTop = r.top; keysRight = r.right;
+  } else {
+    let foot = R.y + R.h - M;
+    for (const K of [C, ...(C.extras || [])]) {
+      const k = drawKey(ctx, R, u, K, foot, M, th);
+      foot -= k.h + 16 * u;
+      keysRight = Math.max(keysRight, k.right);
     }
-    for (const w of shown) {
-      ctx.fillStyle = WARN_COLOURS[w.severity];
-      roundRect(ctx, kx + 20 * u, y + 5 * u, 16 * u, 16 * u, 4 * u);
-      ctx.fill();
-      ctx.font = `800 ${15 * u}px ${FONT}`;
-      ctx.fillStyle = ink;
-      ctx.fillText(fitText(ctx, `${w.severity} · ${w.type}`, kw * 0.52), kx + 46 * u, y + 19 * u);
-      ctx.font = `600 ${13 * u}px ${FONT}`;
-      ctx.fillStyle = sub;
-      ctx.textAlign = 'right';
-      ctx.fillText(w.when, kx + kw - 20 * u, y + 19 * u);
-      ctx.textAlign = 'left';
-      y += rowH;
-    }
-    if (more) {
-      ctx.font = `600 ${13 * u}px ${FONT}`;
-      ctx.fillStyle = sub;
-      ctx.fillText(`and ${more} more`, kx + 46 * u, y + 19 * u);
-    }
-    return;
+    keysTop = foot + 16 * u;
   }
-
-  // ── key: one slim capsule along the foot, and one above it for each layer laid over or under ──
-  let foot = R.y + R.h - pad;
-  for (const K of [C, ...(C.extras || [])]) foot -= drawKey(ctx, R, u, K, st, foot, pad, ink, sub) + 8 * u;
+  const source = C.source || '';
+  if (source) {
+    ctx.font = `600 ${14 * u}px ${FONT}`;
+    const sw = ctx.measureText(source).width;
+    const x = R.x + R.w - M - sw;
+    const y = x > keysRight + 20 * u ? R.y + R.h - M : keysTop - 14 * u;
+    inkText(ctx, fitText(ctx, source, R.w - 2 * M), Math.max(R.x + M, x), y, th.muted, th.halo, 4 * u);
+  }
+  ctx.restore();
 }
 
-/* one layer's key, its foot at `foot`; returns its height */
-function drawKey(ctx, R, u, C, st, foot, pad, ink, sub) {
-  const sc = C.scale || {};
-  if (sc.families) return drawFamiliesKey(ctx, R, u, C, st, foot, pad, ink, sub);
+/* a warnings window's key: what is in force, and when */
+function drawWarnKey(ctx, R, u, C, M, th) {
+  const list = C.warnList, shown = list.slice(0, list.length > 5 ? 4 : 5), more = list.length - shown.length;
+  const rowH = 26 * u, rows = Math.max(1, shown.length) + (more ? 1 : 0);
+  const w = Math.min(R.w - 2 * M, 560 * u), h = 30 * u + rows * rowH;
+  const x = R.x + M, top = R.y + R.h - M - h;
+  clearing(ctx, x - 14 * u, top - 12 * u, w + 28 * u, h + 22 * u, u, th);
+  ctx.font = `650 ${18 * u}px ${FONT}`;
+  inkText(ctx, C.variable || 'Met Office warnings', x, top + 16 * u, th.ink, th.halo, 4 * u);
+  if (C.credit) {
+    ctx.font = `600 ${14 * u}px ${FONT}`;
+    ctx.textAlign = 'right';
+    inkText(ctx, C.credit, x + w, top + 16 * u, th.muted, th.halo, 4 * u);
+    ctx.textAlign = 'left';
+  }
+  let y = top + 30 * u;
+  if (!shown.length) {
+    ctx.font = `600 ${16 * u}px ${FONT}`;
+    inkText(ctx, 'No warnings in force at this time', x, y + 18 * u, th.ink, th.halo, 4 * u);
+  }
+  for (const wn of shown) {
+    ctx.fillStyle = WARN_COLOURS[wn.severity];
+    roundRect(ctx, x, y + 4 * u, 16 * u, 16 * u, 4 * u); ctx.fill();
+    ctx.lineWidth = Math.max(1, u); ctx.strokeStyle = 'rgba(11,26,49,0.35)'; ctx.stroke();
+    ctx.font = `650 ${16 * u}px ${FONT}`;
+    inkText(ctx, fitText(ctx, `${wn.severity} · ${wn.type}`, w * 0.55), x + 26 * u, y + 18 * u, th.ink, th.halo, 4 * u);
+    ctx.font = `600 ${14 * u}px ${FONT}`;
+    ctx.textAlign = 'right';
+    inkText(ctx, wn.when, x + w, y + 18 * u, th.muted, th.halo, 4 * u);
+    ctx.textAlign = 'left';
+    y += rowH;
+  }
+  if (more) {
+    ctx.font = `600 ${14 * u}px ${FONT}`;
+    inkText(ctx, `and ${more} more`, x + 26 * u, y + 18 * u, th.muted, th.halo, 4 * u);
+  }
+  return { top, right: x + w };
+}
+
+/* one layer's key, its foot at `foot`: { h, right } */
+function drawKey(ctx, R, u, K, foot, M, th) {
+  const sc = K.scale || {};
+  if (sc.families) return drawFamiliesKey(ctx, R, u, K, foot, M, th);
   const ticks = sc.ticks || [];
   const steps = sc.keySteps || ticks;
   const hasBar = steps.length > 1;
-  const kh = hasBar ? 70 * u : 44 * u;
-  ctx.font = `700 ${13 * u}px ${FONT}`;
-  const name = `${C.variable}${C.unit ? ` · ${C.unit}` : ''}`;
-  const wName = ctx.measureText(name).width, full = R.w - 2 * pad;
-  const credit = wName + ctx.measureText(C.credit || '').width + 72 * u <= full ? C.credit || '' : C.creditShort || C.credit || '';
-  const wCredit = ctx.measureText(credit).width;
-  const textW = wName + wCredit + 72 * u;
-  const kw = Math.min(full, hasBar ? Math.max(480 * u, textW, Math.min(820 * u, steps.length * (sc.keySteps ? 30 : 74) * u + 40 * u)) : textW);
-  const kx = R.x + pad, ky = foot - kh;
-  glassPanel(ctx, kx, ky, kw, kh, 22 * u, u, st.glass);
-  ctx.font = `700 ${13 * u}px ${FONT}`;
-  ctx.fillStyle = sub;
-  ctx.fillText(fitText(ctx, name, kw - wCredit - 56 * u), kx + 20 * u, ky + (hasBar ? 24 : 27) * u);
-  ctx.textAlign = 'right';
-  ctx.fillText(credit, kx + kw - 20 * u, ky + (hasBar ? 24 : 27) * u);
-  ctx.textAlign = 'left';
+  const titleSize = 18 * u, tickSize = 15 * u;
+  const kh = keyHeight(K, u);
+  const maxW = Math.min(R.w - 2 * M, 620 * u);
+  const barW = hasBar ? Math.min(maxW, Math.max(330 * u, Math.min(580 * u, steps.length * (sc.keySteps ? 22 : 56) * u))) : 0;
+  ctx.font = `650 ${titleSize}px ${FONT}`;
+  const title = K.keyTitle || K.variable || '';
+  const titleW = ctx.measureText(title).width;
+  ctx.font = `600 ${tickSize}px ${FONT}`;
+  const unitW = K.unit ? ctx.measureText(K.unit).width + 8 * u : 0;
+  const w = Math.max(barW, Math.min(maxW, titleW + unitW));
+  const x = R.x + M, top = foot - kh;
+  clearing(ctx, x - 14 * u, top - 10 * u, w + 28 * u, kh + 18 * u, u, th);
+  const tb = top + 15 * u;
+  ctx.font = `650 ${titleSize}px ${FONT}`;
+  const shownTitle = fitText(ctx, title, Math.max(60 * u, w - unitW));
+  inkText(ctx, shownTitle, x, tb, th.ink, th.halo, 4 * u);
+  if (K.unit) {
+    const at = x + ctx.measureText(shownTitle).width + 8 * u;
+    ctx.font = `600 ${tickSize}px ${FONT}`;
+    inkText(ctx, K.unit, at, tb, th.muted, th.halo, 4 * u);
+  }
   if (hasBar) {
-    const bx2 = kx + 20 * u, bw2 = kw - 40 * u, by2 = ky + 33 * u, bh2 = 10 * u, n = steps.length;
-    const seg = bw2 / n;
+    const by = tb + 12 * u, bh = 8 * u, n = steps.length, seg = barW / n;
     ctx.save();
-    roundRect(ctx, bx2, by2, bw2, bh2, bh2 / 2);
+    ctx.shadowColor = th.shadow; ctx.shadowBlur = 4 * u; ctx.shadowOffsetY = 1 * u;
+    roundRect(ctx, x - 1.5 * u, by - 1.5 * u, barW + 3 * u, bh + 3 * u, (bh + 3 * u) / 2);
+    ctx.fillStyle = th.casing; ctx.fill();
+    ctx.restore();
+    ctx.save();
+    roundRect(ctx, x, by, barW, bh, bh / 2);
     ctx.clip();
     if (sc.discrete) {
       for (let i = 0; i < n; i++) {
-        const c = colourAt({ ...sc, floor: null }, steps[i]) || [80, 90, 100, 255];
+        const c = colourAt({ ...sc, floor: null }, steps[i]) || [120, 130, 140, 255];
         ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
-        ctx.fillRect(bx2 + i * seg, by2, seg + 0.6, bh2);
+        ctx.fillRect(x + i * seg, by, seg + 0.6, bh);
       }
     } else {
-      const g = ctx.createLinearGradient(bx2, 0, bx2 + bw2, 0);
+      const gr = ctx.createLinearGradient(x, 0, x + barW, 0);
       const fine = sc.band ? 240 : 24;
       for (let i = 0; i <= fine; i++) {
         const f = i / fine, pos = f * n - 0.5, k = Math.max(0, Math.min(n - 1, Math.floor(pos)));
         const t = Math.max(0, Math.min(1, pos - k));
         const v = k + 1 < n ? steps[k] + t * (steps[k + 1] - steps[k]) : steps[n - 1];
-        const c = colourAt({ ...sc, floor: null }, v) || [80, 90, 100, 255];
-        g.addColorStop(f, `rgb(${c[0]},${c[1]},${c[2]})`);
+        const c = colourAt({ ...sc, floor: null }, v) || [120, 130, 140, 255];
+        gr.addColorStop(f, `rgb(${c[0]},${c[1]},${c[2]})`);
       }
-      ctx.fillStyle = g;
-      ctx.fillRect(bx2, by2, bw2, bh2);
+      ctx.fillStyle = gr;
+      ctx.fillRect(x, by, barW, bh);
     }
     ctx.restore();
-    // labels: every tick that fits, never overlapping
-    ctx.fillStyle = ink;
-    ctx.font = `600 ${12.5 * u}px ${FONT}`;
+    ctx.font = `600 ${tickSize}px ${FONT}`;
     const labelled = new Set(ticks.map((v) => +v));
     let lastEnd = -Infinity;
     for (let i = 0; i < n; i++) {
       if (sc.keySteps && !labelled.has(+steps[i])) continue;
       const txt = String(sc.keyLabel ? sc.keyLabel(steps[i]) : +(+steps[i]).toFixed(2));
-      const w = ctx.measureText(txt).width;
-      const cx = sc.discrete ? bx2 + i * seg : bx2 + (i + 0.5) * seg - w / 2;
-      if (cx < lastEnd + 6 * u || cx + w > bx2 + bw2 + 4 * u) continue;
-      ctx.fillText(txt, cx, by2 + bh2 + 17 * u);
-      lastEnd = cx + w;
+      const tw2 = ctx.measureText(txt).width;
+      const cx = sc.discrete ? x + i * seg : x + (i + 0.5) * seg - tw2 / 2;
+      if (cx < lastEnd + 6 * u || cx + tw2 > x + barW + 4 * u) continue;
+      inkText(ctx, txt, cx, by + bh + 18 * u, th.muted, th.halo, 3.5 * u);
+      lastEnd = cx + tw2;
     }
   }
-  return kh;
+  return { h: kh, right: x + w };
 }
 
-/* a key of several kinds on one rate axis (the radar by type): a row of colours for each, labelled,
-   with the rates beneath on a log scale */
-function drawFamiliesKey(ctx, R, u, C, st, foot, pad, ink, sub) {
-  const all = C.scale.families, fams = (C.scale.order || all.map((_, i) => i)).map((i) => all[i]);
-  const LO = 0.05, HI = 40, TICKS = [0.2, 0.5, 1, 2, 4, 8, 16, 30];
-  const rowH = 9 * u, gap = 7 * u, top = 36 * u;
-  const kh = top + fams.length * (rowH + gap) + 18 * u;
-  ctx.font = `700 ${13 * u}px ${FONT}`;
-  const name = `${C.variable}${C.unit ? ` · ${C.unit}` : ''}`;
-  const wName = ctx.measureText(name).width, full = R.w - 2 * pad;
-  const credit = wName + ctx.measureText(C.credit || '').width + 72 * u <= full ? C.credit || '' : C.creditShort || C.credit || '';
-  const wCredit = ctx.measureText(credit).width;
-  const kw = Math.min(full, Math.max(520 * u, wName + wCredit + 72 * u));
-  const kx = R.x + pad, ky = foot - kh;
-  glassPanel(ctx, kx, ky, kw, kh, 22 * u, u, st.glass);
-  ctx.fillStyle = sub;
-  ctx.fillText(fitText(ctx, name, kw - wCredit - 56 * u), kx + 20 * u, ky + 24 * u);
-  ctx.textAlign = 'right';
-  ctx.fillText(credit, kx + kw - 20 * u, ky + 24 * u);
-  ctx.textAlign = 'left';
-  ctx.font = `600 ${12 * u}px ${FONT}`;
-  const labelW = Math.max(...fams.map((f) => ctx.measureText(f.name).width)) + 14 * u;
-  const bx = kx + 20 * u + labelW, bw = kx + kw - 20 * u - bx;
-  const xOf = (r) => bx + (Math.log(r / LO) / Math.log(HI / LO)) * bw;
+/* a key of several kinds on one rate axis (precipitation by type): a stepped row of colours for each,
+   labelled, the rates beneath on a log scale (STRATA UiPrecipKey) */
+function drawFamiliesKey(ctx, R, u, K, foot, M, th) {
+  const all = K.scale.families, fams = (K.scale.order || all.map((_, i) => i)).map((i) => all[i]);
+  const LO = 0.05, HI = 40, TICKS = [0.2, 1, 4, 10, 40];
+  const rowH = 21 * u, barH = 8 * u, titleSize = 18 * u, tickSize = 15 * u;
+  const kh = keyHeight(K, u);
+  ctx.font = `650 ${17 * u}px ${FONT}`;
+  const labW = Math.max(...fams.map((f) => ctx.measureText(f.name).width)) + 14 * u;
+  const barW = Math.max(160 * u, Math.min(R.w - 2 * M - labW - 54 * u, 330 * u));
+  const x = R.x + M, top = foot - kh, w = labW + barW + 46 * u;
+  clearing(ctx, x - 14 * u, top - 10 * u, w + 28 * u, kh + 18 * u, u, th);
+  const tb = top + 15 * u;
+  ctx.font = `650 ${titleSize}px ${FONT}`;
+  const title = fitText(ctx, K.keyTitle || K.variable || '', w);
+  inkText(ctx, title, x, tb, th.ink, th.halo, 4 * u);
+  const bx = x + labW;
+  const xOf = (r) => bx + (Math.log(r / LO) / Math.log(HI / LO)) * barW;
   fams.forEach((f, i) => {
-    const y = ky + top + i * (rowH + gap);
-    ctx.fillStyle = ink;
-    ctx.fillText(f.name, kx + 20 * u, y + rowH);
+    const yc = tb + 12 * u + i * rowH + rowH / 2;
+    ctx.font = `650 ${17 * u}px ${FONT}`;
+    inkText(ctx, f.name, x, yc + 6 * u, th.ink, th.halo, 4 * u);
     ctx.save();
-    roundRect(ctx, bx, y, bw, rowH, rowH / 2);
+    ctx.shadowColor = th.shadow; ctx.shadowBlur = 4 * u; ctx.shadowOffsetY = 1 * u;
+    roundRect(ctx, bx - 1.5 * u, yc - barH / 2 - 1.5 * u, barW + 3 * u, barH + 3 * u, (barH + 3 * u) / 2);
+    ctx.fillStyle = th.casing; ctx.fill();
+    ctx.restore();
+    ctx.save();
+    roundRect(ctx, bx, yc - barH / 2, barW, barH, barH / 2);
     ctx.clip();
-    const N = 160;
+    const N = 140;
     for (let k = 0; k < N; k++) {
-      const c = colourAt({ ...f.scale, floor: null }, LO * (HI / LO) ** ((k + 0.5) / N)) || [80, 90, 100, 255];
+      const c = colourAt({ ...f.scale, floor: null }, LO * (HI / LO) ** ((k + 0.5) / N)) || [120, 130, 140, 255];
       ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
-      ctx.fillRect(bx + (k / N) * bw, y, bw / N + 0.6, rowH);
+      ctx.fillRect(bx + (k / N) * barW, yc - barH / 2, barW / N + 0.6, barH);
     }
     ctx.restore();
   });
-  ctx.fillStyle = ink;
-  const ty = ky + top + fams.length * (rowH + gap) + 8 * u;
-  let lastEnd = -Infinity;
+  const ty = tb + 12 * u + fams.length * rowH + 16 * u;
+  ctx.font = `600 ${tickSize}px ${FONT}`;
   for (const r of TICKS) {
-    const txt = String(r), w = ctx.measureText(txt).width, cx = xOf(r) - w / 2;
-    if (cx < lastEnd + 6 * u || cx + w > bx + bw + 4 * u) continue;
-    ctx.fillText(txt, cx, ty);
-    lastEnd = cx + w;
+    const txt = String(r), tw2 = ctx.measureText(txt).width;
+    inkText(ctx, txt, Math.min(xOf(r) - tw2 / 2, bx + barW - tw2), ty, th.muted, th.halo, 3.5 * u);
   }
-  return kh;
+  inkText(ctx, 'mm/h', bx + barW + 10 * u, ty, th.muted, th.halo, 3.5 * u);
+  return { h: kh, right: x + w };
 }
 
 function roundRect(ctx, x, y, w, h, r) {

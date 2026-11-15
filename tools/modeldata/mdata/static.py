@@ -315,6 +315,72 @@ def styled_basemaps():
     Image.fromarray(rgb.astype(np.uint8)).save(STATIC / 'basemap_light.png', optimize=True)
 
 
+TERRAIN = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'   # AWS Terrain Tiles, keyless
+
+
+def _terrain(lon, lat, z):
+    """Height in metres (the sea floor negative) at each lon/lat, from AWS Terrain Tiles (Mapzen
+    terrarium: SRTM, GMTED, ETOPO1 and others) at zoom z; the tiles are kept on D:."""
+    import concurrent.futures as cf
+    from .common import DATA
+    from nova.io_aws import get
+    n = 2 ** z
+    la = np.radians(np.clip(lat, -85.05, 85.05))
+    tx = (lon + 180.0) / 360.0 * n
+    ty = (1 - np.log(np.tan(la) + 1 / np.cos(la)) / np.pi) / 2 * n
+    x0, x1, y0, y1 = int(np.floor(tx.min())), int(np.floor(tx.max())), int(np.floor(ty.min())), int(np.floor(ty.max()))
+    cache = DATA / 'terrain_tiles' / str(z)
+    cache.mkdir(parents=True, exist_ok=True)
+
+    def tile(xy):
+        x, y = xy
+        f = cache / f'{x % n}_{y}.png'
+        if not f.exists():
+            try:
+                f.write_bytes(get(TERRAIN.format(z=z, x=x % n, y=y), tries=4, timeout=60))
+            except Exception:
+                return xy, None
+        im = np.asarray(Image.open(f).convert('RGB'), np.float32)
+        return xy, im[..., 0] * 256 + im[..., 1] + im[..., 2] / 256 - 32768
+    mosaic = np.zeros(((y1 - y0 + 1) * 256, (x1 - x0 + 1) * 256), np.float32)
+    with cf.ThreadPoolExecutor(16) as ex:
+        for (x, y), h in ex.map(tile, [(x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1)]):
+            if h is not None:
+                mosaic[(y - y0) * 256:(y - y0 + 1) * 256, (x - x0) * 256:(x - x0 + 1) * 256] = h
+    mosaic = ndimage.gaussian_filter(mosaic, 0.6)
+    return ndimage.map_coordinates(mosaic, [(ty - y0) * 256 - 0.5, (tx - x0) * 256 - 0.5], order=1, mode='nearest')
+
+
+def strata_basemap(name='basemap_light.png'):
+    """The light map in the look of the STRATA motion graphics (15 Nov 2026): pale land lit by the
+    real terrain (hills and mountains in relief, a little brighter with height) and a soft blue sea
+    that deepens over the deep water beyond the shelf. Written as basemap_light.png (the page's
+    Light map). Terrain from AWS Terrain Tiles: zoom 7 (~0.7 km) on the UK grid, 5 on the wide one."""
+    lon, lat = _pixel_lonlat()
+    h = _terrain(lon, lat, 7 if GRID == 'uk' else 5)
+    land = land_mask()
+    gy, gx = np.gradient(np.where(land > 0.5, np.maximum(h, 0), 0), DX / SS)
+    slope = np.arctan((2.0 if GRID == 'uk' else 3.5) * np.hypot(gx, gy))
+    aspect = np.arctan2(-gx, gy)
+    alt, az = np.deg2rad(40), np.deg2rad(315)
+    shade = (np.sin(alt) * np.cos(slope) + np.cos(alt) * np.sin(slope) * np.cos(az - aspect)) / np.sin(alt)
+    shade = 0.78 + 0.34 * np.clip(shade, 0.25, 1.35) / 1.35                      # 0.84 (shadow) .. 1.12 (lit)
+    e = np.clip(h / 900.0, 0, 1)[..., None]
+    pk = np.clip((h - 900.0) / 900.0, 0, 1)[..., None]
+    lo, hi, peak = np.array([203, 211, 205], float), np.array([220, 224, 218], float), np.array([238, 240, 238], float)
+    landc = np.clip(((lo * (1 - e) + hi * e) * (1 - pk) + peak * pk) * shade[..., None], 0, 255)
+    d = np.clip(np.log1p(np.clip(-h, 0, None) / 40.0) / np.log1p(4000 / 40.0), 0, 1)[..., None]
+    seac = np.array([186, 209, 230], float) * (1 - d) + np.array([150, 183, 215], float) * d
+    a = land[..., None]
+    rgb = seac * (1 - a) + landc * a
+    STATIC.mkdir(parents=True, exist_ok=True)
+    old = STATIC / 'basemap_light.png'
+    if name == 'basemap_light.png' and old.exists() and not (STATIC / 'basemap_light_v1.png').exists():
+        import shutil
+        shutil.copyfile(old, STATIC / 'basemap_light_v1.png')                    # the old paper map, kept
+    Image.fromarray(rgb.astype(np.uint8)).save(STATIC / name, optimize=True)
+
+
 def main():
     STATIC.mkdir(parents=True, exist_ok=True)
     write_json(STATIC / 'grid.json', grid_meta())
@@ -326,6 +392,7 @@ def main():
     roads()
     basemap()
     styled_basemaps()
+    strata_basemap()
     print('static layers written to', STATIC)
 
 
@@ -333,5 +400,8 @@ if __name__ == '__main__':
     import sys
     if sys.argv[1:] == ['roads']:                  # roads only (the basemaps take minutes)
         print(roads())
+    elif sys.argv[1:2] == ['strata']:              # the light map only (optionally under another name, to look at first)
+        strata_basemap(*sys.argv[2:3])
+        print('written to', STATIC)
     else:
         main()

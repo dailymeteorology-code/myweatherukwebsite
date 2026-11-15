@@ -21,7 +21,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
-  Waves, MapPin, Search, ChevronDown, X, Layers, Star, Minus, Plus, Zap, Route, Grid3x3, Navigation, CloudSun, Cloud,
+  Waves, MapPin, ChevronDown, X, Layers, Star, Minus, Plus, Zap, Route, Grid3x3, Navigation, CloudSun, Cloud,
   Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard, Snowflake,
 } from 'lucide-react';
 import {
@@ -29,7 +29,12 @@ import {
   realtimeBasemap, fmtValue, download, makeGif, makeVideo, canMakeVideo, probFrame, loadLive, loadRoads, loadObserved, WX_NAMES, sampleFrame,
   lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres, splitFrame, drawPanes, withGrid, viewOnGrid, WARN_COLOURS,
   coversMap, SEE_THROUGH, setPalette, scaleSwatch, radarTypeOf, RADAR_FAMILIES,
+  setTone, onWxIcons, probScaleKey, scaleRamp, DISPLAY, INK, ACCENT,
 } from '@/lib/modelViewer';
+import '@/components/modeldata/strata.css';
+import LayerBrowser from '@/components/modeldata/LayerBrowser';
+import Timeline from '@/components/modeldata/Timeline';
+import { LAYER_DESC, POPULAR, probFamily, probLine, categoryOf } from '@/lib/modelLayers';
 import { tweenFrame } from '@/lib/modelTween';
 import { GRIDS, gridOfModel, projection } from '@/lib/modelGrids';
 import { useAuth } from '@/lib/AuthContext';
@@ -40,8 +45,8 @@ import { frostRuns, frostRunName, snowSpans, snowKeyAt, snowOverlay } from '@/li
 import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES, SNOW_AMOUNT_LEVELS, cmText } from '@/lib/frostKey';
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
-const FRAMES = { screen: { label: 'Fit', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe' };
+const FRAMES = { screen: { label: 'Screen', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
+const SHORT_NAMES = { frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix' };
 /* who makes each model, its grid, and where the files come from (picker groups and the credit line) */
 const MODEL_INFO = {
   frost: ['MyWeatherUK', '2 km', 'MyWeatherUK’s own snow model'],
@@ -51,6 +56,8 @@ const MODEL_INFO = {
   ecmwf_ens: ['ECMWF', '0.25°', 'ECMWF open data'], aifs_ens: ['ECMWF', '0.25°', 'ECMWF open data'], gefs: ['NOAA', '0.25°', 'NOAA via AWS'],
   /* DWD ICON-EU: the UK on the 2 km grid, or its whole area (Europe, North Africa, the eastern Atlantic) */
   icon: ['DWD', '6.5 km', 'Source: Deutscher Wetterdienst'], icon_europe: ['DWD', '6.5 km', 'Source: Deutscher Wetterdienst'],
+  /* MWUK Mix: MyWeatherUK's blend of the UKV and ICON-EU on the UKV's 2 km grid (tools/modeldata/mdata/mix.py) */
+  mix: ['MyWeatherUK', '2 km', 'MyWeatherUK blend of the Met Office UKV and DWD ICON-EU'],
 };
 /* where a model's frames are being fetched from, for the loading notices: DWD's own server for ICON */
 const fetchedFrom = (id) => (MODEL_INFO[id]?.[0] === 'DWD' ? 'DWD' : 'AWS');
@@ -64,11 +71,13 @@ const OBS_PANEL_W = 320;                                    // the observed side
 /* the four views: [key, name, what it is] (the phone's view menu says what each one is for) */
 const MODE_INFO = [
   ['forecast', 'Forecast', 'Every model and every layer, run by run'],
-  ['prob', 'Probability', 'The chance of rain, wind, frost and more, from ensembles'],
+  ['prob', 'Chances', 'The chance of rain, wind, frost and more, from ensembles'],
   ['live', 'Live', 'Radar, satellite, lightning and the weather now'],
   ['observed', 'Observed', 'Each day’s highs, lows and totals, kept day by day'],
 ];
-const MODE_SHORT = { forecast: 'Forecast', prob: 'Chance', live: 'Live', observed: 'Observed' };
+const MODE_SHORT = { forecast: 'Forecast', prob: 'Chances', live: 'Live', observed: 'Observed' };
+/* playback speeds, in words (ms per step) */
+const SPEEDS = [[2000, 'Very slow'], [1300, 'Slower'], [900, 'Slow'], [650, 'Steady'], [450, 'Normal'], [300, 'Fast'], [200, 'Faster'], [120, 'Fastest']];
 const londonToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
 /* rain-type layers: these get the cloud overlay and the smoothing that keeps the radar's colour bands crisp */
 const RAINY = new Set(['radar', 'precip_rate', 'rain_rate', 'conv_rain', 'precip_1h', 'refc', 'snow_rate', 'hail_rate']);
@@ -395,9 +404,11 @@ const runDays = (runs) => {
   }
   return out;
 };
+/* a run as its list names it: when it started, how far it reaches, and whether it is the newest */
+const runText = (r, runs) => `${runLabel(r.run)} · T+${r.steps[r.steps.length - 1]}${r.run === runs[0].run ? ' · latest' : ''}`;
 const runOptions = (runs) => runDays(runs).map(([day, rs]) => (
   <optgroup key={day} label={day} style={{ color: '#111' }}>
-    {rs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runLabel(r.run)} · T+{r.steps[r.steps.length - 1]}{r.run === runs[0].run ? ' · latest' : ''}</option>)}
+    {rs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runText(r, runs)}</option>)}
   </optgroup>
 ));
 const runLabel = (iso) => new Date(iso).toLocaleString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', hour: '2-digit' }).replace(',', '') + 'Z';
@@ -408,38 +419,59 @@ function creditOf(m, rn, lead) {
   const who = m.members ? `${m.label} · ${m.members} members` : `${m.id === 'ukv' ? 'UKV' : m.label} ${MODEL_INFO[m.id]?.[1] || ''}`.trim();
   return { credit: `${who}${when} · ${MODEL_INFO[m.id]?.[2] || 'open data'}`, creditShort: `${SHORT_NAMES[m.id] || m.label}${when}` };
 }
+/* the STRATA graphic's badge (15 Nov 2026): the model and its run's hour in white, the lead time in
+   the accent; and the source, as the foot of the frame */
+const runHour = (iso) => `${String(new Date(iso).getUTCHours()).padStart(2, '0')}Z`;
+const badgeOf = (m, rn, lead) => [`${SHORT_NAMES[m.id] || m.label}${rn ? ` ${runHour(rn.run)}` : ''}`.toUpperCase(), lead != null ? `T+${lead}` : ''];
+const sourceOf = (m) => MODEL_INFO[m.id]?.[2] || 'open data';
+/* the line under a live layer's headline */
+const liveLine = (it) => (it.src === 'radar' || it.src === 'radar_type'
+  ? `The Met Office 1 km rain radar, every 15 minutes${it.src === 'radar_type' ? ', each echo typed by the UKV and the station reports' : ''}`
+  : it.src.startsWith('now_') ? 'Now: the UKV corrected by the latest station reports, every 15 minutes'
+    : it.src.startsWith('sat_') ? 'Meteosat imagery from EUMETSAT' : '');
 const imgCache = {};
 const loadImage = (src) => (imgCache[src] ||= new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; }));
 
-/* ── liquid glass, in two tints: the bars follow the map underneath, so text on them stays
-   readable (dark glass over the dark, satellite and real-time maps; light glass over the
-   light map) ── */
-const BLUR = { backdropFilter: 'blur(26px) saturate(185%)', WebkitBackdropFilter: 'blur(26px) saturate(185%)' };
+/* ── STRATA plates (15 Nov 2026), as the motion graphics' light UI (mwuk-graphics src/strata/ui.ts):
+   near-white plates with a fine ink edge and a soft shadow over the Light map, deep-navy plates over
+   the dark, satellite and real-time maps; ink #0B1A31, the accent blue, and what is chosen in navy
+   with white type (STRATA's chipOn). The same values reach the CSS of the layer picker and the
+   timeline as --md-* variables (components/modeldata/strata.css). ── */
+const BLUR = { backdropFilter: 'blur(20px) saturate(165%)', WebkitBackdropFilter: 'blur(20px) saturate(165%)' };
 function mkTheme(light) {
   const glass = light ? {
     ...BLUR,
-    background: 'linear-gradient(140deg, rgba(255,255,255,0.8), rgba(255,255,255,0.62) 55%, rgba(255,255,255,0.74))',
-    border: '1px solid rgba(255,255,255,0.9)',
-    boxShadow: 'inset 0 1px 0 #ffffff, inset 0 -1px 0 rgba(15,23,34,0.04), 0 10px 30px rgba(15,23,34,0.18)',
-    color: '#0f1722',
+    background: 'rgba(250,252,255,0.9)',
+    border: '1px solid rgba(11,26,49,0.09)',
+    boxShadow: '0 1px 2px rgba(11,26,49,0.08), 0 10px 30px rgba(11,26,49,0.16)',
+    color: INK,
   } : {
     ...BLUR,
-    background: 'linear-gradient(140deg, rgba(58,72,96,0.5), rgba(18,26,40,0.48) 55%, rgba(36,48,68,0.52))',
-    border: '1px solid rgba(255,255,255,0.16)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3), inset 0 -1px 0 rgba(255,255,255,0.05), 0 12px 32px rgba(0,0,0,0.38)',
-    color: '#f5f7fa',
+    background: 'rgba(12,19,32,0.84)',
+    border: '1px solid rgba(255,255,255,0.14)',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.3), 0 12px 32px rgba(0,0,0,0.42)',
+    color: '#F5F8FC',
   };
-  return light ? {
-    light, glass, capsule: { ...glass, borderRadius: 999 }, ink: '#0f1722', ink2: 'rgba(15,23,34,0.58)', ink3: 'rgba(15,23,34,0.84)',
-    track: 'rgba(15,23,34,0.07)', trackShadow: 'inset 0 1px 2px rgba(15,23,34,0.12)', idle: 'rgba(15,23,34,0.06)',
-    on: 'linear-gradient(180deg, #ffffff, #eef2f7)', onShadow: '0 1px 3px rgba(15,23,34,0.2), inset 0 1px 0 #ffffff',
-    chip: 'rgba(15,23,34,0.06)', chipShadow: 'inset 0 1px 0 rgba(255,255,255,0.6)', btn: 'rgba(15,23,34,0.09)', line: 'rgba(15,23,34,0.1)',
+  const t = light ? {
+    light, glass, capsule: { ...glass, borderRadius: 999 }, ink: INK, ink2: 'rgba(11,26,49,0.62)', ink3: 'rgba(11,26,49,0.84)', faint: 'rgba(11,26,49,0.42)',
+    track: 'rgba(11,26,49,0.055)', trackShadow: 'inset 0 0 0 1px rgba(11,26,49,0.06)', idle: 'rgba(11,26,49,0.05)',
+    on: INK, onInk: '#FFFFFF', onShadow: '0 2px 6px rgba(11,26,49,0.25)',
+    chip: 'rgba(11,26,49,0.055)', chipShadow: 'none', btn: 'rgba(11,26,49,0.08)', line: 'rgba(11,26,49,0.1)', accent: ACCENT,
   } : {
-    light, glass, capsule: { ...glass, borderRadius: 999 }, ink: '#f5f7fa', ink2: 'rgba(240,244,250,0.64)', ink3: 'rgba(240,244,250,0.86)',
-    track: 'rgba(0,0,0,0.24)', trackShadow: 'inset 0 1px 2px rgba(0,0,0,0.35)', idle: 'rgba(0,0,0,0.2)',
-    on: 'linear-gradient(180deg, rgba(255,255,255,0.3), rgba(255,255,255,0.14))', onShadow: 'inset 0 1px 0 rgba(255,255,255,0.45), 0 2px 8px rgba(0,0,0,0.25)',
-    chip: 'rgba(255,255,255,0.08)', chipShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)', btn: 'rgba(255,255,255,0.18)', line: 'rgba(255,255,255,0.12)',
+    light, glass, capsule: { ...glass, borderRadius: 999 }, ink: '#F5F8FC', ink2: 'rgba(228,236,247,0.68)', ink3: 'rgba(236,242,250,0.88)', faint: 'rgba(228,236,247,0.44)',
+    track: 'rgba(255,255,255,0.07)', trackShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)', idle: 'rgba(255,255,255,0.07)',
+    on: '#F5F8FC', onInk: INK, onShadow: '0 2px 8px rgba(0,0,0,0.35)',
+    chip: 'rgba(255,255,255,0.08)', chipShadow: 'none', btn: 'rgba(255,255,255,0.14)', line: 'rgba(255,255,255,0.12)', accent: '#4DA3FF',
   };
+  t.vars = {
+    '--md-ink': t.ink, '--md-sub': t.ink3, '--md-muted': t.ink2, '--md-faint': t.faint, '--md-plate': glass.background, '--md-stroke': light ? 'rgba(11,26,49,0.1)' : 'rgba(255,255,255,0.14)',
+    '--md-shadow-big': light ? '0 2px 6px rgba(11,26,49,0.08), 0 24px 60px rgba(11,26,49,0.22)' : '0 24px 60px rgba(0,0,0,0.5)',
+    '--md-track': t.track, '--md-track-strong': light ? 'rgba(11,26,49,0.12)' : 'rgba(255,255,255,0.16)', '--md-hover': light ? 'rgba(11,26,49,0.06)' : 'rgba(255,255,255,0.08)',
+    '--md-on': t.on, '--md-on-ink': t.onInk, '--md-card': light ? '#FFFFFF' : 'rgba(255,255,255,0.05)', '--md-accent': t.accent,
+    '--md-accent-soft': light ? 'rgba(10,111,219,0.09)' : 'rgba(77,163,255,0.16)', '--md-casing': light ? '#FFFFFF' : 'rgba(0,0,0,0.5)',
+    '--md-line': t.line, '--md-lift': light ? 'rgba(11,26,49,0.14)' : 'rgba(0,0,0,0.4)', '--md-past': light ? 'rgba(11,26,49,0.38)' : 'rgba(255,255,255,0.5)',
+  };
+  return t;
 }
 const THEMES = { dark: mkTheme(false), light: mkTheme(true) };
 const ThemeCtx = React.createContext(THEMES.dark);
@@ -448,13 +480,13 @@ function Seg({ items, value, onChange, small }) {
   const t = React.useContext(ThemeCtx);
   return (
     <div style={{ display: 'inline-flex', padding: 3, gap: 2, borderRadius: 999, background: t.track, boxShadow: t.trackShadow }}>
-      {items.map(([k, label]) => {
+      {items.map(([k, label, tip]) => {
         const on = k === value;
         return (
-          <button key={k} onClick={() => onChange(k)} style={{
+          <button key={k} onClick={() => onChange(k)} title={tip} aria-pressed={on} style={{
             border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: small ? 11.5 : 12.5, fontWeight: 650, letterSpacing: '-0.01em',
-            padding: small ? '5px 9px' : '6px 12px', borderRadius: 999, whiteSpace: 'nowrap', transition: 'all .18s ease',
-            color: on ? t.ink : t.ink2, background: on ? t.on : 'transparent', boxShadow: on ? t.onShadow : 'none',
+            padding: small ? '5px 10px' : '6px 13px', borderRadius: 999, whiteSpace: 'nowrap', transition: 'all .18s ease',
+            color: on ? t.onInk : t.ink2, background: on ? t.on : 'transparent', boxShadow: on ? t.onShadow : 'none',
           }}>{label}</button>
         );
       })}
@@ -466,19 +498,8 @@ function IconBtn({ on, title, onClick, children, style }) {
   return (
     <button title={title} aria-label={title} onClick={onClick} style={{
       border: 'none', cursor: 'pointer', width: 32, height: 32, borderRadius: 999, display: 'grid', placeItems: 'center',
-      color: on ? t.ink : t.ink2, background: on ? t.on : t.idle, boxShadow: on ? t.onShadow : t.trackShadow, ...style,
+      color: on ? t.onInk : t.ink3, background: on ? t.on : t.idle, boxShadow: on ? t.onShadow : t.trackShadow, ...style,
     }}>{children}</button>
-  );
-}
-/* a labelled on/off pill */
-function Pill({ on, onClick, icon, children, title }) {
-  const t = React.useContext(ThemeCtx);
-  return (
-    <button title={title} aria-pressed={!!on} onClick={onClick} style={{
-      border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: 11.5, fontWeight: 700, padding: '0 11px', height: 32, borderRadius: 999,
-      display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
-      color: on ? t.ink : t.ink2, background: on ? t.on : t.idle, boxShadow: on ? t.onShadow : t.trackShadow,
-    }}>{icon}{children}</button>
   );
 }
 /* one row of the Layers panel: icon, name, a note, and a switch (locked when the layer on
@@ -490,13 +511,13 @@ function LayerRow({ icon, label, note, on, onClick, locked }) {
       all: 'unset', boxSizing: 'border-box', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '7px 8px', borderRadius: 12,
       cursor: locked ? 'default' : 'pointer', opacity: locked ? 0.75 : 1,
     }}>
-      <span style={{ width: 28, height: 28, borderRadius: 999, display: 'grid', placeItems: 'center', flexShrink: 0, background: on ? t.on : t.idle, boxShadow: on ? t.onShadow : 'none', color: on ? t.ink : t.ink2 }}>{icon}</span>
+      <span style={{ width: 28, height: 28, borderRadius: 999, display: 'grid', placeItems: 'center', flexShrink: 0, background: on ? t.on : t.idle, boxShadow: on ? t.onShadow : 'none', color: on ? t.onInk : t.ink2 }}>{icon}</span>
       <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: t.ink }}>{label}</span>
         {note && <span style={{ display: 'block', fontSize: 11, color: t.ink2, marginTop: 1 }}>{note}</span>}
       </span>
       <span style={{ width: 34, height: 20, borderRadius: 999, flexShrink: 0, position: 'relative', transition: 'background .18s',
-        background: on ? (t.light ? '#1f6fe0' : 'rgba(110,180,255,0.75)') : t.track, boxShadow: t.trackShadow }}>
+        background: on ? t.accent : t.track, boxShadow: t.trackShadow }}>
         <span style={{ position: 'absolute', top: 2, left: on ? 16 : 2, width: 16, height: 16, borderRadius: 999, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', transition: 'left .18s' }} />
       </span>
     </button>
@@ -647,8 +668,14 @@ export default function ModelData() {
   const [thrText, setThrText] = useState('50');
   useEffect(() => { setThrText((t) => (parseFloat(t) === thr ? t : fmtThr(thr))); }, [thr]);
   const nudge = (k) => setThr((v) => Math.round((v + k * preset.step) * 1000) / 1000);
-  const [style, setStyle] = useState(MAP_STYLES[prefs.style] ? prefs.style : 'dark');
+  /* The Light map (the STRATA look) is where everyone starts since the redesign of 15 Nov 2026: a choice
+     saved before it (prefs without ui: 2, when Dark was the default) is put to Light once. */
+  const [style, setStyle] = useState(prefs.ui === 2 && MAP_STYLES[prefs.style] ? prefs.style : 'light');
   const T = THEMES[style === 'light' ? 'light' : 'dark'];
+  /* the colour scales for the map's tone (cloud as a grey veil on the light map), set during render
+     like the palette, so the layers made below already use them; put back when the page closes */
+  setTone(MAP_STYLES[style]?.glass === 'light' ? 'light' : 'dark');
+  useEffect(() => () => setTone('dark'), []);
   const [frameKey, setFrameKey] = useState(FRAMES[prefs.frameKey] ? prefs.frameKey : 'screen');
   const [view, setView] = useState(null);
   const [interacting, setInteracting] = useState(false);        // the map is being dragged or zoomed
@@ -694,7 +721,7 @@ export default function ModelData() {
   const [exp, setExp] = useState({ open: false, png: 1080, gif: 720, video: 1080, fps: 60, smooth: true, from: 0, to: null, busy: null, job: null, err: null });
   useEffect(() => {
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours,
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ ui: 2, mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours,
         showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, strikeStyle, ov, sn, msl, wn, cmp, extras: extrasBy, layerAlpha, palette }));
     } catch { /* private window: nothing to remember */ }
   }, [mode, modelId, varKey, liveKey, obsKey, style, frameKey, speed, smooth, showContours, showCities, showStar, showRoads, showGrid, showArrows, showWx, showClouds, showLightning, msl,
@@ -828,15 +855,14 @@ export default function ModelData() {
     return () => window.removeEventListener('resize', measure);
   }, []);
 
-  /* the graphic's typeface, so the canvas, the PNG and the GIF all use it */
+  /* the graphic's typefaces, so the canvas, the PNG, the GIF and the video all use them: the motion
+     graphics' own Inter and Inter Tight (public/fonts, @font-face in strata.css), loaded before the
+     first draw that needs them; the map is drawn again as they arrive, and as each weather icon does */
   useEffect(() => {
-    if (!document.getElementById('md-inter')) {
-      const l = document.createElement('link');
-      l.id = 'md-inter'; l.rel = 'stylesheet';
-      l.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap';
-      document.head.appendChild(l);
-    }
-    Promise.all(['400', '600', '700', '800'].map((w) => document.fonts.load(`${w} 20px Inter`))).then(() => setFontsOk((n) => n + 1)).catch(() => {});
+    const faces = ['500 20px Inter', '600 20px Inter', '650 20px Inter', '700 20px Inter', '650 20px "Inter Tight"', '760 20px "Inter Tight"'];
+    Promise.all(faces.map((f) => document.fonts.load(f))).then(() => setFontsOk((n) => n + 1)).catch(() => {});
+    onWxIcons(() => setFontsOk((n) => n + 1));
+    return () => onWxIcons(null);
   }, []);
 
   /* catalogue + static layers */
@@ -898,7 +924,8 @@ export default function ModelData() {
     : isProb
       ? { label: `Chance of ${preset.label.toLowerCase()} ${dir === 'below' ? '≤' : '≥'} ${fmtThr(thr)}${fmeta?.unit ? ` ${fmeta.unit}` : ''}`, unit: '%', group: preset.group }
       : cat?.variables?.[varKey]), [isObs, obsItem, isLive, liveItem, isProb, preset, dir, thr, fmeta, cat, varKey]);
-  const scaleKey = isObs ? obsItem.scale : isLive ? (liveItem.scale || (liveItem.src === 'radar' ? 'radar' : liveKey)) : isProb ? 'prob' : varKey;
+  /* a chance is coloured by what it is about (snow in the snow-chance colours, rain in blues …) */
+  const scaleKey = isObs ? obsItem.scale : isLive ? (liveItem.scale || (liveItem.src === 'radar' ? 'radar' : liveKey)) : isProb ? probScaleKey(probFamily(preset)) : varKey;
 
   useEffect(() => {
     if (timeSteps) return;
@@ -1051,7 +1078,7 @@ export default function ModelData() {
   const varB = !modelB || isProb ? null : cmp.v && modelB.variables.includes(cmp.v) ? cmp.v
     : modelB.variables.includes(varKey) ? varKey : modelB.variables.includes('precip_rate') ? 'precip_rate' : modelB.variables[0];
   const fieldB = isProb ? preset.field : varB;
-  const scaleB = isProb ? 'prob' : varB;
+  const scaleB = isProb ? probScaleKey(probFamily(preset)) : varB;
   const gridB = modelB ? gridOfModel(modelB.id) : gridName;
   const wantStepB = useRef(0);
   const dataB = useRunFrames(modelB, runB, fieldB, wantStepB, !!modelB);
@@ -1342,7 +1369,7 @@ export default function ModelData() {
   const addExtra = (v) => setExtrasBy((o) => (o[mode].length >= MAX_EXTRA ? o : { ...o, [mode]: [...o[mode], { v, place: coversMap(extraScale(v)) ? 'under' : 'over', alpha: coversMap(extraScale(v)) ? 1 : 0.8 }] }));
   /* the field behind a layer's name in each view, its colours, and what its key says */
   const extraField = (v) => (isProb ? PRESET[v]?.field : isLive ? LIVE[v]?.src : v);
-  const extraScale = (v) => (isObs ? OBS[v]?.scale : isLive ? LIVE[v]?.scale || (LIVE[v]?.src === 'radar' ? 'radar' : v) : isProb ? 'prob' : v);
+  const extraScale = (v) => (isObs ? OBS[v]?.scale : isLive ? LIVE[v]?.scale || (LIVE[v]?.src === 'radar' ? 'radar' : v) : isProb ? probScaleKey(probFamily(PRESET[v])) : v);
   const extraMeta = (v) => (isObs ? { label: OBS[v]?.label, unit: OBS[v]?.unit }
     : isLive ? { label: LIVE[v]?.label, unit: RADARS.has(LIVE[v]?.src) ? 'mm/h' : NOW_UNITS[LIVE[v]?.src] ?? '' }
     : isProb ? { label: `Chance of ${(PRESET[v]?.label || '').toLowerCase()} ${PRESET[v]?.dir === 'below' ? '≤' : '≥'} ${fmtThr(PRESET[v]?.thr ?? 0)}${cat?.ens_fields?.[PRESET[v]?.field]?.unit ? ` ${cat.ens_fields[PRESET[v].field].unit}` : ''}`, unit: '%' }
@@ -1386,12 +1413,21 @@ export default function ModelData() {
   const credit = !model || !timeSteps ? '' : isObs
     ? (['precip_total', 'rain_rate_max'].includes(obsKey) ? 'Met Office radar via AWS' : 'UKV analysis + METAR station reports')
     : (liveItem.src === 'radar' ? 'Met Office radar via AWS' : liveItem.src === 'radar_type' ? 'Met Office radar via AWS · type from UKV + METAR' : liveItem.src.startsWith('now_') ? 'UKV + METAR + Met Office radar' : liveProd?.source?.startsWith('Meteosat') ? `${liveProd.source} · EUMETSAT` : 'EUMETSAT');
+  /* the line under the headline and the badge, for the STRATA graphic */
+  const radarObs = ['precip_total', 'rain_rate_max'].includes(obsKey);
+  const chromeSub = isProb ? probLine(preset, dir, fmtThr(thr), fmeta?.unit, model?.members)
+    : isObs ? (radarObs ? 'Observed: the Met Office radar’s own record of the day' : 'Observed: the UKV analysed every 15 minutes with the station reports')
+      : isLive ? liveLine(liveItem) : LAYER_DESC[varKey] || '';
+  const timeBadge = isObs ? (radarObs ? 'MET OFFICE RADAR' : 'UKV + STATIONS')
+    : isLive ? (liveItem.src.startsWith('sat_') ? 'METEOSAT' : liveItem.src.startsWith('now_') ? 'UKV + STATIONS' : 'MET OFFICE RADAR') : null;
   const chromeFor = useCallback((f) => (f && model && vmeta ? {
     variable: underMeta ? `${vmeta.label} · colours: ${underMeta.label.toLowerCase()}` : vmeta.label, unit: underMeta ? underMeta.unit : vmeta.unit,
     valid: f.head.valid, logo: statics?.logo, ...(timeSteps ? { credit } : creditOf(model, run, f.head.step)),
     scale: underMeta ? scaleFor(underVar) : (isLive && liveItem.src.startsWith('sat_')) || ['wdir10', 'mwd'].includes(scaleKey) ? {} : scaleFor(scaleKey),
     dayOnly: isObs,
-  } : null), [model, vmeta, run, scaleKey, statics, credit, isLive, isObs, liveItem, timeSteps, underMeta, underVar]);
+    sub: chromeSub, source: timeSteps ? credit : sourceOf(model),
+    badge: timeSteps ? [timeBadge, isObs ? 'OBSERVED' : 'LIVE'] : badgeOf(model, run, f.head.step),
+  } : null), [model, vmeta, run, scaleKey, statics, credit, isLive, isObs, liveItem, timeSteps, underMeta, underVar, chromeSub, timeBadge]);
   const metaB = !modelB ? null : isProb ? vmeta : cat?.variables?.[varB];
   /* the second window's: with nothing to show at this time, the time and a word saying why */
   const chromeForB = useCallback((f, ms) => {
@@ -1403,8 +1439,9 @@ export default function ModelData() {
       variable: underMetaB ? `${metaB.label} · colours: ${underMetaB.label.toLowerCase()}` : metaB.label, unit: underMetaB ? underMetaB.unit : metaB.unit,
       valid: f ? f.head.valid : new Date(ms).toISOString(), logo: staticsBy[gridB]?.logo, ...creditOf(modelB, runB, f?.head.step), notice,
       scale: underMetaB ? scaleFor(underVarB) : ['wdir10', 'mwd'].includes(scaleB) ? {} : scaleFor(scaleB),
+      sub: isProb ? chromeSub : LAYER_DESC[varB] || '', source: sourceOf(modelB), badge: badgeOf(modelB, runB, f?.head.step),
     };
-  }, [modelB, metaB, runB, runMsB, stepsB, fieldB, scaleB, isProb, preset, underMetaB, underVarB, staticsBy, gridB]);
+  }, [modelB, metaB, runB, runMsB, stepsB, fieldB, scaleB, isProb, preset, underMetaB, underVarB, staticsBy, gridB, chromeSub, varB]);
 
   /* what each window draws: its layer, what it has switched on, and the companions it can read them from */
   const cachesA = useMemo(() => ({ colour: colourCache.current, contour: contourCache.current, smooth: smoothCache.current, overlay: overlayCache.current,
@@ -1497,6 +1534,7 @@ export default function ModelData() {
       style, basemap: basemapFor(raw, gridName, ms), lines: st?.lines, cities: showCities ? st?.cities : null, roads: showRoads ? roadsBy[gridName] || null : null, smooth,
       warnings: { alpha: 1, look: 'fill', labels: true, areas },
       chrome: ms == null ? null : { variable: 'Met Office warnings', valid: new Date(ms).toISOString(), logo: st?.logo, dayOnly: isObs, credit: isObs ? 'In force that day' : 'In force at this time',
+        badge: ['MET OFFICE', 'WARNINGS'], sub: isObs ? 'The weather warnings in force that day' : 'The weather warnings in force at the time on show',
         warnList: warnData ? areas.filter((w) => (w.fade ?? 1) > 0.5).reverse().map((w) => ({ severity: w.severity, type: w.text, when: warnWhen(w) })) : [], notice: warnData ? null : 'Loading the warnings…' },
     };
   }, [staticsBy, gridName, warningsAt, isObs, style, basemapFor, showCities, showRoads, roadsBy, smooth, warnData]);
@@ -1583,7 +1621,8 @@ export default function ModelData() {
       });
     } else drawScene(ctx, R, view, { ...L, ...plain }, { clip: full, coarse: true, cache: true });
     ctx.save();
-    ctx.fillStyle = 'rgba(3,6,12,0.62)';
+    // beyond the frame: frosted on the light map, dimmed on the dark ones
+    ctx.fillStyle = T.light ? 'rgba(226,234,243,0.74)' : 'rgba(3,6,12,0.62)';
     ctx.beginPath();
     ctx.rect(0, 0, c.width, c.height);
     const r = 18 * (c.width / Math.max(1, stageRef.current.clientWidth));
@@ -1593,7 +1632,7 @@ export default function ModelData() {
     if (S) drawPanes(ctx, R, S, { round: r, cache: true, interacting });
     else drawScene(ctx, R, view, { ...L, interacting }, { round: r, cache: true });
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.strokeStyle = T.light ? 'rgba(11,26,49,0.14)' : 'rgba(255,255,255,0.22)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect ? ctx.roundRect(R.x + 0.5, R.y + 0.5, R.w - 1, R.h - 1, r) : ctx.rect(R.x, R.y, R.w, R.h);
@@ -1611,7 +1650,7 @@ export default function ModelData() {
       }
     }
     ctx.restore();
-  }, [view, frame, layersFor, paneA, windowsFor, kindB, gridName, frameRect, interacting, pin]);
+  }, [view, frame, layersFor, paneA, windowsFor, kindB, gridName, frameRect, interacting, pin, T]);
 
   /* playback */
   useEffect(() => {
@@ -1893,34 +1932,34 @@ export default function ModelData() {
     };
   }
 
-  const groups = useMemo(() => {
+  /* every layer this view offers, for the layer picker (components/modeldata/LayerBrowser): its name,
+     its group, one line saying what it shows, its unit, and its colours as the map draws them (in the
+     tone and palette on show) */
+  const browserItems = useMemo(() => {
     if (!model || !cat) return [];
-    const g = {};
-    const qq = q.trim().toLowerCase();
+    const ramp = (sk) => { try { return sk ? scaleRamp(sk) : null; } catch { return null; } };
     if (isObs) {
-      for (const it of OBS_LIST) {
-        if (!qq || it.label.toLowerCase().includes(qq) || it.group.toLowerCase().includes(qq)) (g[it.group] ||= []).push([it.key, it]);
-      }
-      return Object.entries(g);
+      return OBS_LIST.map((it) => ({ key: it.key, label: it.label, group: it.group, unit: it.unit, ramp: ramp(it.scale),
+        desc: ['precip_total', 'rain_rate_max'].includes(it.key) ? 'From the Met Office radar, day by day' : 'From the UKV analysed every 15 minutes with the station reports' }));
     }
     if (isLive) {
-      for (const it of LIVE_LIST) {
-        if (!qq || it.label.toLowerCase().includes(qq) || it.group.toLowerCase().includes(qq)) (g[it.group] ||= []).push([it.key, it]);
-      }
-      return Object.entries(g);
+      return LIVE_LIST.map((it) => ({ key: it.key, label: it.label, group: it.group, desc: liveLine(it),
+        unit: RADARS.has(it.src) ? 'mm/h' : NOW_UNITS[it.src] ?? '', ramp: it.src.startsWith('sat_') ? null : ramp(it.scale || (it.src === 'radar' ? 'radar' : it.key)) }));
     }
     if (isProb) {
-      for (const pr of PRESETS) {
-        if (model.fields.includes(pr.field) && (!qq || pr.label.toLowerCase().includes(qq) || pr.group.toLowerCase().includes(qq))) (g[pr.group] ||= []).push([pr.key, pr]);
-      }
-      return Object.entries(g);
+      return PRESETS.filter((pr) => model.fields.includes(pr.field)).map((pr) => {
+        const unit = cat.ens_fields?.[pr.field]?.unit || '';
+        return { key: pr.key, label: pr.label, group: pr.group, unit: '%', ramp: ramp(probScaleKey(probFamily(pr))),
+          desc: `The chance of ${pr.dir === 'below' ? 'at most' : 'at least'} ${fmtThr(pr.thr)}${unit ? ` ${unit}` : ''}; move the slider to ask another` };
+      });
     }
-    for (const k of model.variables) {
-      const v = cat.variables[k];
-      if (v && (!qq || v.label.toLowerCase().includes(qq) || v.group.toLowerCase().includes(qq))) (g[v.group] ||= []).push([k, v]);
-    }
-    return GROUP_ORDER.filter((n) => g[n]).map((n) => [n, g[n]]);
-  }, [model, cat, q, isProb, isLive, isObs]);
+    const vars = model.variables.filter((k) => cat.variables[k]);
+    const order = [...GROUP_ORDER, ...new Set(vars.map((k) => cat.variables[k].group).filter((g) => !GROUP_ORDER.includes(g)))];
+    return order.flatMap((g) => vars.filter((k) => cat.variables[k].group === g).map((k) => ({
+      key: k, label: cat.variables[k].label, group: g, unit: cat.variables[k].unit, desc: LAYER_DESC[k] || '', ramp: ['wdir10', 'mwd'].includes(k) ? null : ramp(k),
+    })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, cat, isProb, isLive, isObs, style, palette]);
   const pending = key && status && status.state !== 'complete' ? Math.max(0, steps.length - loadedCount) : 0;
   /* a new set of steps starts the export range afresh */
   useEffect(() => { setExp((e) => (e.from || e.to != null ? { ...e, from: 0, to: null } : e)); }, [mode, key, liveSrc, obsKey]);
@@ -1938,6 +1977,7 @@ export default function ModelData() {
   /* one value, as this layer reads: a weather type, a direction, or a number with its unit */
   const fmtPoint = (v, sk = scaleKey, meta = vmeta) => (!Number.isFinite(v) ? '—' : sk === 'wx' ? WX_NAMES[Math.round(v)] ?? '—'
     : sk === 'snow_risk' ? `${SNOW_RISK_NAMES[Math.round(v)] ?? '—'} risk of snow`
+    : sk === 'snow_cond' ? `${['None', 'Very low', 'Low', 'Moderate', 'High', 'Very high'][Math.round(v)] ?? '—'} snow risk (conditions)`
     : sk === 'ptype' || sk === 'radar_type' ? (() => { const t = radarTypeOf(v); return t ? `${RADAR_FAMILIES[t.family].name} · ${fmtValue(t.rate, 'mm/h')}` : 'Dry'; })()
     : sk === 'wdir10' || sk === 'mwd' ? `from the ${compass(v)} · ${Math.round(v)}°` : fmtValue(v, meta?.unit));
 
@@ -1967,17 +2007,28 @@ export default function ModelData() {
     : isLive ? (liveTime ? `Live · latest ${liveTime}` : 'Live · starting…')
     : model ? `${SHORT_NAMES[model.id] || model.label} · ${MODEL_INFO[model.id]?.[1] || ''}${run ? ` · run ${runLabel(run.run)}` : ''}` : 'Loading…';
 
+  /* the layer on show as the picker's button: its category's icon on a navy badge and its name */
+  const layerIcon = categoryOf((isObs ? obsItem.group : isLive ? liveItem.group : isProb ? preset.group : vmeta?.group) || '').icon;
+  const layerBadge = <span className="mdb-badge" aria-hidden="true"><img src={`/icons/wx/${layerIcon}.svg`} alt="" draggable={false} /></span>;
+  /* desktop: the layer as the top bar's last field, in navy: LAYER above its name, its icon beside */
   const varButton = (
-    <button onClick={() => { setVarOpen((o) => !o); setQ(''); setMapOpen(false); }} style={{ ...sel, padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0, background: varOpen ? T.btn : sel.background }}>
-      {layerLabel} <ChevronDown style={{ width: 14, height: 14, opacity: 0.7, transform: varOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+    <button className="md-layer-btn md-field-layer" onClick={() => { setVarOpen((o) => !o); setQ(''); setMapOpen(false); setCmpOpen(false); }} aria-expanded={varOpen}
+      aria-label={`Layer: ${layerLabel}. Choose another`} title="Choose what the map shows">
+      {layerBadge}
+      <span style={{ minWidth: 0 }}>
+        <span className="md-field-lab">Layer</span>
+        <span className="md-field-val">{layerLabel}</span>
+      </span>
+      <ChevronDown className="md-field-chev" />
     </button>
   );
   /* phones and tablets: one chip names the layer and where it comes from; tap for models, runs and layers */
   const dataChip = (
-    <button onClick={() => openPanel('data')} aria-label="Choose the model, run and layer" style={{ ...sel, flex: 1, minWidth: 0, padding: '5px 12px 5px 14px', display: 'flex', alignItems: 'center', gap: 8,
+    <button className="md-layer-btn" onClick={() => openPanel('data')} aria-label="Choose the model, run and layer" style={{ ...sel, flex: 1, minWidth: 0, padding: '5px 12px 5px 5px', display: 'flex', alignItems: 'center', gap: 9,
       textAlign: 'left', background: varOpen ? T.btn : sel.background }}>
+      {layerBadge}
       <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: 'block', fontSize: 13, fontWeight: 800, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{layerLabel}</span>
+        <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{layerLabel}</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: err && !cat ? '#fca5a5' : T.ink2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {isLive && liveTime && <span style={{ width: 6, height: 6, borderRadius: 99, background: '#ff4d4f', boxShadow: '0 0 6px #ff4d4f', flexShrink: 0 }} />}
           {!cat && !err && <Loader2 className="animate-spin" style={{ width: 11, height: 11, flexShrink: 0 }} />}
@@ -1987,7 +2038,7 @@ export default function ModelData() {
       <ChevronDown style={{ width: 16, height: 16, opacity: 0.7, flexShrink: 0, transform: varOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
     </button>
   );
-  const modeSeg = <Seg items={MODE_INFO.map(([k, l]) => [k, l])} value={mode} onChange={setModeTo} />;
+  const modeSeg = <Seg items={MODE_INFO} value={mode} onChange={setModeTo} />;
   const modeBtn = (
     <button onClick={() => openPanel('mode')} aria-label="Change view" style={{ ...sel, padding: '0 10px 0 13px', height: 42, display: 'flex', alignItems: 'center', gap: 4, fontWeight: 800,
       flexShrink: 0, background: modeOpen ? T.btn : sel.background }}>
@@ -2000,12 +2051,6 @@ export default function ModelData() {
   const styleSeg = <Seg small items={Object.entries(MAP_STYLES).map(([k, s]) => [k, s.label])} value={style} onChange={setStyle} />;
   const frameSeg = <Seg small items={Object.entries(FRAMES).map(([k, f]) => [k, f.label])} value={frameKey} onChange={setFrameKey} />;
   const sectionTitle = (t) => <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '4px 4px 7px' }}>{t}</div>;
-  /* only the UK grid's cells are the model's or radar's real cells: the wide grid's always interpolate */
-  const smoothPill = gridName === 'uk' && (
-    <Pill on={smooth} title={smooth ? 'Smoothed: click to see the radar and model cells as they are' : 'Cells as they are: click to smooth'} onClick={() => setSmooth((x) => !x)}>
-      {smooth ? 'Smooth' : 'Pixels'}
-    </Pill>
-  );
   /* under the Lightning switch: the strikes' colours and outline */
   const subRow = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11.5, color: T.ink2, fontWeight: 650 };
   const swatch = (value, onChange, title) => (
@@ -2243,9 +2288,6 @@ export default function ModelData() {
   );
   const layerRows = (
     <div style={{ display: 'grid', gap: 1 }}>
-      {colourControls}
-      {stackControls}
-      <div style={{ height: 1, background: T.line, margin: '2px 4px 6px' }} />
       <LayerRow icon={<MapPin size={14} />} label="Places" note={wxOn ? 'shown with the weather symbols' : null} on={showCities || wxOn} locked={wxOn} onClick={() => setShowCities((x) => !x)} />
       {canWx && <LayerRow icon={<CloudSun size={14} />} label="Weather symbols" note={ownWx ? 'part of this layer' : 'above the places; sun or moon by the real sun'} on={wxOn} locked={ownWx} onClick={() => setShowWx((x) => !x)} />}
       {canArrows && <LayerRow icon={<Navigation size={14} />} label="Wind arrows" note={ownArrows ? 'part of this layer' : 'the way the wind is blowing'} on={arrowsOn} locked={ownArrows} onClick={() => setShowArrows((x) => !x)} />}
@@ -2272,31 +2314,82 @@ export default function ModelData() {
       )}
     </div>
   );
+  /* the Map panel, on every device: the map's look first, then what is drawn on it, then the finer
+     settings (layers over and under, the colours, smoothing) */
+  const mapBody = (
+    <div style={{ display: 'grid' }}>
+      <div className="md-sec">
+        <span className="md-sec-t">Map style</span>
+        <div className="md-noscroll" style={{ overflowX: 'auto' }}>{styleSeg}</div>
+      </div>
+      <div className="md-sec">
+        <span className="md-sec-t">Show on the map</span>
+        {layerRows}
+      </div>
+      <div className="md-sec" style={{ gap: 4 }}>
+        {stackControls}
+        {colourControls}
+        {/* only the UK grid's cells are the model's or radar's real cells: the wide grid's always interpolate */}
+        {gridName === 'uk' && (
+          <LayerRow icon={<Waves size={14} />} label="Smooth the data" note={smooth ? 'blended between the model and radar cells' : 'every model and radar cell as it is'}
+            on={smooth} onClick={() => setSmooth((x) => !x)} />
+        )}
+      </div>
+    </div>
+  );
+  /* the map's own settings (its style, what is drawn on it, the colours) behind one button, named
+     plainly so it is never confused with the layer picker */
   const layersBtn = (
-    <Pill on={mapOpen} title="Layers: places, symbols, arrows, warnings, roads, grid…" onClick={() => { if (narrow) openPanel('layers'); else { setCmpOpen(false); setMapOpen((o) => !o); } }} icon={<Layers size={14} />}>
-      Layers{layerCount ? ` · ${layerCount}` : ''}
-    </Pill>
+    <button type="button" className="md-act" aria-pressed={mapOpen} title="The map: its style, and what is drawn on it (places, warnings, lightning, roads…)"
+      onClick={() => { if (narrow) openPanel('layers'); else { setCmpOpen(false); setVarOpen(false); setMapOpen((o) => !o); } }}>
+      <Layers size={16} />Map{layerCount ? <span className="md-act-count" aria-label={`${layerCount} on`}>{layerCount}</span> : null}
+    </button>
   );
   const compareBtn = (
-    <Pill on={cmpOpen || cmp.on} title="Two windows: compare runs, or the warnings beside a layer" onClick={() => { if (narrow) openPanel('compare'); else { setMapOpen(false); setCmpOpen((o) => !o); } }} icon={<Columns2 size={14} />}>
-      Compare
-    </Pill>
+    <button type="button" className="md-act" aria-pressed={cmpOpen || cmp.on} title="Two windows side by side: two runs, two models, or the warnings beside a layer"
+      onClick={() => { if (narrow) openPanel('compare'); else { setMapOpen(false); setVarOpen(false); setCmpOpen((o) => !o); } }}>
+      <Columns2 size={16} />Compare
+    </button>
   );
   /* the models, grouped by who makes them: a picker on desktops, buttons on phones and tablets */
   const modelGroups = (list) => ['MyWeatherUK', 'Met Office', 'ECMWF', 'DWD', 'NOAA'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
   const chooseModel = (id) => (isProb ? (setEnsId(id), setEnsRunIso(null)) : (setModelId(id), setRunIso(null)));
+  const modelText = (m) => `${SHORT_NAMES[m.id] || m.label} · ${MODEL_INFO[m.id]?.[1] || ''}`;
+  const modelOptions = (list) => modelGroups(list).map(([g, ms]) => (
+    <optgroup key={g} label={g} style={{ color: '#111' }}>
+      {ms.map((m) => <option key={m.id} value={m.id} style={{ color: '#111' }}>{modelText(m)}</option>)}
+    </optgroup>
+  ));
   const modelPicker = (list, value, onChange, wide) => (
     <div style={{ position: 'relative', flexShrink: 0 }}>
       <select value={value} onChange={(e) => onChange(e.target.value)} style={{ ...sel, fontWeight: 700, ...(wide ? { width: '100%' } : {}) }} title={model?.source || 'Model'} aria-label={wide ? "Second window's model" : 'Model'}>
-        {modelGroups(list).map(([g, ms]) => (
-          <optgroup key={g} label={g} style={{ color: '#111' }}>
-            {ms.map((m) => <option key={m.id} value={m.id} style={{ color: '#111' }}>{SHORT_NAMES[m.id] || m.label} · {MODEL_INFO[m.id]?.[1] || ''}</option>)}
-          </optgroup>
-        ))}
+        {modelOptions(list)}
       </select>
       <ChevronDown style={{ position: 'absolute', right: 10, top: 9, width: 14, height: 14, pointerEvents: 'none', opacity: 0.7 }} />
     </div>
   );
+  /* desktop: the top bar's labelled fields. Each says what it is (MODEL, RUN) above what it holds,
+     and the whole box opens its list */
+  const topField = (label, text, el, title) => (
+    <div className="md-field" title={title}>
+      <span className="md-field-lab">{label}</span>
+      <span className="md-field-size" aria-hidden="true">{text}</span>
+      {el}
+      <ChevronDown className="md-field-chev" />
+    </div>
+  );
+  const statusField = (label, content) => (
+    <div className="md-field is-status">
+      <span className="md-field-lab">{label}</span>
+      <span className="md-field-size">{content}</span>
+    </div>
+  );
+  const modelField = (list, value) => topField('Model', model ? modelText(model) : '', (
+    <select className="md-field-sel" value={value} onChange={(e) => chooseModel(e.target.value)} aria-label="Model">{modelOptions(list)}</select>
+  ), model ? `${model.label} · ${MODEL_INFO[model.id]?.[2] || model.source || ''}` : 'Model');
+  const runField = model && !timeSteps && run && topField('Run', runText(run, model.runs), (
+    <select className="md-field-sel" value={run.run} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} aria-label="Run">{runOptions(model.runs)}</select>
+  ), 'When the model run started (UTC), and how far ahead it reaches');
   const runSelect = model && !timeSteps && (
     <div style={{ position: 'relative' }}>
       <select value={run?.run || ''} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} style={{ ...sel, ...(narrow ? { width: '100%', padding: '10px 34px 10px 14px', fontSize: 13.5 } : {}) }}
@@ -2351,64 +2444,42 @@ export default function ModelData() {
       )}
     </div>
   );
+  /* a chip: what is chosen in navy with white type, as STRATA's chips */
   const chip = (on) => ({
-    border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: narrow ? 13 : 12.5, fontWeight: 600, padding: narrow ? '9px 14px' : '7px 12px', borderRadius: 999,
-    color: on ? '#fff' : T.ink3,
-    background: on ? (T.light ? 'linear-gradient(180deg, #4b95ff, #1f6fe0)' : 'linear-gradient(180deg, rgba(110,180,255,0.55), rgba(60,130,240,0.4))') : T.chip,
-    boxShadow: on ? 'inset 0 1px 0 rgba(255,255,255,0.5)' : T.chipShadow,
+    border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: narrow ? 13 : 12.5, fontWeight: 620, padding: narrow ? '9px 14px' : '7px 12px', borderRadius: 999,
+    color: on ? T.onInk : T.ink3, background: on ? T.on : T.chip, boxShadow: on ? T.onShadow : T.chipShadow,
   });
-  const isSel = (k) => k === (isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey);
   const pickVar = (k) => { if (isObs) setObsKey(k); else if (isLive) setLiveKey(k); else if (isProb) choosePreset(k); else setVarKey(k); setVarOpen(false); };
-  const searchBox = (autoFocus) => (
-    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, padding: narrow ? '10px 14px' : '7px 12px', borderRadius: 999, background: T.track }}>
-      <Search size={14} style={{ opacity: 0.6 }} />
-      <input autoFocus={autoFocus} value={q} onChange={(e) => setQ(e.target.value)} placeholder={isLive ? 'Search radar, satellite…' : isProb ? 'Search wind, rain, frost, snow…' : isObs ? 'Search highs, lows, rain…' : 'Search layers'}
-        style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: T.ink, fontFamily: FONT, fontSize: narrow ? 16 : 13 }} />
-    </div>
-  );
-  const varGroups = groups.map(([g, list]) => (
-    <div key={g} style={{ marginBottom: 10 }}>
-      {sectionTitle(g)}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {list.map(([k, v]) => <button key={k} onClick={() => pickVar(k)} style={chip(isSel(k))}>{v.label}</button>)}
-      </div>
-    </div>
-  ));
-  const pickerNote = model && (
-    <div style={{ fontSize: 11, color: T.ink2, margin: '4px 4px 0', lineHeight: 1.45 }}>{isObs
-      ? "Each day's highs, lows and totals across the UK and Ireland, kept from 20 October 2026 onwards: step back through the days on the timeline. Temperature, wind, pressure and humidity come from a 15-minute analysis that starts from the Met Office UKV model and is pulled to what the airport weather stations (METAR) measured; rainfall is the Met Office radar's own total."
-      : isLive
+  const pickerNote = !model ? '' : isObs
+    ? "Each day's highs, lows and totals across the UK and Ireland, kept from 20 October 2026 onwards: step back through the days on the timeline. Temperature, wind, pressure and humidity come from a 15-minute analysis that starts from the Met Office UKV model and is pulled to what the airport weather stations (METAR) measured; rainfall is the Met Office radar's own total."
+    : isLive
       ? "Live, observed: Met Office 1 km rain radar every 15 minutes (AWS), Meteosat-12 imagery every 10 minutes and Meteosat 0° every 15 (EUMETSAT), lightning from the Met Office LEELA network. 'Now' layers are a 15-minute analysis: the Met Office UKV model corrected to the UK and Irish airport weather reports (METAR), with the radar's rain and LEELA lightning for the weather symbols."
       : isProb
-      ? `${model.label}: ${model.members} members. The chance is the share of members past your threshold, so drag the slider to ask a different question. Flooding uses 24 h rain or ECMWF runoff (wet ground runs off more); it is a signal, not a river forecast.`
-      : model.source}</div>
-  );
-  /* phones and tablets: models and run first, then the layers */
-  const dataBody = (
-    <div style={{ display: 'grid', gap: 6 }}>
-      {cat && !timeSteps && (
-        <>
-          {modelGroups(isProb ? cat.ensembles : cat.models).map(([g, ms]) => (
-            <div key={g} style={{ marginBottom: 4 }}>
-              {sectionTitle(g)}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {ms.map((m) => (
-                  <button key={m.id} onClick={() => chooseModel(m.id)} style={chip(m.id === (isProb ? ensId : modelId))}>
-                    {SHORT_NAMES[m.id] || m.label}<span style={{ opacity: 0.7, fontWeight: 500 }}> · {MODEL_INFO[m.id]?.[1] || ''}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+        ? `${model.label}: ${model.members} members. The chance is the share of members past your threshold, so drag the slider to ask a different question. Flooding uses 24 h rain or ECMWF runoff (wet ground runs off more); it is a signal, not a river forecast.`
+        : model.source;
+  /* phones and tablets: the model and the run, above the layers in the picker */
+  const modelRunRow = cat && !timeSteps && (
+    <>
+      <div className="mdb-extra-row">
+        <span className="mdb-extra-lab">Model</span>
+        <div className="mdb-extra-chips">
+          {modelGroups(isProb ? cat.ensembles : cat.models).flatMap(([, ms]) => ms).map((m) => (
+            <button key={m.id} type="button" onClick={() => chooseModel(m.id)} style={chip(m.id === (isProb ? ensId : modelId))}>
+              {SHORT_NAMES[m.id] || m.label}<span style={{ opacity: 0.7, fontWeight: 500 }}> · {MODEL_INFO[m.id]?.[1] || ''}</span>
+            </button>
           ))}
-          {sectionTitle('Run')}
-          {runSelect}
-          <div style={{ height: 1, background: T.line, margin: '8px 2px 4px' }} />
-        </>
-      )}
-      <div style={{ display: 'flex', margin: '2px 0 6px' }}>{searchBox(false)}</div>
-      {varGroups}
-      {pickerNote}
-    </div>
+        </div>
+      </div>
+      <div className="mdb-extra-row"><span className="mdb-extra-lab">Run</span><div>{runSelect}</div></div>
+    </>
+  );
+  /* the layer picker, where it opens */
+  const browser = (pos, extra) => (
+    <LayerBrowser items={browserItems} popular={isProb || timeSteps ? [] : POPULAR} selected={isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey}
+      onPick={pickVar} onClose={closePanels} layout={layout} style={pos} query={q} setQuery={setQ} note={pickerNote} extra={extra}
+      title={isObs ? 'Observed' : isLive ? 'Live' : isProb ? 'Chances' : 'Layers'}
+      subtitle={!model ? '' : isProb ? `${model.label} · ${model.members} members` : timeSteps ? chipSub
+        : `${SHORT_NAMES[model.id] || model.label} · ${MODEL_INFO[model.id]?.[1] || ''} · ${browserItems.length} layers`} />
   );
   const regionList = (
     <div style={{ display: 'grid', gap: 2 }}>
@@ -2418,14 +2489,25 @@ export default function ModelData() {
       ))}
     </div>
   );
+  /* the playback speed, in words; a speed typed into the Download panel shows as its milliseconds */
+  const speedOptions = (
+    <>
+      {!SPEEDS.some(([v]) => v === speed) && <option value={speed} style={{ color: '#111' }}>{speed} ms a step</option>}
+      {SPEEDS.map(([v, l]) => <option key={v} value={v} style={{ color: '#111' }}>{l}</option>)}
+    </>
+  );
+  const speedName = SPEEDS.find(([v]) => v === speed)?.[1] || `${speed} ms a step`;
   const speedSelect = (
     <div style={{ position: 'relative' }}>
       <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} style={{ ...sel, padding: '7px 26px 7px 10px' }} title="Playback speed (GIFs and videos time themselves)" aria-label="Playback speed">
-        {[120, 200, 300, 450, 650, 900, 1300, 2000].map((v) => <option key={v} value={v} style={{ color: '#111' }}>{(1000 / v).toFixed(v > 500 ? 1 : 0)} fps</option>)}
+        {speedOptions}
       </select>
       <ChevronDown style={{ position: 'absolute', right: 8, top: 9, width: 13, height: 13, pointerEvents: 'none', opacity: 0.7 }} />
     </div>
   );
+  const speedField = topField('Speed', speedName, (
+    <select className="md-field-sel" value={speed} onChange={(e) => setSpeed(Number(e.target.value))} aria-label="Playback speed">{speedOptions}</select>
+  ), 'How fast the map plays (GIFs and videos time themselves)');
   const waiting = pending + pendingB + pendingX;
   const lengthSec = (job) => {
     const list = motionFrames(job);
@@ -2436,14 +2518,19 @@ export default function ModelData() {
     const off = waiting > 0 || (job === 'video' && !canMakeVideo());
     return (
       <button onClick={() => exportMotion(job)} disabled={off} style={{ ...sel, flex: 1, minWidth: 150, padding: '10px 14px', display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center',
-        color: off ? T.ink2 : '#fff', background: off ? T.chip : 'linear-gradient(180deg, rgba(110,180,255,0.75), rgba(60,130,240,0.65))' }}>
+        color: off ? T.ink2 : '#fff', background: off ? T.chip : T.light ? ACCENT : '#2f7fe0', boxShadow: off ? 'none' : '0 3px 10px rgba(10,111,219,0.3)' }}>
         {icon}{label}
       </button>
     );
   };
   const exportBody = exp.open && (
     <div style={{ display: 'grid', gap: 12, fontSize: 12.5 }}>
-      <div style={{ color: T.ink2 }}>{FRAMES[frameKey].a ? FRAMES[frameKey].label : 'As framed'}{kindB ? ' · both windows' : ''} · exactly as previewed</div>
+      <div style={{ display: 'grid', gap: 7 }}>
+        <span className="md-sec-t">Shape</span>
+        <div className="md-noscroll" style={{ overflowX: 'auto' }}>{frameSeg}</div>
+        <span style={{ color: T.ink2, fontSize: 11.5 }}>Saved exactly as the frame on the map shows it{kindB ? ', both windows' : ''}</span>
+      </div>
+      <div style={{ height: 1, background: T.line }} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between', flexWrap: 'wrap' }}>
         <Seg small items={[[1080, '1080p'], [2160, '4K']]} value={exp.png} onChange={(v) => setExp((x) => ({ ...x, png: v }))} />
         <button onClick={exportPng} disabled={!frame} style={{ ...sel, padding: '9px 14px', display: 'flex', gap: 6, alignItems: 'center', background: T.btn }}><ImageIcon size={14} />PNG of this step</button>
@@ -2610,14 +2697,33 @@ export default function ModelData() {
   );
   const stepBack = () => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); };
   const stepFwd = () => { setPlaying(false); setIdx((i) => Math.min(steps.length - 1, i + 1)); };
+  /* the timeline: the run's days as a STRATA progress bar (components/modeldata/Timeline), a tick for
+     every step (faint until it has loaded), the time it lands on shown above a press or a drag */
+  const runMsT = run && !timeSteps ? Date.parse(run.run) : 0;
+  const stepTimes = timeSteps ? steps : steps.map((s) => runMsT + s * 3600e3);
+  const tipLabel = (ms) => {
+    const d = new Date(ms);
+    if (isObs) return d.toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' });
+    const t = d.toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', ' ·');
+    return timeSteps ? t : `${t} · T+${Math.round((ms - runMsT) / 3600e3)}`;
+  };
   const slider = (
-    <input type="range" min={0} max={Math.max(0, steps.length - 1)} value={Math.min(idx, Math.max(0, steps.length - 1))}
-      onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} style={{ flex: 1, minWidth: 60, accentColor: '#7cc8ff', height: phone ? 30 : undefined }} aria-label="Forecast step" />
+    <Timeline times={stepTimes} idx={Math.min(idx, Math.max(0, steps.length - 1))} onPick={(i) => { setPlaying(false); setIdx(i); }}
+      loaded={(i) => !!frames[steps[i]]} label={tipLabel} />
   );
   const playBtn = (
-    <IconBtn on={playing} title={playing ? 'Pause (space)' : 'Play (space)'} onClick={() => setPlaying((p) => !p)} style={{ width: phone ? 42 : 38, height: phone ? 42 : 38, flexShrink: 0 }}>
-      {playing ? <Pause size={17} /> : <Play size={17} />}
-    </IconBtn>
+    <button type="button" className="mdt-play" onClick={() => setPlaying((p) => !p)} title={playing ? 'Pause (space)' : 'Play (space)'} aria-label={playing ? 'Pause' : 'Play'}
+      style={phone ? { width: 42, height: 42 } : undefined}>
+      {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" style={{ marginLeft: 2 }} />}
+    </button>
+  );
+  /* the time on show, as the STRATA clock: the day in the accent, the hour in ink, the lead under it */
+  const [dayPart, hourPart] = isObs ? [validLabel, ''] : validLabel.split(', ');
+  const timeLabel = (
+    <span className="mdt-time">
+      <b><i>{dayPart}</i>{hourPart ? ` · ${hourPart}` : ''}</b>
+      <span>{subLabel}</span>
+    </span>
   );
   /* a labelled tool on the phone's bottom bar */
   const tool = (icon, label, on, onClick, badge) => (
@@ -2631,8 +2737,8 @@ export default function ModelData() {
 
   return (
     <ThemeCtx.Provider value={T}>
-    <div ref={shellRef} style={{ height: shellH, position: 'relative', overflow: 'hidden', fontFamily: FONT, color: T.ink,
-      background: 'radial-gradient(120% 80% at 50% 0%, #142238 0%, #070c16 60%, #04070d 100%)' }}>
+    <div ref={shellRef} className="md-strata" style={{ ...T.vars, height: shellH, position: 'relative', overflow: 'hidden', fontFamily: FONT, color: T.ink,
+      background: T.light ? 'radial-gradient(120% 80% at 50% 0%, #e9f0f7 0%, #c9d8e7 60%, #b3c7dc 100%)' : 'radial-gradient(120% 80% at 50% 0%, #142238 0%, #070c16 60%, #04070d 100%)' }}>
       <div ref={stageRef} style={{ position: 'absolute', inset: 0 }}>
         <canvas ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
           onPointerLeave={(e) => { onUp(e); setHover(null); }}
@@ -2648,16 +2754,13 @@ export default function ModelData() {
                 <>
                   {modeSeg}
                   {isObs
-                    ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px', fontSize: 12, fontWeight: 700, color: T.ink2, whiteSpace: 'nowrap' }}>{chipSub}</span>
+                    ? statusField('Archive', chipSub)
                     : isLive
-                    ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px', fontSize: 12, fontWeight: 700, color: T.ink2, whiteSpace: 'nowrap' }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 99, background: '#ff4d4f', boxShadow: '0 0 8px #ff4d4f' }} />
-                        {liveTime ? `Latest ${liveTime}` : 'Starting…'}
-                      </span>
+                    ? statusField('Updated', <><span style={{ width: 8, height: 8, borderRadius: 99, background: '#ff4d4f', boxShadow: '0 0 8px #ff4d4f', flexShrink: 0 }} />{liveTime ? `Latest ${liveTime}` : 'Starting…'}</>)
                     : isProb
-                    ? modelPicker(cat.ensembles, ensId, chooseModel)
-                    : modelPicker(cat.models, modelId, chooseModel)}
-                  {runSelect}
+                    ? modelField(cat.ensembles, ensId)
+                    : modelField(cat.models, modelId)}
+                  {runField}
                   {varButton}
                 </>
               ) : (
@@ -2667,7 +2770,7 @@ export default function ModelData() {
               )}
             </div>
             <div style={{ flex: 1 }} />
-            <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{styleSeg}{frameSeg}{smoothPill}{compareBtn}{layersBtn}</div>
+            <div style={{ ...T.capsule, padding: 7, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{compareBtn}{layersBtn}</div>
           </>
         ) : (
           <div style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flex: 1, minWidth: 0 }}>
@@ -2681,28 +2784,15 @@ export default function ModelData() {
       </div>
 
       {/* desktop: the layer picker and the layers, as cards under the top bar */}
-      {layout === 'desktop' && mapOpen && card('Layers', null, () => setMapOpen(false), layerRows, { right: 10, top: topH, width: 300 })}
+      {layout === 'desktop' && mapOpen && card('Map', null, () => setMapOpen(false), mapBody, { right: 10, top: topH, width: 330 })}
       {layout === 'desktop' && cmpOpen && card('Compare', null, () => setCmpOpen(false), compareBody, { right: 10, top: topH, width: 320 })}
-      {layout === 'desktop' && varOpen && cat && !mapOpen && (
-        <div style={{ ...T.glass, borderRadius: 24, position: 'absolute', left: 10, top: topH, width: 'min(560px, calc(100% - 20px))', maxHeight: '62%', overflowY: 'auto', padding: 14, zIndex: 5 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
-            {searchBox(true)}
-            <IconBtn title="Close" onClick={() => setVarOpen(false)}><X size={15} /></IconBtn>
-          </div>
-          {varGroups}
-          {pickerNote}
-        </div>
-      )}
-      {/* tablet: the same, as cards */}
-      {layout === 'tablet' && varOpen && card('Model, run and layer', null, closePanels, dataBody, { left: 10, top: topH, width: 'min(460px, calc(100% - 20px))' })}
-      {layout === 'tablet' && mapOpen && card('Map and layers', null, closePanels,
-        <div style={{ display: 'grid', gap: 8 }}>
-          <div style={{ display: 'grid', gap: 8, justifyItems: 'start', paddingBottom: 8, borderBottom: `1px solid ${T.line}` }}>{styleSeg}{frameSeg}{smoothPill}</div>
-          {layerRows}
-        </div>, { right: 10, top: topH, width: 320 })}
+      {layout === 'desktop' && varOpen && cat && !mapOpen && browser({ left: 10, top: topH, width: 'min(980px, calc(100% - 20px))', height: `min(680px, calc(100% - ${topH + botH + 4}px))` })}
+      {/* tablet: the picker with the model and run above its layers; the layers, as a card */}
+      {layout === 'tablet' && varOpen && cat && browser({ left: 10, right: 10, top: topH, height: `calc(100% - ${topH + botH + 4}px)` }, modelRunRow)}
+      {layout === 'tablet' && mapOpen && card('Map', null, closePanels, mapBody, { right: 10, top: topH, width: 330 })}
       {layout === 'tablet' && cmpOpen && card('Compare', null, closePanels, compareBody, { right: 10, top: topH, width: 320 })}
       {layout === 'tablet' && regionsOpen && card('Zoom to', null, closePanels, regionList, { right: 10, bottom: botH, width: 240 })}
-      {layout === 'tablet' && exp.open && card('Export', null, closePanels, <>{exportBody}<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback</span>{speedSelect}</div></>,
+      {layout === 'tablet' && exp.open && card('Download', null, closePanels, <>{exportBody}<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback speed</span>{speedSelect}</div></>,
         { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
 
       <style>{'.md-noscroll::-webkit-scrollbar{display:none}.md-noscroll{scrollbar-width:none}'
@@ -2765,7 +2855,7 @@ export default function ModelData() {
       {!exp.open && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || obsPanel || modeOpen)) && pinCard}
 
       {/* desktop: the export card above the timeline */}
-      {layout === 'desktop' && exp.open && card('Export', null, () => setExp((e) => ({ ...e, open: false })), exportBody, { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
+      {layout === 'desktop' && exp.open && card('Download', null, () => setExp((e) => ({ ...e, open: false })), exportBody, { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
 
       {/* bottom bar */}
       {layout === 'desktop' ? (
@@ -2773,45 +2863,39 @@ export default function ModelData() {
           <IconBtn title="Previous step (←)" onClick={stepBack}><ChevronLeft size={16} /></IconBtn>
           {playBtn}
           <IconBtn title="Next step (→)" onClick={stepFwd}><ChevronRight size={16} /></IconBtn>
-          {slider}
-          <span style={{ fontSize: 12.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', padding: '0 4px' }}>
-            {validLabel}<span style={{ color: T.ink2, fontWeight: 600 }}>{subLabel && !isObs ? ` · ${subLabel}` : ''}</span>
-          </span>
-          {speedSelect}
-          <IconBtn on={exp.open} title="Export a PNG, GIF or video" onClick={() => setExp((e) => ({ ...e, open: !e.open }))} style={{ width: 38, height: 38 }}><Download size={16} /></IconBtn>
+          <div style={{ flex: 1, minWidth: 80, display: 'flex', padding: '0 8px' }}>{slider}</div>
+          {timeLabel}
+          {speedField}
+          <button type="button" className="md-act" aria-pressed={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => setExp((e) => ({ ...e, open: !e.open }))}>
+            <Download size={16} />Download
+          </button>
         </div>
       ) : layout === 'tablet' ? (
         <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'calc(100% - 20px)', maxWidth: 1060, padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
           <IconBtn title="Previous step" onClick={stepBack} style={{ width: 38, height: 38 }}><ChevronLeft size={17} /></IconBtn>
           {playBtn}
           <IconBtn title="Next step" onClick={stepFwd} style={{ width: 38, height: 38 }}><ChevronRight size={17} /></IconBtn>
-          {slider}
-          <span style={{ display: 'grid', lineHeight: 1.15, padding: '0 4px', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-            <span style={{ fontSize: 12.5, fontWeight: 800 }}>{validLabel}</span>
-            <span style={{ fontSize: 11, fontWeight: 600, color: T.ink2 }}>{subLabel}</span>
-          </span>
+          <div style={{ flex: 1, minWidth: 80, display: 'flex', padding: '0 6px' }}>{slider}</div>
+          {timeLabel}
           <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => openPanel('regions')} style={{ width: 38, height: 38 }}><MapIcon size={16} /></IconBtn>
           {isObs && <IconBtn on={obsPanel} title="The day's extremes" onClick={() => (sidePanel ? setObsPanel(false) : openPanel('summary'))} style={{ width: 38, height: 38 }}><Star size={16} /></IconBtn>}
-          <IconBtn on={exp.open} title="Export a PNG, GIF or video" onClick={() => openPanel('export')} style={{ width: 38, height: 38 }}><Download size={16} /></IconBtn>
+          <button type="button" className="md-act" aria-pressed={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => openPanel('export')}><Download size={16} />Download</button>
         </div>
       ) : (
         <div ref={botRef} style={{ ...T.glass, position: 'absolute', left: 8, right: 8, bottom: 22, borderRadius: 24, padding: '6px 6px 4px', display: 'grid', gap: 2 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 4px' }}>
             {playBtn}
-            {slider}
-            <span style={{ display: 'grid', lineHeight: 1.15, textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-              <span style={{ fontSize: 12.5, fontWeight: 800 }}>{validLabel.replace(/^(\w+) (\d+),/, '$1 $2 ·')}</span>
-              <span style={{ fontSize: 11, fontWeight: 600, color: T.ink2 }}>{subLabel}</span>
-            </span>
+            <div style={{ flex: 1, minWidth: 60, display: 'flex' }}>{slider}</div>
+            {timeLabel}
           </div>
           <div style={{ display: 'flex', gap: 2 }}>
             {tool(<ChevronLeft size={18} />, 'Back', false, stepBack)}
             {tool(<ChevronRight size={18} />, 'Next', false, stepFwd)}
-            {tool(<Layers size={18} />, 'Layers', mapOpen, () => openPanel('layers'), layerCount)}
+            {tool(<Layers size={18} />, 'Map', mapOpen, () => openPanel('layers'), layerCount)}
             {tool(<Columns2 size={18} />, 'Compare', cmpOpen || cmp.on, () => openPanel('compare'))}
             {tool(<MapIcon size={18} />, 'Regions', regionsOpen, () => openPanel('regions'))}
             {isObs && tool(<Star size={18} />, 'Day', obsPanel, () => openPanel('summary'))}
-            {tool(<Download size={18} />, 'Export', exp.open, () => openPanel('export'))}
+            {tool(<Download size={18} />, 'Download', exp.open, () => openPanel('export'))}
           </div>
         </div>
       )}
@@ -2830,22 +2914,21 @@ export default function ModelData() {
           </div>
         </Sheet>
       )}
-      {phone && varOpen && <Sheet title={timeSteps ? 'Layer' : 'Model, run and layer'} onClose={closePanels} tall>{dataBody}</Sheet>}
+      {phone && varOpen && cat && (
+        <>
+          <div onClick={closePanels} style={{ position: 'absolute', inset: 0, zIndex: 44, background: 'rgba(2,6,14,0.4)' }} />
+          {browser({ left: 0, right: 0, bottom: 0, height: '88%', zIndex: 45 }, modelRunRow)}
+        </>
+      )}
       {phone && mapOpen && (
-        <Sheet title="Map and layers" onClose={closePanels} clear>
-          <div style={{ display: 'grid', gap: 10 }}>
-            <div className="md-noscroll" style={{ overflowX: 'auto' }}>{styleSeg}</div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>{frameSeg}{smoothPill}</div>
-            {layerRows}
-          </div>
-        </Sheet>
+        <Sheet title="Map" onClose={closePanels} clear>{mapBody}</Sheet>
       )}
       {phone && cmpOpen && <Sheet title="Compare" onClose={closePanels} clear>{compareBody}</Sheet>}
       {phone && regionsOpen && <Sheet title="Zoom to" onClose={closePanels} clear>{regionList}</Sheet>}
       {phone && exp.open && (
-        <Sheet title="Export" onClose={closePanels}>
+        <Sheet title="Download" onClose={closePanels}>
           {exportBody}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback</span>{speedSelect}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback speed</span>{speedSelect}</div>
         </Sheet>
       )}
       {phone && isObs && obsPanel && summaryBody && <Sheet title={summaryTitle} note={summaryNote} onClose={closePanels} clear>{summaryBody}</Sheet>}
