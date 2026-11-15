@@ -445,3 +445,71 @@
 .lw-sdays .lw-day-fact i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .lw-frost-note { background: rgba(165, 216, 255, 0.12); border-color: rgba(165, 216, 255, 0.32); }
 .lw-frost-note svg { color: #a5d8ff; }
+
+/* ── 15 Nov 2026: the quarter hours, the snow chance, the kinds of precipitation, the days' Day and Night ── */
+/* the arrow by an hour's time: pointing right to open its quarters, down to close them */
+.lw-hour .lw-h-time { display: inline-flex; align-items: center; gap: 1px; }
+.lw-qbtn { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-right: -6px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--ink3); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.lw-qbtn:hover, .lw-qbtn[aria-expanded='true'] { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.lw-qbtn:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.8); outline-offset: 1px; }
+.lw-hour.is-open { background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.06)); border-radius: 14px 0 0 14px; }
+.lw-hour.is-quarter { background: rgba(255, 255, 255, 0.06); border-radius: 0; }
+.lw-hour.is-quarter.is-qend { border-radius: 0 14px 14px 0; margin-right: 4px; }
+.lw-hour.is-quarter .lw-h-time { font-size: 11.5px; font-weight: 600; color: var(--ink3); }
+.lw-hour.is-quarter .lw-h-temp { font-size: 16px; }
+.lw-hour.is-quarter .lw-h-day { min-height: 14px; }
+/* the snow chance row: a small badge in the step's own colour */
+.lw-hour .lw-h-sc { display: inline-flex; align-items: center; min-height: 16px; }
+.lw-hour .lw-h-sc b { display: inline-flex; align-items: center; gap: 2px; padding: 1px 5px 1px 4px; border-radius: 99px; font-size: 10px; font-weight: 800; line-height: 1.3; white-space: nowrap; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2); }
+.lw-hours-note.lw-snow-note { display: block; line-height: 1.5; }
+.lw-snow-note > svg { display: inline-block; vertical-align: -1px; margin-right: 5px; color: #dbeafe; }
+.lw-sc-key { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; color: var(--ink3); white-space: nowrap; }
+.lw-sc-key i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18); }
+.lw-sc-key i:last-of-type { margin-right: 3px; }
+.lw-q-hint { opacity: 0.85; }
+.lw-q-hint svg { color: var(--ink2) !important; }
+/* the precipitation card's key: the five kinds, each its own colour */
+.lw-kinds { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 11.5px; color: var(--ink3); }
+.lw-kinds span { display: inline-flex; align-items: center; gap: 5px; opacity: 0.55; }
+.lw-kinds span.is-on { opacity: 1; color: var(--ink); font-weight: 600; }
+.lw-kinds i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; }
+.lw-updating { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; opacity: 0.85; }
+
+/* the days: a row each (the day's weather, the night's, any snow or thunder, the low and the high) */
+.lw-day.lw-day2 { grid-template-columns: 68px 40px 26px 16px 34px minmax(40px, 1fr) 34px; gap: 6px; padding: 8px 4px; }
+.lw-day2 .lw-day-name { display: flex; flex-direction: column; line-height: 1.15; font-size: 16.5px; }
+.lw-day2 .lw-day-name small { font-size: 11.5px; font-weight: 600; color: var(--ink3); letter-spacing: 0.01em; }
+.lw-day-night { display: grid; place-items: center; opacity: 0.85; }
+.lw-day-flags { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.lw-day-flags svg { filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3)); }
+/* a day opened: its Day and Night side by side (one above the other on a narrow screen) */
+.lw-parts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin: 2px 0 10px; }
+.lw-parts.is-one { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 460px) { .lw-parts { grid-template-columns: minmax(0, 1fr); } }
+.lw-part { padding: 10px 11px 11px; border-radius: 16px; background: rgba(255, 255, 255, 0.1); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16); }
+.lw-part.is-night { background: linear-gradient(160deg, rgba(10, 18, 44, 0.32), rgba(10, 18, 44, 0.18)); }
+.lw-part-head { display: flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink2); }
+.lw-part-head span { margin-left: auto; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink3); }
+.lw-part-main { display: flex; align-items: center; gap: 10px; margin: 6px 0 8px; }
+.lw-part-say { min-width: 0; }
+.lw-part-temp { font-size: 13px; color: var(--ink2); }
+.lw-part-temp b { font-size: 24px; font-weight: 600; color: var(--ink); margin-left: 2px; }
+.lw-part-cond { font-size: 13.5px; font-weight: 600; line-height: 1.3; color: var(--ink); }
+.lw-part-facts { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--ink2); }
+.lw-part-facts li { display: flex; align-items: flex-start; gap: 6px; line-height: 1.35; }
+.lw-part-facts li > svg { flex: 0 0 auto; margin-top: 2px; opacity: 0.85; }
+.lw-part-facts b { color: var(--ink); font-weight: 650; }
+.lw-part-facts em { font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: 0.05em; padding: 1px 6px; border-radius: 99px; margin-left: 3px; background: rgba(255, 255, 255, 0.14); color: var(--ink2); }
+.lw-part-facts li.is-frost svg { color: #a5d8ff; }
+.lw-sc-pill { display: inline-block; padding: 0 7px; border-radius: 99px; font-size: 11.5px; line-height: 1.5; }
+.lw-day-fact.is-src { background: rgba(255, 255, 255, 0.08); color: var(--ink3); font-weight: 600; }
+.lw-outlook-note { margin: 10px 4px 0; font-size: 11.5px; line-height: 1.45; color: var(--ink3); }
+.lw-outlook-note b { color: var(--ink2); font-weight: 650; }
+@media (max-width: 420px) {
+  .lw-phours { gap: 2px; }
+  .lw-phours span { font-size: 10px; }
+  .lw-phours em { font-size: 9.5px; letter-spacing: -0.02em; }
+  .lw-outlook .lw-title .lw-title-aside { font-size: 10.5px; text-align: right; }
+}
+/* the snow card's days: every other one on a phone, where ten names do not fit */
+@media (max-width: 480px) { .lw-saxis span.is-odd { display: none; } }

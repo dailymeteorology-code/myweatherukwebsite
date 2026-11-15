@@ -284,40 +284,76 @@ async function builtCubesAsync() {
   } catch { return []; }
 }
 
-/* Which UKV runs to cube: the newest that reaches T+120 (03Z and 15Z), and the newest that reaches
-   T+54 once it is three hours newer than both that and every cube already built. A place's first two
-   days then come from a run at most about six hours old (every long run, in practice). */
-function pointTargets(cat, built) {
-  const m = cat?.models?.find((x) => x.id === 'ukv');
+/* ── version 2 (15 Nov 2026, mdata/point.py cube2) ─────────────────────────────────────────────
+   The Location page's hours from the UKV, its days from the MWUK Mix (the UKV and DWD ICON-EU), and the
+   days beyond the Mix from the Met Office Global: each a cube a place is read from in one go. The
+   frames each needs are queued in the 'point' lane, then its cube is built, one at a time. The Mix's
+   step amounts are made by point.py from the UKV's and ICON's own (ICON's come with the Mix's rates),
+   and the Global's few fields and steps (from T+90) are read by point.py itself. */
+export const POINT2_DIR = path.join(DATA, 'point2');
+const POINT2_VARS = {
+  ukv: [...POINT_VARS, 'snow_cond'],
+  mix: ['t2', 'td2', 'rh2', 'tskin', 'wind10', 'gust10', 'wdir10', 'mslp', 'precip_rate', 'snow_rate', 'tcc', 'lcc',
+    'mcc', 'hcc', 'vis', 'sw_down', 'snow_cond'],
+  mo_global: [],
+};
+const MOG_FROM = 90;                                                     // mdata/point.py SPECS.mo_global.from_lead
+async function built2(model) {
+  try {
+    const dir = path.join(POINT2_DIR, model);
+    const names = (await fs.promises.readdir(dir)).filter((t) => RUN_RE.test(t)).sort();
+    const mans = await Promise.all(names.map((t) => readJsonAsync(path.join(dir, t, 'manifest.json'))));
+    return names.map((t, i) => ({ tag: t, man: mans[i] })).filter((x) => x.man);
+  } catch { return []; }
+}
+/* The runs to cube: the newest long one (the UKV's 03Z and 15Z to T+120, the Mix's pairs of those to
+   T+114 or more, the Global's 00Z and 12Z to T+168) and, for the UKV and the Mix, the newest shorter
+   one once it is three hours newer than that and than every cube built (topped up as it grows). A
+   place's first two days then come from a run at most about six hours old. */
+function targets2(cat, model, built) {
+  const m = cat?.models?.find((x) => x.id === model);
   if (!m?.runs?.length) return [];
   const top = (r) => Math.max(...r.steps);
-  const long = m.runs.find((r) => top(r) >= 120);
-  const short = m.runs.find((r) => top(r) >= 54);
-  const ref = Math.max(built.length ? tagMs(built[built.length - 1]) : 0, long ? tagMs(runTag(long.run)) : 0);
+  const need = model === 'mix' ? 114 : model === 'mo_global' ? 168 : 120;
+  const long = m.runs.find((r) => top(r) >= need && (model !== 'mo_global' || r.complete));
+  if (model === 'mo_global') return long ? [long] : [];
+  const short = m.runs.find((r) => top(r) >= 54 && !r.kept);
+  const ref = Math.max(built.length ? tagMs(built[built.length - 1].tag) : 0, long ? tagMs(runTag(long.run)) : 0);
   const out = long ? [long] : [];
-  if (short && short !== long && tagMs(runTag(short.run)) - ref >= 3 * 3600e3) out.unshift(short);
+  if (short && short !== long && (tagMs(runTag(short.run)) - ref >= 3 * 3600e3 || built.some((x) => x.tag === runTag(short.run)))) out.unshift(short);
   return out;
+}
+/* the version 1 cubes, once the page reads version 2: gone (each 0.5-1.2 GB) */
+async function pruneLegacy() {
+  if ((await built2('ukv')).length < 2) return;
+  for (const t of await builtCubesAsync()) await fs.promises.rm(path.join(POINT_DIR, t), { recursive: true, force: true }).catch(() => {});
 }
 
 let pointBusy = false;
 async function refreshPoint(cat) {
-  for (const r of pointTargets(cat, await builtCubesAsync())) {
-    const tag = runTag(r.run);
-    const man = await readJsonAsync(path.join(POINT_DIR, tag, 'manifest.json'));
-    /* a built cube's run: its precipitation type too, for the radar's next hours on the home and
-       Location pages (made from frames the cube already needed, so quick) */
-    if (man) await ensureJobAsync('ukv', tag, 'ptype', true);
-    if (man && man.steps.length >= r.steps.length) continue;            // built, and the run has not grown since
-    const sts = await Promise.all(POINT_VARS.map((v) => readJsonAsync(path.join(frameDir('ukv', tag, v), 'status.json'))));
-    const ready = sts.every((st) => st?.state === 'complete' && !grown('ukv', tag, st));
-    if (!ready) { POINT_VARS.forEach((v, i) => ensureJob('ukv', tag, v, 'point', null, sts[i])); continue; }
-    if (pointBusy) return;
-    pointBusy = true;
-    python(['mdata.point', 'cube', runIso(tag)], (code, err) => {
-      pointBusy = false;
-      if (code) console.warn(`[modeldata] point cube ${tag} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
-    });
-    return;                                                              // one cube at a time
+  for (const model of ['ukv', 'mix', 'mo_global']) {
+    const built = await built2(model);
+    for (const r of targets2(cat, model, built)) {
+      const tag = runTag(r.run);
+      const have = built.find((x) => x.tag === tag)?.man;
+      /* a built UKV cube's run: its precipitation type too, for the radar's next hours on the home and
+         Location pages (made from frames the cube already needed, so quick) */
+      if (model === 'ukv' && have) await ensureJobAsync('ukv', tag, 'ptype', true);
+      const want = model === 'mo_global' ? r.steps.filter((h) => h >= MOG_FROM).length : r.steps.length;
+      if (have && have.steps.length >= want) continue;                   // built, and the run has not grown since
+      const vars = POINT2_VARS[model];
+      const sts = await Promise.all(vars.map((v) => readJsonAsync(path.join(frameDir(model, tag, v), 'status.json'))));
+      const ready = sts.every((st) => st?.state === 'complete' && !grown(model, tag, st));
+      if (!ready) { vars.forEach((v, i) => ensureJob(model, tag, v, 'point', null, sts[i])); continue; }
+      if (pointBusy) return;
+      pointBusy = true;
+      python(['mdata.point', 'cube2', model, runIso(tag)], (code, err) => {
+        pointBusy = false;
+        if (code) console.warn(`[modeldata] point cube ${model} ${tag} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
+        else if (model === 'ukv') pruneLegacy().catch(() => {});
+      }, { MDATA_GRID: gridOf(model), MDATA_THREADS: '6', MDATA_LANE: 'background' });
+      return;                                                              // one cube at a time
+    }
   }
 }
 

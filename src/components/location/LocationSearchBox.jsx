@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, Loader2, X, Building2, MapPin, House, Trees, Mail } from 'lucide-react';
+import { prefetchLocation } from '@/lib/ukvLocation';
 
 const DEBOUNCE_MS = 160;
 const KIND = { city: ['City', Building2], town: ['Town', MapPin], village: ['Village', House], hamlet: ['Hamlet', Trees], suburb: ['Area', MapPin], postcode: ['Postcode', Mail] };
@@ -149,7 +150,7 @@ export default function LocationSearchBox({ value, onChange, onSearch, loading =
                 const [kindLabel, Icon] = KIND[s.kind] || KIND.town;
                 return (
                   <li key={`${s.name}|${s.lat}|${s.lon}`} role="option" aria-selected={i === cursor}>
-                    <button type="button" className="lw-suggest-item" onMouseEnter={() => setCursor(i)} onClick={() => choose(s)}>
+                    <button type="button" className="lw-suggest-item" onMouseEnter={() => { setCursor(i); prefetchLocation(s); }} onTouchStart={() => prefetchLocation(s)} onClick={() => choose(s)}>
                       <span className="lw-suggest-ico"><Icon /></span>
                       <span className="lw-suggest-text">
                         <span className="lw-suggest-name"><Highlight name={s.name} q={searched} /></span>

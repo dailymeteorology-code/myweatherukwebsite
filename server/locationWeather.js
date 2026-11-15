@@ -66,8 +66,9 @@ const r2 = (v) => (v == null ? null : Math.round(v * 100) / 100);
 
 /* ── whole frames (now analysis, observed day, radar, UKV rain), decoded once and kept ── */
 const frameCache = new Map();
-/* the radar loops alone ask for ~40 frames (the rain and its type, past and next hours) */
-const FRAME_CACHE = 64;
+/* the radar loops alone ask for ~40 frames (the rain and its type, past and next hours), and the
+   page's own ~25 (now, today so far, the newest scans) are kept warm beside them */
+const FRAME_CACHE = 80;
 function parseFrame(raw) {
   const n = raw.readUInt32LE(0);
   const head = JSON.parse(raw.subarray(4, 4 + n).toString('utf8'));
@@ -201,6 +202,178 @@ function forecastAt(lat, lon) {
   return { ...out, runs, units: Object.fromEntries(vars.map((v) => [v, pm.vars[v].unit])), cell: { row, col, offset_km: Math.round(Math.hypot(x - (EDGE_X + (col + 0.5) * 2000), y - (EDGE_Y - (row + 0.5) * 2000)) / 100) / 10 } };
 }
 
+/* ── version 2 cubes (mdata/point.py cube2, 15 Nov 2026): a place in one read a cube ──────────────
+   A place's first load used to read ~500 scattered rows of the cubes above (a row a variable, and
+   50-200 cells round it for its chances and its sky): 1.6-2.6 s on the external drive. A v2 cube
+   keeps each cell's whole forecast as one block, [var][step], with the chances and the sky already
+   worked out, so a place is one small read from each cube, and none of it holds up the site.
+     ukv        the hours (as above, plus the snow conditions index)
+     mix        the days: the MWUK Mix of the UKV and DWD ICON-EU (mdata/mix.py)
+     mo_global  the days beyond the Mix: the Met Office Global, from T+90 */
+const POINT2 = path.join(MODELDATA_DIR, 'point2');
+const readJsonAsync = async (f) => { try { return JSON.parse(await fs.promises.readFile(f, 'utf8')); } catch { return null; } };
+/* the Lambert azimuthal equal-area grid of a cube (the UKV's, or the global models' wide one) */
+const projs = new Map();
+function projOf(g) {
+  const key = `${g.lat0},${g.lon0}`;
+  if (!projs.has(key)) {
+    const p1 = g.lat0 * D, l0 = g.lon0 * D;
+    const b1 = Math.asin(qf(Math.sin(p1)) / QP);
+    const dd = (A * Math.cos(p1) / Math.sqrt(1 - E2 * Math.sin(p1) ** 2)) / (RQ * Math.cos(b1));
+    projs.set(key, (lon, lat) => {
+      const b = Math.asin(qf(Math.sin(lat * D)) / QP);
+      const dl = lon * D - l0;
+      const bb = RQ * Math.sqrt(2 / (1 + Math.sin(b1) * Math.sin(b) + Math.cos(b1) * Math.cos(b) * Math.cos(dl)));
+      return [bb * dd * Math.cos(b) * Math.sin(dl), (bb / dd) * (Math.cos(b1) * Math.sin(b) - Math.sin(b1) * Math.cos(b) * Math.cos(dl))];
+    });
+  }
+  return projs.get(key);
+}
+/* (row, col) of the grid cell a place is in, and how far the cell's centre is (km) */
+function cellIn(g, lon, lat) {
+  const [x, y] = projOf(g)(lon, lat);
+  const row = Math.round((g.y_top + g.dx / 2 - y) / g.dx - 0.5), col = Math.round((x - (g.x0 - g.dx / 2)) / g.dx - 0.5);
+  return { row, col, km: Math.round(Math.hypot(x - (g.x0 + col * g.dx), y - (g.y_top - row * g.dx)) / 100) / 10 };
+}
+const lutOf = (e) => { const dec = decoder(e); return Float32Array.from({ length: 256 }, (_, q) => (q === 255 ? NaN : dec(q))); };
+const lists2 = new Map();                                                    // model -> { at, list }
+function cubeOf(model, tag, man) {
+  const runMs = Date.parse(man.run);
+  const steps = man.steps;
+  return {
+    model, tag, man, runMs, steps, dir: path.join(POINT2, model, tag),
+    lut: Object.fromEntries(Object.entries(man.vars).map(([v, e]) => [v, lutOf(e)])),
+    idx: Object.fromEntries(man.order.map((v, i) => [v, i])),
+    width: man.order.length * steps.length,
+    start: runMs + steps[0] * 3600e3, end: runMs + steps[steps.length - 1] * 3600e3, top: Math.max(...steps),
+    key: `${model}:${tag}:${man.built}`,
+  };
+}
+/** The v2 cubes of a model, newest run first (the listing is looked at again every 20 s at most). */
+async function cubes2(model, fresh = false) {
+  const hit = lists2.get(model);
+  if (hit && !fresh && Date.now() - hit.at < 20e3) return hit.list;
+  let names = [];
+  try { names = (await fs.promises.readdir(path.join(POINT2, model))).filter((t) => RUN_RE.test(t)).sort().reverse(); } catch { /* none yet */ }
+  const list = [];
+  for (const tag of names) {
+    const man = await readJsonAsync(path.join(POINT2, model, tag, 'manifest.json'));
+    if (man?.version !== 2 || !man.steps?.length) continue;
+    const old = hit?.list.find((c) => c.tag === tag && c.man.built === man.built);
+    list.push(old || cubeOf(model, tag, man));
+  }
+  lists2.set(model, { at: Date.now(), list });
+  return list;
+}
+/* one cell's block of a cube ([var][step] bytes), or null outside it; a cube rebuilt since it was
+   listed (its size no longer matches) is listed again */
+async function readBlock(c, row, col) {
+  const m = c.man;
+  if (row < m.r0 || col < m.c0 || row >= m.r0 + m.nr || col >= m.c0 + m.nc) return null;
+  const k = (row - m.r0) * m.nc + (col - m.c0);
+  const fh = await fs.promises.open(path.join(c.dir, 'cube.u8'), 'r');
+  try {
+    const st = await fh.stat();
+    if (st.size !== m.nr * m.nc * c.width) { lists2.delete(c.model); return null; }
+    const buf = Buffer.alloc(c.width);
+    const { bytesRead } = await fh.read(buf, 0, c.width, k * c.width);
+    return bytesRead === c.width ? buf : null;
+  } finally {
+    await fh.close();
+  }
+}
+/* A forecast from layers of cubes: [{ c, keep(t) }], the first the most wanted. Each step a layer
+   keeps becomes one time; `span` is the hours its amounts cover. The chances come out of `v`. */
+async function layered(layers, lat, lon) {
+  const vars = [...new Set(layers.flatMap(({ c }) => c.man.order))];
+  const blocks = await Promise.all(layers.map(({ c }) => { const at = cellIn(c.man.grid, lon, lat); return readBlock(c, at.row, at.col).catch(() => null); }));
+  const rows = [], runs = [];
+  layers.forEach(({ c, keep }, j) => {
+    const b = blocks[j];
+    if (!b) return;
+    const S = c.steps.length, ri = runs.length;
+    runs.push({ model: c.model, tag: c.tag, run: c.man.run, built: c.man.built, top: c.top, ...(c.man.pair ? { pair: c.man.pair } : {}) });
+    c.steps.forEach((h, i) => {
+      const t = c.runMs + h * 3600e3;
+      if (!keep(t)) return;
+      const vals = vars.map((v) => {
+        const k = c.idx[v];
+        if (k == null) return null;
+        const x = c.lut[v][b[k * S + i]];
+        return Number.isNaN(x) ? null : r2(x);
+      });
+      rows.push({ t, ri, span: c.man.spans ? c.man.spans[i] : i ? h - c.steps[i - 1] : null, vals });
+    });
+  });
+  rows.sort((a, b) => a.t - b.t);
+  const v = Object.fromEntries(vars.map((x, k) => [x, rows.map((r) => r.vals[k])]));
+  const { p_rain: pr, p_thunder: pt, ...rest } = v;
+  const units = {};
+  for (const { c } of layers) for (const [x, e] of Object.entries(c.man.vars)) units[x] ??= e.unit;
+  return {
+    times: rows.map((r) => r.t), src: rows.map((r) => r.ri), span: rows.map((r) => r.span), v: rest,
+    p_rain: pr || rows.map(() => null), p_thunder: pt || rows.map(() => null), runs, units,
+  };
+}
+/** The hours (UKV, as forecastAt above, from the v2 cubes): null when there are none yet. */
+async function hoursAt(lat, lon) {
+  const list = await cubes2('ukv');
+  if (!list.length) return null;
+  const primary = list[0];
+  const at = cellIn(primary.man.grid, lon, lat);
+  const m = primary.man;
+  if (at.row < m.r0 || at.col < m.c0 || at.row >= m.r0 + m.nr || at.col >= m.c0 + m.nc) return { error: 'outside' };
+  const long = list.find((c) => c.top >= 120);
+  const prev = list.find((c) => c !== primary && c.runMs < primary.runMs);
+  const layers = [{ c: primary, keep: () => true }];
+  if (prev && prev === long) layers.push({ c: prev, keep: (t) => t < primary.start || t > primary.end });   // one run both ways
+  else {
+    if (prev) layers.push({ c: prev, keep: (t) => t < primary.start });
+    if (long && long !== primary) layers.push({ c: long, keep: (t) => t > primary.end });
+  }
+  const out = await layered(layers, lat, lon);
+  if (!out.times.length) return null;
+  return { ...out, cell: { row: at.row, col: at.col, offset_km: at.km } };
+}
+/** The days: the freshest MWUK Mix, the newest long one (T+114) round and beyond it, then the Met Office
+    Global. With no Mix yet, the UKV stands in for it (runs[].model says which). */
+async function outlookAt(lat, lon) {
+  let mix = await cubes2('mix');
+  if (!mix.length) mix = await cubes2('ukv');
+  const mog = await cubes2('mo_global');
+  const fresh = mix[0], long = mix.find((c) => c.top >= 100);
+  const layers = [];
+  if (fresh) layers.push({ c: fresh, keep: () => true });
+  if (long && long !== fresh) layers.push({ c: long, keep: (t) => t < fresh.start || t > fresh.end });
+  const end = Math.max(fresh?.end ?? 0, long?.end ?? 0);
+  if (mog[0]) layers.push({ c: mog[0], keep: (t) => t > end });
+  if (!layers.length) return null;
+  const out = await layered(layers, lat, lon);
+  return out.times.length ? out : null;
+}
+/* Each cell's hours and days, kept until a cube is rebuilt: a place opened again (or a neighbour in
+   the same 2 km cell) is answered without touching the drive. */
+const pointCache = new Map();
+async function pointAt(lat, lon) {
+  const [u, x, g] = await Promise.all([cubes2('ukv'), cubes2('mix'), cubes2('mo_global')]);
+  if (!u.length) return null;
+  const at = cellIn(u[0].man.grid, lon, lat);
+  const key = `${at.row},${at.col}|${[...u, ...x, ...g].map((c) => c.key).join(',')}`;
+  let hit = pointCache.get(key);
+  if (!hit) {
+    hit = (async () => ({ fc: await hoursAt(lat, lon), ol: await outlookAt(lat, lon).catch(() => null) }))();
+    pointCache.set(key, hit);
+    hit.catch(() => pointCache.delete(key));
+    while (pointCache.size > 400) pointCache.delete(pointCache.keys().next().value);
+  }
+  const { fc, ol } = await hit;
+  if (!fc) return null;
+  /* each answer gets its own copy: anchoring to now changes the numbers */
+  const out = { fc: structuredClone(fc), ol: ol ? structuredClone(ol) : null };
+  if (!out.fc.error) out.fc.cell = { ...out.fc.cell, offset_km: at.km };
+  return out;
+}
+
 /* ── the next hour and a half, minute by minute: the radar carried forward ──────
    The Met Office composite comes every 15 minutes and reaches AWS 10 minutes after its time, so
    the newest scan is 10 to 25 minutes old: read as "now" it lags a downpour by that much (21 Oct
@@ -298,8 +471,30 @@ function motionAt(times, row, col) {
   while (motionCache.size > 400) motionCache.delete(motionCache.keys().next().value);
   return mv;
 }
+/* the live products' indexes (radar, now_ptype), re-read in the background (warmLive) rather than on
+   every page: the drive can take most of a second for a file when it is busy */
+const liveIdx = new Map();
+function liveIndex(name) {
+  const hit = liveIdx.get(name);
+  if (hit && Date.now() - hit.at < 90e3) return hit.v;
+  const v = readJson(path.join(LIVE, name, 'index.json'));
+  liveIdx.set(name, { at: Date.now(), v });
+  return v;
+}
+/* the newest analysed precipitation type at or before a radar scan, within half an hour of it */
+function typedNear(scanMs) {
+  const times = liveIndex('now_ptype')?.times || [];
+  for (let i = times.length - 1; i >= 0; i--) {
+    const t = Date.parse(times[i]);
+    if (t > scanMs + 60e3) continue;
+    if (scanMs - t > 30 * 60e3) break;
+    const f = frameAt(path.join(LIVE, 'now_ptype', `${stampOf(times[i])}.bin`));
+    return f ? { ...f, valid: times[i] } : null;
+  }
+  return null;
+}
 function nowcastAt(lat, lon) {
-  const times = readJson(path.join(LIVE, 'radar', 'index.json'))?.times || [];
+  const times = liveIndex('radar')?.times || [];
   const t0 = times.at(-1);
   if (!t0 || Date.now() - Date.parse(t0) > NC_MAX_AGE * 60e3) return null;
   const f = frameAt(radarFile(t0));
@@ -309,7 +504,25 @@ function nowcastAt(lat, lon) {
   const mv = motionAt(times, row, col);
   const vr = mv?.vr ?? 0, vc = mv?.vc ?? 0;
   const start = Math.floor(Date.now() / 60e3) * 60e3, scan = Date.parse(t0);
-  const rate = [], chance = [];
+  const rate = [], chance = [], kind = [];
+  /* what is falling, carried with the rain: the current-conditions analysis' type (mdata/now.py
+     now_ptype, 2 km: 0 rain, 1 sleet, 2 snow, 3 ice) where the rain over the place will have come from */
+  const typed = typedNear(scan);
+  const kindAt = (sr, sc) => {
+    if (!typed) return null;
+    const r2k = Math.floor(((sr + 0.5) * f.dx) / typed.dx), c2k = Math.floor(((sc + 0.5) * f.dx) / typed.dx);
+    const n = [0, 0, 0, 0];
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        const r = r2k + dr, c = c2k + dc;
+        if (r < 0 || c < 0 || r >= typed.ny || c >= typed.nx) continue;
+        const q = typed.q[r * typed.nx + c];
+        if (q >= 1 && q <= 252) n[Math.floor((q - 1) / 63)] += dr || dc ? 1 : 3;     // the cell itself counts most
+      }
+    }
+    const best = n.indexOf(Math.max(...n));
+    return n[best] > 0 ? best : null;
+  };
   for (let m = 0; m <= NC_MINUTES; m++) {
     const lead = (start + m * 60e3 - scan) / 60e3;
     if (lead > NC_MAX_LEAD) break;
@@ -332,11 +545,12 @@ function nowcastAt(lat, lon) {
     }
     rate.push(sw ? r2(sv / sw) : null);
     chance.push(sw ? Math.round((swet / sw) * 100) : null);
+    kind.push(sw && sv / sw >= 0.05 ? kindAt(sr, sc) : null);
   }
   /* the motion for the page's words: speed and the compass direction it is heading */
   const kmh = mv ? Math.hypot(vr, vc) * 60 * (f.dx / 1000) : null;
   return {
-    scan: t0, start: new Date(start).toISOString(), step: 1, rate, chance,
+    scan: t0, start: new Date(start).toISOString(), step: 1, rate, chance, kind, typed: typed?.valid ?? null,
     motion: mv ? { kmh: Math.round(kmh), towards: Math.round(((Math.atan2(vc, -vr) * 180) / Math.PI + 360) % 360) } : null,
   };
 }
@@ -346,8 +560,36 @@ const tryNowcast = (lat, lon) => { try { return nowcastAt(lat, lon); } catch { r
 /* ── now and today so far ──────────────────────────────────────────────────── */
 const NOW_VARS = ['t2', 'td2', 'rh2', 'wind10', 'wdir10', 'gust10', 'mslp', 'feels', 'windchill', 'tcc'];
 const stampOf = (iso) => iso.replace(/[-:]/g, '').slice(0, 13);              // 2026-10-20T17:15 -> 20261020T1715
+let liveCat = { at: 0, v: null };
+const liveCatalog = () => {
+  if (Date.now() - liveCat.at > 90e3) liveCat = { at: Date.now(), v: readJson(path.join(LIVE, 'catalog.json')) };
+  return liveCat.v;
+};
+/* Kept warm in the background, so a page never waits on the drive for them: the newest analysis,
+   radar scans and type, and today's observed frames, re-read every 30 s (cached while unchanged). */
+async function warmLive() {
+  try {
+    const cat = await readJsonAsync(path.join(LIVE, 'catalog.json'));
+    if (cat) liveCat = { at: Date.now(), v: cat };
+    for (const name of ['radar', 'now_ptype']) {
+      const v = await readJsonAsync(path.join(LIVE, name, 'index.json'));
+      if (v) liveIdx.set(name, { at: Date.now(), v });
+    }
+    for (const v of NOW_VARS) {
+      const t = cat?.products?.[`now_${v}`]?.times?.at(-1);
+      if (t) await frameAtAsync(path.join(LIVE, `now_${v}`, `${stampOf(t)}.bin`));
+    }
+    for (const t of (liveIdx.get('radar')?.v?.times || []).slice(-3)) await frameAtAsync(radarFile(t));
+    const pt = liveIdx.get('now_ptype')?.v?.times?.at(-1);
+    if (pt) await frameAtAsync(path.join(LIVE, 'now_ptype', `${stampOf(pt)}.bin`));
+    const day = londonDay();
+    for (const f of OBS_FIELDS) await frameAtAsync(path.join(OBS, day, `${f}.bin`));
+    await Promise.all(['ukv', 'mix', 'mo_global'].map((m) => cubes2(m, true)));
+    await frostPoint(52.5, -1.5).catch(() => null);             // a new TCM FROST run's point cube, inflated before anyone asks
+  } catch { /* the next round */ }
+}
 function nowAt(lat, lon, nc = tryNowcast(lat, lon)) {
-  const cat = readJson(path.join(LIVE, 'catalog.json'));
+  const cat = liveCatalog();
   const out = {};
   let valid = null;
   for (const v of NOW_VARS) {
@@ -368,7 +610,7 @@ function nowAt(lat, lon, nc = tryNowcast(lat, lon)) {
   if (nc?.rate[0] != null) {
     out.radar = nc.rate[0]; out.radar_valid = nc.start; out.radar_scan = nc.scan;
   } else {
-    const rt = readJson(path.join(LIVE, 'radar', 'index.json'))?.times?.at(-1);
+    const rt = liveIndex('radar')?.times?.at(-1);
     if (rt && age(rt) <= NC_MAX_AGE * 60e3) {
       const rain = sample(frameAt(radarFile(rt)), lon, lat);
       if (rain != null) { out.radar = r2(rain); out.radar_valid = rt; out.radar_scan = rt; }
@@ -446,18 +688,18 @@ function observedAt(lat, lon) {
 const HALF_KM = 200;                                                         // a place's crop reaches 200 km each way
 /* the home page's UK-wide radar: the UK and Ireland, at 2 km (1 km radar coarsened) */
 const UK_VIEW = { lat: 54.8, lon: -4.0, halfKm: 700, km: 2 };
-function radarIndex() {
-  const radar = readJson(path.join(LIVE, 'radar', 'index.json'))?.times || [];
+async function radarIndex() {
+  const radar = liveIndex('radar')?.times || [];
   const past = radar.slice(-12);                                             // the last three hours, every 15 min
   /* which of them have their precipitation type (mdata/now.py now_ptype) */
-  const typed = new Set(readJson(path.join(LIVE, 'now_ptype', 'index.json'))?.times || []);
-  const list = cubes();
+  const typed = new Set(liveIndex('now_ptype')?.times || []);
+  /* the next hours: the freshest UKV cube's run (version 2, else version 1) */
+  const c = (await cubes2('ukv'))[0] || cubes()[0];
   const future = [];
-  if (list.length) {
-    const c = list[0];
-    const st = readJson(path.join(FRAMES, 'ukv', c.tag, 'precip_rate', 'status.json'));
+  if (c) {
+    const st = await readJsonAsync(path.join(FRAMES, 'ukv', c.tag, 'precip_rate', 'status.json'));
     const done = new Set(st?.done || []);
-    const types = new Set(readJson(path.join(FRAMES, 'ukv', c.tag, 'ptype', 'status.json'))?.done || []);
+    const types = new Set((await readJsonAsync(path.join(FRAMES, 'ukv', c.tag, 'ptype', 'status.json')))?.done || []);
     const from = past.length ? Date.parse(past[past.length - 1]) : Date.now();
     for (const h of c.man.steps) {
       const t = c.runMs + h * 3600e3;
@@ -502,11 +744,30 @@ function cropFrame(f, lat, lon, halfKm = HALF_KM, step = 1) {
   return zlib.gzipSync(Buffer.concat([len, head, body]), { level: 5 });
 }
 
+/* JSON, gzipped when the browser takes it (a forecast is ~60 kB, ~12 kB gzipped: on a phone's
+   connection most of the wait was the download) */
+const gzipAsync = (buf) => new Promise((ok, no) => zlib.gzip(buf, { level: 6 }, (e, r) => (e ? no(e) : ok(r))));
+async function sendJson(req, res, obj) {
+  const body = Buffer.from(JSON.stringify(obj));
+  res.set('Content-Type', 'application/json; charset=utf-8');
+  res.set('Vary', 'Accept-Encoding');
+  if (body.length > 1400 && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
+    try {
+      const gz = await gzipAsync(body);
+      res.set('Content-Encoding', 'gzip');
+      return res.end(gz);
+    } catch { /* plain, below */ }
+  }
+  return res.end(body);
+}
+
 export function mountLocationWeather(app) {
   /* inflate each new NOVA run's frames before anyone asks (the first place after a run costs ~1 s) */
   const warm = () => { try { novaThunderAt(52.5, -1.5); } catch { /* no NOVA yet */ } };
-  setTimeout(warm, 20e3).unref?.();
+  setTimeout(warm, 5e3).unref?.();
   setInterval(warm, 5 * 60e3).unref?.();
+  setTimeout(warmLive, 3e3).unref?.();
+  setInterval(warmLive, 30e3).unref?.();
 
   app.get('/api/location/forecast', async (req, res) => {
     let lat = Number(req.query.lat), lon = Number(req.query.lon);
@@ -535,19 +796,27 @@ export function mountLocationWeather(app) {
       return res.status(502).json({ error: 'The place search is not answering. Try again in a moment.' });
     }
     if (country && !COUNTRIES.has(country)) return res.json({ code: 'OUTSIDE_UK', resolvedCountry: country, resolvedName: name });
-    let fc;
-    try { fc = forecastAt(lat, lon); } catch { fc = { error: 'read' }; }
+    /* the hours and days from the v2 cubes, at once with TCM FROST's snow; the v1 cubes while there
+       are no v2 ones yet */
+    const frostP = frostPoint(lat, lon).catch(() => null);                    // TCM FROST's snow: never costs the page its forecast
+    let fc, outlook = null;
+    try {
+      const pt = await pointAt(lat, lon);
+      if (pt?.fc) { fc = pt.fc; outlook = pt.ol; } else fc = forecastAt(lat, lon);
+    } catch {
+      try { fc = forecastAt(lat, lon); } catch { fc = { error: 'read' }; }
+    }
     if (fc.error === 'outside') return res.json({ code: 'OUTSIDE_UK', resolvedName: name });
     if (fc.error) return res.status(503).json({ error: 'The Met Office UKV forecast is being prepared. Try again in a few minutes.' });
     const nc = tryNowcast(lat, lon);                                         // null: the newest scan and the hourly forecast
     const now = nowAt(lat, lon, nc);
     try { fc.anchor = anchorToNow(fc, now); } catch { fc.anchor = null; }
+    if (outlook) { try { outlook.anchor = anchorToNow(outlook, now); } catch { outlook.anchor = null; } }
     let nova = null;
-    try { nova = novaThunderAt(lat, lon); } catch { nova = null; }           // never costs the page its forecast
-    let frost = null;
-    try { frost = await frostPoint(lat, lon); } catch { frost = null; }       // TCM FROST's snow, likewise
+    try { nova = novaThunderAt(lat, lon); } catch { nova = null; }           // likewise
+    const frost = await frostP;
     res.set('Cache-Control', 'no-cache');
-    res.json({ location: { name, lat, lon, country }, forecast: fc, now, nowcast: nc, nova, frost, observed: observedAt(lat, lon), generated: new Date().toISOString() });
+    return sendJson(req, res, { location: { name, lat, lon, country }, forecast: fc, outlook, now, nowcast: nc, nova, frost, observed: observedAt(lat, lon), generated: new Date().toISOString() });
   });
 
   app.get('/api/location/search', async (req, res) => {
@@ -567,9 +836,9 @@ export function mountLocationWeather(app) {
     res.json({ places: pts.map(([lat, lon]) => nowAt(lat, lon)) });
   });
 
-  app.get('/api/location/radar', (req, res) => {
+  app.get('/api/location/radar', async (req, res) => {
     res.set('Cache-Control', 'no-cache');
-    res.json(radarIndex());
+    try { res.json(await radarIndex()); } catch { res.json({ past: [], pastTyped: [], future: [] }); }
   });
 
   /* kind=type: the precipitation type at the same time (2 km ECMWF codes): the analysis's for the

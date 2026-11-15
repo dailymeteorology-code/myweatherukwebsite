@@ -346,6 +346,9 @@ export default function WxIcon({ cond = 'cloudy', day = true, windy = false, siz
     case 'sleet':
       body = (<><Cloud x={8} y={15} s={1} tone="back" uid={uid} /><Sleet /></>);
       break;
+    case 'mix':                                               // rain and snow together: drops and flakes under a greyer cloud
+      body = (<><Cloud x={8} y={15} s={1} tone="grey" uid={uid} /><Sleet /></>);
+      break;
     case 'snow':
       body = (<><Cloud x={8} y={15} s={1} tone="back" uid={uid} /><Snow n={3} /></>);
       break;

@@ -9,7 +9,7 @@ import { useUnits } from '@/components/useUnits';
 import { MapPin, Clock, Crosshair, X, Loader2, ShieldCheck } from 'lucide-react';
 import LocationSearchBox from './LocationSearchBox';
 import WxIcon from './WxIcon';
-import { classify, condLabel, sunElevation, windyOf } from '@/lib/ukvLocation';
+import { classify, condLabel, sunElevation, windyOf, prefetchLocation } from '@/lib/ukvLocation';
 
 const POPULAR = [
   { name: 'London', region: 'Greater London', lat: 51.5074, lon: -0.1278 },
@@ -93,6 +93,7 @@ export default function LocationLanding({
             {recent.map((r) => (
               <span key={`${r.name}|${r.lat}|${r.lon}`} className="lw-chip" style={{ padding: 0 }}>
                 <button type="button" onClick={() => onSearch({ name: r.name, region: r.region, lat: r.lat, lon: r.lon })}
+                  onMouseEnter={() => prefetchLocation(r)} onFocus={() => prefetchLocation(r)} onTouchStart={() => prefetchLocation(r)}
                   style={{ background: 'none', border: 0, color: '#fff', font: 'inherit', fontWeight: 600, padding: '6px 4px 6px 12px', cursor: 'pointer' }}>
                   {r.name}{r.at && <span style={{ fontWeight: 500, color: 'var(--ink3)', marginLeft: 6, fontSize: 11 }}>{timeAgo(r.at)}</span>}
                 </button>
@@ -121,7 +122,8 @@ export default function LocationLanding({
             const cond = wx ? classify(wx) : null;
             const windy = wx ? windyOf(wx) : false;
             return (
-              <button key={c.name} type="button" className="lw-city" onClick={() => onSearch({ name: c.name, region: c.region, lat: c.lat, lon: c.lon })}>
+              <button key={c.name} type="button" className="lw-city" onClick={() => onSearch({ name: c.name, region: c.region, lat: c.lat, lon: c.lon })}
+                onMouseEnter={() => prefetchLocation(c)} onFocus={() => prefetchLocation(c)} onTouchStart={() => prefetchLocation(c)}>
                 <span className="lw-city-top">
                   <span className="lw-city-name">{c.name}</span>
                   {n?.t2 != null && <span className="lw-city-temp">{Math.round(temp(n.t2))}°</span>}

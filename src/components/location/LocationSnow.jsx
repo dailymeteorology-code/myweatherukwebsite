@@ -115,7 +115,7 @@ export default function LocationSnow({ model }) {
           </div>
           <div className="lw-paxis lw-saxis">
             <span style={{ left: 0, transform: 'none' }}>Now</span>
-            {ticks.map((x) => ((x.at - t0) / span < 0.05 ? null : <span key={x.at} style={{ left: `${((x.at - t0) / span) * 100}%` }}>{x.label}</span>))}
+            {ticks.map((x, k) => ((x.at - t0) / span < 0.05 ? null : <span key={x.at} className={k % 2 ? 'is-odd' : undefined} style={{ left: `${((x.at - t0) / span) * 100}%` }}>{x.label}</span>))}
           </div>
           <p className="lw-pnote">
             {hp ? (
