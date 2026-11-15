@@ -979,7 +979,7 @@ export default function Home() {
             </h1>
 
             {settings?.description && (
-              <p className="lg-body" style={{
+              <p className="lg-body max-[999px]:hidden" style={{
                 margin: 'clamp(10px, 2vw, 16px) auto 0',
                 /* Wide enough that the site's own description reads as two or
                    three lines rather than a narrow column of six. */
@@ -988,6 +988,15 @@ export default function Home() {
                 {settings.description}
               </p>
             )}
+            {/* On a phone or tablet the site's line stands here instead of the description: the top
+                bar, which carries it beside Account on wider screens, has no room for it below
+                1000 px (SiteNav.jsx). */}
+            <p className="lg-body flex flex-wrap justify-center min-[1000px]:hidden" style={{
+              margin: 'clamp(10px, 2vw, 16px) auto 0', columnGap: 16, rowGap: 2, letterSpacing: '0.01em',
+            }}>
+              <span style={{ whiteSpace: 'nowrap', fontWeight: 700, color: 'var(--ink-1)' }}>Alert. Aware. Safe</span>
+              <span style={{ whiteSpace: 'nowrap' }}>For A Brighter Future</span>
+            </p>
 
             {/* The status line. A live dot and a sentence — the same information
                 the old pill and its amber count badge carried between them. */}

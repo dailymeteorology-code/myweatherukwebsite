@@ -320,7 +320,18 @@ function DesktopBar({ roles, siteName, logoUrl }) {
           );
         })}
 
-        <div style={{ flex: 1 }} />
+        {/* The site's line, between the menus and Account: on one line when there is room, its two
+            phrases stacked when there is not. Below 1000 px the bar has no room for it (at 900 px it ran
+            into News), so the home page carries it instead, in place of the description under the
+            name (Home.jsx). Clipped rather than ever overlapping the menus (longer translated names). */}
+        <div className="hidden min-[1000px]:flex" style={{
+          flex: 1, minWidth: 0, overflow: 'hidden', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center',
+          columnGap: 22, rowGap: 1, marginRight: 12, fontSize: 12, lineHeight: 1.25, letterSpacing: '0.02em',
+        }}>
+          <span style={{ whiteSpace: 'nowrap', fontWeight: 700, color: isDark ? '#cbd5e1' : '#334155' }}>Alert. Aware. Safe</span>
+          <span style={{ whiteSpace: 'nowrap', fontWeight: 500, color: isDark ? '#94a3b8' : '#64748b' }}>For A Brighter Future</span>
+        </div>
+        <div className="min-[1000px]:hidden" style={{ flex: 1 }} />
 
         {account.length > 0 && (
           <button
