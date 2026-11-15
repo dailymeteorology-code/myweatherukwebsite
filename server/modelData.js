@@ -40,7 +40,12 @@ const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', '
 const WARM_FIRST_ONLY = new Set(['icon', 'icon_europe', 'aigfs', 'gdps', 'meps', 'arpege', 'arome']);   // the new models too: the wide grid is bigger now
 /* MWUK Mix (mdata/mix.py) is made from the UKV's and ICON's own frames when someone opens it: never warmed, so it
    never adds downloads of its own in the background */
-const NO_WARM = new Set(['mix', 'ecmwf_ensm', 'aifs_ensm']);   // the ensemble means: 50 members a field, made only when opened
+const NO_WARM = new Set(['mix', 'aifs_ensm']);   // the AIFS ensemble mean: 50 members a field, made only when opened
+/* models warmed with only these layers (15 Nov 2026, "faster ECMWF ENS"): the ECMWF ENS mean's
+   temperature and pressure, whose 50 members each (~1.5 GB a field a run) are fetched in the
+   background as each run lands, so its first open is not a five-minute wait (the Chances view
+   shares them) */
+const WARM_ONLY = { ecmwf_ensm: ['t2', 'mslp'] };
 /* TCM FROST, MyWeatherUK's snow model: its runs come from its own mirror (server/tcmFrost.js),
    already made, on the 2 km grid; nothing is ever fetched for it here */
 const MIRRORED = new Set(['frost']);
@@ -239,6 +244,28 @@ function refreshLive(lane) {
   });
 }
 
+/* Météo-France's files have no index: each new ARPEGE and AROME run's files are walked in the
+   background as soon as they are listed (mdata/mf.py prewalk), one run at a time, so the first
+   layer opened (ARPEGE's upper air took about 90 s) finds them ready (15 Nov 2026) */
+const prewalked = new Set();
+let prewalkBusy = false;
+function prewalkMF(cat) {
+  if (prewalkBusy) return;
+  for (const id of ['arpege', 'arome']) {
+    const m = cat?.models?.find((x) => x.id === id);
+    const r = m?.runs?.[0];
+    const k = r && `${id}/${r.run}/${r.steps?.length}`;            // walked again as a run's later files arrive
+    if (!r || prewalked.has(k)) continue;
+    prewalkBusy = true;
+    prewalked.add(k);
+    python(['mdata.mf', 'prewalk', id, r.run], (code, err) => {
+      prewalkBusy = false;
+      if (code) { prewalked.delete(k); console.warn(`[modeldata] ${id} prewalk failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`); }
+    }, { MDATA_GRID: id === 'arome' ? 'uk' : 'eu', MDATA_LANE: 'background' });
+    return;
+  }
+}
+
 function refreshCatalog() {
   if (catalogBusy) return;
   catalogBusy = true;
@@ -254,13 +281,14 @@ function refreshCatalog() {
         const r = m.runs?.length ? defaultRun(m) : null;
         if (!r) continue;
         const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';
-        const first = PREFETCH.filter((x) => m.variables?.includes(x));
-        const rest = r.complete && !WARM_FIRST_ONLY.has(m.id) ? (m.variables || []).filter((x) => !first.includes(x)) : [];
+        const first = (WARM_ONLY[m.id] || PREFETCH).filter((x) => m.variables?.includes(x));
+        const rest = r.complete && !WARM_FIRST_ONLY.has(m.id) && !WARM_ONLY[m.id] ? (m.variables || []).filter((x) => !first.includes(x)) : [];
         for (const v of [...first, ...rest]) warm.push([m.id, tag, v]);
       }
       const wanted = new Set(warm.map(([mid, tag, v]) => `${mid}/${tag}/${v}`));
       for (let i = queue.length - 1; i >= 0; i--) if (queue[i].prefetch === true && !wanted.has(queue[i].key)) queue.splice(i, 1);
       for (const [mid, tag, v] of warm) await ensureJobAsync(mid, tag, v, true);
+      prewalkMF(cat);
       await refreshPoint(cat);
     } catch (e) {
       console.warn(`[modeldata] after the catalogue: ${e.message}`);

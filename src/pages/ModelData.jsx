@@ -20,9 +20,9 @@
    GIFs and videos are made smooth by working out the frames between the steps (lib/modelTween). */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
+  PenLine, Undo2, Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
   Waves, MapPin, ChevronDown, X, Layers, Star, Minus, Plus, Zap, Route, Grid3x3, Navigation, CloudSun, Cloud,
-  Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard, Snowflake, Ratio,
+  Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard, Snowflake, Ratio, ChevronsLeft, ChevronsRight,
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, fieldLayer, frameContours, drawScene,
@@ -36,6 +36,7 @@ import LayerBrowser from '@/components/modeldata/LayerBrowser';
 import Timeline from '@/components/modeldata/Timeline';
 import { LAYER_DESC, POPULAR, probFamily, probLine, categoryOf } from '@/lib/modelLayers';
 import { withMorePlaces } from '@/lib/modelPlaces';
+import { areaStats, maskCells, typedShares } from '@/lib/areaStats';
 import RegionPicker, { gridBox } from '@/components/modeldata/RegionPicker';
 import LongRange from '@/components/modeldata/LongRange';
 import { tweenFrame } from '@/lib/modelTween';
@@ -713,6 +714,8 @@ export default function ModelData() {
   /* a county picked from the search (components/modeldata/RegionPicker), outlined in green over the
      map, on each grid's cells; it stays until another place is picked or it is closed */
   const [hl, setHl] = useState(null);
+  /* an area being drawn (15 Nov 2026): its corners on the grid, until Done makes it the outline */
+  const [drawing, setDrawing] = useState(null);
   const hlRings = useMemo(() => {
     if (!hl) return null;
     const out = {};
@@ -1100,6 +1103,18 @@ export default function ModelData() {
   const step = steps[Math.min(idx, Math.max(0, steps.length - 1))];
   const frame = frames[step];
   const loadedCount = steps.filter((s) => frames[s]).length;
+  /* how long the rest will take (15 Nov 2026): the rate the steps came in over the last half-minute */
+  const etaRef = useRef({ key: null, pts: [] });
+  const etaSec = useMemo(() => {
+    const e = etaRef.current, t = Date.now();
+    if (e.key !== key) { e.key = key; e.pts = []; }
+    e.pts.push([t, loadedCount]);
+    e.pts = e.pts.filter(([x]) => t - x < 30000);
+    const [t0, c0] = e.pts[0];
+    const rate = (loadedCount - c0) / ((t - t0) / 1000), left = steps.length - loadedCount;
+    return left > 0 && rate > 0 && t - t0 >= 3000 ? left / rate : null;
+  }, [loadedCount, key, steps.length]);
+  const etaText = etaSec == null ? null : etaSec < 60 ? `~${Math.max(5, Math.round(etaSec / 5) * 5)} s left` : `~${Math.round(etaSec / 60)} min left`;
   const validMs = !run || step == null ? null : timeSteps ? step : Date.parse(run.run) + step * 3600e3;
 
   /* The second window. Forecast and Probability can set any model, run or layer beside the first (a
@@ -1560,7 +1575,8 @@ export default function ModelData() {
       strikesDaily: isObs, strikeStyle,
       risk: raw && P.grid === gridName ? riskFor(at) : null,              // its shapes are made for the first window's grid
       warnings: wn.on && at != null ? { alpha: wn.alpha, look: wn.look, labels: wn.labels, areas: warningsAt(at, P.grid, isObs, sync === 'smooth' ? WARN_FADE : 0) } : null,
-      highlight: hlRings ? { rings: hlRings[P.grid] || [], name: hl.name } : null,
+      highlight: drawing?.pts?.length > 1 && P.grid === gridName ? { rings: [drawing.pts], name: 'drawing' }
+        : hlRings ? { rings: hlRings[P.grid] || [], name: hl.name } : null,
       pressure: mslF ? {
         lines: msl.isobars ? pressureLines(mslF, msl.every, P.resKm, C.pressure, later) : null,
         list: msl.symbols || msl.centres ? pressureCentres(mslF, C.centre, later) : null, symbols: msl.symbols, centres: msl.centres,
@@ -1568,7 +1584,7 @@ export default function ModelData() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disp, style, basemapFor, staticsBy, showCities, smooth, showContours, fontsOk, showStar, isObs, isLive, showLightning, strikes, showRoads, roadsBy, showGrid, obsSummary, obsKey,
-    obsStrikes, strikeStyle, riskFor, gridName, wn, warningsAt, msl, bump, calcTick, layerAlpha, palette, hlRings]);
+    obsStrikes, strikeStyle, riskFor, gridName, wn, warningsAt, msl, bump, calcTick, layerAlpha, palette, hlRings, drawing]);
   useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); smoothCache.current.clear(); }, [thr, dir, scaleKey]);
   useEffect(() => { Object.values(cachesB).forEach((m) => m.clear()); }, [cachesB, dataB?.key, thr, dir, scaleB]);
 
@@ -1710,15 +1726,18 @@ export default function ModelData() {
 
   /* keyboard: left/right step, Home/End, space plays, + and - zoom, Esc closes panels */
   const keyRef = useRef({});
+  const stepDayRef = useRef(null);
   useEffect(() => {
     const onKey = (e) => {
       const tag = e.target?.tagName;
       if (e.defaultPrevented) return;                               // already handled (the timeline's own keys)
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag) || e.target?.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
-      const { n, zoomBy: z, ok } = keyRef.current;
+      const { n, zoomBy: z, ok, day } = keyRef.current;
       /* only steps that have loaded, as the timeline (a blank step would make the map jump) */
       const findOk = (from, dir) => { for (let k = from; k >= 0 && k < n; k += dir) if (!ok || ok(k)) return k; return null; };
-      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      if ((e.shiftKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) || e.key === 'PageUp' || e.key === 'PageDown') {
+        e.preventDefault(); day?.(e.key === 'ArrowRight' || e.key === 'PageDown' ? 1 : -1);
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
         e.preventDefault(); setPlaying(false);
         setIdx((i) => { const d = e.key === 'ArrowRight' ? 1 : -1; const k = findOk(Math.min(i, n) + d, d); return k == null ? i : k; });
       } else if (e.key === 'Home' || e.key === 'End') {
@@ -1728,7 +1747,7 @@ export default function ModelData() {
       else if (e.key === ' ' && tag !== 'BUTTON') { e.preventDefault(); setPlaying((p) => !p); }
       else if (e.key === '+' || e.key === '=') z?.(1.35);
       else if (e.key === '-' || e.key === '_') z?.(1 / 1.35);
-      else if (e.key === 'Escape') { setPin(null); setHl(null); setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setExp((x) => ({ ...x, open: false })); }
+      else if (e.key === 'Escape') { setPin(null); setHl(null); setDrawing(null); setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setExp((x) => ({ ...x, open: false })); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -1825,14 +1844,17 @@ export default function ModelData() {
       const at = toGrid(e.clientX, e.clientY);
       /* a click in the second window is the same place, wherever it is on the first window's grid */
       const [gx, gy] = at.second && gridB !== gridName ? projection(gridName).toGrid(...projection(gridB).fromGrid(...onGridB(at))) : [at.gx, at.gy];
-      if (gx >= 0 && gy >= 0 && gx < NX && gy < NY) setPin({ gx, gy });
+      if (gx >= 0 && gy >= 0 && gx < NX && gy < NY) {
+        if (drawing) setDrawing((d) => ({ pts: [...(d?.pts || []), [gx, gy]] }));
+        else setPin({ gx, gy });
+      }
     }
     pressAt.current = null;
     pointers.current.delete(e.pointerId);
     gesture.current = null;
   };
   const zoomBy = (k) => { const r = canvasRef.current.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, k); };
-  keyRef.current = { n: steps.length, zoomBy, ok: (k) => !!frames[steps[k]] };
+  keyRef.current = { n: steps.length, zoomBy, ok: (k) => !!frames[steps[k]], day: (d) => stepDayRef.current?.(d) };
 
   /* exports: the frame, enlarged (short side = chosen size) */
   const exportSize = (short) => {
@@ -2540,18 +2562,44 @@ export default function ModelData() {
       subtitle={!model ? '' : isProb ? `${model.label} · ${model.members} members` : timeSteps ? chipSub
         : `${SHORT_NAMES[model.id] || model.label} · ${MODEL_INFO[model.id]?.[1] || ''} · ${browserItems.length} layers`} />
   );
+  /* several counties outlined together: one outline, its name the counties' names */
+  const joinAreas = (a, b) => {
+    if (!a) return b;
+    const names = [...(a.names || [a.name]), b.name];
+    return {
+      id: `${a.id}+${b.id}`, names, name: names.length > 3 ? `${names.slice(0, 2).join(' + ')} + ${names.length - 2} more` : names.join(' + '),
+      polys: [...a.polys, ...b.polys],
+      bbox: [Math.min(a.bbox[0], b.bbox[0]), Math.min(a.bbox[1], b.bbox[1]), Math.max(a.bbox[2], b.bbox[2]), Math.max(a.bbox[3], b.bbox[3])],
+    };
+  };
+  /* the area drawn: its corners as lon/lat, outlined like a county */
+  const finishDrawing = () => {
+    const pts = drawing?.pts || [];
+    setDrawing(null);
+    if (pts.length < 3) return;
+    const P = projection(gridName);
+    const ring = pts.map(([x, y]) => P.fromGrid(x, y));
+    const lons = ring.map((r) => r[0]), lats = ring.map((r) => r[1]);
+    setHl({ id: `drawn-${Date.now()}`, name: 'Your area', polys: [[ring]], bbox: [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)] });
+  };
   /* zoom to a place: areas, their countries and their regions (components/modeldata/RegionPicker); its
      search also finds counties (zoomed to and outlined in green) and places (zoomed to, about 80 km
      across and at least 16 cells, and pinned, so their values show) */
   const regionList = (
     <RegionPicker grid={gridName} phone={phone} titled={narrow} onPick={(b) => { setHl(null); fit(b); }} onClose={phone || layout === 'tablet' ? closePanels : () => setRegionsOpen(false)}
       wholeBox={(REGIONS.all || REGIONS.ukv)?.box} cities={statics?.cities}
-      onCounty={(c, gb) => { setHl(c); fit(gb); }}
+      onCounty={(c, gb) => { setHl(c); setPin(null); fit(gb); }}
+      canAdd={!!hl} onAddCounty={(c) => {
+        const next = joinAreas(hl, c);
+        setHl(next);
+        fit(gridBox(next.bbox, gridName).box);
+      }}
+      onDraw={() => { setHl(null); setPin(null); setDrawing({ pts: [] }); }}
       onPlace={(p) => {
         setHl(null);
         const hs = Math.max(8, 40000 / GRIDS[gridName].dx);
         fit([p.x - hs, p.y - hs, p.x + hs, p.y + hs]);
-        setPin({ gx: p.x, gy: p.y });
+        setPin({ gx: p.x, gy: p.y, label: p.name });
       }} />
   );
   /* the playback speed, in words; a speed typed into the Download panel shows as its milliseconds */
@@ -2681,14 +2729,90 @@ export default function ModelData() {
   const summaryNote = obsDay ? (obsDay.day === londonToday() ? 'so far today' : `${obsDay.analyses}/96 analyses`) : '';
 
   /* a clicked point: its value now and through the steps */
+  /* the outlined area's numbers (15 Nov 2026): its cells on this grid, the frame on show over them,
+     and the whole run's extremes from every step loaded so far */
+  const areaCells = useMemo(() => (hlRings ? maskCells(hlRings[gridName] || [], gridName) : null), [hlRings, gridName]);
+  const areaWet = RAINY.has(scaleKey) || /^(precip|snow|rain|frzr|icep|conv)_(total|1h|6h|24h|acc)$/.test(scaleKey) ? 0.1 : null;
+  const areaNow = useMemo(() => {
+    if (!areaCells?.length || !frame) return null;
+    const f = disp(frame);
+    if (scaleKey === 'ptype' || scaleKey === 'radar_type') return { typed: typedShares(f, areaCells, gridName) };
+    if (['wx', 'wdir10', 'mwd', 'snow_risk', 'snow_cond', 'frost_risk', 'ice_risk', 'beaufort'].includes(scaleKey) || isImg) return { none: true };
+    return areaStats(f, areaCells, gridName, areaWet);
+  }, [areaCells, frame, disp, scaleKey, gridName, areaWet, isImg]);
+  const areaRun = useMemo(() => {
+    if (!areaCells?.length || !areaNow || areaNow.none || areaNow.typed) return null;
+    let hi = null, lo = null, n = 0;
+    for (const st of steps) {
+      const f = frames[st];
+      if (!f) continue;
+      const a = areaStats(disp(f), areaCells, gridName);
+      if (!a) continue;
+      n++;
+      if (!hi || a.max > hi.v) hi = { v: a.max, st, c: a.imax };
+      if (!lo || a.min < lo.v) lo = { v: a.min, st, c: a.imin };
+    }
+    return n > 1 ? { hi, lo, n } : null;
+  }, [areaCells, areaNow, steps, frames, disp, gridName]);
+  const nearPlace = (c) => {
+    const nx = GRIDS[gridName].nx, gx = c % nx, gy = Math.floor(c / nx);
+    const b = (statics?.cities || []).reduce((m, x) => { const d = Math.hypot(x.x - gx, x.y - gy); return !m || d < m.d ? { d, n: x.name } : m; }, null);
+    return b && (b.d * GRIDS[gridName].dx) / 1000 < 30 ? ` near ${b.n}` : '';
+  };
+  /* a step as its day and time (Mon 16, 08:00), as the run's own steps are labelled elsewhere */
+  const whenOf = (st) => {
+    const ms = timeSteps ? st : Date.parse(run?.run || 0) + st * 3600e3;
+    return new Date(ms).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', '');
+  };
+  const areaCard = hl && !drawing && (() => {
+    const A = areaNow, unit = vmeta?.unit;
+    const of = hl.names ? 'the area' : hl.name;
+    const swatch = <span style={{ width: 12, height: 12, borderRadius: 3, flexShrink: 0, background: 'rgba(34,197,94,0.3)', boxShadow: 'inset 0 0 0 2px #16a34a' }} />;
+    /* at the top on the right, under the run's badge: the key sits bottom left and the pin card bottom right */
+    return (
+      <div style={{ ...T.glass, borderRadius: 18, position: 'absolute', top: topH + (narrow ? 4 : 40), zIndex: 4, padding: '9px 10px 10px 12px', display: 'grid', gap: 3,
+        ...(narrow ? { left: 10, right: 10, maxWidth: 520, margin: '0 auto' } : { right: 62, width: 330 }) }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {swatch}
+          <b style={{ flex: 1, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hl.name}</b>
+          <IconBtn title="Stop outlining it (Esc)" onClick={() => setHl(null)} style={{ width: narrow ? 30 : 24, height: narrow ? 30 : 24 }}><X size={12} /></IconBtn>
+        </div>
+        <div style={{ fontSize: 11.5, color: T.ink2 }}>{vmeta?.label} · {validLabel}</div>
+        {!A ? <div style={{ fontSize: 12, color: T.ink2 }}>This step is still loading.</div>
+          : A.none ? <div style={{ fontSize: 12, color: T.ink2 }}>Pick a layer with numbers (temperature, rain, wind…) to see its highest, lowest and average here.</div>
+          : A.typed ? (
+            <div style={{ fontSize: 12.5, fontWeight: 650 }}>
+              {['Rain', 'Sleet', 'Snow', 'Ice'].map((k, i) => `${k} ${Math.round(A.typed[i] * 100)}%`).join(' · ')}<span style={{ color: T.ink2, fontWeight: 500 }}> of {of}</span>
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 13, fontWeight: 750 }}>Highest {fmtValue(A.max, unit)}<span style={{ fontWeight: 550, color: T.ink3 }}>{nearPlace(A.imax)}</span></div>
+              <div style={{ fontSize: 12.5, fontWeight: 650 }}>
+                {A.wetShare != null
+                  ? <>{A.wetShare > 0 ? `Falling over ${Math.max(1, Math.round(A.wetShare * 100))}% of ${of}` : `Dry over all of ${of}`}</>
+                  : <>Lowest {fmtValue(A.min, unit)}<span style={{ fontWeight: 500, color: T.ink3 }}>{nearPlace(A.imin)}</span></>}
+                <span style={{ fontWeight: 500, color: T.ink2 }}> · average {fmtValue(A.mean, unit)}</span>
+              </div>
+              {areaRun && (
+                <div style={{ fontSize: 11.5, color: T.ink3, marginTop: 2 }}>
+                  Whole run{areaRun.n < steps.length ? ` (${areaRun.n} of ${steps.length} steps loaded)` : ''}: highest {fmtValue(areaRun.hi.v, unit)} ({whenOf(areaRun.hi.st)})
+                  {A.wetShare == null ? `, lowest ${fmtValue(areaRun.lo.v, unit)} (${whenOf(areaRun.lo.st)})` : ''}
+                </div>
+              )}
+            </>
+          )}
+      </div>
+    );
+  })();
   const pinCard = pin && (() => {
     const vals = steps.map((s) => (frames[s] ? sampleFrame(disp(frames[s]), pin.gx, pin.gy) : NaN));
     const at = Math.min(idx, Math.max(0, steps.length - 1));
     const numeric = !['wx', 'ptype', 'wdir10', 'mwd'].includes(scaleKey);
     const fin = vals.filter(Number.isFinite);
     const c = (statics?.cities || []).reduce((b, x) => { const d = Math.hypot(x.x - pin.gx, x.y - pin.gy); return !b || d < b.d ? { d, n: x.name } : b; }, null);
-    const km = c ? c.d * 2 : null;
-    const where = !c ? 'Picked point' : km < 6 ? c.n : km < 20 ? `Near ${c.n}` : `${Math.round(km)} km from ${c.n}`;
+    const km = c ? (c.d * GRIDS[gridName].dx) / 1000 : null;          // cells to km on this grid (2 km or 10 km)
+    /* a place or postcode picked from the search keeps its own name */
+    const where = pin.label || (!c ? 'Picked point' : km < 6 ? c.n : km < 20 ? `Near ${c.n}` : `${Math.round(km)} km from ${c.n}`);
     return (
       <div style={{ ...T.glass, borderRadius: 20, position: 'absolute', bottom: botH, zIndex: 4, padding: '10px 12px 12px', display: 'grid', gap: 6,
         ...(narrow ? { left: 10, right: 10, maxWidth: 520, margin: '0 auto' } : { right: 10, width: 300 }) }}>
@@ -2767,6 +2891,20 @@ export default function ModelData() {
      every step (faint until it has loaded), the time it lands on shown above a press or a drag */
   const runMsT = run && !timeSteps ? Date.parse(run.run) : 0;
   const stepTimes = timeSteps ? steps : steps.map((s) => runMsT + s * 3600e3);
+  /* a day back or on (15 Nov 2026): the loaded step nearest the same time a day away */
+  const stepDay = (dir) => {
+    setPlaying(false);
+    setIdx((i) => {
+      const cur = Math.min(i, steps.length - 1), tNow = stepTimes[cur], want = tNow + dir * 864e5;
+      let best = null;
+      steps.forEach((st, k) => {
+        if (!frames[st] || (dir > 0 ? stepTimes[k] <= tNow : stepTimes[k] >= tNow)) return;
+        if (best == null || Math.abs(stepTimes[k] - want) < Math.abs(stepTimes[best] - want)) best = k;
+      });
+      return best ?? i;
+    });
+  };
+  stepDayRef.current = stepDay;
   const tipLabel = (ms) => {
     const d = new Date(ms);
     if (isObs) return d.toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' });
@@ -2789,12 +2927,12 @@ export default function ModelData() {
     const done = loadedCount >= steps.length, pct = loadedCount / steps.length;
     return (
       <span className={`mdt-load${done ? ' is-done' : ''}`} role="status" aria-live="polite"
-        title={done ? `All ${steps.length} steps have loaded` : `${loadedCount} of ${steps.length} steps have loaded; the rest are coming from ${fetchedFrom(model?.id)}. Each mark under the timeline is a step, solid once it has loaded.`}>
+        title={done ? `All ${steps.length} steps have loaded` : `${loadedCount} of ${steps.length} steps have loaded${etaText ? ` (${etaText.replace('~', 'about ')})` : ''}; the rest are coming from ${fetchedFrom(model?.id)}. Each mark under the timeline is a step, solid once it has loaded.`}>
         <svg viewBox="0 0 20 20" aria-hidden="true">
           <circle cx="10" cy="10" r="8" className="mdt-load-bg" />
           <circle cx="10" cy="10" r="8" className="mdt-load-fg" style={{ strokeDasharray: `${(pct * 50.27).toFixed(2)} 50.27` }} />
         </svg>
-        <span><b>{loadedCount}/{steps.length}</b>{!phone && <i>{done ? 'all loaded' : 'loaded'}</i>}</span>
+        <span><b>{loadedCount}/{steps.length}</b>{!phone ? <i>{done ? 'all loaded' : etaText || 'loaded'}</i> : !done && etaText ? <i>{etaText}</i> : null}</span>
       </span>
     );
   })();
@@ -2934,13 +3072,17 @@ export default function ModelData() {
       )}
 
       {!exp.open && !isLong && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || obsPanel || modeOpen || shapeOpen)) && pinCard}
-      {/* the county outlined from the search: its name, and a way to stop showing it */}
-      {hl && !isLong && !exp.open && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || modeOpen || shapeOpen)) && (
-        <div style={{ ...T.capsule, position: 'absolute', right: 10, bottom: botH, padding: '4px 4px 4px 12px', fontSize: 12.5, fontWeight: 700, display: 'flex', gap: 8,
-          alignItems: 'center', zIndex: 3, maxWidth: 'calc(100% - 20px)' }}>
-          <span style={{ width: 12, height: 12, borderRadius: 3, flexShrink: 0, background: 'rgba(34,197,94,0.3)', boxShadow: 'inset 0 0 0 2px #16a34a' }} />
-          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{hl.name}</span>
-          <IconBtn title="Stop outlining it (Esc)" onClick={() => setHl(null)} style={{ width: 26, height: 26 }}><X size={13} /></IconBtn>
+      {/* the outlined county or area: its highest, lowest and average (phones: while no pin card is open) */}
+      {areaCard && !isLong && !exp.open && !(phone && (pin || varOpen || mapOpen || cmpOpen || regionsOpen || modeOpen || shapeOpen)) && areaCard}
+      {/* drawing an area: how, and Undo, Done and Cancel */}
+      {drawing && !isLong && (
+        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '5px 6px 5px 14px', display: 'flex', gap: 6,
+          alignItems: 'center', zIndex: 6, fontSize: 12.5, fontWeight: 650, whiteSpace: 'nowrap', maxWidth: 'calc(100% - 20px)' }}>
+          <PenLine size={14} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{narrow ? 'Tap' : 'Click'} the map for each corner{drawing.pts.length ? ` · ${drawing.pts.length}` : ''}</span>
+          <IconBtn title="Take away the last corner" onClick={() => setDrawing((d) => ({ pts: d.pts.slice(0, -1) }))} style={{ width: 28, height: 28 }}><Undo2 size={13} /></IconBtn>
+          <button type="button" className="md-act" disabled={drawing.pts.length < 3} onClick={finishDrawing} style={{ opacity: drawing.pts.length < 3 ? 0.5 : 1 }}>Done</button>
+          <IconBtn title="Cancel (Esc)" onClick={() => setDrawing(null)} style={{ width: 28, height: 28 }}><X size={13} /></IconBtn>
         </div>
       )}
 
@@ -2953,9 +3095,11 @@ export default function ModelData() {
       {/* bottom bar */}
       {isLong ? null : layout === 'desktop' ? (
         <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'min(980px, calc(100% - 20px))', padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <IconBtn title="Back a day (Shift+←)" onClick={() => stepDay(-1)}><ChevronsLeft size={16} /></IconBtn>
           <IconBtn title="Previous step (←)" onClick={stepBack}><ChevronLeft size={16} /></IconBtn>
           {playBtn}
           <IconBtn title="Next step (→)" onClick={stepFwd}><ChevronRight size={16} /></IconBtn>
+          <IconBtn title="On a day (Shift+→)" onClick={() => stepDay(1)}><ChevronsRight size={16} /></IconBtn>
           <div style={{ flex: 1, minWidth: 80, display: 'flex', padding: '0 8px' }}>{slider}</div>
           {loadMeter}
           {timeLabel}
@@ -2966,9 +3110,11 @@ export default function ModelData() {
         </div>
       ) : layout === 'tablet' ? (
         <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'calc(100% - 20px)', maxWidth: 1060, padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <IconBtn title="Back a day" onClick={() => stepDay(-1)} style={{ width: 34, height: 34 }}><ChevronsLeft size={16} /></IconBtn>
           <IconBtn title="Previous step" onClick={stepBack} style={{ width: 38, height: 38 }}><ChevronLeft size={17} /></IconBtn>
           {playBtn}
           <IconBtn title="Next step" onClick={stepFwd} style={{ width: 38, height: 38 }}><ChevronRight size={17} /></IconBtn>
+          <IconBtn title="On a day" onClick={() => stepDay(1)} style={{ width: 34, height: 34 }}><ChevronsRight size={16} /></IconBtn>
           <div style={{ flex: 1, minWidth: 80, display: 'flex', padding: '0 6px' }}>{slider}</div>
           {loadMeter}
           {timeLabel}
@@ -2980,9 +3126,11 @@ export default function ModelData() {
         <div ref={botRef} className="md-phone-bar" style={{ ...T.glass, position: 'absolute', left: 10, right: 10, bottom: 16, borderRadius: 26, padding: '10px 12px 6px', display: 'grid', gap: 6 }}>
           {/* the time on show, with a step back and a step on either side of it */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconBtn title="Back a day" onClick={() => stepDay(-1)} style={{ width: 34, height: 34 }}><ChevronsLeft size={17} /></IconBtn>
             <IconBtn title="Previous step" onClick={stepBack} style={{ width: 40, height: 40 }}><ChevronLeft size={19} /></IconBtn>
             <div className="md-phone-time" style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center' }}>{timeLabel}</div>
             <IconBtn title="Next step" onClick={stepFwd} style={{ width: 40, height: 40 }}><ChevronRight size={19} /></IconBtn>
+            <IconBtn title="On a day" onClick={() => stepDay(1)} style={{ width: 34, height: 34 }}><ChevronsRight size={17} /></IconBtn>
           </div>
           {/* play, and the whole width to drag along the timeline */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

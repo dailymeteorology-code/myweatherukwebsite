@@ -467,3 +467,37 @@ SOURCES_MF = {
 }
 MODELS_MF = [ARPEGE(), AROME()]
 DIFFERENCED_MF = {(m, v) for m in ('arpege', 'arome') for v in ('precip_rate', 'snow_rate', 'sw_down', 'lw_down')}
+
+
+def prewalk(model_id, run_iso=None, workers=8):
+    """Walk every package file of a run as soon as it is listed (15 Nov 2026, at the user's request:
+    "faster ARPEGE upper air"), so the first layer anyone opens finds its index ready: a cold ARPEGE
+    upper-air layer took about a minute and a half walking its files. Header reads only (2 KB a
+    field), kept on D: like any other index.
+
+        python -m mdata.mf prewalk arpege [run]"""
+    import concurrent.futures as cf
+    M = {m.id: m for m in MODELS_MF}[model_id]
+    if run_iso:
+        from .models import _utc
+        run = _utc(run_iso)
+    else:
+        run = M.runs(n=1)[0][0]
+    pkgs = ['SP1', 'SP2', 'IP1', 'IP2', 'IP3', 'IP4'] if model_id == 'arpege' else ['SP1', 'SP2', 'SP3']
+    files = [f for pkg in pkgs for f in M._pkg_files(run, pkg).values()]
+    t0 = time.time()
+
+    def one(f):
+        try:
+            return len(index(*f))
+        except Exception:                                   # noqa: BLE001  (a file still uploading: walked later)
+            return 0
+    with cf.ThreadPoolExecutor(workers) as ex:
+        n = sum(ex.map(one, files))
+    print(f'{model_id} {run:%d %HZ}: {len(files)} files, {n} fields indexed in {time.time() - t0:.0f} s')
+
+
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) >= 3 and sys.argv[1] == 'prewalk':
+        prewalk(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)

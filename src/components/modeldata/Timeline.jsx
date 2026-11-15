@@ -81,6 +81,26 @@ export default function Timeline({ times, idx, onPick, loaded, label }) {
   const up = () => { setDrag(false); held.current = null; };
   /* the arrow keys, Home and End also go only to loaded steps */
   const loadedFrom = (from, dir) => { for (let i = from; i >= 0 && i < times.length; i += dir) if (loaded(i)) return i; return null; };
+  /* where the steps grow further apart (hourly to every 3 hours, 3 to 6): a mark on the bar there
+     (15 Nov 2026, at the user's request), and the tip says how far apart the steps are past it */
+  const changes = [];
+  let every = times.length > 1 ? times[1] - times[0] : 0;
+  for (let i = 1; i + 1 < times.length; i++) {
+    const g = times[i + 1] - times[i];
+    if (g > every * 1.5 && (i + 2 >= times.length || times[i + 2] - times[i + 1] >= g * 0.9)) { changes.push({ t: times[i], h: Math.round(g / 3600e3) }); every = g; }
+  }
+  const everyAt = (i) => { let h = null; for (const c of changes) if (times[i] > c.t) h = c.h; return h; };
+  const tipText = (i) => { const h = everyAt(i); return `${label(times[i])}${h ? ` · every ${h} h` : ''}`; };
+  /* a day on or back: the loaded step nearest the same time a day away (the page's buttons and Shift+arrows) */
+  const dayFrom = (dir) => {
+    const want = now + dir * 864e5;
+    let best = null;
+    for (let i = 0; i < times.length; i++) {
+      if (!loaded(i) || (dir > 0 ? times[i] <= now : times[i] >= now)) continue;
+      if (best == null || Math.abs(times[i] - want) < Math.abs(times[best] - want)) best = i;
+    }
+    return best;
+  };
   /* with little room a label is left out rather than squeezed: where the segments are narrower than a
      label (ten days in a phone's bar), every second or third one is labelled instead */
   const width = ref.current?.clientWidth || 600;
@@ -93,10 +113,12 @@ export default function Timeline({ times, idx, onPick, loaded, label }) {
       aria-valuetext={label(now)} tabIndex={0}
       onKeyDown={(e) => {
         // handled here only: the page's own arrow keys would otherwise take a second step
-        const dirs = { ArrowLeft: [cur - 1, -1], ArrowRight: [cur + 1, 1], Home: [0, 1], End: [times.length - 1, -1] }[e.key];
-        if (!dirs) return;
+        const day = e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') ? (e.key === 'ArrowRight' ? 1 : -1)
+          : e.key === 'PageDown' ? 1 : e.key === 'PageUp' ? -1 : 0;
+        const dirs = day ? null : { ArrowLeft: [cur - 1, -1], ArrowRight: [cur + 1, 1], Home: [0, 1], End: [times.length - 1, -1] }[e.key];
+        if (!dirs && !day) return;
         e.preventDefault(); e.stopPropagation();
-        const go = loadedFrom(...dirs);
+        const go = day ? dayFrom(day) : loadedFrom(...dirs);
         if (go != null && go !== cur) onPick(go);
       }}>
       {segs.map((s, k) => {
@@ -112,8 +134,11 @@ export default function Timeline({ times, idx, onPick, loaded, label }) {
         );
       })}
       {times.length <= 240 && times.map((t, i) => <i key={t} className={`mdt-tick${loaded(i) ? '' : ' is-wait'}`} style={{ left: `calc(${pos(t)}% - 1px)` }} />)}
+      {changes.map((c) => (
+        <span key={c.t} className="mdt-every" style={{ left: `${pos(c.t)}%` }} title={`Every ${c.h} hours from ${label(c.t)}`}><b>{c.h}h</b></span>
+      ))}
       <span className="mdt-head" style={{ left: `${pos(now)}%` }} />
-      {tip && <span className="mdt-tip" style={{ left: tip.x }}>{label(times[tip.i])}</span>}
+      {tip && <span className="mdt-tip" style={{ left: tip.x }}>{tipText(tip.i)}</span>}
     </div>
   );
 }

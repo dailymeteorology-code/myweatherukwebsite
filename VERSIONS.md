@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.52.011 | 2026-11-15 | Patch | — | Model Data: search for any town, village or county in Zoom to (and countries and regions as before): a place is zoomed to and pinned, a county zoomed to and outlined in green | Model Data STRATA redesign (Nov) |
+| 5.53.000 | 2026-11-15 | Update | — | Model Data: a day back or on from the timeline, marks where the steps go 3- or 6-hourly, time left while loading, postcode search, an outlined county's (or your own drawn area's) highest, lowest and average now and over the run, several counties outlined together; ECMWF ENS temperature and pressure and every ARPEGE and AROME run readied in the background | Model Data STRATA redesign (Nov) |
+| 5.52.011 | 2026-11-15 | Patch | 78b3f9d | Model Data: search for any town, village or county in Zoom to (and countries and regions as before): a place is zoomed to and pinned, a county zoomed to and outlined in green | Model Data STRATA redesign (Nov) |
 | 5.52.010 | 2026-11-15 | Patch | 44cff9b | The site's line, "Alert. Aware. Safe" and "For A Brighter Future", beside Account in the top bar; on phones and tablets it stands under the MyWeatherUK name on the home page in place of the description | Location Weather overhaul (Nov) |
 | 5.52.009 | 2026-11-15 | Patch | 203ad9a | Warning map on phones: the warning's details take under half the screen (was three-quarters), so its area stays in view, and they drag down to close | Location Weather overhaul (Nov) |
 | 5.52.008 | 2026-11-15 | Patch | 22cc244 | Home: pressing a warning card opens the warning map on that warning, on its day, framed on its area, with its full details open beside it | Location Weather overhaul (Nov) |

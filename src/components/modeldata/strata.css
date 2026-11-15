@@ -128,6 +128,10 @@
 /* the time and the count beside the timeline keep one width (15 Nov 2026): when a time grew a
    character (T+99 to T+100, Mon to Wed) the bar beside it narrowed under a drag and the screen jittered */
 .mdt-time { min-width: 150px; box-sizing: border-box; }
+/* where the steps grow further apart: a line through the bar and how far apart they are past it */
+.mdt-every { position: absolute; top: 17px; height: 20px; width: 0; border-left: 2px dashed var(--md-sub); opacity: 0.85; pointer-events: none; }
+.mdt-every b { position: absolute; left: 3px; top: -3px; font-size: 9px; font-weight: 800; letter-spacing: 0.02em; color: var(--md-sub);
+  background: var(--md-plate); border-radius: 4px; padding: 0 2px; line-height: 12px; }
 .mdt-load { min-width: 98px; box-sizing: border-box; }
 .md-phone-time .mdt-time, .mdt-time .mdt-load { min-width: 0; }
 .mdt-time b { font-family: 'Inter Tight', 'Inter', sans-serif; font-size: 16px; font-weight: 650; letter-spacing: -0.015em; color: var(--md-ink); }
@@ -226,6 +230,13 @@
 .mdr-row:hover { background: var(--md-hover); color: var(--md-ink); }
 .mdr.is-phone .mdr-row { padding: 12px 12px; font-size: 15px; }
 .mdr-name { flex: 1; min-width: 0; display: grid; }
+/* a row with a second button beside it: a county's "Add" (to outline several together) */
+.mdr-rowwrap { display: flex; align-items: center; gap: 4px; }
+.mdr-rowwrap .mdr-row { flex: 1; min-width: 0; }
+.mdr-add { all: unset; box-sizing: border-box; cursor: pointer; flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; padding: 5px 9px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; color: #15803d; background: rgba(34, 197, 94, 0.12); box-shadow: inset 0 0 0 1px rgba(22, 163, 74, 0.35); }
+.mdr-add:hover { background: rgba(34, 197, 94, 0.2); }
+.mdr-draw .mdr-name > span:first-child { color: var(--md-ink); font-weight: 700; }
 .mdr-name i { font-style: normal; font-size: 11.5px; font-weight: 520; color: var(--md-muted); margin-top: 1px; }
 .mdr-more { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; font-size: 11.5px; font-weight: 650; color: var(--md-muted); font-variant-numeric: tabular-nums; }
 .mdr-note { padding: 10px 12px; font-size: 12.5px; color: var(--md-muted); }

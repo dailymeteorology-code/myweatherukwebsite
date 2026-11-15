@@ -14,7 +14,7 @@
    villages of Great Britain and Ireland). A county is handed back with its outline to be drawn in
    green; a place with its grid cell, to be zoomed to and pinned. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, PenLine, Plus, Search, X } from 'lucide-react';
 import { GRIDS, projection } from '@/lib/modelGrids';
 
 let regionsP = null;
@@ -67,10 +67,13 @@ const matchOf = (name, s) => {
   return n.includes(s) ? 3 : 9;
 };
 const KIND_ORDER = { county: 0, region: 1, place: 2 };
+/* a UK postcode, whole (SG5 1AB) or its first half (SG5): looked up with postcodes.io (open data, no key) */
+const POSTCODE = /^([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})?$/i;
 const placeKind = (p) => (p.pop == null ? 'City' : p.pop >= 100000 ? 'City' : p.pop >= 5000 ? 'Town' : 'Village');
 
-export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, titled, cities, onCounty, onPlace }) {
+export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, titled, cities, onCounty, onPlace, onDraw, canAdd, onAddCounty }) {
   const [areas, setAreas] = useState(null);
+  const [post, setPost] = useState(null);                  // a postcode found: { name, sub, p }
   const [counties, setCounties] = useState(null);
   const [path, setPath] = useState([]);                    // [] areas, [a] an area's places, [a, i] a place's regions
   const [q, setQ] = useState('');
@@ -78,6 +81,28 @@ export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, t
   useEffect(() => { let on = true; loadRegions().then((a) => on && setAreas(a)); return () => { on = false; }; }, []);
   useEffect(() => { let on = true; loadCounties().then((c) => on && setCounties(c)); return () => { on = false; }; }, []);
   useEffect(() => { if (!phone) searchRef.current?.focus({ preventScroll: true }); }, [phone]);
+  /* a postcode typed: its place from postcodes.io, a moment after typing stops */
+  useEffect(() => {
+    const m = q.trim().toUpperCase().match(POSTCODE);
+    setPost(null);
+    if (!m) return undefined;
+    let on = true;
+    const t = setTimeout(async () => {
+      try {
+        const whole = !!m[2];
+        const url = whole ? `https://api.postcodes.io/postcodes/${encodeURIComponent(m[1] + m[2])}` : `https://api.postcodes.io/outcodes/${encodeURIComponent(m[1])}`;
+        const r = await fetch(url);
+        if (!r.ok) return;
+        const d = (await r.json()).result;
+        if (!on || !d || d.latitude == null) return;
+        const [x, y] = projection(grid).toGrid(d.longitude, d.latitude);
+        const where = whole ? [d.admin_ward, d.admin_district].filter(Boolean).join(', ') : (d.admin_district || []).slice(0, 2).join(', ');
+        const label = whole ? `${m[1]} ${m[2]}` : m[1];
+        setPost({ name: label, sub: `Postcode${where ? ` · ${where}` : ''}`, p: { name: label, x, y } });
+      } catch { /* no postcode then */ }
+    }, 350);
+    return () => { on = false; clearTimeout(t); };
+  }, [q, grid]);
 
   /* what this grid reaches: every place with its grid box, those mostly off the grid left out */
   const tree = useMemo(() => {
@@ -131,8 +156,8 @@ export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, t
       const c = (counties || []).find((k) => inCounty(k, lon, lat));
       f.sub = c ? `${placeKind(f.p)} · ${c.name}` : placeKind(f.p);
     }
-    return top;
-  }, [q, tree, counties, cities, grid]);
+    return post ? [{ kind: 'place', ...post }, ...top] : top;
+  }, [q, tree, counties, cities, grid, post]);
   const choose = (f) => {
     if (f.kind === 'county' && onCounty) onCounty(f.c, f.gb);
     else if (f.kind === 'place' && onPlace) onPlace(f.p);
@@ -140,11 +165,14 @@ export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, t
     onClose?.();
   };
 
-  const row = (key, label, sub, onClick, more) => (
-    <button key={key} type="button" className="mdr-row" onClick={onClick}>
-      <span className="mdr-name">{label}{sub ? <i>{sub}</i> : null}</span>
-      {more ? <span className="mdr-more">{more}<ChevronRight size={15} /></span> : null}
-    </button>
+  const row = (key, label, sub, onClick, more, add) => (
+    <div key={key} className="mdr-rowwrap">
+      <button type="button" className="mdr-row" onClick={onClick}>
+        <span className="mdr-name">{label}{sub ? <i>{sub}</i> : null}</span>
+        {more ? <span className="mdr-more">{more}<ChevronRight size={15} /></span> : null}
+      </button>
+      {add ? <button type="button" className="mdr-add" onClick={add} title={`Add ${label} to the outline`} aria-label={`Add ${label} to the outline`}><Plus size={14} />Add</button> : null}
+    </div>
   );
 
   return (
@@ -164,7 +192,9 @@ export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, t
       </label>
       <div className="mdr-list">
         {!tree ? <div className="mdr-note">Loading the places…</div>
-          : found ? (found.length ? found.map((f, i) => row(`f${i}`, f.name, f.sub, () => choose(f))) : <div className="mdr-note">Nothing called “{q.trim()}” on this map.</div>)
+          : found ? (found.length ? found.map((f, i) => row(`f${i}`, f.name, f.sub, () => choose(f), null,
+            f.kind === 'county' && canAdd && onAddCounty ? () => { onAddCounty(f.c); onClose?.(); } : null))
+            : <div className="mdr-note">{POSTCODE.test(q.trim()) ? 'Looking up the postcode…' : `Nothing called “${q.trim()}” on this map.`}</div>)
           : place ? (
             <>
               {row('all', `All of ${place.name}`, null, () => go(place.gb, true))}
@@ -178,6 +208,11 @@ export default function RegionPicker({ grid, onPick, onClose, wholeBox, phone, t
             </>
           ) : (
             <>
+              {onDraw ? (
+                <button type="button" className="mdr-row mdr-draw" onClick={() => { onDraw(); onClose?.(); }}>
+                  <span className="mdr-name"><span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><PenLine size={14} />Draw your own area</span><i>Its highest, lowest and average, like a county’s</i></span>
+                </button>
+              ) : null}
               {wholeBox ? row('whole', 'Whole map', null, () => go(wholeBox, true)) : null}
               {tree.map((a, i) => row(`a${i}`, a.name, null, () => { go(a.gb, false); setPath([i]); }, `${a.items.length}`))}
             </>
