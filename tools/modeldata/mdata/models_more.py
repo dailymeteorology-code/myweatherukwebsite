@@ -448,3 +448,9 @@ SOURCES_MORE = {
 MODELS_MORE = [AIGFS(), GDPS(), MEPS()]
 # accumulations differenced between steps into rates (job.py DIFFERENCED, RATE_DIFF)
 DIFFERENCED_MORE = {('meps', 'precip_rate'), ('meps', 'snow_rate')}
+
+# Météo-France's ARPEGE and AROME (mdata/mf.py)
+from .mf import DIFFERENCED_MF, MODELS_MF, SOURCES_MF   # noqa: E402
+SOURCES_MORE.update(SOURCES_MF)
+MODELS_MORE += MODELS_MF
+DIFFERENCED_MORE |= DIFFERENCED_MF
