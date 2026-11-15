@@ -40,9 +40,34 @@ function useLongRange() {
 }
 
 /* ── the polar vortex ── */
-function VortexChart({ v, t, phone }) {
+const PICK_C = '#9333EA';                                  // the line picked out: purple, apart from every other line
+const fmtWhen = (ms) => {
+  const d = new Date(ms);
+  const day = d.toLocaleDateString('en-GB', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' });
+  return d.getUTCHours() ? `${day} ${String(d.getUTCHours()).padStart(2, '0')}Z` : day;
+};
+/* a line's value at a time, between its points (only to find which line is nearest the pointer) */
+function valueAt(pts, ms) {
+  if (!pts.length || ms < pts[0][0] || ms > pts[pts.length - 1][0]) return null;
+  let i = 1;
+  while (i < pts.length && pts[i][0] < ms) i++;
+  if (i >= pts.length) return pts[pts.length - 1][1];
+  const [a, ua] = pts[i - 1], [b, ub] = pts[i];
+  return b === a ? ua : ua + ((ub - ua) * (ms - a)) / (b - a);
+}
+/* the line's own point nearest a time: what the label shows, so its numbers are always the model's */
+function pointNear(pts, ms) {
+  let best = null;
+  for (const p of pts) if (!best || Math.abs(p[0] - ms) < Math.abs(best[0] - ms)) best = p;
+  return best;
+}
+
+/* Point at a line (or press on it, on a phone or tablet: 15 Nov 2026, at the user's request) to pick
+   it out: that member's whole path in purple, the others faded, and a label with what it says that day,
+   its lowest and highest, whether it reverses the winds, and the other lines on the same day. */
+function VortexChart({ v, t, phone, touch }) {
   const W = phone ? 480 : 760, H = phone ? 330 : 340, L = 44, R = 14, TOP = 16, B = 30;   // narrower on phones: its words larger
-  const now = Date.now();
+  const now = useMemo(() => Date.now(), [v]);
   const gefs = v?.gefs, gfs = v?.gfs;
   const series = useMemo(() => {
     const an = (v?.analysis || []).map(([d, u]) => [dms(d), u]);
@@ -54,9 +79,14 @@ function VortexChart({ v, t, phone }) {
   }, [v, gefs, gfs]);
   const x0 = now - 60 * DAY;
   const x1 = Math.max(now + 16 * DAY, ...series.days, ...series.gf.map(([x]) => x));
-  const normalAt = (ms) => { const n = v?.normal; return n?.length ? n[Math.min(n.length - 1, doy(ms))] : null; };
-  const normal = [];
-  for (let ms = x0; ms <= x1; ms += DAY) { const u = normalAt(ms); if (u != null) normal.push([ms, u]); }
+  const normal = useMemo(() => {
+    const n = v?.normal, out = [];
+    if (!n?.length) return out;
+    for (let ms = Date.UTC(new Date(x0).getUTCFullYear(), new Date(x0).getUTCMonth(), new Date(x0).getUTCDate()); ms <= x1; ms += DAY) {
+      if (ms >= x0) out.push([ms, n[Math.min(n.length - 1, doy(ms))]]);
+    }
+    return out;
+  }, [v, x0, x1]);
   const all = [...series.an, ...series.gf, ...series.mean, ...normal, ...series.members.flat()].map(([, u]) => u).filter((u) => u != null);
   const yMin = Math.min(-10, Math.floor(Math.min(...all, 0) / 10) * 10);
   const yMax = Math.max(40, Math.ceil(Math.max(...all, 0) / 10) * 10);
@@ -70,34 +100,117 @@ function VortexChart({ v, t, phone }) {
   }
   const ticks = [];
   for (let u = yMin; u <= yMax; u += 10) ticks.push(u);
+
+  /* every line that can be picked out, members first */
+  const lines = useMemo(() => [
+    ...series.members.map((pts, i) => ({ key: `m${i}`, kind: 'member', n: i + 1, pts, colour: PICK_C })),
+    { key: 'mean', kind: 'mean', pts: series.mean, colour: GEFS_C },
+    { key: 'gfs', kind: 'gfs', pts: series.gf, colour: GFS_C },
+    { key: 'an', kind: 'an', pts: series.an, colour: t.ink },
+    { key: 'normal', kind: 'normal', pts: normal, colour: t.ink2 },
+  ], [series, normal, t]);
+  const [pick, setPick] = useState(null);                   // { key, ms, u }: the line picked out and its own point
+  const locate = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const sx = ((e.clientX - r.left) / r.width) * W, sy = ((e.clientY - r.top) / r.height) * H;
+    if (sx < L - 6 || sx > W - R + 6 || sy < TOP - 10 || sy > H - B + 10) return null;
+    const ms = x0 + ((Math.min(Math.max(sx, L), W - R) - L) / (W - L - R)) * (x1 - x0);
+    let best = null;
+    for (const ln of lines) {
+      const u = valueAt(ln.pts, ms);
+      if (u == null) continue;
+      const d = Math.abs(Y(u) - sy);
+      if (!best || d < best.d) best = { ln, d };
+    }
+    if (!best || best.d > (touch ? 44 : 26)) return null;   // a finger is wider than a pointer
+    const p = pointNear(best.ln.pts, ms);
+    return p ? { key: best.ln.key, ms: p[0], u: p[1] } : null;
+  };
+  const picked = pick ? lines.find((l) => l.key === pick.key) : null;
+  const label = useMemo(() => {
+    if (!picked) return null;
+    const runOf = (iso) => (iso ? ` ${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 13)}Z` : '');
+    const name = picked.kind === 'member' ? `GEFS member ${picked.n} of ${series.members.length}`
+      : picked.kind === 'mean' ? 'GEFS mean (the average of the members)'
+        : picked.kind === 'gfs' ? `GFS${runOf(gfs?.run)}`
+          : picked.kind === 'an' ? 'Observed (GFS analysis)' : 'Normal (the 1991–2020 average)';
+    const rows = [`${fmtWhen(pick.ms)}: ${pick.u.toFixed(1)} m/s`];
+    if (picked.kind === 'member' || picked.kind === 'mean' || picked.kind === 'gfs') {
+      const pts = picked.pts.filter(([x]) => x > now - DAY);
+      if (pts.length) {
+        const lo = pts.reduce((a, b) => (b[1] < a[1] ? b : a)), hi = pts.reduce((a, b) => (b[1] > a[1] ? b : a));
+        rows.push(`Lowest ${lo[1].toFixed(1)} m/s (${fmtDay(lo[0])}), highest ${hi[1].toFixed(1)} (${fmtDay(hi[0])})`);
+        const rev = pts.find(([, u]) => u < 0);
+        rows.push(rev ? `Reverses the winds on ${fmtDay(rev[0])}: a major warming` : `Keeps the winds westerly to ${fmtDay(pts[pts.length - 1][0])}`);
+      }
+    }
+    const same = [['mean', 'mean', series.mean], ['gfs', 'GFS', series.gf], ['an', 'observed', series.an], ['normal', 'normal', normal]]
+      .filter(([k]) => k !== picked.key)
+      .map(([, l, pts]) => { const p = pts.find(([x]) => Math.abs(x - pick.ms) < 3600e3) || (l === 'normal' ? pointNear(pts, pick.ms) : null); return p ? `${l} ${p[1].toFixed(1)}` : null; })
+      .filter(Boolean);
+    return { name, rows, same: same.length ? `Same day: ${same.join(' · ')}` : '' };
+  }, [picked, pick, series, normal, gfs, now]);
+
+  const fadeMembers = picked?.kind === 'member';
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label="The westerly wind at 60 degrees north and 10 hPa">
-      {ticks.map((u) => (
-        <g key={u}>
-          <line x1={L} x2={W - R} y1={Y(u)} y2={Y(u)} stroke={t.line} strokeWidth={u === 0 ? 0 : 1} />
-          <text x={L - 6} y={Y(u) + 4} textAnchor="end" fontSize="11" fill={t.ink2}>{u}</text>
-        </g>
-      ))}
-      {months.map((ms) => (
-        <g key={ms}>
-          <line x1={X(ms)} x2={X(ms)} y1={TOP} y2={H - B} stroke={t.line} strokeDasharray="2 4" />
-          <text x={X(ms) + 4} y={H - B + 18} fontSize="11.5" fontWeight="650" fill={t.ink2}>{new Date(ms).toLocaleDateString('en-GB', { timeZone: 'UTC', month: 'short' })}</text>
-        </g>
-      ))}
-      {/* below nought: the vortex has broken down */}
-      <rect x={L} y={Y(0)} width={W - L - R} height={Math.max(0, Y(yMin) - Y(0))} fill={REV_C} opacity={0.06} />
-      <line x1={L} x2={W - R} y1={Y(0)} y2={Y(0)} stroke={REV_C} strokeWidth={1.5} strokeDasharray="6 4" />
-      {/* on the right on wide screens (the forecasts are above it there), on the left on phones (the past is above it there) */}
-      <text x={phone ? L + 4 : W - R - 4} y={Y(0) + 14} textAnchor={phone ? 'start' : 'end'} fontSize="11" fontWeight="700" fill={REV_C}>Below 0: winds reversed (major warming)</text>
-      <path d={path(normal)} fill="none" stroke={t.ink2} strokeWidth={1.6} strokeDasharray="5 4" />
-      {series.members.map((m, i) => <path key={i} d={path(m)} fill="none" stroke={GEFS_C} strokeWidth={1} opacity={0.28} />)}
-      <path d={path(series.mean)} fill="none" stroke={GEFS_C} strokeWidth={3} />
-      <path d={path(series.gf)} fill="none" stroke={GFS_C} strokeWidth={2.2} />
-      <path d={path(series.an)} fill="none" stroke={t.ink} strokeWidth={2.6} />
-      <line x1={X(now)} x2={X(now)} y1={TOP} y2={H - B} stroke={t.ink} strokeWidth={1} opacity={0.5} />
-      <text x={X(now) + 4} y={TOP + 11} fontSize="11" fontWeight="700" fill={t.ink}>Today</text>
-      <text x={L} y={TOP - 4} fontSize="11" fill={t.ink2}>m/s</text>
-    </svg>
+    <div style={{ position: 'relative' }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block', touchAction: 'pan-y', cursor: 'crosshair', userSelect: 'none' }}
+        role="img" aria-label="The westerly wind at 60 degrees north and 10 hPa: point at or press on a line to see what it says"
+        onPointerDown={(e) => setPick(locate(e))}
+        onPointerMove={(e) => { if (e.pointerType === 'mouse' || e.buttons) setPick(locate(e)); }}
+        onPointerLeave={(e) => { if (e.pointerType === 'mouse') setPick(null); }}>
+        {ticks.map((u) => (
+          <g key={u}>
+            <line x1={L} x2={W - R} y1={Y(u)} y2={Y(u)} stroke={t.line} strokeWidth={u === 0 ? 0 : 1} />
+            <text x={L - 6} y={Y(u) + 4} textAnchor="end" fontSize="11" fill={t.ink2}>{u}</text>
+          </g>
+        ))}
+        {months.map((ms) => (
+          <g key={ms}>
+            <line x1={X(ms)} x2={X(ms)} y1={TOP} y2={H - B} stroke={t.line} strokeDasharray="2 4" />
+            <text x={X(ms) + 4} y={H - B + 18} fontSize="11.5" fontWeight="650" fill={t.ink2}>{new Date(ms).toLocaleDateString('en-GB', { timeZone: 'UTC', month: 'short' })}</text>
+          </g>
+        ))}
+        {/* below nought: the vortex has broken down */}
+        <rect x={L} y={Y(0)} width={W - L - R} height={Math.max(0, Y(yMin) - Y(0))} fill={REV_C} opacity={0.06} />
+        <line x1={L} x2={W - R} y1={Y(0)} y2={Y(0)} stroke={REV_C} strokeWidth={1.5} strokeDasharray="6 4" />
+        {/* on the right on wide screens (the forecasts are above it there), on the left on phones (the past is above it there) */}
+        <text x={phone ? L + 4 : W - R - 4} y={Y(0) + 14} textAnchor={phone ? 'start' : 'end'} fontSize="11" fontWeight="700" fill={REV_C}>Below 0: winds reversed (major warming)</text>
+        <path d={path(normal)} fill="none" stroke={t.ink2} strokeWidth={1.6} strokeDasharray="5 4" />
+        {series.members.map((m, i) => <path key={i} d={path(m)} fill="none" stroke={GEFS_C} strokeWidth={1} opacity={fadeMembers ? 0.14 : 0.28} />)}
+        <path d={path(series.mean)} fill="none" stroke={GEFS_C} strokeWidth={3} opacity={fadeMembers ? 0.55 : 1} />
+        <path d={path(series.gf)} fill="none" stroke={GFS_C} strokeWidth={2.2} opacity={fadeMembers ? 0.55 : 1} />
+        <path d={path(series.an)} fill="none" stroke={t.ink} strokeWidth={2.6} />
+        <line x1={X(now)} x2={X(now)} y1={TOP} y2={H - B} stroke={t.ink} strokeWidth={1} opacity={0.5} />
+        <text x={X(now) + 4} y={TOP + 11} fontSize="11" fontWeight="700" fill={t.ink}>Today</text>
+        <text x={L} y={TOP - 4} fontSize="11" fill={t.ink2}>m/s</text>
+        {picked && (
+          <g pointerEvents="none">
+            <path d={path(picked.pts)} fill="none" stroke={picked.colour} strokeWidth={picked.kind === 'member' ? 2.8 : 4} strokeDasharray={picked.kind === 'normal' ? '5 4' : undefined} />
+            <line x1={X(pick.ms)} x2={X(pick.ms)} y1={TOP} y2={H - B} stroke={picked.colour} strokeWidth={1} strokeDasharray="3 3" opacity={0.7} />
+            <circle cx={X(pick.ms)} cy={Y(pick.u)} r={5} fill={picked.colour} stroke={t.light ? '#fff' : '#0E1624'} strokeWidth={2} />
+          </g>
+        )}
+      </svg>
+      {picked && label && (() => {
+        const px = X(pick.ms) / W, py = Y(pick.u) / H;
+        return (
+          <div role="status" aria-live="polite" style={{
+            /* anchored by the side it opens towards, so it keeps its full width near either edge */
+            position: 'absolute', ...(px > 0.55 ? { right: `calc(${(1 - px) * 100}% + 12px)` } : { left: `calc(${px * 100}% + 12px)` }), top: `${py * 100}%`,
+            pointerEvents: 'none', zIndex: 2, width: 'max-content', maxWidth: phone ? 236 : 300,
+            transform: `translateY(${py > 0.42 ? 'calc(-100% - 10px)' : '10px'})`,
+            ...t.glass, borderRadius: 14, padding: '8px 11px', fontSize: 12, lineHeight: 1.45, color: t.ink3,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 800, color: t.ink, fontSize: 12.5 }}>
+              <span style={{ width: 14, height: 3, borderRadius: 2, background: picked.colour, flexShrink: 0 }} />{label.name}
+            </div>
+            {label.rows.map((r, i) => <div key={i} style={{ fontWeight: i ? 550 : 750, color: i ? t.ink3 : t.ink }}>{r}</div>)}
+            {label.same && <div style={{ marginTop: 3, color: t.ink2, fontSize: 11.5 }}>{label.same}</div>}
+          </div>
+        );
+      })()}
+    </div>
   );
 }
 
@@ -211,6 +324,7 @@ const VORTEX_INFO = (t, members) => [
     [swatch(GEFS_C), 'The average of the members: the most likely path.'],
     [swatch(t.ink2, { dash: true }), 'The normal for each date (the 1991–2020 average). Below it the vortex is weaker than usual, above it stronger.'],
     [swatch(REV_C, { band: true }), 'Below 0 the winds have reversed: the vortex has broken down (a major sudden warming).'],
+    [swatch(PICK_C), 'Point at any line, or press on it on a phone or tablet, to pick it out: one member’s whole path turns purple, with what it says that day, its lowest and highest, whether it reverses the winds, and the other lines on the same day.'],
   ]],
   ['Why it matters for the UK', [
     'After a major warming the weather lower down often turns blocked over the next two to six weeks: high pressure near Greenland or Scandinavia, winds from the north or east, and a better chance of cold and snow in the UK. It shifts the odds; it does not guarantee it, and not every warming reaches the ground. A strong vortex tends to mean the opposite: mild, wet and windy westerlies.',
@@ -234,6 +348,7 @@ const MJO_INFO = (t) => [
 export default function LongRange({ t, phone, style, onMap }) {
   const [data, err] = useLongRange();
   const [info, setInfo] = useState(null);                 // 'vortex' | 'mjo': the explanation open under that title
+  const touch = useMemo(() => typeof window !== 'undefined' && !!window.matchMedia?.('(hover: none)').matches, []);   // phones and tablets: press, not point
   const toggle = (k) => setInfo((o) => (o === k ? null : k));
   const v = data?.vortex;
   const mjo = data?.mjo?.days || [];
@@ -272,7 +387,7 @@ export default function LongRange({ t, phone, style, onMap }) {
               )}
             </div>
             {info === 'vortex' && <Explainer t={t} sections={VORTEX_INFO(t, v?.gefs?.members?.length || 30)} onClose={() => setInfo(null)} />}
-            <VortexChart v={v} t={t} phone={phone} />
+            <VortexChart v={v} t={t} phone={phone} touch={touch} />
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', margin: '6px 0 8px' }}>
               {key(t.ink, 'Observed (GFS analyses)')}
               {key(GFS_C, 'GFS')}
@@ -280,6 +395,7 @@ export default function LongRange({ t, phone, style, onMap }) {
               {key(GEFS_C, `GEFS members (${v?.gefs?.members?.length || 30})`, false, true)}
               {key(t.ink2, 'Normal (1991–2020)', true)}
             </div>
+            <p style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 650, color: t.accent }}>{touch ? 'Press on any line to see what that member (or line) says.' : 'Point at any line to see what that member (or line) says.'}</p>
             {vortexSummary(v).map((s) => <p key={s} style={{ margin: '2px 0', fontSize: 13, fontWeight: 600, color: t.ink3 }}>{s}</p>)}
             <p style={{ ...sub, margin: '8px 0 0', fontSize: 11.5 }}>
               {v?.gfs?.run ? `GFS ${v.gfs.run.slice(8, 10)}/${v.gfs.run.slice(5, 7)} ${v.gfs.run.slice(11, 13)}Z` : ''}{v?.gefs?.run ? ` · GEFS ${v.gefs.run.slice(8, 10)}/${v.gefs.run.slice(5, 7)} 00Z` : ''} · NOAA via AWS · normal: NCEP/NCAR reanalysis, NOAA PSL

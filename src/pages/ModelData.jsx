@@ -1702,11 +1702,16 @@ export default function ModelData() {
       const tag = e.target?.tagName;
       if (e.defaultPrevented) return;                               // already handled (the timeline's own keys)
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag) || e.target?.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
-      const { n, zoomBy: z } = keyRef.current;
+      const { n, zoomBy: z, ok } = keyRef.current;
+      /* only steps that have loaded, as the timeline (a blank step would make the map jump) */
+      const findOk = (from, dir) => { for (let k = from; k >= 0 && k < n; k += dir) if (!ok || ok(k)) return k; return null; };
       if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
         e.preventDefault(); setPlaying(false);
-        setIdx((i) => Math.max(0, Math.min(n - 1, i + (e.key === 'ArrowRight' ? 1 : -1))));
-      } else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); setPlaying(false); setIdx(e.key === 'Home' ? 0 : Math.max(0, n - 1)); }
+        setIdx((i) => { const d = e.key === 'ArrowRight' ? 1 : -1; const k = findOk(Math.min(i, n) + d, d); return k == null ? i : k; });
+      } else if (e.key === 'Home' || e.key === 'End') {
+        e.preventDefault(); setPlaying(false);
+        setIdx((i) => { const k = e.key === 'Home' ? findOk(0, 1) : findOk(n - 1, -1); return k == null ? i : k; });
+      }
       else if (e.key === ' ' && tag !== 'BUTTON') { e.preventDefault(); setPlaying((p) => !p); }
       else if (e.key === '+' || e.key === '=') z?.(1.35);
       else if (e.key === '-' || e.key === '_') z?.(1 / 1.35);
@@ -1814,7 +1819,7 @@ export default function ModelData() {
     gesture.current = null;
   };
   const zoomBy = (k) => { const r = canvasRef.current.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, k); };
-  keyRef.current = { n: steps.length, zoomBy };
+  keyRef.current = { n: steps.length, zoomBy, ok: (k) => !!frames[steps[k]] };
 
   /* exports: the frame, enlarged (short side = chosen size) */
   const exportSize = (short) => {
@@ -2733,8 +2738,9 @@ export default function ModelData() {
       {!narrow && <span style={{ fontSize: 11.5, color: T.ink2, whiteSpace: 'nowrap' }}>{model?.members ? `${model.members} members` : ''}</span>}
     </div>
   );
-  const stepBack = () => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); };
-  const stepFwd = () => { setPlaying(false); setIdx((i) => Math.min(steps.length - 1, i + 1)); };
+  /* back and next go to the nearest step that has loaded (as the timeline does): never onto a blank map */
+  const stepBack = () => { setPlaying(false); setIdx((i) => { for (let k = Math.min(i, steps.length) - 1; k >= 0; k--) if (frames[steps[k]]) return k; return i; }); };
+  const stepFwd = () => { setPlaying(false); setIdx((i) => { for (let k = i + 1; k < steps.length; k++) if (frames[steps[k]]) return k; return i; }); };
   /* the timeline: the run's days as a STRATA progress bar (components/modeldata/Timeline), a tick for
      every step (faint until it has loaded), the time it lands on shown above a press or a drag */
   const runMsT = run && !timeSteps ? Date.parse(run.run) : 0;

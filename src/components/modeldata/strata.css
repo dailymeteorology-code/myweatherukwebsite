@@ -125,6 +125,11 @@
   background: var(--md-accent); box-shadow: 0 4px 14px rgba(10, 111, 219, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.25); }
 .mdt-play:hover { filter: brightness(1.06); }
 .mdt-time { display: grid; line-height: 1.12; white-space: nowrap; font-variant-numeric: tabular-nums; padding: 0 6px; text-align: right; }
+/* the time and the count beside the timeline keep one width (15 Nov 2026): when a time grew a
+   character (T+99 to T+100, Mon to Wed) the bar beside it narrowed under a drag and the screen jittered */
+.mdt-time { min-width: 150px; box-sizing: border-box; }
+.mdt-load { min-width: 98px; box-sizing: border-box; }
+.md-phone-time .mdt-time, .mdt-time .mdt-load { min-width: 0; }
 .mdt-time b { font-family: 'Inter Tight', 'Inter', sans-serif; font-size: 16px; font-weight: 650; letter-spacing: -0.015em; color: var(--md-ink); }
 .mdt-time span { font-size: 11.5px; font-weight: 620; color: var(--md-muted); }
 .mdt-time b i { font-style: normal; color: var(--md-accent); }

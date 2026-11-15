@@ -41,6 +41,7 @@ function segments(t0, t1, unit) {
  */
 export default function Timeline({ times, idx, onPick, loaded, label }) {
   const ref = useRef(null);
+  const held = useRef(null);                                    // the bar's place and size when a drag began
   const [tip, setTip] = useState(null);
   const [drag, setDrag] = useState(false);
   const t0 = times[0], t1 = times[times.length - 1], span = Math.max(1, (t1 ?? 0) - (t0 ?? 0));
@@ -48,21 +49,38 @@ export default function Timeline({ times, idx, onPick, loaded, label }) {
   const segs = useMemo(() => (times.length > 1 ? segments(t0, t1, unit) : []), [t0, t1, unit, times.length]);
   if (times.length < 2) return <div className="mdt" />;
   const pos = (t) => ((t - t0) / span) * 100;
-  const now = times[Math.min(idx, times.length - 1)];
-  const nearest = (clientX) => {
-    const r = ref.current.getBoundingClientRect();
+  const cur = Math.min(idx, times.length - 1);
+  const now = times[cur];
+  /* Only a step that has loaded can be picked (15 Nov 2026, at the user's request: "restricted to the
+     loaded parts"): pointing past them lands on the nearest one that has, so the map never goes blank
+     under a drag. During a drag the bar is measured once, where the drag began: measured afresh at
+     every move, a time beside it growing a character (T+99 to T+100) narrowed the bar under the
+     finger, the same place became another step, its time another width, and the screen jittered. */
+  const nearest = (clientX, r = held.current || ref.current.getBoundingClientRect()) => {
     const t = t0 + Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * span;
-    let best = 0;
-    for (let i = 1; i < times.length; i++) if (Math.abs(times[i] - t) < Math.abs(times[best] - t)) best = i;
+    let best = -1;
+    for (let i = 0; i < times.length; i++) {
+      if (loaded(i) && (best < 0 || Math.abs(times[i] - t) < Math.abs(times[best] - t))) best = i;
+    }
+    if (best < 0) best = cur;                                    // nothing has loaded yet: stay
     return { i: best, x: ((times[best] - t0) / span) * r.width };
   };
-  const down = (e) => { e.currentTarget.setPointerCapture?.(e.pointerId); setDrag(true); const n = nearest(e.clientX); onPick(n.i); setTip(n); };
-  const move = (e) => {
+  const down = (e) => {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    held.current = ref.current.getBoundingClientRect();
+    setDrag(true);
     const n = nearest(e.clientX);
-    if (drag) onPick(n.i);
+    if (n.i !== cur) onPick(n.i);
     setTip(n);
   };
-  const up = () => { setDrag(false); };
+  const move = (e) => {
+    const n = nearest(e.clientX);
+    if (drag && n.i !== cur) onPick(n.i);
+    setTip((o) => (o && o.i === n.i && o.x === n.x ? o : n));
+  };
+  const up = () => { setDrag(false); held.current = null; };
+  /* the arrow keys, Home and End also go only to loaded steps */
+  const loadedFrom = (from, dir) => { for (let i = from; i >= 0 && i < times.length; i += dir) if (loaded(i)) return i; return null; };
   /* with little room a label is left out rather than squeezed: where the segments are narrower than a
      label (ten days in a phone's bar), every second or third one is labelled instead */
   const width = ref.current?.clientWidth || 600;
@@ -75,10 +93,11 @@ export default function Timeline({ times, idx, onPick, loaded, label }) {
       aria-valuetext={label(now)} tabIndex={0}
       onKeyDown={(e) => {
         // handled here only: the page's own arrow keys would otherwise take a second step
-        const go = { ArrowLeft: Math.max(0, idx - 1), ArrowRight: Math.min(times.length - 1, idx + 1), Home: 0, End: times.length - 1 }[e.key];
-        if (go == null) return;
+        const dirs = { ArrowLeft: [cur - 1, -1], ArrowRight: [cur + 1, 1], Home: [0, 1], End: [times.length - 1, -1] }[e.key];
+        if (!dirs) return;
         e.preventDefault(); e.stopPropagation();
-        onPick(go);
+        const go = loadedFrom(...dirs);
+        if (go != null && go !== cur) onPick(go);
       }}>
       {segs.map((s, k) => {
         const left = pos(s.a), w = pos(s.b) - left, on = now >= s.a && (now < s.b || (k === segs.length - 1 && now <= s.b));
