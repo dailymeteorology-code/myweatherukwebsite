@@ -3,8 +3,9 @@
 
      uk  the Met Office UKV grid: Lambert azimuthal equal-area on WGS84, centred 54.9 N 2.5 W,
          1042 x 970 cells of 2 km (UKV, the live radar and satellite, the observed days)
-     eu  the global models' grid: centred 50 N 12 W, 1083 x 708 cells of 8 km, from the US east
-         coast to the Volga and from Svalbard into the Sahara (Met Office Global, ECMWF, GFS)
+     eu  the global models' grid: centred 50 N 12 W, 1273 x 1085 cells of 10 km (15 Nov 2026; it was
+         1083 x 708 of 8 km): Alaska, Canada, Greenland, the Arctic, all of Scandinavia, Europe to the
+         Volga, North Africa, Mexico and the Caribbean, over the pole (Met Office Global, ECMWF, GFS…)
 
    Grid units: gx east and gy south, in cells from the grid's outer north-west corner (cell i spans
    [i, i+1]). The projection is the ellipsoidal one (Snyder), as pyproj makes the frames with: the
@@ -12,7 +13,7 @@
 
 export const GRIDS = {
   uk: { name: 'uk', lat0: 54.9, lon0: -2.5, nx: 1042, ny: 970, dx: 2000, x0: -1158000, yTop: 902000 },
-  eu: { name: 'eu', lat0: 50, lon0: -12, nx: 1083, ny: 708, dx: 8000, x0: -4428000, yTop: 2924000 },
+  eu: { name: 'eu', lat0: 50, lon0: -12, nx: 1273, ny: 1085, dx: 10000, x0: -7705000, yTop: 6855000 },
 };
 /** The grid a model's frames are on (mdata/common.py MODEL_GRID; TCM FROST, MyWeatherUK's snow
     model, is made on the UKV's, and so is DWD ICON-EU's UK view, 'icon': its Europe view,

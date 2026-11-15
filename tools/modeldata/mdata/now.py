@@ -239,6 +239,25 @@ def spread(st, field, L_km, w0=0.25):
     return field + num / (den + w0)
 
 
+TYPE_L_KM = 35                                   # how far an airport's report of what is falling is felt
+
+
+def _type_nudge(field, st):
+    """derived.radar_phase's pull towards what the airports see falling: their residuals spread as
+    the temperature's are (the station's own cell 80 % of the way, fading over ~35 km)."""
+    return spread(st, field, TYPE_L_KM, 0.25)
+
+
+def near_reports(reports, t, minutes=35):
+    """Each station's report nearest t, within `minutes`."""
+    near = {}
+    for o in reports or []:
+        dt = abs(o['t'] - t.timestamp())
+        if dt <= minutes * 60 and (o['id'] not in near or dt < abs(near[o['id']]['t'] - t.timestamp())):
+            near[o['id']] = o
+    return near
+
+
 def at_station(a, o):
     j, i = int(o['gy']), int(o['gx'])
     return float(a[j, i]) if 0 <= j < NY and 0 <= i < NX else np.nan
@@ -480,7 +499,7 @@ def analyse(t, reports):
     # what is falling: rain, sleet, snow or freezing rain (derived.radar_phase), for the weather
     # symbols (as a snow rate, its share of what falls; freezing rain shows as rain there) and as
     # now_ptype, wherever the radar has any echo in the cell
-    code, share = radar_phase(B, t2, td2)
+    code, share = radar_phase(B, t2, td2, reports=list(near.values()), nudge=_type_nudge)
     prn = np.nan_to_num(pr)
     wx = weather_type({'precip_rate': pr, 'snow_rate': np.where(code == 3, 0, share) * prn, 'tcc': A['tcc'], 't2': t2, 'td2': td2,
                        'vis': B.get('vis', np.full((NY, NX), 99.0))})
@@ -500,7 +519,7 @@ TYPE_BACKFILL = 12                               # type-only fills per cycle
 QUICK_TYPES = 12                                 # the radar loop's three hours: typed first, every cycle
 
 
-def type_frames(t, model_ok=False):
+def type_frames(t, model_ok=False, reports=None):
     """now_ptype and radar_type for a radar time: from its analysed temperature and dew point and the
     UKV background where it is cached (the wet bulb alone where not); fetches nothing, redoes nothing
     else. With `model_ok`, a time not yet analysed takes the UKV's own temperature and dew point
@@ -526,7 +545,7 @@ def type_frames(t, model_ok=False):
         t2, td2, source = B['t2'], B['td2'], 'ukv'
     else:
         return False
-    code, _ = radar_phase(B, t2, td2)
+    code, _ = radar_phase(B, t2, td2, reports=list(near_reports(reports, t).values()), nudge=_type_nudge)
     top = np.nanmax(r1.reshape(NY, 2, NX, 2), axis=(1, 3))
     meta = {'valid': t.isoformat(), 'radar': True, 'backfill': True, 'type_from': source}
     write_frame(LIVE / 'now_ptype' / f'{stamp}.bin', np.where(np.isfinite(top), np.where(top >= 0.05, code, 0), np.nan).astype(np.float32),
@@ -820,11 +839,15 @@ def update():
     # hours behind (after the PC has slept, 13 Nov 2026). The analysis replaces it when it gets there.
     typed = stamps('now_ptype')
     quick = 0
+    try:                                                  # what the airports see falling, for the type
+        recent = metars(3)
+    except Exception:
+        recent = []
     for t in sorted(times, reverse=True)[:QUICK_TYPES]:
         if t < cut or f'{t:%Y%m%dT%H%M}' in typed:
             continue
         try:
-            quick += bool(type_frames(t, model_ok=True))
+            quick += bool(type_frames(t, model_ok=True, reports=recent))
         except Exception as e:
             print(f'[now] type of {t:%H:%M}: {type(e).__name__}: {e}', flush=True)
     if quick:
@@ -871,7 +894,7 @@ def update():
         for stamp in missing[:TYPE_BACKFILL]:
             t = datetime.strptime(stamp, '%Y%m%dT%H%M').replace(tzinfo=timezone.utc)
             if t >= cut:
-                type_frames(t)
+                type_frames(t, reports=recent)
     except Exception as e:
         print(f'[now] type backfill: {type(e).__name__}: {e}', flush=True)
     rained = fold_radar()

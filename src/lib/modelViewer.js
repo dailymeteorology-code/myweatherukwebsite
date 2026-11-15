@@ -20,7 +20,7 @@ import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES } from '@/lib/frostKey';
 export const API = '/api/modeldata';
 /* bump when frames are re-made differently (v2: coarse models smooth, not blocks; v3: the global
    models moved to the wide grid, 26 Oct 2026, so their old UK-grid frames must not come from cache) */
-const FRAME_V = 3;
+const FRAME_V = 4;                                        // 4: the wide grid grew (15 Nov 2026)
 /* and per layer, when one layer's frames change: ptype v2 (12 Nov 2026) carries its kind and strength */
 const VAR_V = { ptype: 2 };
 /* and per model, when a model's frames change: AIFS v2 (13 Nov 2026) its precipitation no longer 1000x */
@@ -71,8 +71,12 @@ function wideRegions() {
   return out;
 }
 export let REGIONS = UK_REGIONS;
+/* each grid's static layers' version: a new number when a grid changes shape (the wide grid grew on
+   15 Nov 2026), so no browser draws a day-old cached map on it */
+const STATIC_V = { eu: 2 };
 /** The static layer's URL on the grid in use. */
-export const staticUrl = (file, grid = GRID.name) => `${API}/static/${grid === 'uk' ? '' : `${grid}/`}${file}`;
+export const staticUrl = (file, grid = GRID.name) => `${API}/static/${grid === 'uk' ? '' : `${grid}/`}${file}`
+  + (STATIC_V[grid] ? `${file.includes('?') ? '&' : '?'}g=${STATIC_V[grid]}` : '');
 
 /** Switch the display grid (by name); returns whether it changed. Cheap: what is worked out per
     grid is kept per grid, so two windows on two grids can take turns on every draw. */

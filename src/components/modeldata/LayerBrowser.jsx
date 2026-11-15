@@ -57,7 +57,6 @@ export default function LayerBrowser({ items, popular = [], selected, onPick, on
         {it.unit ? <span className="mdb-unit">{it.unit}</span> : null}
       </span>
       {withCat && <span className="mdb-cat-tag">{categoryOf(it.group).name}</span>}
-      {it.desc ? <span className="mdb-desc">{it.desc}</span> : null}
       {it.ramp ? <i className="mdb-ramp" style={{ background: it.ramp }} /> : null}
     </button>
   );

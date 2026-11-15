@@ -183,7 +183,22 @@ def weather_type(f):
     return np.where(np.isfinite(f['precip_rate']) | (tcc is not None and np.isfinite(tcc)), code, np.nan).astype(np.float32)
 
 
-def radar_phase(model, t2, td2, reach_cells=15):
+def metar_phase(wx):
+    """What an airport's present weather (METAR wxString) says is falling there: (snow share, freezing).
+    Snow or snow grains 1, rain or drizzle with snow (sleet) 0.5, rain or drizzle 0; freezing rain or
+    drizzle and ice pellets are rain that freezes (share 0, freezing). None where it reports nothing
+    falling (blowing or drifting snow and showers in the vicinity are not falling at the station)."""
+    import re
+    s = re.sub(r'\b(BL|DR)SN\b', '', (wx or '').upper())
+    s = ' '.join(g for g in s.split() if not g.startswith('VC') and not g.startswith('RE'))
+    sn, ra, pl = bool(re.search(r'SN|SG', s)), bool(re.search(r'RA|DZ', s)), bool(re.search(r'PL', s))
+    if not (sn or ra or pl):
+        return None, False
+    fz = 'FZ' in s or (pl and not sn)
+    return (0.5 if sn and ra else 1.0 if sn else 0.0), fz
+
+
+def radar_phase(model, t2, td2, reach_cells=15, reports=None, nudge=None):
     """What would fall at each cell now, as ECMWF codes (1 rain, 3 freezing rain, 5 snow, 7 sleet),
     and the snow share behind it. model: the UKV at the time ({'precip_rate', 'snow_rate'}, any
     missing); t2, td2: the analysed screen temperature and dew point (the stations' correction of the
@@ -195,11 +210,19 @@ def radar_phase(model, t2, td2, reach_cells=15):
     (all snow at -0.2 C or below, all rain from +1.2 C, as in weather_type), which keeps the stations'
     say where they are warmer or colder than the model. Where the model has no precipitation near,
     the wet bulb alone. Rain from the model where the analysed air is at or below freezing is
-    freezing rain (the melting layer aloft, the ground below zero), whatever the wet bulb says."""
+    freezing rain (the melting layer aloft, the ground below zero), whatever the wet bulb says.
+
+    Then the airports (15 Nov 2026): every report of what is falling (metar_phase) pulls the share
+    round it towards what was seen, the way the analysis treats their temperatures (`nudge`, the
+    station residuals spread over ~35 km, the station's own cell most of the way). The ground truth
+    wins near the stations; between them the model and the wet bulb. Checked against 24 h of UK and
+    Irish METARs: sleet and snow were reported at wet bulbs of 1.7 C and rain at 0-2 C, so no surface
+    threshold separates them (the air aloft decides); before this every wintry report was typed rain.
+    The wet bulb's half of the share is half snow at 0.8 C (it was 0.5 C)."""
     from scipy import ndimage
     t2 = np.nan_to_num(t2, nan=10.0)
     tw = wet_bulb(t2, np.nan_to_num(td2, nan=10.0))
-    sf_wb = np.clip((1.2 - tw) / 1.4, 0, 1)
+    sf_wb = np.clip((1.6 - tw) / 1.6, 0, 1)
     pr = np.nan_to_num(model.get('precip_rate', np.zeros_like(t2)))
     frz = np.zeros(t2.shape, bool)
     if 'snow_rate' in model:
@@ -214,6 +237,21 @@ def radar_phase(model, t2, td2, reach_cells=15):
         frz = near & (sf_model < 0.2) & (t2 <= 0)
     else:
         sf = sf_wb
+    if reports and nudge is not None:                     # what the airports see falling
+        st, fz_st = [], []
+        for o in reports:
+            share, fz = metar_phase(o.get('wx'))
+            if share is None or 'gx' not in o:
+                continue
+            gy, gx = int(o['gy']), int(o['gx'])
+            if 0 <= gy < sf.shape[0] and 0 <= gx < sf.shape[1]:
+                st.append((o['gx'], o['gy'], share - float(sf[gy, gx])))
+                if fz:
+                    fz_st.append((o['gx'], o['gy'], 1.0))
+        if st:
+            sf = np.clip(nudge(sf, st), 0, 1)
+        if fz_st:                                         # freezing rain or ice pellets reported near
+            frz = frz | ((nudge(np.zeros_like(sf), fz_st) > 0.5) & (sf < SLEET_SHARE))
     code = np.select([sf >= SNOW_SHARE, sf >= SLEET_SHARE], [5, 7], 1)
     code = np.where(frz, 3, code)
     return code.astype(np.uint8), sf.astype(np.float32)

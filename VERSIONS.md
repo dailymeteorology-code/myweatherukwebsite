@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.51.000 | 2026-11-15 | Update | — | Location Weather: the freezing level read at the ground, the hours and detailed forecast to the last day (Saturday), the radar beside the days and the detailed forecast moved up | Location Weather overhaul (Nov) |
+| 5.52.000 | 2026-11-15 | Update | — | Model Data: the wide map grown to Alaska, Canada, Greenland, all of Scandinavia and North Africa; a region picker (the UK and Ireland, Europe, North Africa and North America, down to countries and regions); no descriptions under layer names; the radar's rain, sleet, snow and ice steered by what the airports report | Model Data STRATA redesign (Nov) |
+| 5.51.000 | 2026-11-15 | Update | 77627aa | Location Weather: the freezing level read at the ground, the hours and detailed forecast to the last day (Saturday), the radar beside the days and the detailed forecast moved up | Location Weather overhaul (Nov) |
 | 5.50.006 | 2026-11-15 | Patch | 8d3fa4e | Version tool: tags only the save that carries the version (a failed commit cannot pass its number to the one before) | Location Weather overhaul (Nov) |
 | 5.50.005 | 2026-11-15 | Patch | f17be9c | Version tool: push only the new version's tag (the cloud runs' release tags stay put) | Location Weather overhaul (Nov) |
 | 5.50.004 | 2026-11-15 | Patch | cb861e2 | Site version numbers: 5.##.### in the corner of every page, every save of the site numbered (VERSIONS.md) | Location Weather overhaul (Nov) |

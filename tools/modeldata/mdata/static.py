@@ -67,10 +67,25 @@ CITIES_WIDE = CITIES + [
     ('Cologne', 50.938, 6.960, 3), ('Toulouse', 43.605, 1.444, 3), ('Nantes', 47.218, -1.554, 3), ('Bilbao', 43.263, -2.935, 3),
     ('Venice', 45.441, 12.316, 3), ('Florence', 43.770, 11.256, 3), ('Thessaloniki', 40.640, 22.944, 3), ('Odesa', 46.482, 30.723, 3),
     ('Gothenburg', 57.709, 11.975, 3), ('Akureyri', 65.683, -18.088, 3), ('Marrakesh', 31.630, -7.981, 3),
+    # the grown wide grid (15 Nov 2026): North America to Alaska, Greenland, the Arctic and North Africa
+    ('Ottawa', 45.421, -75.697, 1), ('Toronto', 43.653, -79.383, 1), ('Montreal', 45.502, -73.567, 1), ('Vancouver', 49.283, -123.121, 1),
+    ('Mexico City', 19.433, -99.133, 1), ('Havana', 23.113, -82.366, 1), ('Anchorage', 61.218, -149.900, 1), ('Washington', 38.907, -77.037, 1),
+    ('Chicago', 41.878, -87.630, 1), ('Calgary', 51.045, -114.057, 2), ('Edmonton', 53.546, -113.494, 2), ('Winnipeg', 49.895, -97.138, 2),
+    ('Quebec City', 46.813, -71.208, 2), ('Whitehorse', 60.721, -135.057, 2), ('Yellowknife', 62.454, -114.372, 2), ('Iqaluit', 63.749, -68.522, 2),
+    ('Fairbanks', 64.838, -147.716, 2), ('Juneau', 58.302, -134.420, 2), ('Monterrey', 25.686, -100.316, 2), ('Guadalajara', 20.659, -103.350, 2),
+    ('Guatemala City', 14.634, -90.507, 2), ('Panama City', 8.983, -79.517, 2), ('San Jose', 9.928, -84.091, 2), ('Kingston', 17.971, -76.793, 2),
+    ('Santo Domingo', 18.486, -69.931, 2), ('Nassau', 25.044, -77.350, 2), ('Miami', 25.762, -80.192, 2), ('Atlanta', 33.749, -84.388, 2),
+    ('Dallas', 32.777, -96.797, 2), ('Denver', 39.739, -104.990, 2), ('Seattle', 47.606, -122.332, 2), ('Los Angeles', 34.052, -118.244, 2),
+    ('Minneapolis', 44.978, -93.265, 3), ('Cancun', 21.161, -86.851, 3), ('Saskatoon', 52.131, -106.670, 3), ('Thunder Bay', 48.381, -89.248, 3),
+    ('Churchill', 58.769, -94.169, 3), ('Inuvik', 68.361, -133.723, 3), ('Resolute', 74.697, -94.830, 3), ('Kangerlussuaq', 67.009, -50.693, 3),
+    ('Ilulissat', 69.218, -51.100, 3), ('Tasiilaq', 65.613, -37.636, 3), ('Qaanaaq', 77.467, -69.231, 3), ('Utqiagvik', 71.290, -156.789, 3),
+    ('Nome', 64.501, -165.406, 3), ('Longyearbyen', 78.223, 15.627, 2), ('Murmansk', 68.970, 33.075, 2), ('Arkhangelsk', 64.540, 40.544, 3),
+    ('Rovaniemi', 66.503, 25.729, 3), ('Lulea', 65.584, 22.155, 3), ('Bodo', 67.280, 14.405, 3), ('Alexandria', 31.200, 29.919, 2),
+    ('Benghazi', 32.115, 20.068, 3), ('Nouakchott', 18.079, -15.965, 3), ('Khartoum', 15.501, 32.559, 3), ('Tamanrasset', 22.785, 5.523, 3),
 ]
 
 _TR = Transformer.from_crs('EPSG:4326', PROJ, always_xy=True)
-_AREA = (-32, 32, 34, 76) if GRID == 'uk' else (-100, 75, 10, 86)        # lon/lat box worth drawing
+_AREA = (-32, 32, 34, 76) if GRID == 'uk' else (-180, 180, -20, 90)      # lon/lat box worth drawing (the wide grid reaches over the pole)
 
 
 def to_px(lon, lat, scale=1.0):
@@ -253,8 +268,8 @@ def basemap():
 
 NASA = REPO.parent / 'mwuk-graphics' / 'assets' / 'basemap'      # same NASA imagery as the motion graphics
 # equirectangular, north-up (west, south, east, north); the wide grid's from GIBS at about 4 km
-NASA_BOX = (-22.5, 40.5, 18.0, 67.5) if GRID == 'uk' else (-100.0, 12.0, 76.0, 87.0)
-NASA_PX = (4608, 3072) if GRID == 'uk' else (4800, 2045)
+NASA_BOX = (-22.5, 40.5, 18.0, 67.5) if GRID == 'uk' else (-180.0, -20.0, 180.0, 90.0)    # the wide grid: every longitude (it crosses the pole)
+NASA_PX = (4608, 3072) if GRID == 'uk' else (8192, 3186)
 GIBS = ('https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0'
         '&LAYERS={layer}&CRS=EPSG:4326&BBOX={s},{w},{n},{e}&WIDTH={pw}&HEIGHT={ph}&FORMAT=image/jpeg')
 
@@ -358,6 +373,10 @@ def strata_basemap(name='basemap_light.png'):
     Light map). Terrain from AWS Terrain Tiles: zoom 7 (~0.7 km) on the UK grid, 5 on the wide one."""
     lon, lat = _pixel_lonlat()
     h = _terrain(lon, lat, 7 if GRID == 'uk' else 5)
+    # the tiles stop at 85 N (Web Mercator): over the polar cap their last row smears into a star, so
+    # the Arctic Ocean there fades to deep water (the wide grid reaches over the pole)
+    cap = np.clip((lat - 82.5) / 2.0, 0, 1)
+    h = h * (1 - cap) + np.minimum(h, -3000.0) * cap
     land = land_mask()
     gy, gx = np.gradient(np.where(land > 0.5, np.maximum(h, 0), 0), DX / SS)
     slope = np.arctan((2.0 if GRID == 'uk' else 3.5) * np.hypot(gx, gy))

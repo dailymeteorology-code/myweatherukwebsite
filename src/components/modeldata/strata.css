@@ -202,3 +202,25 @@
 .mdb.is-phone .mdb-search { flex: 1 1 120px; min-width: 0; max-width: none; }
 .mdb.is-phone .mdb-search input { min-width: 0; width: 100%; }
 .mdb.is-phone .mdb-jump select { max-width: 150px; }
+
+/* ── the region picker: areas, their countries, their regions (RegionPicker) ── */
+.mdr { display: flex; flex-direction: column; min-height: 0; width: 100%; color: var(--md-ink); }
+.mdr-head { display: flex; align-items: center; gap: 6px; padding: 2px 2px 8px; }
+.mdr-title { flex: 1; min-width: 0; font-family: 'Inter Tight', 'Inter', sans-serif; font-size: 16px; font-weight: 680; letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 4px; }
+.mdr-back { border: none; cursor: pointer; flex-shrink: 0; width: 30px; height: 30px; border-radius: 999px; display: grid; place-items: center;
+  color: var(--md-sub); background: var(--md-track); }
+.mdr-search { display: flex; align-items: center; gap: 7px; height: 36px; padding: 0 10px; margin: 0 2px 6px; border-radius: 999px;
+  background: var(--md-track); box-shadow: inset 0 0 0 1px var(--md-line); }
+.mdr-search input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--md-ink); font: 500 13px Inter, system-ui, sans-serif; }
+.mdr-clear { border: none; cursor: pointer; width: 20px; height: 20px; border-radius: 99px; display: grid; place-items: center; background: var(--md-track); color: var(--md-sub); }
+.mdr-list { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; min-height: 0; max-height: min(52vh, 460px); scrollbar-width: thin; }
+.mdr.is-phone .mdr-list { max-height: none; }
+.mdr-row { all: unset; box-sizing: border-box; cursor: pointer; width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px;
+  font-size: 13.5px; font-weight: 620; color: var(--md-sub); }
+.mdr-row:hover { background: var(--md-hover); color: var(--md-ink); }
+.mdr.is-phone .mdr-row { padding: 12px 12px; font-size: 15px; }
+.mdr-name { flex: 1; min-width: 0; display: grid; }
+.mdr-name i { font-style: normal; font-size: 11.5px; font-weight: 520; color: var(--md-muted); margin-top: 1px; }
+.mdr-more { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; font-size: 11.5px; font-weight: 650; color: var(--md-muted); font-variant-numeric: tabular-nums; }
+.mdr-note { padding: 10px 12px; font-size: 12.5px; color: var(--md-muted); }

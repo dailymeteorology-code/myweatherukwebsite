@@ -36,6 +36,7 @@ import LayerBrowser from '@/components/modeldata/LayerBrowser';
 import Timeline from '@/components/modeldata/Timeline';
 import { LAYER_DESC, POPULAR, probFamily, probLine, categoryOf } from '@/lib/modelLayers';
 import { withMorePlaces } from '@/lib/modelPlaces';
+import RegionPicker from '@/components/modeldata/RegionPicker';
 import { tweenFrame } from '@/lib/modelTween';
 import { GRIDS, gridOfModel, projection } from '@/lib/modelGrids';
 import { useAuth } from '@/lib/AuthContext';
@@ -1427,9 +1428,9 @@ export default function ModelData() {
     : (liveItem.src === 'radar' ? 'Met Office radar via AWS' : liveItem.src === 'radar_type' ? 'Met Office radar via AWS · type from UKV + METAR' : liveItem.src.startsWith('now_') ? 'UKV + METAR + Met Office radar' : liveProd?.source?.startsWith('Meteosat') ? `${liveProd.source} · EUMETSAT` : 'EUMETSAT');
   /* the line under the headline and the badge, for the STRATA graphic */
   const radarObs = ['precip_total', 'rain_rate_max'].includes(obsKey);
-  const chromeSub = isProb ? probLine(preset, dir, fmtThr(thr), fmeta?.unit, model?.members)
-    : isObs ? (radarObs ? 'Observed: the Met Office radar’s own record of the day' : 'Observed: the UKV analysed every 15 minutes with the station reports')
-      : isLive ? liveLine(liveItem) : LAYER_DESC[varKey] || '';
+  /* the line under the headline: only the Chances' question (the user asked, 15 Nov 2026, for no short
+     description under each layer's name; the badge and the source already say where it comes from) */
+  const chromeSub = isProb ? probLine(preset, dir, fmtThr(thr), fmeta?.unit, model?.members) : '';
   const timeBadge = isObs ? (radarObs ? 'MET OFFICE RADAR' : 'UKV + STATIONS')
     : isLive ? (liveItem.src.startsWith('sat_') ? 'METEOSAT' : liveItem.src.startsWith('now_') ? 'UKV + STATIONS' : 'MET OFFICE RADAR') : null;
   const chromeFor = useCallback((f) => (f && model && vmeta ? {
@@ -1451,7 +1452,7 @@ export default function ModelData() {
       variable: underMetaB ? `${metaB.label} · colours: ${underMetaB.label.toLowerCase()}` : metaB.label, unit: underMetaB ? underMetaB.unit : metaB.unit,
       valid: f ? f.head.valid : new Date(ms).toISOString(), logo: staticsBy[gridB]?.logo, ...creditOf(modelB, runB, f?.head.step), notice,
       scale: underMetaB ? scaleFor(underVarB) : ['wdir10', 'mwd'].includes(scaleB) ? {} : scaleFor(scaleB),
-      sub: isProb ? chromeSub : LAYER_DESC[varB] || '', source: sourceOf(modelB), badge: badgeOf(modelB, runB, f?.head.step),
+      sub: isProb ? chromeSub : '', source: sourceOf(modelB), badge: badgeOf(modelB, runB, f?.head.step),
     };
   }, [modelB, metaB, runB, runMsB, stepsB, fieldB, scaleB, isProb, preset, underMetaB, underVarB, staticsBy, gridB, chromeSub, varB]);
 
@@ -1546,7 +1547,7 @@ export default function ModelData() {
       style, basemap: basemapFor(raw, gridName, ms), lines: st?.lines, cities: showCities ? st?.cities : null, roads: showRoads ? roadsBy[gridName] || null : null, smooth,
       warnings: { alpha: 1, look: 'fill', labels: true, areas },
       chrome: ms == null ? null : { variable: 'Met Office warnings', valid: new Date(ms).toISOString(), logo: st?.logo, dayOnly: isObs, credit: isObs ? 'In force that day' : 'In force at this time',
-        badge: ['MET OFFICE', 'WARNINGS'], sub: isObs ? 'The weather warnings in force that day' : 'The weather warnings in force at the time on show',
+        badge: ['MET OFFICE', 'WARNINGS'],
         warnList: warnData ? areas.filter((w) => (w.fade ?? 1) > 0.5).reverse().map((w) => ({ severity: w.severity, type: w.text, when: warnWhen(w) })) : [], notice: warnData ? null : 'Loading the warnings…' },
     };
   }, [staticsBy, gridName, warningsAt, isObs, style, basemapFor, showCities, showRoads, roadsBy, smooth, warnData]);
@@ -2489,13 +2490,10 @@ export default function ModelData() {
       subtitle={!model ? '' : isProb ? `${model.label} · ${model.members} members` : timeSteps ? chipSub
         : `${SHORT_NAMES[model.id] || model.label} · ${MODEL_INFO[model.id]?.[1] || ''} · ${browserItems.length} layers`} />
   );
+  /* zoom to a place: areas, their countries and their regions (components/modeldata/RegionPicker) */
   const regionList = (
-    <div style={{ display: 'grid', gap: 2 }}>
-      {Object.entries(REGIONS).map(([k, r]) => (
-        <button key={k} onClick={() => { fit(r.box); setRegionsOpen(false); }} style={{ all: 'unset', cursor: 'pointer', padding: narrow ? '12px 14px' : '7px 12px', borderRadius: 12, fontSize: narrow ? 14 : 12.5, fontWeight: 650, color: T.ink3 }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = T.chip; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>{r.label}</button>
-      ))}
-    </div>
+    <RegionPicker grid={gridName} phone={phone} titled={narrow} onPick={(b) => fit(b)} onClose={phone || layout === 'tablet' ? closePanels : () => setRegionsOpen(false)}
+      wholeBox={(REGIONS.all || REGIONS.ukv)?.box} />
   );
   /* the playback speed, in words; a speed typed into the Download panel shows as its milliseconds */
   const speedOptions = (
@@ -2814,7 +2812,7 @@ export default function ModelData() {
       {layout === 'tablet' && varOpen && cat && browser({ left: 10, right: 10, top: topH, height: `calc(100% - ${topH + botH + 4}px)` }, modelRunRow)}
       {layout === 'tablet' && mapOpen && card('Map', null, closePanels, mapBody, { right: 10, top: topH, width: 330 })}
       {layout === 'tablet' && cmpOpen && card('Compare', null, closePanels, compareBody, { right: 10, top: topH, width: 320 })}
-      {layout === 'tablet' && regionsOpen && card('Zoom to', null, closePanels, regionList, { right: 10, bottom: botH, width: 240 })}
+      {layout === 'tablet' && regionsOpen && card('Zoom to', null, closePanels, regionList, { right: 10, bottom: botH, width: 300 })}
       {layout === 'tablet' && exp.open && card('Download', null, closePanels, <>{exportBody}<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback speed</span>{speedSelect}</div></>,
         { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
 
@@ -2831,7 +2829,7 @@ export default function ModelData() {
         </div>
       )}
       {layout === 'desktop' && regionsOpen && (
-        <div style={{ ...T.glass, borderRadius: 18, position: 'absolute', right: 58, top: '50%', transform: 'translateY(-50%)', padding: 6, zIndex: 6 }}>{regionList}</div>
+        <div style={{ ...T.glass, borderRadius: 18, position: 'absolute', right: 58, top: '50%', transform: 'translateY(-50%)', padding: 10, zIndex: 6, width: 290, display: 'flex' }}>{regionList}</div>
       )}
 
       {hover && layout === 'desktop' && (
