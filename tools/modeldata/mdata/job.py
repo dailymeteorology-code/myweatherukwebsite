@@ -41,6 +41,19 @@ def run_dir(model, run, var):
     return FRAMES / model / f'{run:%Y%m%dT%H%MZ}' / var
 
 
+def covers(model, run, var, steps):
+    """Is a source layer finished for every step wanted? 'complete' alone is not enough: a layer made before
+    its run grew (a run still arriving, or a model listed further ahead, as GFS and ECMWF were on 16 Nov 2026)
+    is complete for its old steps only, and a layer made from it would be marked complete with the new steps
+    missing, for good. Making the source again only fetches the steps it lacks."""
+    import json
+    try:
+        st = json.loads((run_dir(model, run, var) / 'status.json').read_text())
+    except Exception:
+        return False
+    return st.get('state') == 'complete' and set(steps) <= set(st.get('steps') or [])
+
+
 def steps_for(model, run):
     import json
     try:
@@ -70,11 +83,7 @@ def derived(model, run_s, var, steps, d, status):
                   else (partial(snow_conditions, cell_km=DX / 1000.0), snow_cond_inputs(M.variables)) if var == 'snow_cond'
                   else (weather_type, wx_inputs(M.variables)))
     for v in deps:
-        try:
-            done = json.loads((run_dir(model, run, v) / 'status.json').read_text()).get('state') == 'complete'
-        except Exception:
-            done = False
-        if not done:
+        if not covers(model, run, v, steps):
             main(model, run_s, v)
     for h in steps:
         if (d / f'{h}.bin').exists():
@@ -110,11 +119,7 @@ def recipe(model, run_s, var, steps, d, status):
     run = _utc(run_s)
     ins, fn, _ = RECIPES[var]
     for v in dict.fromkeys(inputs_of(var)):
-        try:
-            done = json.loads((run_dir(model, run, v) / 'status.json').read_text()).get('state') == 'complete'
-        except Exception:
-            done = False
-        if not done:
+        if not covers(model, run, v, steps):
             main(model, run_s, v)
     have = set(steps)
     for h in steps:
@@ -159,11 +164,7 @@ def peak(model, run_s, var, steps, d, status):
     M = MODELS[model]
     run = _utc(run_s)
     src = 'gust_max' if 'gust_max' in M.variables else 'gust10'
-    try:
-        done = json.loads((run_dir(model, run, src) / 'status.json').read_text()).get('state') == 'complete'
-    except Exception:
-        done = False
-    if not done:
+    if not covers(model, run, src, steps):
         main(model, run_s, src)
     status['source'] = src
     best = None
@@ -244,10 +245,7 @@ def alias(model, run_s, var, steps, d, status):
     run = _utc(run_s)
     src = ALIASES[var]
     sdir = run_dir(model, run, src)
-    try:
-        done = json.loads((sdir / 'status.json').read_text()).get('state') == 'complete'
-    except Exception:
-        done = False
+    done = covers(model, run, src, steps)
     maker = None
     if not done:
         maker = threading.Thread(target=main, args=(model, run_s, src), daemon=True)

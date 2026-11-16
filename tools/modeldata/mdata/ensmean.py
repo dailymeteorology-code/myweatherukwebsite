@@ -89,8 +89,9 @@ class EnsStats:
         """The members of the field this layer is made from, made first if they are not there yet."""
         from .ens import frame_dir, main
         f = SRC[var][0]
-        try:
-            done = json.loads((frame_dir(self.ens_id, run, f) / 'status.json').read_text()).get('state') == 'complete'
+        try:                                             # complete for every step the run has now (16 Nov 2026: the
+            st = json.loads((frame_dir(self.ens_id, run, f) / 'status.json').read_text())   # ENS went to T+360)
+            done = st.get('state') == 'complete' and set(self.schedule(run)) <= set(st.get('steps') or [])
         except Exception:                                # noqa: BLE001  (not made yet)
             done = False
         if not done:
