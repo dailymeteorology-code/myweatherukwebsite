@@ -5,7 +5,7 @@
    (SkyBackdrop.jsx TOP_CARDS). */
 import React, { useMemo } from 'react';
 import {
-  Sun, Moon, CloudLightning, Snowflake, AlertTriangle, CloudRain, CloudFog, Wind, Thermometer, ThermometerSnowflake, SunMedium, ChevronRight,
+  Sun, Moon, CloudLightning, Snowflake, AlertTriangle, CloudRain, CloudFog, Wind, Thermometer, ThermometerSnowflake, SunMedium, ChevronRight, Waves, Leaf,
 } from 'lucide-react';
 import { useUnits } from '@/components/useUnits';
 import { writtenForecast, mattersToday } from '@/lib/location/forecastText';
@@ -13,13 +13,13 @@ import { severityFill, severityInk } from '@/components/location/LocationWarning
 
 const ICON = {
   warning: AlertTriangle, thunder: CloudLightning, snow: Snowflake, ice: Snowflake, rain: CloudRain, fog: CloudFog,
-  wind: Wind, heat: Thermometer, cold: ThermometerSnowflake, frost: ThermometerSnowflake, uv: SunMedium,
+  wind: Wind, heat: Thermometer, cold: ThermometerSnowflake, frost: ThermometerSnowflake, uv: SunMedium, flood: Waves, air: Leaf,
 };
 
-export default function TodayCard({ model, warnings, onCard }) {
+export default function TodayCard({ model, warnings, onCard, outside = null }) {
   const U = useUnits();
   const parts = useMemo(() => writtenForecast(model, U), [model, U]);
-  const matters = useMemo(() => mattersToday(model, warnings, U), [model, warnings, U]);
+  const matters = useMemo(() => mattersToday(model, warnings, U, outside), [model, warnings, U, outside]);
   if (!parts.length && !matters.length) return null;
   const night = parts[0]?.key === 'tonight';
   return (

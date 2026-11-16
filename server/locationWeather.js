@@ -29,6 +29,7 @@ import { novaThunderAt } from './novaPoint.js';
 import { frostPoint } from './tcmFrost.js';
 import { haversineKm, bearingDeg, kmPerDegLon } from './aiw/geometry.js';
 import { envPeek } from './aiw/env.js';
+import { mountOutside } from './location/outside.js';
 
 const LIVE = path.join(MODELDATA_DIR, 'live');
 const OBS = path.join(MODELDATA_DIR, 'observed');
@@ -681,8 +682,9 @@ function anchorToNow(fc, now) {
 
 const OBS_FIELDS = ['t2_max', 't2_min', 'precip_total', 'gust10_max', 'wind10_max', 'rain_rate_max', 'feels_min', 'feels_max', 'rh2_min', 'td2_max'];
 const londonDay = (d = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
-function observedAt(lat, lon) {
-  const day = londonDay();
+/* a day's observed extremes at the place (today's so far, by default; yesterday's whole day for
+   "warmer than yesterday", Phase E) */
+function observedAt(lat, lon, day = londonDay()) {
   const sum = readJson(path.join(OBS, day, 'summary.json'));
   if (!sum) return null;
   const out = { day, updated: sum.updated, analyses: sum.analyses, expected: sum.expected };
@@ -847,6 +849,8 @@ async function sendJson(req, res, obj) {
 
 /* `lightning`: the lightning archive (server/lightning, index.js), for the strikes near a place */
 export function mountLocationWeather(app, { lightning = null } = {}) {
+  /* floods, health alerts, air quality, the tide and the normals (location/outside.js, Phase E) */
+  mountOutside(app);
   const point = (req, res) => {
     const lat = Number(req.query.lat), lon = Number(req.query.lon);
     if (!(Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) { res.status(400).json({ error: 'lat and lon are needed' }); return null; }
@@ -932,7 +936,7 @@ export function mountLocationWeather(app, { lightning = null } = {}) {
     try { nova = novaThunderAt(lat, lon); } catch { nova = null; }           // likewise
     const frost = await frostP;
     res.set('Cache-Control', 'no-cache');
-    return sendJson(req, res, { location: { name, lat, lon, country }, forecast: fc, outlook, now, nowcast: nc, nova, frost, observed: observedAt(lat, lon), generated: new Date().toISOString() });
+    return sendJson(req, res, { location: { name, lat, lon, country }, forecast: fc, outlook, now, nowcast: nc, nova, frost, observed: observedAt(lat, lon), yesterday: observedAt(lat, lon, londonDay(new Date(Date.now() - 864e5))), generated: new Date().toISOString() });
   });
 
   app.get('/api/location/search', async (req, res) => {

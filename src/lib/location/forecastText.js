@@ -6,7 +6,8 @@
    say a number the hours and charts do not show. The day's parts are the days card's (the MWUK Mix and
    the Met Office Global: 06:00-18:00 and 18:00-06:00); the times inside them are the UKV's hours
    (hourly to T+54, then three-hourly), which carry the visibility, the ground temperature and TCM NOVA. */
-import { condLabel, isWet, hhmm, thunderRisk, snowChance, rateOf, bandOf, uvWord } from '@/lib/ukvLocation';
+import { condLabel, isWet, hhmm, thunderRisk, snowChance, rateOf, bandOf, uvWord, sunTimes, ukDay } from '@/lib/ukvLocation';
+import { daqiWord } from '@/lib/location/outside';
 import { roadIce, fogSpells } from '@/lib/location/situations';
 
 const DIRS = ['northerly', 'north-easterly', 'easterly', 'south-easterly', 'southerly', 'south-westerly', 'westerly', 'north-westerly'];
@@ -66,7 +67,9 @@ function partWords(model, part, from, to, U) {
   const later = model.full.filter((h) => h.t > from && h.t <= to + 1 && (!startsNow || h.t > nowMs + 30 * 60e3));
   const hs = startsNow && model.now?.cond ? [{ ...model.now, t: nowMs }, ...later] : later;
   if (!hs.length && !part) return null;
-  const isDay = part ? part.kind === 'day' : true;
+  /* "sunny" only while the sun is up over most of what is left of the part (16 Nov 2026: the last of
+     "today" after a winter sunset read "Sunny spells") */
+  const isDay = hs.length ? hs.filter((h) => h.isDay).length >= hs.length / 2 : part ? part.kind === 'day' : true;
   const deg = (c) => (c == null ? null : `${Math.round(U.temp(c))}${U.tempUnit}`);
   const out = [];
 
@@ -138,7 +141,9 @@ export function writtenForecast(model, U) {
   const iToday = today ? ol.indexOf(today) : -1;
   const tomorrow = iToday >= 0 ? ol[iToday + 1] || null : ol[0] || null;
   const parts = [];
-  if (today?.dayPart && today.dayPart.to > nowMs + 30 * 60e3) {
+  /* once the sun has set, what is left of "today" is the evening: tonight says it */
+  const sunset = today ? sunTimes(today.day, model.lat, model.lon).set : null;
+  if (today?.dayPart && today.dayPart.to > nowMs + 30 * 60e3 && !(sunset && nowMs >= sunset)) {
     const p = today.dayPart;
     const text = partWords(model, p, Math.max(nowMs, p.from), p.to, U);
     if (text) parts.push({ key: 'today', label: 'Today', text });
@@ -160,7 +165,7 @@ export function writtenForecast(model, U) {
    From now until 06:00 tomorrow: the warnings for the place, then the weather in order of how much it
    changes a day: thunderstorms, snow, ice, heavy rain, fog, gales, heat, cold, frost, strong gusts,
    high UV. Each names the card that says more. Three at most. */
-export function mattersToday(model, warnings, U) {
+export function mattersToday(model, warnings, U, outside = null) {
   if (!model) return [];
   const nowMs = Date.now();
   const ol = model.outlook?.days || [];
@@ -174,7 +179,18 @@ export function mattersToday(model, warnings, U) {
       out.push({ key: `w${w.id}`, kind: 'warning', warning: w, label: `${w.severity} warning: ${String(w.type).toLowerCase()}`, card: 'warnings', rank: 0 });
     }
   }
-  if (!hs.length) return out.slice(0, 3);
+  /* the outside feeds (src/lib/location/outside.js, Phase E): flood warnings nearby, UKHSA's health
+     alerts for the region, and air that is moderate or worse today */
+  const fl = outside?.floods?.england?.[0];
+  if (fl) out.push({ key: 'flood', kind: 'flood', label: fl.level === 1 ? 'Severe flood warning nearby' : fl.level === 2 ? 'Flood warning nearby' : 'Flood alert nearby', sub: fl.area, card: 'alerts', rank: fl.level <= 2 ? 0.5 : 4.5 });
+  else if (outside?.floods?.scotland?.length) out.push({ key: 'flood', kind: 'flood', label: 'Flood warnings in Scotland', card: 'alerts', rank: 4.5 });
+  for (const a of outside?.health || []) {
+    const to = Date.parse(a.to);
+    out.push({ key: `h${a.kind}`, kind: a.kind === 'heat' ? 'heat' : 'cold', label: `${a.status} ${a.kind}-health alert`, sub: Number.isFinite(to) ? `until ${ukDay(to) === ukDay(nowMs) ? clock(to) : new Date(to).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'Europe/London' })}` : null, card: 'alerts', rank: a.status === 'Yellow' ? 3.5 : 1.5 });
+  }
+  const aq = outside?.air?.days?.find((d) => d.day === ukDay(nowMs));
+  if (aq && aq.v >= 4) out.push({ key: 'air', kind: 'air', label: `Air quality ${daqiWord(aq.v).toLowerCase()}`, sub: `index ${aq.v} of 10`, card: 'tiles', rank: aq.v >= 7 ? 1.6 : 9.5 });
+  if (!hs.length) return out.sort((a, b) => a.rank - b.rank).slice(0, 3);
   const nova = (model.nova?.hours || []).filter((x) => x.t > nowMs - 36e5 && x.t <= end);
   const storm = nova.length ? maxBy(nova, (x) => x.p) : null;
   if (storm && storm.p >= 15) out.push({ key: 'thunder', kind: 'thunder', label: `Thunderstorms: ${thunderRisk(storm.p).word.toLowerCase()} risk`, sub: `around ${clock(storm.t)}`, card: 'thunder', rank: 1 });

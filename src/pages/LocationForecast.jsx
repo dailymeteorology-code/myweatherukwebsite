@@ -26,7 +26,7 @@ import { useUnits } from '@/components/useUnits';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Clock3, CalendarDays, Radar, AlertTriangle, CloudRain, ChevronLeft, ChevronRight, ChevronDown, Loader2, Palette, LocateFixed, MoreHorizontal, Link2, Thermometer, Check,
-  Umbrella, Sunrise, Sunset, Zap, Snowflake, Sun, Moon, Wind, Droplets, Eye,
+  Umbrella, Sunrise, Sunset, Zap, Snowflake, Sun, Moon, Wind, Droplets, Eye, Play, Share2, Share, Smartphone, WifiOff,
 } from 'lucide-react';
 import LocationThunder from '@/components/location/LocationThunder';
 import LocationSnow from '@/components/location/LocationSnow';
@@ -42,9 +42,16 @@ import TodayCard from '@/components/location/TodayCard';
 import SituationCards from '@/components/location/SituationCards';
 import StormWatch from '@/components/location/StormWatch';
 import { SaveStar, PlacesStrip, CompareSheet, CommuteCard } from '@/components/location/YourPlaces';
-import { loadPlaces, savePlaces, placeWith, samePlace, DEFAULT_COMMUTE } from '@/lib/location/places';
+import { loadPlaces, savePlaces, placeWith, samePlace, localPlaces } from '@/lib/location/places';
 import HourSheet, { hourFor, momentParam, parseMoment } from '@/components/location/HourSheet';
 import { mattersToday } from '@/lib/location/forecastText';
+import TimeTravel from '@/components/location/TimeTravel';
+import StoryMode from '@/components/location/StoryMode';
+import ShareSheet from '@/components/location/ShareSheet';
+import { travelModel, travelSteps, dayRange, travelLabel } from '@/lib/location/travel';
+import { useInstall, useLocationApp } from '@/lib/location/app';
+import { useOutside, AlertsCard, CoastCard } from '@/components/location/OutsideCards';
+import { compareWords } from '@/lib/location/outside';
 import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
 import WxIcon from '@/components/location/WxIcon';
 import '@/components/location/location.css';
@@ -53,7 +60,7 @@ import { fetchAllWarningsForPoint } from '@/lib/locationWarnings';
 import {
   fetchLocation, shape, condLabel, isWet, nextHoursText, hhmm, hourOf, sunElevation, compass,
   minutelyText, wetMinute, bandOf, ukDay, thunderRisk, fromThisHour, quartersOf, snowChance, SNOW_CHANCE, dayText,
-  PRECIP_KINDS, KIND_KEYS, rateOf, sourceName, cachedLocation, uvWord, visWord,
+  PRECIP_KINDS, KIND_KEYS, rateOf, sourceName, cachedLocation, uvWord, visWord, cachedLocationAny, lastOpenedPlace, dayLabel,
 } from '@/lib/ukvLocation';
 import { snowRiskLevel, cmText } from '@/lib/frostKey';
 
@@ -612,6 +619,11 @@ function BarMenu({ link, isAdmin, previewOn, onPreview }) {
   const { isF, updateUnit } = useUnits();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  /* add to your home screen (src/lib/location/app.js): the browser's own offer where it has one, else
+     (Safari) the two taps that do it */
+  const inst = useInstall();
+  const [howTo, setHowTo] = useState(false);
+  useEffect(() => { if (!open) setHowTo(false); }, [open]);
   const ref = useRef(null);
   useEffect(() => {
     if (!open) return undefined;
@@ -643,6 +655,18 @@ function BarMenu({ link, isAdmin, previewOn, onPreview }) {
               {copied ? <Check size={16} /> : <Link2 size={16} />}{copied ? 'Link copied' : 'Copy a link to this place'}
             </button>
           )}
+          {!inst.standalone && (inst.canPrompt || inst.ios) && (
+            <button type="button" role="menuitem" className="lw-menu-row"
+              onClick={async () => { if (inst.canPrompt) { setOpen(false); await inst.install(); } else setHowTo((v) => !v); }}>
+              <Smartphone size={16} />Add to your home screen
+            </button>
+          )}
+          {howTo && (
+            <p className="lw-menu-howto">
+              Tap your browser&rsquo;s <b>Share</b> button <Share size={13} aria-hidden="true" />, then <b>Add to Home Screen</b>. It opens
+              straight to your Home place, and shows the last forecast when there is no connection.
+            </p>
+          )}
           {isAdmin && (
             <button type="button" role="menuitem" className="lw-menu-row" onClick={() => { setOpen(false); onPreview(); }}>
               <Palette size={16} />{previewOn ? 'Close the sky preview' : 'Sky preview'}<span className="lw-menu-tag">Admin</span>
@@ -654,12 +678,47 @@ function BarMenu({ link, isAdmin, previewOn, onPreview }) {
   );
 }
 
+/* The cards that do not change with time travel keep their last drawing while the ruler moves (their
+   props are the model and steady callbacks); the hero, the sky and the tiles follow it. */
+const HourlyMemo = React.memo(HourlyCard);
+const PrecipMemo = React.memo(PrecipCard);
+const OutlookMemo = React.memo(OutlookCard);
+const DaysMemo = React.memo(DaysCard);
+const ChartsMemo = React.memo(LocationCharts);
+const RadarMemo = React.memo(LocationRadar);
+const SnowMemo = React.memo(LocationSnow);
+const ThunderMemo = React.memo(LocationThunder);
+const StormMemo = React.memo(StormWatch);
+const SituationsMemo = React.memo(SituationCards);
+const TodayMemo = React.memo(TodayCard);
+const CommuteMemo = React.memo(CommuteCard);
+const TilesMemo = React.memo(LocationTiles);
+const PlacesMemo = React.memo(PlacesStrip);
+const AlertsMemo = React.memo(AlertsCard);
+const CoastMemo = React.memo(CoastCard);
+
+/* the installed app opens with ?app=1 (public/location.webmanifest): straight to your Home place, else
+   your first place, else the place last opened on this device */
+function appStartPlace(search) {
+  const q = new URLSearchParams(search);
+  if (q.get('app') !== '1' || q.has('lat') || q.has('location')) return null;
+  const d = localPlaces();
+  return placeWith(d, 'home') || d.places[0] || lastOpenedPlace();
+}
+/* "at 14:20 (3 h ago)", for the forecast shown without a connection */
+function savedWhen(at) {
+  if (!at) return 'earlier';
+  const mins = Math.max(0, Math.round((Date.now() - at) / 60e3));
+  const ago = mins < 60 ? `${mins} min ago` : mins < 48 * 60 ? `${Math.round(mins / 60)} h ago` : `${Math.round(mins / 1440)} days ago`;
+  return `at ${hhmm(at)}${ukDay(at) !== ukDay(Date.now()) ? ` on ${dayLabel(ukDay(at))}` : ''} (${ago})`;
+}
+
 export default function LocationForecast() {
   const routerLocation = useLocation();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   /* a link naming a place starts loading at once, rather than flashing the search page first */
-  const [loading, setLoading] = useState(() => { const q = new URLSearchParams(routerLocation.search); return q.has('location') || q.has('lat'); });
+  const [loading, setLoading] = useState(() => { const q = new URLSearchParams(routerLocation.search); return q.has('location') || q.has('lat') || !!appStartPlace(routerLocation.search); });
   const [error, setError] = useState(null);
   const [resp, setResp] = useState(null);
   const [place, setPlace] = useState(null);
@@ -675,8 +734,20 @@ export default function LocationForecast() {
   /* the hour sheet: the hour open in it (its time), or null */
   const [sheetT, setSheetT] = useState(null);
   /* your places (src/lib/location/places.js): kept places, Home and Work, the commute; and Compare */
-  const [placesData, setPlacesData] = useState({ places: [], commute: DEFAULT_COMMUTE });
+  const [placesData, setPlacesData] = useState(() => localPlaces());
   const [comparing, setComparing] = useState(false);
+  const openCompare = useCallback(() => setComparing(true), []);
+  /* time travel (TimeTravel.jsx): the hour the page shows, null for now; story mode; the share sheet;
+     and the forecast shown without a connection ({ at: when it was saved }) */
+  const [travelT, setTravelT] = useState(null);
+  const [story, setStory] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [offline, setOffline] = useState(null);
+  const closeStory = useCallback(() => { setStory(false); setTravelT(null); }, []);
+  const shareFromStory = useCallback(() => { setStory(false); setTravelT(null); setSharing(true); }, []);
+  const closeShare = useCallback(() => setSharing(false), []);
+  /* this page's own app manifest and its offline worker (src/lib/location/app.js) */
+  useLocationApp();
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [recent, setRecent] = useState([]);
@@ -734,6 +805,7 @@ export default function LocationForecast() {
       if (ac.signal.aborted) return;
       if (body.code === 'OUTSIDE_UK') { if (!quiet) setOutside({ query: name || body.resolvedName, country: body.resolvedCountry }); return; }
       setResp(body);
+      setOffline(null);
       setPlace({ name: body.location.name, lat: body.location.lat, lon: body.location.lon, region: p.region || '' });
       if (!quiet) {
         if (!cached) { setDayIdx(0); setOpenDay(ukDay(Date.now())); }
@@ -741,7 +813,21 @@ export default function LocationForecast() {
           .then((list) => { if (list) setRecent(list); });
       }
     } catch (e) {
-      if (e?.name !== 'AbortError' && !quiet) setError(e?.message || 'Could not load the forecast. Please try again shortly.');
+      if (e?.name === 'AbortError') return;
+      /* no connection (the installed app opened offline, or the network dropped): the forecast saved for
+         the place last time, at any age, labelled with when it was saved */
+      if (!navigator.onLine || e?.name === 'TypeError') {
+        const old = cachedLocationAny({ lat: p.lat, lon: p.lon, name });
+        if (old) {
+          if (!quiet) {
+            setResp(old.body);
+            setPlace({ name: old.body.location.name, lat: old.body.location.lat, lon: old.body.location.lon, region: p.region || '' });
+          }
+          setOffline({ at: old.at });
+          return;
+        }
+      }
+      if (!quiet) setError(e?.message || 'Could not load the forecast. Please try again shortly.');
     } finally {
       if (!quiet && !ac.signal.aborted) { setLoading(false); setRefreshing(false); }
     }
@@ -754,6 +840,24 @@ export default function LocationForecast() {
     const b = setInterval(() => setTick((x) => x + 1), 60e3);
     return () => { clearInterval(a); clearInterval(b); };
   }, [place, run]);
+
+  /* the installed app's first screen: your place, at once (from the forecast saved for it if offline) */
+  const appStart = useRef(undefined);
+  if (appStart.current === undefined) appStart.current = appStartPlace(routerLocation.search);
+  useEffect(() => {
+    const p = appStart.current;
+    if (!p) return;
+    appStart.current = null;
+    setQuery(p.name);
+    run({ lat: p.lat, lon: p.lon, name: p.name, region: p.region });
+  }, [run]);
+  /* the connection back: fetched afresh */
+  useEffect(() => {
+    if (!offline || !place) return undefined;
+    const back = () => run(place, { quiet: true });
+    window.addEventListener('online', back);
+    return () => window.removeEventListener('online', back);
+  }, [offline, place, run]);
 
   const useMyLocation = useCallback(() => {
     if (!navigator.geolocation) { setGeoError('This browser cannot share a location.'); return; }
@@ -794,6 +898,15 @@ export default function LocationForecast() {
   }, [resp, tick]);
   const T = temp;
   const deg = (c) => (c == null ? '—' : `${Math.round(T(c))}°`);
+  /* floods, health alerts, air quality, the tide and the normals for the place (OutsideCards.jsx, Phase E) */
+  const feeds = useOutside(lat, lon);
+  /* the page at the hour travelled to (the hero, the tiles and the sky read it); the model itself at now;
+     a new place starts at now, and an hour gone from the forecast goes back to now */
+  const travel = useMemo(() => (model && travelT != null ? travelModel(model, travelT) : model), [model, travelT]);
+  useEffect(() => { setTravelT(null); }, [lat, lon]);
+  useEffect(() => {
+    if (travelT != null && model && !travelSteps(model).some((x) => x.t === travelT)) setTravelT(null);
+  }, [model, travelT]);
 
   /* ── the hour sheet, links to a moment, and cards to go to ── */
   const placeLink = useCallback((extra = '') => (model
@@ -851,7 +964,7 @@ export default function LocationForecast() {
   /* the cards that matter most today (the Today card's chips) come up the page on a phone */
   /* (not the tiles or the days: those are the general cards, and a cold-feel or frost chip pointing
      at the tiles would lift fourteen of them up the page) */
-  const lifted = useMemo(() => new Set(model ? mattersToday(model, warnings, U).flatMap((m) => m.card.split('|')).filter((n) => n !== 'tiles' && n !== 'days') : []), [model, warnings, U]);
+  const lifted = useMemo(() => new Set(model ? mattersToday(model, warnings, U, feeds).flatMap((m) => m.card.split('|')).filter((n) => n !== 'tiles' && n !== 'days') : []), [model, warnings, U, feeds]);
   /* a slot comes up when its card, or one of the cards it holds, matters today */
   const slot = (name, holds = [name]) => `lw-slot lw-o-${name}${holds.some((n) => lifted.has(n)) ? ' is-lifted' : ''}`;
 
@@ -864,34 +977,34 @@ export default function LocationForecast() {
 
   /* a day picked on the charts (by its place in the UKV's days) or in the days card (by its date):
      both follow, and the hourly strip scrolls to it where it reaches */
-  const showDay = (day) => {
+  const showDay = useCallback((day) => {
     const el = day && stripRef.current?.querySelector(`[data-day="${day}"]`);
     if (el && stripRef.current) stripRef.current.scrollTo({ left: el.offsetLeft - 8, behavior: 'smooth' });
-  };
-  const pickDay = (i) => {
+  }, []);
+  const pickDay = useCallback((i) => {
     setDayIdx(i);
     const d = model?.days[i];
     if (d) { setOpenDay(d.day); showDay(d.day); }
-  };
-  const openOutlookDay = (day) => {
+  }, [model, showDay]);
+  const openOutlookDay = useCallback((day) => {
     setOpenDay(day);
     const i = day ? model?.days.findIndex((d) => d.day === day) : -1;
     if (i >= 0) { setDayIdx(i); showDay(day); }
-  };
+  }, [model, showDay]);
 
   /* the sky: the weather now at the place, or a mild default before a search */
   const sky = useMemo(() => {
     if (preview) { const p = previewSky(preview); return { ...p, snow: ['snow', 'heavySnow', 'snowShowers', 'blizzard'].includes(p.cond) ? Math.max(0.3, p.rate) : ['sleet', 'mix'].includes(p.cond) ? p.rate * 0.5 : 0 }; }
     if (model) {
-      const n = model.now;
+      const n = travel.now;
       const rate = n.span > 0 ? (n.precip ?? 0) / n.span : n.precipRate ?? 0;
       /* the snow falling now (mm/h of water): the radar's rate times what of it is snow */
       const snow = n.span > 0 && n.snow != null ? n.snow / n.span : n.snowRate ?? 0;
-      return { cond: n.cond, sun: n.sun, morning: hourOf(Date.now()) < 12, wind: n.wind ?? 8, wdir: n.wdir ?? 240, rate, snow, cloud: n.tcc ?? 60 };
+      return { cond: n.cond, sun: n.sun, morning: hourOf(travel.at ?? Date.now()) < 12, wind: n.wind ?? 8, wdir: n.wdir ?? 240, rate, snow, cloud: n.tcc ?? 60 };
     }
     const sun = sunElevation(Date.now(), 52.5, -1.5);
     return { cond: 'partly', sun, morning: hourOf(Date.now()) < 12, wind: 10, wdir: 240, rate: 0, cloud: 45 };
-  }, [model, preview]);
+  }, [model, travel, preview]);
   const togglePreview = () => {
     setHidePage(false);
     setPreview((p) => (p ? null : { ...PREVIEW_START, cond: model?.now.cond || PREVIEW_START.cond }));
@@ -900,17 +1013,27 @@ export default function LocationForecast() {
   /* today's high and low: the days card's (the Mix and today's observed), else the UKV's */
   const olToday = model?.outlook?.days?.find((d) => d.isToday);
   const today = olToday ? { hi: olToday.hi, lo: olToday.lo } : model?.days[0];
+  const heroRange = travelT != null && model ? dayRange(model, travelT) : today;
+  /* the day against yesterday (today only, from yesterday's observed high when most of the day was
+     analysed) and against the district's 1991-2020 normal for the date */
+  const vsLine = model ? compareWords({
+    hi: heroRange?.hi ?? null,
+    yesterdayHi: travelT == null && (model.yesterday?.analyses ?? 0) >= 64 ? model.yesterday.t2_max ?? null : null,
+    normal: feeds?.normal, day: travelT ?? Date.now(), U,
+  }) : null;
+  /* story mode shows the sky alone behind its cards */
+  const pageHidden = hidePage || story;
   const runs = model?.runs || [];
   const olRuns = model?.outlook?.runs || [];
 
   return (
     <div className="lw-page" data-sky={dark < 0.3 ? 'bright' : dark < 0.55 ? 'mid' : 'dark'}>
       <SkyBackdrop {...sky} />
-      {model && !hidePage && <CardRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
-      {model && !hidePage && <CardSnow cond={sky.cond} rate={sky.snow} wind={sky.wind} wdir={sky.wdir} />}
+      {model && !pageHidden && <CardRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
+      {model && !pageHidden && <CardSnow cond={sky.cond} rate={sky.snow} wind={sky.wind} wdir={sky.wdir} />}
       {/* frost on the glass below freezing: the temperature now (the sky preview's snowy skies at -3 C) */}
-      {model && !hidePage && <CardFrost temp={preview ? (sky.snow > 0 ? -3 : null) : model.now.t2} />}
-      {model && !hidePage && <WindowRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
+      {model && !pageHidden && <CardFrost temp={preview ? (sky.snow > 0 ? -3 : null) : travel.now.t2} />}
+      {model && !pageHidden && <WindowRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
 
       {outside && (
         <div role="dialog" aria-modal="true" aria-labelledby="lw-out" onClick={() => setOutside(null)}
@@ -931,6 +1054,10 @@ export default function LocationForecast() {
 
       {comparing && <CompareSheet data={placesData} current={place} onClose={() => setComparing(false)} />}
 
+      {/* the forecast card by card over the live sky (StoryMode.jsx), and as a picture (ShareSheet.jsx) */}
+      {model && story && <StoryMode model={model} onSky={setTravelT} onClose={closeStory} onShare={shareFromStory} />}
+      {model && sharing && <ShareSheet model={model} warnings={warnings} onClose={closeShare} />}
+
       {/* everything for one hour (HourSheet.jsx): from the hourly strip, or a link to the moment */}
       {model && sheetT != null && !hidePage && (
         <HourSheet model={model} t={sheetT} linkFor={linkFor}
@@ -938,7 +1065,7 @@ export default function LocationForecast() {
       )}
 
       {/* one glass bar: back, the search, my location, and a menu for the rest */}
-      <div className="lw-head" style={hidePage ? { visibility: 'hidden' } : undefined}>
+      <div className="lw-head" style={pageHidden ? { visibility: 'hidden' } : undefined}>
         <div className="lw-bar">
           <button type="button" className="lw-bar-btn" onClick={backOut} aria-label={model ? 'Back to search' : 'Back'}>
             <ChevronLeft size={22} />
@@ -959,12 +1086,12 @@ export default function LocationForecast() {
         </div>
       </div>
 
-      <div className="lw-wrap" style={hidePage ? { display: 'none' } : undefined}>
+      <div className="lw-wrap" style={pageHidden ? { display: 'none' } : undefined}>
         {error && <div className="lw-error" role="alert">{error}</div>}
         {geoError && model && <div className="lw-error" role="alert">{geoError}</div>}
 
         {/* your places, one tap away (YourPlaces.jsx); on the search page your commute too */}
-        <PlacesStrip data={placesData} current={place} onOpen={openPlace} onChange={changePlaces} onCompare={() => setComparing(true)} />
+        <PlacesMemo data={placesData} current={place} onOpen={openPlace} onChange={changePlaces} onCompare={openCompare} />
         {!model && !loading && <CommuteCard data={placesData} onChange={changePlaces} />}
 
         {loading && !model && (
@@ -985,17 +1112,28 @@ export default function LocationForecast() {
 
         {model && (
           <>
-            <header className="lw-hero" aria-live="polite">
+            {/* the hero: now, or the hour travelled to (TimeTravel.jsx) */}
+            <header className="lw-hero" aria-live={travelT == null ? 'polite' : 'off'}>
               <div className="lw-hero-name"><span translate="no">{model.location.name}</span><SaveStar place={place} data={placesData} onChange={changePlaces} /></div>
-              <div className="lw-hero-temp">{deg(model.now.t2)}</div>
-              <div className="lw-hero-cond">{condLabel(model.now.cond, model.now.isDay, model.now.windy)}</div>
-              {today && <div className="lw-hero-hl">H:{deg(today.hi)}&nbsp;&nbsp;L:{deg(today.lo)}</div>}
+              <div className="lw-hero-temp">{deg(travel.now.t2)}</div>
+              <div className="lw-hero-cond">{condLabel(travel.now.cond, travel.now.isDay, travel.now.windy)}</div>
+              {heroRange && <div className="lw-hero-hl">H:{deg(heroRange.hi)}&nbsp;&nbsp;L:{deg(heroRange.lo)}</div>}
+              {vsLine && <div className="lw-hero-vs" title={feeds?.normal ? `Normal: the Met Office ${feeds.normal.period} average for ${feeds.normal.name}` : undefined}>{vsLine}</div>}
               <div className="lw-hero-meta">
-                Feels like {deg(model.now.feels)}
-                {model.analysis?.valid ? ` · observed analysis ${hhmm(Date.parse(model.analysis.valid))}` : ''}
+                Feels like {deg(travel.now.feels)}
+                {travelT != null ? ` · the forecast for ${travelLabel(travelT)}` : model.analysis?.valid ? ` · observed analysis ${hhmm(Date.parse(model.analysis.valid))}` : ''}
                 {refreshing ? <span className="lw-updating"><Loader2 size={11} className="animate-spin" />updating</span> : null}
               </div>
+              <div className="lw-hero-acts">
+                <button type="button" className="lw-chip" onClick={() => setStory(true)}><Play size={14} />Play the forecast</button>
+                <button type="button" className="lw-chip" onClick={() => setSharing(true)}><Share2 size={14} />Share</button>
+              </div>
             </header>
+            {offline && (
+              <div className="lw-offline" role="status"><WifiOff size={15} />No connection. This is the forecast saved {savedWhen(offline.at)}.</div>
+            )}
+            {/* slide to any hour: the sky, the hero and the tiles follow */}
+            <TimeTravel model={model} value={travelT} onChange={setTravelT} onSettle={scrollStripTo} />
 
             {warnings.length > 0 && (
               /* lw-warn-card: the top card while there is a warning, the one the rain and snow land on */
@@ -1006,7 +1144,9 @@ export default function LocationForecast() {
             )}
 
             {/* the forecast in words, and what matters most today (TodayCard.jsx) */}
-            <TodayCard model={model} warnings={warnings} onCard={goCard} />
+            {/* flood warnings nearby and UKHSA's health alerts, while one is in force */}
+            <AlertsMemo outside={feeds} />
+            <TodayMemo model={model} warnings={warnings} onCard={goCard} outside={feeds} />
 
             {/* The layout (15 Nov 2026, the user's: the radar to the right of the days, the detailed
                 forecast moved up). On a computer: the hours, the precipitation, the detailed forecast and
@@ -1016,36 +1156,37 @@ export default function LocationForecast() {
             <div className="lw-layout">
               <div className="lw-col">
                 <div id="lw-card-hourly" className={slot('hourly')}>
-                  <HourlyCard model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} onHour={setSheetT} sheetT={sheetT} />
+                  <HourlyMemo model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} onHour={setSheetT} sheetT={sheetT} />
                 </div>
-                <div id="lw-card-precip" className={slot('precip')}><PrecipCard model={model} /></div>
+                <div id="lw-card-precip" className={slot('precip')}><PrecipMemo model={model} /></div>
                 {/* road ice and fog, snow settling, the night sky, event days: each only when it has
                     something to say (SituationCards.jsx) */}
-                <div id="lw-card-situations" className={`${slot('situations', ['roads', 'settle', 'nightsky', 'events'])} lw-situations`}>
-                  {atCommutePlace && <CommuteCard data={placesData} onChange={changePlaces} />}
-                  <SituationCards model={model} />
+                <div id="lw-card-situations" className={`${slot('situations', ['roads', 'settle', 'nightsky', 'events', 'coast'])} lw-situations`}>
+                  {atCommutePlace && <CommuteMemo data={placesData} onChange={changePlaces} />}
+                  <SituationsMemo model={model} />
+                  <CoastMemo outside={feeds} />
                 </div>
-                <div id="lw-card-detail" className={slot('detail')}><LocationCharts model={model} dayIdx={dayIdx} onDay={pickDay} /></div>
+                <div id="lw-card-detail" className={slot('detail')}><ChartsMemo model={model} dayIdx={dayIdx} onDay={pickDay} /></div>
                 {/* lightning near here, heavy rain on its way, the AI lightning warning, the storm type and
                     hail: only when there is something to watch (StormWatch.jsx) */}
-                <div id="lw-card-storm" className={slot('storm', ['storm', 'thunder'])}><StormWatch model={model} /></div>
-                <div id="lw-card-thunder" className={slot('thunder')}><LocationThunder model={model} /></div>
+                <div id="lw-card-storm" className={slot('storm', ['storm', 'thunder'])}><StormMemo model={model} /></div>
+                <div id="lw-card-thunder" className={slot('thunder')}><ThunderMemo model={model} /></div>
               </div>
               <div className="lw-col">
-                <div id="lw-card-tiles" className={slot('tiles')}><LocationTiles model={model} /></div>
+                <div id="lw-card-tiles" className={slot('tiles')}><TilesMemo model={travel} outside={feeds} /></div>
               </div>
               <div id="lw-card-days" className={slot('days')}>
                 {model.outlook?.days?.length
-                  ? <OutlookCard model={model} T={T} selected={openDay} onDay={openOutlookDay} warnings={warnings} onWarning={showWarning} />
-                  : <DaysCard model={model} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />}
+                  ? <OutlookMemo model={model} T={T} selected={openDay} onDay={openOutlookDay} warnings={warnings} onWarning={showWarning} />
+                  : <DaysMemo model={model} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />}
               </div>
               <div id="lw-card-radar" className={slot('radar')}>
                 <div className="lw-glass lw-card">
                   <div className="lw-title"><Radar />Rain radar<span className="lw-title-aside">Met Office 1 km · then UKV</span></div>
-                  <LocationRadar lat={model.lat} lon={model.lon} />
+                  <RadarMemo lat={model.lat} lon={model.lon} />
                 </div>
               </div>
-              <div id="lw-card-snow" className={slot('snow')}><LocationSnow model={model} /></div>
+              <div id="lw-card-snow" className={slot('snow')}><SnowMemo model={model} /></div>
             </div>
 
             <p className="lw-source">

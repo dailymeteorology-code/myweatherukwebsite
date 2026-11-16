@@ -23,6 +23,8 @@ const clean = (d) => ({
   },
 });
 const readLocal = () => { try { return clean(JSON.parse(localStorage.getItem(KEY) || 'null') || EMPTY); } catch { return clean(EMPTY); } };
+/** This browser's places at once (no account call): the first screen of the installed app. */
+export const localPlaces = () => readLocal();
 const writeLocal = (d) => { try { localStorage.setItem(KEY, JSON.stringify(d)); } catch { /* storage blocked */ } };
 
 const entity = () => base44.entities.LocationSearchHistory;

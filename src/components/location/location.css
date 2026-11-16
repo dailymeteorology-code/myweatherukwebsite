@@ -701,3 +701,134 @@
 .lw-commute-change { margin-top: 10px; }
 .lw-commute-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; color: var(--ink2); }
 .lw-commute-edit input { margin-left: 4px; padding: 4px 6px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.24); background: rgba(255, 255, 255, 0.08); color: var(--ink); font: inherit; color-scheme: dark; }
+
+/* ── Phase F (16 Nov 2026): the hero's buttons, no connection, time travel, story mode, share as a picture ── */
+.lw-hero-acts { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; text-shadow: none; }
+.lw-hero-acts .lw-chip { background: rgba(255, 255, 255, 0.14); color: var(--ink); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.lw-hero-acts .lw-chip:hover { background: rgba(255, 255, 255, 0.24); }
+
+.lw-offline { display: flex; align-items: center; gap: 8px; max-width: 600px; margin: 0 auto 12px; padding: 9px 14px; border-radius: 14px; background: rgba(250, 204, 21, 0.16); border: 1px solid rgba(253, 224, 71, 0.42); color: #fef9c3; font-size: 13px; line-height: 1.35; }
+.lw-offline svg { flex: none; }
+
+/* time travel: a ruler of hours under a fixed marker (TimeTravel.jsx); it stays in view while away from now */
+.lw-travel { max-width: 760px; margin: 0 auto 14px; padding: 8px 0 4px; border-radius: 18px; }
+.lw-travel.is-away { position: sticky; top: 126px; z-index: 15; }
+@media (max-width: 767px) { .lw-travel.is-away { top: 54px; } }   /* under the site's 48 px phone header */
+.lw-travel-head { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 12px 2px 14px; font-size: 13px; color: var(--ink2); }
+.lw-travel-when { font-size: 15px; font-weight: 700; color: var(--ink); }
+.lw-travel-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ink3); }
+.lw-travel-back { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border: 0; border-radius: 99px; background: rgba(255, 255, 255, 0.92); color: #0b1a2c; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.lw-travel-ruler { position: relative; }
+.lw-travel-scroll {
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none; scroll-snap-type: x mandatory; cursor: grab; outline: none; touch-action: pan-x;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent); mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+}
+.lw-travel-scroll::-webkit-scrollbar { display: none; }
+.lw-travel-scroll.is-dragging { scroll-snap-type: none; cursor: grabbing; }
+.lw-travel-scroll:focus-visible { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.55); border-radius: 12px; }
+.lw-travel-track { position: relative; height: 40px; }
+.lw-travel-snap { position: absolute; top: 0; width: 1px; height: 1px; scroll-snap-align: center; pointer-events: none; }
+.lw-travel-mark { position: absolute; top: 7px; width: 1px; height: 6px; margin-left: -0.5px; background: rgba(255, 255, 255, 0.28); pointer-events: none; }
+.lw-travel-mark.is-major { height: 9px; background: rgba(255, 255, 255, 0.45); }
+.lw-travel-mark.is-mid { top: 3px; width: 2px; height: 15px; margin-left: -1px; background: rgba(255, 255, 255, 0.85); }
+.lw-travel-mark em { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); font-style: normal; font-size: 11px; font-weight: 600; color: var(--ink3); white-space: nowrap; }
+.lw-travel-mark.is-mid em { top: 18px; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink); }
+.lw-travel-now { position: absolute; top: 21px; transform: translateX(-50%); font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink); pointer-events: none; }
+.lw-travel-marker { position: absolute; left: 50%; top: 1px; width: 2px; height: 19px; margin-left: -1px; border-radius: 2px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 10, 30, 0.2), 0 0 10px rgba(255, 255, 255, 0.55); pointer-events: none; }
+
+/* story mode: full-screen cards over the live sky (StoryMode.jsx) */
+.lw-story {
+  position: fixed; inset: 0; z-index: 80; display: flex; justify-content: center; color: #fff; outline: none;
+  touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+  /* a scrim over the site's own bar at the top, fading into the live sky (and over the tab bar on phones) */
+  background: linear-gradient(180deg, rgba(4, 10, 24, 0.97) 0, rgba(4, 10, 24, 0.94) 58px, rgba(4, 10, 24, 0) 170px);
+  animation: lw-fade 0.25s ease both;
+}
+@media (max-width: 767px) {
+  .lw-story {
+    background: linear-gradient(180deg, rgba(4, 10, 24, 0.97) 0, rgba(4, 10, 24, 0.94) 58px, rgba(4, 10, 24, 0) 170px,
+      rgba(4, 10, 24, 0) calc(100% - 170px), rgba(4, 10, 24, 0.9) calc(100% - 66px), rgba(4, 10, 24, 0.96) 100%);
+  }
+}
+.lw-story-col { position: relative; display: flex; flex-direction: column; width: min(480px, 100%); height: 100%; padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+.lw-story-bars { display: flex; gap: 4px; }
+.lw-story-seg { flex: 1; height: 3px; overflow: hidden; border-radius: 3px; background: rgba(255, 255, 255, 0.3); }
+.lw-story-seg i { display: block; width: 0; height: 100%; border-radius: inherit; background: #fff; }
+.lw-story-seg i.is-done { width: 100%; }
+.lw-story-seg i.is-on { animation: lw-story-fill linear forwards; }
+@keyframes lw-story-fill { from { width: 0; } to { width: 100%; } }
+.lw-story-top { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+.lw-story-place { font-size: 15px; font-weight: 700; text-shadow: 0 1px 10px rgba(0, 10, 30, 0.45); }
+.lw-story-x { display: grid; place-items: center; width: 38px; height: 38px; border: 0; border-radius: 99px; background: rgba(255, 255, 255, 0.16); color: #fff; cursor: pointer; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.lw-story-card {
+  margin: auto 0; padding: 20px 20px 18px; border-radius: 26px;
+  background: linear-gradient(150deg, rgba(10, 22, 44, 0.44), rgba(10, 22, 44, 0.3)); border: 1px solid rgba(255, 255, 255, 0.2);
+  -webkit-backdrop-filter: blur(24px) saturate(160%); backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26), 0 18px 48px rgba(0, 8, 24, 0.28);
+  animation: lw-story-in 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes lw-story-in { from { opacity: 0; transform: translateY(14px) scale(0.985); } to { opacity: 1; transform: none; } }
+.lw-story-label { margin-bottom: 10px; font-size: 13px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255, 255, 255, 0.72); }
+.lw-story-hero { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.lw-story-temp { margin: 6px 0 4px 0.1em; font-size: 96px; font-weight: 200; line-height: 1; letter-spacing: -0.04em; }
+.lw-story-cond { font-size: 21px; font-weight: 600; }
+.lw-story-sub { margin-top: 6px; font-size: 15px; color: rgba(255, 255, 255, 0.82); }
+.lw-story-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.lw-story-hero .lw-story-chips { justify-content: center; }
+.lw-story-chips span { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 99px; background: rgba(255, 255, 255, 0.14); font-size: 13.5px; font-weight: 600; }
+.lw-story-text { margin: 0; font-size: 19px; font-weight: 500; line-height: 1.45; }
+.lw-story-part { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.lw-story-big { font-size: 56px; font-weight: 300; line-height: 1; letter-spacing: -0.03em; }
+.lw-story-big small { display: block; margin-bottom: 4px; font-size: 12.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255, 255, 255, 0.66); }
+.lw-story-mins { display: flex; align-items: flex-end; gap: 1px; height: 110px; margin-top: 18px; padding-bottom: 1px; border-bottom: 1px solid rgba(255, 255, 255, 0.3); }
+.lw-story-mins i { flex: 1; min-width: 0; border-radius: 2px 2px 0 0; background: rgba(255, 255, 255, 0.25); }
+.lw-story-axis { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: rgba(255, 255, 255, 0.66); }
+.lw-story-hours { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; margin-top: 18px; text-align: center; }
+.lw-story-hours div { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 13px; color: rgba(255, 255, 255, 0.76); }
+.lw-story-hours b { font-size: 18px; font-weight: 600; color: #fff; }
+.lw-story-hours small { min-height: 14px; font-size: 11.5px; font-weight: 700; color: #8fd0ff; }
+.lw-story-days { display: flex; flex-direction: column; }
+.lw-story-day { display: grid; grid-template-columns: 70px 46px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.14); }
+.lw-story-day:last-child { border-bottom: 0; }
+.lw-story-day > div { display: flex; flex-direction: column; }
+.lw-story-day b { font-size: 17px; }
+.lw-story-day small { font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+.lw-story-words { font-size: 14px; line-height: 1.3; color: rgba(255, 255, 255, 0.86); }
+.lw-story-range { font-size: 17px; white-space: nowrap; color: rgba(255, 255, 255, 0.6); }
+.lw-story-range b { margin-right: 6px; color: #fff; }
+.lw-story-end { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.lw-story-end button { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border: 0; border-radius: 99px; background: rgba(255, 255, 255, 0.16); color: #fff; font: inherit; font-size: 14px; font-weight: 650; cursor: pointer; }
+.lw-story-end button:first-child { background: #fff; color: #0b1a2c; }
+.lw-story-hint { margin: 0; text-align: center; font-size: 12.5px; color: rgba(255, 255, 255, 0.66); }
+@media (prefers-reduced-motion: reduce) { .lw-story, .lw-story-card { animation: none; } }
+
+/* share as a picture (ShareSheet.jsx), in the hour sheet's frame */
+.lw-share-pic { flex: 1; min-height: 0; display: grid; place-items: center; padding: 2px 14px 10px; }
+.lw-share-pic img { max-width: 100%; max-height: 100%; aspect-ratio: 9 / 16; object-fit: contain; border-radius: 14px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); }
+.lw-share-wait { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink2); }
+.lw-share-btns { display: flex; gap: 8px; padding: 10px 14px 14px; border-top: 1px solid var(--line); flex: none; }
+.lw-share-btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 11px 14px; border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 14px; background: rgba(255, 255, 255, 0.1); color: #fff; font: inherit; font-size: 14.5px; font-weight: 650; cursor: pointer; }
+.lw-share-btn.is-main { border-color: transparent; background: #fff; color: #0b1a2c; }
+.lw-share-btn:disabled { opacity: 0.45; cursor: default; }
+@media (max-width: 640px) { .lw-sh.lw-share { height: 86%; } }
+
+/* the menu: how to add the page to a home screen in Safari */
+.lw-menu-howto { margin: 2px 4px 6px; padding: 10px 12px; border-radius: 12px; background: rgba(255, 255, 255, 0.08); font-size: 13px; line-height: 1.45; color: var(--ink2); }
+.lw-menu-howto svg { display: inline; vertical-align: -2px; }
+
+/* ── Phase E (16 Nov 2026): against yesterday and normal, flood and health alerts, the tide, air quality ── */
+.lw-hero-vs { margin-top: 4px; font-size: 14px; font-weight: 500; color: var(--ink2); }
+.lw-out-badge { display: inline-block; margin-bottom: 6px; padding: 3px 9px; border-radius: 7px; font-size: 12px; font-weight: 800; letter-spacing: 0.02em; }
+.lw-out-link { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; font-size: 13px; font-weight: 650; color: #9fd2ff; text-decoration: none; }
+.lw-out-link:hover { text-decoration: underline; }
+.lw-out-list { margin: 6px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.45; color: var(--ink2); }
+.lw-out-list li + li { margin-top: 3px; }
+.lw-out-more { margin-top: 6px; font-size: 13px; color: var(--ink2); }
+.lw-out-more summary { cursor: pointer; font-weight: 650; color: var(--ink); }
+.lw-out-src { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--ink3); }
+.lw-alerts .lw-sit-row + .lw-sit-row { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.lw-tide { display: block; width: 100%; height: 86px; margin-top: 10px; }
+.lw-tide-axis { display: flex; justify-content: space-between; margin-top: 2px; font-size: 11.5px; color: var(--ink3); }
+.lw-aq { display: flex; gap: 6px; margin: 6px 0 2px; }
+.lw-aq span { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: var(--ink3); }
+.lw-aq i { display: block; width: 100%; height: 8px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }

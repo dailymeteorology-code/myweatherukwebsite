@@ -286,6 +286,18 @@ export function cachedLocation(p) {
   const hit = readStore()[placeKey(p)];
   return hit && Date.now() - hit.at < 20 * 60e3 ? hit.body : null;
 }
+/** What was last fetched for a place at any age, with when ({ body, at }): shown offline (Phase F). */
+export function cachedLocationAny(p) {
+  const hit = readStore()[placeKey(p)];
+  return hit?.body?.location ? hit : null;
+}
+/** The place opened last on this device ({ name, lat, lon }), for the installed app's first screen. */
+export function lastOpenedPlace() {
+  const all = Object.values(readStore()).filter((x) => x?.body?.location);
+  if (!all.length) return null;
+  const { location: l } = all.sort((a, b) => b.at - a.at)[0].body;
+  return { name: l.name, lat: l.lat, lon: l.lon };
+}
 /** Start fetching a place before it is picked (a suggestion hovered or focused). */
 export function prefetchLocation(p) {
   const key = placeKey(p);
@@ -456,6 +468,8 @@ export function shape(resp) {
 
   return {
     location: loc, hours: allHours, full: allFull, days, now: nowHour, nowIdx, observed, analysis: an, minutely,
+    /* yesterday's observed day at the place (its high, for "colder than yesterday": Phase E) */
+    yesterday: resp.yesterday || null,
     runs: fc.runs, cell: fc.cell, lat, lon, anchor: fc.anchor || null, outlook,
     /* every NOVA hour (not only the UKV's: hourly to the end of the Main Run) */
     nova: novaModel,

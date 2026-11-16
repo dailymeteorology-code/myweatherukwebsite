@@ -3,6 +3,7 @@
    place's own UKV hour (or the 15-minute analysis for "now"); the sentences only describe them. */
 import React from 'react';
 import { useUnits } from '@/components/useUnits';
+import { AirTile } from '@/components/location/OutsideCards';
 import {
   Thermometer, Wind, Sun, Sunset, Droplets, Eye, Gauge, Cloud, CloudLightning, Snowflake, Moon, SunMedium, History,
 } from 'lucide-react';
@@ -87,10 +88,11 @@ function MoonDisc({ phase }) {
   );
 }
 
-export default function LocationTiles({ model }) {
+export default function LocationTiles({ model, outside = null }) {
   const U = useUnits();
   const deg = (c) => (c == null ? '—' : `${Math.round(U.temp(c))}°`);
-  const now = model.now, nowMs = Date.now();
+  /* model.at: an hour the page has travelled to (TimeTravel.jsx), else now */
+  const now = model.now, nowMs = model.at ?? Date.now();
   const next = (hrs) => model.full.filter((h) => h.t > nowMs - 30 * 60e3 && h.t <= nowMs + hrs * 36e5);
   const today = model.days[0];
   const n24 = next(24), n12 = next(12);
@@ -170,7 +172,7 @@ export default function LocationTiles({ model }) {
 
       <Tile icon={Droplets} label="Humidity">
         <div className="lw-big">{now.rh == null ? '—' : `${Math.round(now.rh)}%`}</div>
-        <div className="lw-foot">The dew point is {deg(now.td)} right now{now.rh >= 95 ? ' and the air is close to saturated.' : now.rh <= 45 ? ', fairly dry air.' : '.'}</div>
+        <div className="lw-foot">The dew point is {deg(now.td)} {model.at ? 'then' : 'right now'}{now.rh >= 95 ? ' and the air is close to saturated.' : now.rh <= 45 ? ', fairly dry air.' : '.'}</div>
       </Tile>
 
       <Tile icon={Eye} label="Visibility">
@@ -238,7 +240,7 @@ export default function LocationTiles({ model }) {
 
       <Tile icon={SunMedium} label="Sunshine">
         <div className="lw-big">{Math.round(cur.sw ?? 0)}<small>W/m²</small></div>
-        <div className="lw-mini">solar power at the ground now</div>
+        <div className="lw-mini">solar power at the ground {model.at ? 'then' : 'now'}</div>
         <div className="lw-foot">{swPeak && swPeak.sw > 20 ? `Strongest around ${hhmm(swPeak.t)} at ${Math.round(swPeak.sw)} W/m².` : 'Little sunshine left today.'}</div>
       </Tile>
 
@@ -252,6 +254,8 @@ export default function LocationTiles({ model }) {
         ) : <div className="lw-mini">Observed data for today is not ready yet.</div>}
         <div className="lw-foot lw-mini">Since midnight, from the UKV analysis corrected by station reports and the radar.</div>
       </Tile>
+      {/* DEFRA's air quality forecast (OutsideCards.jsx, Phase E) */}
+      <AirTile outside={outside} />
     </div>
   );
 }
