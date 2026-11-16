@@ -53,6 +53,7 @@ import { travelModel, travelSteps, dayRange, travelLabel } from '@/lib/location/
 import { useInstall, useLocationApp } from '@/lib/location/app';
 import { useOutside, AlertsCard, CoastCard } from '@/components/location/OutsideCards';
 import TrendCard from '@/components/location/TrendCard';
+import { ACTIVITIES, scoreHours, goodSpells } from '@/lib/everydayIndices';
 import { compareWords } from '@/lib/location/outside';
 import { fetchKp } from '@/lib/location/feeds';
 import { SHOWERS, auroraKp } from '@/lib/location/situations';
@@ -78,14 +79,42 @@ const runName = (iso) => {
 const COL_W = 58;                                  // every column of the strip (.lw-hour, border-box)
 const LANE_H = 24;                                 // one warning bar, with its gap
 const QUARTER_HOURS = 12;                          // the hours that open into their quarters: the next twelve
-/* `onHour`: tapping an hour (or one of its quarters) opens the hour sheet for it; `sheetT` marks it */
-function HourlyCard({ model, T, stripRef, warnings, onWarning, onHour, sheetT }) {
+/* the best-time finder's activities: Out and about's (src/lib/everydayIndices.js), but cycling, whose score
+   needs the way you ride (Out and about asks for it) */
+const BEST_FOR = ACTIVITIES.filter(([k]) => k !== 'cycle');
+const spellDay = (t) => {
+  const d = ukDay(t), today = ukDay(Date.now());
+  if (d === today) return 'today';
+  if (d === ukDay(Date.now() + 864e5)) return 'tomorrow';
+  return new Date(t).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'Europe/London' });
+};
+/* `onHour`: tapping an hour (or one of its quarters) opens the hour sheet for it; `sheetT` marks it.
+   `bestFor`: the activity the best-time finder is showing (Phase G, from the user's brainstorm): its
+   good hours get a green bar under them across the whole forecast, and its best spells are listed. */
+function HourlyCard({ model, T, stripRef, warnings, onWarning, onHour, sheetT, bestFor = null, onBestFor }) {
   const U = useUnits();
   /* the hours opened into their quarters (by the hour's time), and each of the next twelve hours' quarters */
   const [open, setOpen] = useState(() => new Set());
   const toggle = useCallback((t) => setOpen((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n; }), []);
   const hs = useMemo(() => fromThisHour(model.full), [model]);
   const quarters = useMemo(() => new Map(hs.slice(0, QUARTER_HOURS + 1).map((h) => [h.t, quartersOf(model, h)])), [model, hs]);
+  /* the best-time finder: every waking hour (07:00 to 22:00) scored for the activity (Out and about's rules
+     of thumb), the good ones (6 out of 10 or better) marked, and each day's longest good spell listed */
+  const best = useMemo(() => {
+    if (!bestFor) return null;
+    const awake = (t) => { const hr = hourOf(t); return hr >= 7 && hr <= 21; };
+    const scored = scoreHours(hs, bestFor).map((x) => (awake(x.t) ? x : { ...x, score: 0 }));
+    const span = new Map(hs.map((h) => [h.t, Math.max(1, h.span || 1)]));
+    /* a spell ends with its last good hour (a three-hourly step ends three hours on), and by 22:00 */
+    const endOf = (sp) => { const d = ukDay(sp.from); let e = sp.to + span.get(sp.to) * 36e5; while (e - 36e5 > sp.from && (ukDay(e - 1) !== d || hourOf(e - 1) >= 22)) e -= 36e5; return e; };
+    const spells = goodSpells(scored).map((sp) => { const end = endOf(sp); return { ...sp, end, hours: (end - sp.from) / 36e5 }; });
+    const byDay = new Map();
+    for (const sp of spells) {
+      const d = ukDay(sp.from), cur = byDay.get(d);
+      if (!cur || sp.hours > cur.hours || (sp.hours === cur.hours && sp.best > cur.best)) byDay.set(d, sp);
+    }
+    return { score: new Map(scored.map((x) => [x.t, x.score])), days: [...byDay.values()].sort((a, b) => a.from - b.from) };
+  }, [hs, bestFor]);
   const items = useMemo(() => {
     if (!hs.length) return [];
     const from = hs[0].t, to = hs[hs.length - 1].t;
@@ -139,6 +168,24 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning, onHour, sheetT })
         </span>
       </div>
       <p className="lw-summary">{nextHoursText(model, U)}</p>
+      {onBestFor && (
+        <div className="lw-best">
+          <span className="lw-best-label">Best time for</span>
+          <div className="lw-best-chips" role="group" aria-label="Find the best time for">
+            {BEST_FOR.map(([k, l]) => (
+              <button key={k} type="button" className="lw-chip" aria-pressed={bestFor === k} onClick={() => onBestFor(bestFor === k ? null : k)}>{l}</button>
+            ))}
+          </div>
+          {best && (
+            <p className="lw-best-say" aria-live="polite">
+              {best.days.length
+                ? <>Best {best.days.slice(0, 5).map((sp, i, list) => <span key={sp.from}>{i ? (i === list.length - 1 ? ' and ' : ', ') : ''}<b>{spellDay(sp.from)} {hhmm(sp.from)}–{hhmm(sp.end)}</b></span>)}.</>
+                : <>No good spell between 07:00 and 22:00 in the forecast.</>}
+              {' '}Every good hour has green under it.
+            </p>
+          )}
+        </div>
+      )}
       <div className="lw-hours" ref={stripRef}
         onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && e.currentTarget.scrollWidth > e.currentTarget.clientWidth) { e.currentTarget.scrollLeft += e.deltaY; } }}>
         <div className="lw-hours-track" style={lanes.length ? { paddingBottom: lanes.length * LANE_H + 6 } : undefined}>
@@ -213,7 +260,7 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning, onHour, sheetT })
           const open1 = () => onHour?.(hourT);
           return (
             <div key={q ? `q${q.t}` : h.t}
-              className={`lw-hour is-tap${k === 0 ? ' is-now' : ''}${dayStart ? ' is-day-start' : ''}${q ? ' is-quarter' : ''}${lastQ ? ' is-qend' : ''}${isOpen ? ' is-open' : ''}${!q && sheetT === h.t ? ' is-sel' : ''}`}
+              className={`lw-hour is-tap${k === 0 ? ' is-now' : ''}${dayStart ? ' is-day-start' : ''}${q ? ' is-quarter' : ''}${lastQ ? ' is-qend' : ''}${isOpen ? ' is-open' : ''}${!q && sheetT === h.t ? ' is-sel' : ''}${!q && best ? ((best.score.get(h.t) ?? 0) >= 0.8 ? ' is-best is-ideal' : (best.score.get(h.t) ?? 0) >= 0.6 ? ' is-best' : '') : ''}`}
               data-day={q ? undefined : h.day} data-t={q ? undefined : h.t}
               role="button" tabIndex={0} onClick={open1}
               onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open1(); } }}
@@ -742,6 +789,9 @@ export default function LocationForecast() {
   const [placesData, setPlacesData] = useState(() => localPlaces());
   const [comparing, setComparing] = useState(false);
   const openCompare = useCallback(() => setComparing(true), []);
+  /* the best-time finder's activity (HourlyCard), kept on this device */
+  const [bestFor, setBestFor] = useState(() => { try { return localStorage.getItem('lw-best-for') || null; } catch { return null; } });
+  useEffect(() => { try { if (bestFor) localStorage.setItem('lw-best-for', bestFor); else localStorage.removeItem('lw-best-for'); } catch { /* storage blocked */ } }, [bestFor]);
   /* time travel (TimeTravel.jsx): the hour the page shows, null for now; story mode; the share sheet;
      and the forecast shown without a connection ({ at: when it was saved }) */
   const [travelT, setTravelT] = useState(null);
@@ -1200,7 +1250,7 @@ export default function LocationForecast() {
             <div className="lw-layout">
               <div className="lw-col">
                 <div id="lw-card-hourly" className={slot('hourly')}>
-                  <HourlyMemo model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} onHour={setSheetT} sheetT={sheetT} />
+                  <HourlyMemo model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} onHour={setSheetT} sheetT={sheetT} bestFor={bestFor} onBestFor={setBestFor} />
                 </div>
                 <div id="lw-card-precip" className={slot('precip')}><PrecipMemo model={model} /></div>
                 <div id="lw-card-indices" className={slot('indices')} style={{ order: 2 }}><EverydayIndices model={model} /></div>
