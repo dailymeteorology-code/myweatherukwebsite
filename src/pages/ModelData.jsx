@@ -45,6 +45,7 @@ import { dateWords, dateTimeWords, timeWords } from '@/lib/dateFmt';
 import { countyCells, describe } from '@/lib/mapCaption';
 import RegionPicker, { gridBox, loadCounties } from '@/components/modeldata/RegionPicker';
 import DrawBar from '@/components/modeldata/DrawBar';
+import RouteForecast from '@/components/modeldata/RouteForecast';
 import { AirPath, CrossSection, EnsemblePlume, ModelsAtPoint, Scenarios, Sounding, TRAJ_COLOURS } from '@/components/modeldata/PointTools';
 import { readDrawings, saveDrawings, shapePoints, isClosed } from '@/lib/mapDrawings';
 import LongRange from '@/components/modeldata/LongRange';
@@ -807,6 +808,7 @@ export default function ModelData() {
   const [ptool, setPtool] = useState(null);                    // { kind, lat, lon, place, ... }
   const [sectionFrom, setSectionFrom] = useState(null);      // a cross-section's first end, waiting for the second
   const [traj, setTraj] = useState(null);                    // { busy } | { data } | { err }
+  const [road, setRoad] = useState(null);                    // a road's forecast: { busy } | { data } | { err }
   const hlRings = useMemo(() => {
     if (!hl) return null;
     const out = {};
@@ -1708,13 +1710,14 @@ export default function ModelData() {
      it would any frame. */
   const trajLines = useMemo(() => (traj?.data?.trajectories || []).map((tr) => ({ kind: 'arrow', colour: TRAJ_COLOURS[tr.from_p] || '#111827', w: 4,
     pts: tr.path.map(([la, lo]) => [lo, la]).reverse() })), [traj]);
+  const roadLines = useMemo(() => (ptool?.kind === 'route' && road?.data ? [{ kind: 'line', colour: '#a855f7', w: 6, pts: road.data.points }] : []), [ptool, road]);
   const drawLayer = useMemo(() => {
-    if (!drawings.length && !drawDraft && !trajLines.length) return null;
+    if (!drawings.length && !drawDraft && !trajLines.length && !roadLines.length) return null;
     const P = projection(gridName);
     const pts = drawDraft ? (drawDraft.kind === 'shape' && drawDraft.hover ? [...drawDraft.pts, drawDraft.hover] : drawDraft.pts) : null;
-    return { list: trajLines.length ? [...drawings, ...trajLines] : drawings, draft: drawDraft && pts?.length ? { kind: drawDraft.kind, colour: drawTool.colour, w: drawTool.w, draft: true,
+    return { list: trajLines.length || roadLines.length ? [...roadLines, ...drawings, ...trajLines] : drawings, draft: drawDraft && pts?.length ? { kind: drawDraft.kind, colour: drawTool.colour, w: drawTool.w, draft: true,
       closed: drawDraft.kind === 'shape' ? false : isClosed(drawDraft.kind), pts: shapePoints(drawDraft.kind, pts, P.fromGrid) } : null };
-  }, [drawings, drawDraft, drawTool, gridName, trajLines]);
+  }, [drawings, drawDraft, drawTool, gridName, trajLines, roadLines]);
   const layersFor = useCallback((P, raw, sync = false, ms = null) => {
     const tw = raw?.tween, C = P.caches, st = staticsBy[P.grid];
     const f = tw ? tweenFrame(disp(tw.a), disp(tw.b), tw.t, P.scaleKey, cellBox(disp(tw.a), tw.box), nearOf(tw, disp)) : disp(raw);
@@ -2710,6 +2713,10 @@ export default function ModelData() {
       </div>
       <div className="md-sec">
         <LayerRow icon={<Star size={14} />} label="Simple mode" note="questions to start with, the main layers only, and the map in words" on={simple} onClick={() => setSimple((x) => !x)} />
+        {narrow && !timeSteps && (
+          <LayerRow icon={<Route size={14} />} label="A road's forecast" note="the layer along the M6, A9 or any road, through the run" on={ptool?.kind === 'route'}
+            onClick={() => { setPtool((o) => (o?.kind === 'route' ? null : { kind: 'route' })); closePanels(); }} />
+        )}
         {isAdmin && narrow && (
           <LayerRow icon={<PenLine size={14} />} label="Draw on the map" note="admin: outlines in any colour, in the downloads too" on={drawOn}
             onClick={() => { setDrawOn((o) => !o); setDrawDraft(null); closePanels(); }} />
@@ -3357,6 +3364,44 @@ export default function ModelData() {
     }
     return out;
   }, [ptool, isProb, run, steps, frames]);
+  const loadRoad = (ref) => {
+    setRoad({ busy: true });
+    fetch(`/api/modeldata/road?ref=${encodeURIComponent(ref)}`)
+      .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => {
+        if (!ok || j.error) { setRoad({ err: j.error || 'That road could not be found.' }); return; }
+        setRoad({ data: j });
+        const P = projection(gridName), g = j.points.map(([lo, la]) => P.toGrid(lo, la));
+        const xs = g.map((q) => q[0]), ys = g.map((q) => q[1]), pad = 10;
+        fit([Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad]);
+      })
+      .catch((e) => setRoad({ err: `It could not be fetched (${e.message}).` }));
+  };
+  const routeData = useMemo(() => {
+    const rd = road?.data;
+    if (ptool?.kind !== 'route' || !rd || timeSteps || !run) return null;
+    const P = projection(gridName), stride = Math.max(1, Math.round(rd.points.length / 360));
+    const pts = rd.points.filter((_, i) => i % stride === 0).map(([lo, la]) => P.toGrid(lo, la));
+    const t0 = Date.parse(run.run), rows = [], times = [];
+    for (const st of steps) {
+      const f = frames[st];
+      if (!f) continue;
+      const df = disp(f);
+      times.push(t0 + st * 3600e3);
+      rows.push(pts.map(([gx, gy]) => { const v = sampleFrame(df, gx, gy); return Number.isFinite(v) ? v : null; }));
+    }
+    /* the places along it: towns within 8 km of the road, a few spread out */
+    const kmPer = rd.km / Math.max(1, pts.length - 1), dxKm = GRIDS[gridName].dx / 1000, near = [];
+    for (const c of statics?.cities || []) {
+      let best = null;
+      pts.forEach(([gx, gy], i) => { const d = Math.hypot(gx - c.x, gy - c.y); if (!best || d < best.d) best = { d, i }; });
+      if (best && best.d * dxKm < 8) near.push({ name: c.name, km: best.i * kmPer });
+    }
+    near.sort((a, b) => a.km - b.km);
+    const places = [];
+    for (const q of near) if (!places.length || q.km - places[places.length - 1].km > rd.km / 7) places.push(q);
+    return { rows, times, places };
+  }, [ptool, road, timeSteps, run, gridName, steps, frames, disp, statics]);
   const pinCard = pin && (() => {
     const vals = steps.map((s) => (frames[s] ? sampleFrame(disp(frames[s]), pin.gx, pin.gy) : NaN));
     const at = Math.min(idx, Math.max(0, steps.length - 1));
@@ -3608,6 +3653,7 @@ export default function ModelData() {
           <IconBtn title="Zoom out (−)" onClick={() => zoomBy(1 / 1.35)}><ZoomOut size={15} /></IconBtn>
           <IconBtn title="UK & Ireland" onClick={() => fit(REGIONS.uk.box)}><Maximize size={14} /></IconBtn>
           <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => setRegionsOpen((o) => !o)}><MapIcon size={14} /></IconBtn>
+          {!timeSteps && <IconBtn on={ptool?.kind === 'route'} title="A road\u2019s forecast (M6, A9…)" onClick={() => setPtool((o) => (o?.kind === 'route' ? null : { kind: 'route' }))}><Route size={14} /></IconBtn>}
           {isAdmin && <IconBtn on={drawOn} title="Draw on the map (admin)" onClick={() => { setDrawOn((o) => !o); setDrawDraft(null); }}><PenLine size={14} /></IconBtn>}
         </div>
       )}
@@ -3642,6 +3688,9 @@ export default function ModelData() {
         ) : ptool.kind === 'section' ? (
           <CrossSection t={T} phone={phone} fromName={ptool.fromName} toName={ptool.toName} onClose={close}
             url={g ? `/api/modeldata/section?${q({ run: g.run, step: g.step, lat1: ptool.lat1.toFixed(2), lon1: ptool.lon1.toFixed(2), lat2: ptool.lat2.toFixed(2), lon2: ptool.lon2.toFixed(2) })}` : null} />
+        ) : ptool.kind === 'route' ? (
+          <RouteForecast t={T} phone={phone} road={road?.data} busy={road?.busy} err={road?.err} onRoad={loadRoad} label={vmeta?.label || ''} unit={vmeta?.unit || ''}
+            scale={scaleFor(scaleKey)} rows={routeData?.rows} times={routeData?.times} places={routeData?.places || []} validMs={validMs} rainy={RAINY.has(scaleKey)} onClose={close} />
         ) : ptool.kind === 'scenarios' && isProb && run && step != null ? (
           <Scenarios t={T} phone={phone} lines={statics?.lines} ensName={model?.label || ''} onClose={close} url={`/api/modeldata/scenarios?${q({ ens: model.id, run: run.run, step })}`} />
         ) : null;
