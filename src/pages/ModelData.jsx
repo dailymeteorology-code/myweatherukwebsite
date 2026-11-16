@@ -75,7 +75,8 @@ const MODEL_INFO = {
   icon: ['DWD', '6.5 km', 'Source: Deutscher Wetterdienst'], icon_europe: ['DWD', '6.5 km', 'Source: Deutscher Wetterdienst'],
   /* MWUK Mix: MyWeatherUK's blend of the UKV and ICON-EU on the UKV's 2 km grid (tools/modeldata/mdata/mix.py) */
   mix: ['MyWeatherUK', '2 km', 'MyWeatherUK blend of the Met Office UKV and DWD ICON-EU'],
-  consensus: ['MyWeatherUK', '2 km', 'MyWeatherUK: the middle of nine models'],
+  /* MWUK (the middle of nine models, tools/modeldata/mdata/consensus.py): its credit and the foot of the frame (16 Nov 2026, the user's words) */
+  consensus: ['MyWeatherUK', '2 km', 'MyWeatherUK Weather Model'],
   /* 15 Nov 2026: NOAA's AI GFS, Canada's GDPS (tools/modeldata/mdata/models_more.py) */
   aigfs: ['NOAA', '0.25°', 'NOAA NOMADS', 'NOAA'], gdps: ['ECCC', '15 km', 'Environment and Climate Change Canada', 'Canada'],
   /* MET Norway's MEPS: HARMONIE-AROME at 2.5 km over the Nordic countries and the Baltic (read over OPeNDAP) */
