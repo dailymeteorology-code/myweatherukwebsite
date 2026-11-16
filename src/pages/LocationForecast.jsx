@@ -40,6 +40,7 @@ import SkyBackdrop, { CardFrost, CardRain, CardSnow, WindowRain, CardMist, CardF
 import SkyPreview, { PREVIEW_START, previewSky } from '@/components/location/SkyPreview';
 import TodayCard from '@/components/location/TodayCard';
 import SituationCards from '@/components/location/SituationCards';
+import EverydayIndices from '@/components/location/EverydayIndices';
 import StormWatch from '@/components/location/StormWatch';
 import { SaveStar, PlacesStrip, CompareSheet, CommuteCard } from '@/components/location/YourPlaces';
 import { loadPlaces, savePlaces, placeWith, samePlace, localPlaces } from '@/lib/location/places';
@@ -1202,6 +1203,7 @@ export default function LocationForecast() {
                   <HourlyMemo model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} onHour={setSheetT} sheetT={sheetT} />
                 </div>
                 <div id="lw-card-precip" className={slot('precip')}><PrecipMemo model={model} /></div>
+                <div id="lw-card-indices" className={slot('indices')} style={{ order: 2 }}><EverydayIndices model={model} /></div>
                 {/* road ice and fog, snow settling, the night sky, event days: each only when it has
                     something to say (SituationCards.jsx) */}
                 <div id="lw-card-situations" className={`${slot('situations', ['roads', 'settle', 'nightsky', 'events', 'coast'])} lw-situations`}>

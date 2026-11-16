@@ -122,6 +122,8 @@ export const LAYER_DESC = {
   t2_spread: 'How far apart the forecasts’ temperatures are (an ensemble’s members, or the Consensus’s models): the wider, the less certain',
   mslp_spread: 'How far apart the forecasts’ pressures are (an ensemble’s members, or the Consensus’s models): the wider, the less certain',
   rain_agree: 'How many of the models show rain there (0.2 mm an hour or more): 100% when every one does',
+  stargaze: 'How good the sky is for stars, out of 10: dark (the sun well down), clear (the model’s cloud) and the moon’s glare',
+  aurora: 'A rough guide to seeing the northern lights: how far south NOAA’s forecast Kp brings the aurora, where it is dark and clear. Look north, away from lights',
   shear6: 'How much the wind changes between the ground and about 5.5 km (500 hPa): 40 knots or more organises thunderstorms into long-lived ones',
   scp: 'Supercell composite: instability, low-level spin (0-3 km helicity) and deep shear together. Above 1, rotating thunderstorms are possible; above 4, likely where storms form',
   ehi3: 'Energy-helicity index: instability times 0-3 km helicity. Above 1, storms that form can rotate; above 2, more so',

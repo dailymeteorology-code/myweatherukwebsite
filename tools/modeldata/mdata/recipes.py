@@ -131,6 +131,11 @@ try:                                                    # against the 1991-2020 
     RECIPES.update(ANOMALY_RECIPES)
 except Exception:                                       # noqa: BLE001
     pass
+try:                                                    # the night sky: stargazing and the aurora (mdata/sky.py)
+    from .sky import SKY_RECIPES
+    RECIPES.update(SKY_RECIPES)
+except Exception:                                       # noqa: BLE001
+    pass
 # code layers (classes, not values): stored lo 0 hi 254 so each class is its own byte; never blended between steps or cells
 CODED = {'frost_risk', 'ice_risk', 'beaufort'}
 

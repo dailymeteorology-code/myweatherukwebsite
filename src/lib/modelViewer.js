@@ -557,6 +557,9 @@ SCALES.mslp_anom = { stops: DIVERGE(-30, 30), ticks: [-30, -20, -10, 0, 10, 20, 
 /* the storms' ingredients (16 Nov 2026): deep wind shear, the supercell composite and the energy-helicity index */
 SCALES.shear6 = { stops: [[15, '#e6f5d0', 90], [20, '#c7e9c0', 130], [30, '#7fcdbb', 175], [40, '#41b6c4', 200], [50, '#2c7fb8', 215], [60, '#253494', 225], [80, '#7a0177', 235]], floor: 15, ticks: [20, 30, 40, 50, 60, 80] };
 SCALES.scp = { stops: [[0.5, '#fff5b1', 120], [1, '#fed976', 170], [2, '#fd8d3c', 200], [4, '#e31a1c', 215], [8, '#800026', 230], [12, '#4a0040', 240]], floor: 0.5, ticks: [1, 2, 4, 8, 12] };
+/* the night sky (16 Nov 2026): stargazing 0-10 (dark violet to bright), the aurora's chance (greens) */
+SCALES.stargaze = { stops: [[1, '#1e1b4b', 80], [3, '#3730a3', 150], [5, '#6d28d9', 195], [7, '#a78bfa', 215], [9, '#e9d5ff', 230]], floor: 1, ticks: [2, 4, 6, 8, 10] };
+SCALES.aurora = { stops: [[5, '#bbf7d0', 110], [20, '#4ade80', 170], [50, '#16a34a', 205], [80, '#15803d', 225], [100, '#a855f7', 235]], floor: 5, ticks: [10, 25, 50, 75, 100] };
 SCALES.ehi3 = { stops: [[0.3, '#e0f3db', 110], [0.5, '#a8ddb5', 160], [1, '#fed976', 190], [2, '#fd8d3c', 210], [3, '#e31a1c', 225], [5, '#800026', 235]], floor: 0.3, ticks: [0.5, 1, 2, 3, 5] };
 export const scaleFor = (key) => (TONE === 'light' && LIGHT_SCALES[key]) || SCALES[key] || { stops: TEMP, ticks: [] };
 /** The chance colours for a kind of question: snow, rain, wind, cold, heat, storm, ice or sky. */

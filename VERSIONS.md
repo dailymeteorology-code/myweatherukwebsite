@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.57.006 | 2026-11-16 | Patch | — | Model Data: the storms' ingredients (deep shear, supercell composite, energy-helicity index) and anomalies against 1991-2020 (850 hPa temperature, 500 hPa height, pressure) | Model Data STRATA redesign (Nov) |
+| 5.57.007 | 2026-11-16 | Patch | — | Location Weather: Out and about (washing, BBQ, dog walk, running, cycling headwind; garden frost, school snow day, heat and cold stress, solar and wind-farm output); Model Data: stargazing and aurora layers | Model Data STRATA redesign (Nov) |
+| 5.57.006 | 2026-11-16 | Patch | 91e7307 | Model Data: the storms' ingredients (deep shear, supercell composite, energy-helicity index) and anomalies against 1991-2020 (850 hPa temperature, 500 hPa height, pressure) | Model Data STRATA redesign (Nov) |
 | 5.57.005 | 2026-11-16 | Patch | 7d5ff8e | Model Data: a road's forecast: any road by its number, the layer along it through the run, your drive drawn through it and said in words | Model Data STRATA redesign (Nov) |
 | 5.57.004 | 2026-11-16 | Patch | bee1640 | Model Data: every model at a pin, the members' plume, the air above (skew-T), cross-sections, where the air came from, and ensemble scenarios | Model Data STRATA redesign (Nov) |
 | 5.57.003 | 2026-11-16 | Patch | fd3cee1 | Model Data: MWUK Consensus (the middle of nine models) with its agreement layers; compare as a difference map or with a swipe line | Model Data STRATA redesign (Nov) |
