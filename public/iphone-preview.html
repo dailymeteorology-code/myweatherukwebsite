@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MyWeatherUK iPhone Preview</title>
+<link rel="icon" href="/app-preview/icon.png">
+<!--
+  The iPhone app, live, on a computer (16 Nov 2026, at the user's request: "make the animations work and the data work
+  like on the real website, and make it so I can press the buttons and interact with the screen properly").
+
+  The app (MyWeatherUK-app, src/components/SiteView.tsx) shows this site in a web view between a strip behind the
+  iPhone's status bar and a strip behind its home indicator, each painted in the page's own colour at that edge
+  (src/lib/bridge.ts samples them about once a second). This page does the same around a frame holding the real site,
+  at an iPhone 16's size (393 x 852 points: a 393 x 759 web view between a 59 pt status bar and a 34 pt home bar).
+  The frame is named "MyWeatherUKApp", which tells the site it is inside the app (src/api/base44Client.js IN_APP):
+  an ordinary visitor's site, no admin controls, no automatic owner sign-in. Everything in it is the live site.
+-->
+<style>
+  :root {
+    --bg: #e8edf3; --bg-glow: #d5e1ee; --fg: #0f1b2b; --muted: #56667b; --accent: #1d6fc0;
+    --chip: #ffffff; --chip-line: #cbd6e2; --chip-on: #0f1b2b; --chip-on-fg: #ffffff;
+    --phone-scale: 1;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #08111d; --bg-glow: #10233a; --fg: #e8eef6; --muted: #93a3b7; --accent: #5aa9ff;
+      --chip: #111e30; --chip-line: #22344b; --chip-on: #e8eef6; --chip-on-fg: #0b1626; color-scheme: dark; }
+  }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(90% 70% at 72% 18%, var(--bg-glow), var(--bg) 62%) var(--bg); color: var(--fg);
+    font: 15px/1.5 Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .stage { min-height: 100%; box-sizing: border-box; padding-block: 22px; display: grid; gap: 44px;
+    grid-template-columns: minmax(0, 300px) auto; align-items: center; justify-content: center; }
+  .side { display: grid; gap: 16px; min-width: 0; }
+  .eyebrow { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+  h1 { margin: 0; font: 700 30px/1.12 Poppins, 'Segoe UI', system-ui, sans-serif; letter-spacing: -0.01em; }
+  .lede { margin: 0; color: var(--muted); font-size: 14px; }
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; }
+  .tools button, .links button {
+    all: unset; box-sizing: border-box; cursor: pointer; padding: 8px 13px; border-radius: 12px; font-size: 14px; font-weight: 600;
+    background: var(--chip); box-shadow: inset 0 0 0 1px var(--chip-line); color: var(--fg);
+  }
+  .tools button:hover, .links button:hover { box-shadow: inset 0 0 0 1px var(--accent); }
+  .tools button:focus-visible, .links button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .links { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .links button[aria-current="page"] { background: var(--chip-on); color: var(--chip-on-fg); box-shadow: none; }
+  .where { margin: 0; font: 12.5px/1.4 ui-monospace, 'Cascadia Mono', Consolas, monospace; color: var(--muted); overflow-wrap: anywhere; }
+  .label { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+  .phone-wrap { width: calc(421px * var(--phone-scale)); height: calc(880px * var(--phone-scale)); justify-self: center; }
+  .phone { position: relative; width: 421px; height: 880px; transform: scale(var(--phone-scale)); transform-origin: top left; border-radius: 68px; background: #1b1d21;
+    box-shadow: 0 0 0 2px #5d6168, 0 0 0 4px #2a2c31, 0 40px 80px -30px rgba(4, 10, 20, 0.55), 0 18px 36px -18px rgba(4, 10, 20, 0.45); }
+  .phone::before { content: ""; position: absolute; inset: 3px; border-radius: 65px; background: #000; }
+  .btn { position: absolute; width: 4px; border-radius: 2px; background: #45484e; }
+  .btn.action { left: -6px; top: 150px; height: 34px; } .btn.up { left: -6px; top: 210px; height: 62px; }
+  .btn.down { left: -6px; top: 284px; height: 62px; } .btn.power { right: -6px; top: 236px; height: 96px; }
+  .screen { position: absolute; left: 14px; top: 14px; width: 393px; height: 852px; border-radius: 55px; overflow: hidden; background: #000; isolation: isolate; }
+  .island { position: absolute; left: 50%; top: 11px; width: 126px; height: 37px; margin-left: -63px; border-radius: 20px; background: #000; z-index: 40; pointer-events: none; }
+  .status { position: absolute; left: 0; right: 0; top: 0; height: 59px; display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 30px 0 46px; box-sizing: border-box; z-index: 35; font: 600 17px/1 -apple-system, 'SF Pro Text', Inter, system-ui, sans-serif;
+    color: #fff; pointer-events: none; }
+  .status.dark-text { color: #000; }
+  .status .time { width: 70px; text-align: center; font-variant-numeric: tabular-nums; }
+  .status .icons { display: flex; align-items: center; gap: 6px; }
+  .status svg { display: block; fill: currentColor; }
+
+  /* the app: the strips and the web view, laid out as the app lays them out */
+  .app { position: absolute; inset: 0; display: grid; grid-template-rows: 59px 759px 34px; z-index: 10; background: #0b1a2c; transform-origin: 50% 50%; }
+  .app.opening { animation: open 0.42s cubic-bezier(0.2, 0.85, 0.25, 1) both; }
+  .app.closing { animation: open 0.3s cubic-bezier(0.4, 0, 0.6, 1) reverse both; }
+  @keyframes open { from { transform: scale(0.16); border-radius: 60px; opacity: 0.4; } to { transform: scale(1); border-radius: 0; opacity: 1; } }
+  .strip-top, .strip-bottom { background: #0f172a; transition: background-color 0.25s ease; position: relative; }
+  .web { position: relative; width: 393px; height: 759px; background: #0f172a; }
+  .web iframe { display: block; width: 393px; height: 759px; border: 0; background: transparent; color-scheme: dark; }
+  .home-bar { all: unset; cursor: pointer; position: absolute; left: 50%; bottom: 8px; width: 134px; height: 5px; margin-left: -67px; border-radius: 3px; background: rgba(255, 255, 255, 0.92); }
+  .home-bar::after { content: ""; position: absolute; inset: -14px -20px; }
+  .home-bar.on-light { background: rgba(0, 0, 0, 0.85); }
+  .home-bar:focus-visible { outline: 2px solid #5aa9ff; outline-offset: 4px; }
+  .splash { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; background: #0b1a2c; transition: opacity 0.3s ease; }
+  .splash img { width: 160px; height: auto; }
+  .splash.gone { opacity: 0; pointer-events: none; }
+
+  /* the iPhone's home screen, under the app */
+  .springboard { position: absolute; inset: 0; z-index: 1;
+    background: radial-gradient(70% 45% at 20% 18%, rgba(110, 170, 255, 0.55), transparent 70%),
+      radial-gradient(60% 50% at 85% 75%, rgba(76, 52, 160, 0.55), transparent 70%), linear-gradient(170deg, #1d3f73 0%, #10264a 45%, #0a1530 100%); }
+  .grid { position: absolute; left: 27px; right: 27px; top: 74px; display: grid; grid-template-columns: repeat(4, 64px); justify-content: space-between; }
+  .app-icon { all: unset; cursor: pointer; display: grid; justify-items: center; gap: 6px; width: 64px; position: relative; }
+  .app-icon img { width: 64px; height: 64px; border-radius: 15px; display: block; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); }
+  .app-icon span { font: 500 11.5px/1.1 -apple-system, Inter, system-ui, sans-serif; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); white-space: nowrap; }
+  .app-icon:focus-visible img { outline: 3px solid #fff; outline-offset: 3px; }
+  .pulse { position: absolute; left: 0; top: 0; width: 64px; height: 64px; border-radius: 15px; animation: pulse 1.8s ease-out infinite; pointer-events: none; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.5); } 100% { box-shadow: 0 0 0 16px rgba(255, 255, 255, 0); } }
+  .sb-hint { position: absolute; left: 0; right: 0; bottom: 130px; text-align: center; font: 500 14px/1.3 -apple-system, Inter, system-ui, sans-serif; color: rgba(255, 255, 255, 0.82); }
+  .dock { position: absolute; left: 12px; right: 12px; bottom: 26px; height: 92px; border-radius: 34px; background: rgba(255, 255, 255, 0.16); backdrop-filter: blur(18px); }
+  .springboard .sb-bar { position: absolute; left: 50%; bottom: 8px; width: 134px; height: 5px; margin-left: -67px; border-radius: 3px; background: rgba(255, 255, 255, 0.92); }
+
+  @media (max-width: 860px) {
+    .stage { grid-template-columns: minmax(0, 1fr); gap: 22px; justify-items: center; }
+    .phone-wrap { order: -1; }
+    .side { max-width: 440px; width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) { .app.opening, .app.closing { animation-duration: 0.01s; } .pulse { animation: none; } }
+</style>
+</head>
+<body>
+<main class="stage">
+  <section class="side" aria-labelledby="title">
+    <p class="eyebrow">Live preview · iPhone app</p>
+    <h1 id="title">MyWeatherUK on iPhone</h1>
+    <p class="lede">The real site, live, at an iPhone 16’s size and in the app’s mode: tap, scroll and use it as in the app. The bar at the bottom of the phone goes to the home screen; the icon opens the app again.</p>
+    <div class="tools" role="group" aria-label="Phone controls">
+      <button type="button" id="back">← Back</button>
+      <button type="button" id="reload">Reload</button>
+      <button type="button" id="homeScreen">Home screen</button>
+    </div>
+    <p class="label">Go to</p>
+    <nav class="links" aria-label="Pages" id="links">
+      <button type="button" data-go="/">Home</button>
+      <button type="button" data-go="/LocationWeather">Your weather</button>
+      <button type="button" data-go="/ModelData">Model Data</button>
+      <button type="button" data-go="/ModelData?mode=live">Rain radar</button>
+      <button type="button" data-go="/Lightning">Lightning</button>
+      <button type="button" data-go="/News">News</button>
+    </nav>
+    <p class="where" id="where" aria-live="polite">/</p>
+  </section>
+
+  <div class="phone-wrap" id="phoneWrap">
+    <div class="phone" role="group" aria-label="iPhone running the MyWeatherUK app">
+      <span class="btn action"></span><span class="btn up"></span><span class="btn down"></span><span class="btn power"></span>
+      <div class="screen">
+        <div class="springboard" id="springboard" aria-hidden="true">
+          <div class="grid">
+            <button type="button" class="app-icon" id="appIcon" aria-label="Open MyWeatherUK" tabindex="-1">
+              <span class="pulse" aria-hidden="true"></span>
+              <img src="/app-preview/icon.png" alt="">
+              <span>MyWeatherUK</span>
+            </button>
+          </div>
+          <div class="sb-hint">Tap the icon to open the app</div>
+          <div class="dock"></div>
+          <span class="sb-bar"></span>
+        </div>
+        <div class="app" id="app">
+          <div class="strip-top" id="stripTop"></div>
+          <div class="web"><iframe id="site" name="MyWeatherUKApp" src="/" title="MyWeatherUK, as the iPhone app shows it" allow="geolocation; clipboard-write; fullscreen"></iframe></div>
+          <div class="strip-bottom" id="stripBottom"><button type="button" class="home-bar" id="homeBar" aria-label="Go to the iPhone home screen"></button></div>
+          <div class="splash" id="splash"><img src="/app-preview/splash.png" alt=""></div>
+        </div>
+        <div class="status" id="status">
+          <span class="time" id="clock"></span>
+          <span class="icons" aria-hidden="true">
+            <svg width="18" height="12" viewBox="0 0 18 12"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5.5" width="3" height="6.5" rx="1"/><rect x="10" y="3" width="3" height="9" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1"/></svg>
+            <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.6c2.3 0 4.4.9 6 2.4l1.3-1.4C13.3 1.7 10.8.6 8 .6S2.7 1.7.7 3.6L2 5c1.6-1.5 3.7-2.4 6-2.4zm0 3.6c1.3 0 2.5.5 3.4 1.3l1.3-1.4C11.5 4.9 9.8 4.2 8 4.2s-3.5.7-4.7 1.9l1.3 1.4C5.5 6.7 6.7 6.2 8 6.2zm0 3.4c-.6 0-1.1.2-1.5.6L8 11.8l1.5-1.6c-.4-.4-.9-.6-1.5-.6z"/></svg>
+            <svg width="27" height="13" viewBox="0 0 27 13"><rect x="0.5" y="0.5" width="22" height="12" rx="3.5" fill="none" stroke="currentColor" stroke-opacity="0.45"/><rect x="2" y="2" width="15.5" height="9" rx="2"/><path d="M24 4.5v4c.8-.3 1.4-1.1 1.4-2s-.6-1.7-1.4-2z" fill-opacity="0.5"/></svg>
+          </span>
+        </div>
+        <div class="island" aria-hidden="true"></div>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var site = $('site'), app = $('app'), splash = $('splash'), status = $('status');
+  var open = true, busy = false, first = true;
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* the phone fits the window, never larger than life */
+  function fit() {
+    var narrow = window.innerWidth <= 860;
+    var availH = window.innerHeight - 44;
+    var availW = (narrow ? document.body.clientWidth : window.innerWidth - 400) - 8;
+    var s = Math.min(1, availH / 880, availW / 421);
+    if (narrow) s = Math.min(1, availW / 421);
+    document.documentElement.style.setProperty('--phone-scale', Math.max(0.45, s).toFixed(3));
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  /* the iPhone's clock, in UK time */
+  var fmt = null;
+  try { fmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }); } catch (e) { /* the device's own format */ }
+  function tick() { $('clock').textContent = fmt ? fmt.format(new Date()) : new Date().toTimeString().slice(0, 5); }
+  tick(); setInterval(tick, 10000);
+
+  /* the strips' colours: the page's colour at its very top and bottom, as the app's bridge samples them */
+  function parse(c) { var m = /rgba?\(([^)]+)\)/.exec(c || ''); if (!m) return null; var p = m[1].split(',').map(parseFloat); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; }
+  function clear(c) { var p = parse(c); return !p || p.a === 0; }
+  function bgAt(doc, win, x, y) {
+    var el = doc.elementFromPoint(x, y);
+    while (el && el !== doc.documentElement) {
+      var c = win.getComputedStyle(el).backgroundColor;
+      if (!clear(c)) return c;
+      el = el.parentElement;
+    }
+    var b = doc.body && win.getComputedStyle(doc.body).backgroundColor;
+    return !clear(b) ? b : win.getComputedStyle(doc.documentElement).backgroundColor;
+  }
+  function dark(c) { var p = parse(c); return !p || (0.299 * p.r + 0.587 * p.g + 0.114 * p.b) < 140; }
+  function sample() {
+    try {
+      var win = site.contentWindow, doc = site.contentDocument;
+      if (!doc || !doc.body) return;
+      var x = win.innerWidth / 2;
+      var t = bgAt(doc, win, x, 2), b = bgAt(doc, win, x, win.innerHeight - 2);
+      $('stripTop').style.backgroundColor = t;
+      $('stripBottom').style.backgroundColor = b;
+      if (open) status.classList.toggle('dark-text', !dark(t));
+      $('homeBar').classList.toggle('on-light', !dark(b));
+      var path = win.location.pathname + win.location.search;
+      if ($('where').textContent !== path) {
+        $('where').textContent = path;
+        var btns = document.querySelectorAll('#links button');
+        for (var i = 0; i < btns.length; i++) {
+          var go = btns[i].getAttribute('data-go');
+          var on = go === path || (go === '/ModelData' && path.indexOf('/ModelData') === 0 && path.indexOf('mode=live') < 0) || (go !== '/' && go !== '/ModelData' && path.indexOf(go) === 0);
+          if (on) btns[i].setAttribute('aria-current', 'page'); else btns[i].removeAttribute('aria-current');
+        }
+      }
+    } catch (e) { /* the frame is between pages */ }
+  }
+  setInterval(sample, 1000);
+  /* an iPhone shows no scroll bars: hidden inside the frame (the page itself is untouched) */
+  function iosLook() {
+    try {
+      var doc = site.contentDocument;
+      if (!doc || doc.getElementById('mwuk-iphone-look')) return;
+      var st = doc.createElement('style');
+      st.id = 'mwuk-iphone-look';
+      st.textContent = 'html, body, * { scrollbar-width: none !important; } ::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }'
+        + ' html { -webkit-tap-highlight-color: transparent; }';
+      (doc.head || doc.documentElement).appendChild(st);
+    } catch (e) { /* not reachable */ }
+  }
+  setInterval(iosLook, 1500);
+  site.addEventListener('load', function () {
+    iosLook();
+    sample();
+    try { site.contentWindow.addEventListener('scroll', function () { clearTimeout(window.__t); window.__t = setTimeout(sample, 150); }, { passive: true }); } catch (e) { /* not reachable */ }
+    if (first || !splash.classList.contains('gone')) {
+      first = false;
+      setTimeout(function () { splash.classList.add('gone'); }, reduce ? 0 : 500);
+    }
+  });
+
+  function go(path) {
+    if (!open) { openApp(path); return; }
+    try { site.contentWindow.location.assign(path); } catch (e) { site.src = path; }
+  }
+
+  function openApp(path) {
+    if (busy) return;
+    busy = true; open = true;
+    app.hidden = false;
+    $('springboard').setAttribute('aria-hidden', 'true');
+    $('appIcon').tabIndex = -1;
+    splash.classList.remove('gone');
+    app.classList.remove('closing'); void app.offsetWidth; app.classList.add('opening');
+    /* a cold start: the app opens on the site's home page, as the app does */
+    site.src = path || '/';
+    setTimeout(function () { app.classList.remove('opening'); busy = false; }, reduce ? 20 : 450);
+    setTimeout(function () { splash.classList.add('gone'); }, 4000);                // never stuck behind the splash
+  }
+
+  function closeApp() {
+    if (busy || !open) return;
+    busy = true;
+    app.classList.remove('opening'); void app.offsetWidth; app.classList.add('closing');
+    setTimeout(function () {
+      app.hidden = true; app.classList.remove('closing'); open = false; busy = false;
+      status.classList.remove('dark-text');
+      $('springboard').removeAttribute('aria-hidden');
+      $('appIcon').tabIndex = 0;
+      $('appIcon').focus({ preventScroll: true });
+    }, reduce ? 20 : 300);
+  }
+
+  $('homeBar').addEventListener('click', closeApp);
+  $('homeScreen').addEventListener('click', closeApp);
+  $('appIcon').addEventListener('click', function () { openApp('/'); });
+  $('back').addEventListener('click', function () { if (!open) return; try { site.contentWindow.history.back(); } catch (e) { /* nothing to go back to */ } });
+  $('reload').addEventListener('click', function () { if (!open) { openApp('/'); return; } try { site.contentWindow.location.reload(); } catch (e) { site.src = site.src; } });
+  $('links').addEventListener('click', function (e) { var b = e.target.closest('button[data-go]'); if (b) go(b.getAttribute('data-go')); });
+})();
+</script>
+</body>
+</html>

@@ -36,8 +36,12 @@ const TOKEN_KEY = 'base44_access_token';
  * ordinary user (me() below reports role "user"), so no admin page, menu or control ever shows, and the
  * owner's automatic admin sign-in is never tried. Sign in with Apple, and Google's sign-in sheet, go
  * through the app (window.ReactNativeWebView), which answers with a 'mwuk-signin' event.
+ * The live iPhone preview on a computer (/iphone-preview.html, 16 Nov 2026) shows the site the same way, in a
+ * frame named "MyWeatherUKApp": that counts too (it only ever takes powers away, so a page that frames the site
+ * under that name can do nothing with it).
  */
-const IN_APP = typeof navigator !== 'undefined' && /\bMyWeatherUKApp\//.test(navigator.userAgent || '');
+const IN_APP = typeof navigator !== 'undefined' && (/\bMyWeatherUKApp\//.test(navigator.userAgent || '')
+  || (typeof window !== 'undefined' && window.name === 'MyWeatherUKApp' && window.parent !== window));
 const appBridge = () => (IN_APP && typeof window !== 'undefined' && window.ReactNativeWebView) || null;
 
 /* back from Google's sign-in on the website: the server hands the session over in the address's
