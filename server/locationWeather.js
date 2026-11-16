@@ -30,6 +30,7 @@ import { frostPoint } from './tcmFrost.js';
 import { haversineKm, bearingDeg, kmPerDegLon } from './aiw/geometry.js';
 import { envPeek } from './aiw/env.js';
 import { mountOutside } from './location/outside.js';
+import { projection } from '../src/lib/modelGrids.js';
 
 const LIVE = path.join(MODELDATA_DIR, 'live');
 const OBS = path.join(MODELDATA_DIR, 'observed');
@@ -692,6 +693,75 @@ function observedAt(lat, lon, day = londonDay()) {
   return out;
 }
 
+/* ── the two weeks ahead (Phase G): the US GEFS ensemble average's temperature, days 5 to 16 ───────
+   The Model Data page keeps the GEFS mean's 2 m temperature to T+384 on the wide grid
+   (frames_eu/gefs_mean/<run>/t2). Reading sixty of its frames for each place would take seconds on a
+   busy drive, so once a run reaches T+360 its daily means are worked out in the background for a
+   0.25-degree grid over the UK and Ireland, one frame at a time and outside the frame cache (the live
+   frames stay cached); a place then reads its nearest point. */
+const GEFS_MEAN = path.join(MODELDATA_DIR, 'frames_eu', 'gefs_mean');
+const TREND_BOX = { lat0: 49.5, lat1: 61.25, lon0: -11.25, lon1: 2.5, step: 0.25 };
+const trend = { run: null, data: null, building: false };
+async function buildTrend() {
+  if (trend.building) return;
+  let runs;
+  try { runs = (await fs.promises.readdir(GEFS_MEAN)).filter((r) => /^\d{8}T\d{4}Z$/.test(r)).sort().reverse(); } catch { return; }
+  for (const run of runs) {
+    if (run === trend.run) return;                                   // the newest that reaches is built
+    const dir = path.join(GEFS_MEAN, run, 't2');
+    let files;
+    try { files = await fs.promises.readdir(dir); } catch { continue; }
+    const steps = files.filter((f) => /^\d+\.bin$/.test(f)).map((f) => Number(f.slice(0, -4))).sort((a, b) => a - b);
+    if (!steps.length || steps[steps.length - 1] < 360) continue;     // not to day 15 yet: try the run before
+    trend.building = true;
+    try {
+      const EU = projection('eu');
+      const t0 = Date.parse(`${run.slice(0, 4)}-${run.slice(4, 6)}-${run.slice(6, 8)}T${run.slice(9, 11)}:${run.slice(11, 13)}:00Z`);
+      const B = TREND_BOX;
+      const nLat = Math.round((B.lat1 - B.lat0) / B.step) + 1, nLon = Math.round((B.lon1 - B.lon0) / B.step) + 1;
+      const idx = new Int32Array(nLat * nLon);
+      for (let i = 0; i < nLat; i++) {
+        for (let j = 0; j < nLon; j++) {
+          const [gx, gy] = EU.toGrid(B.lon0 + j * B.step, B.lat0 + i * B.step);
+          idx[i * nLon + j] = Math.floor(gy) * EU.grid.nx + Math.floor(gx);
+        }
+      }
+      const days = new Map();
+      for (const h of steps) {
+        if (h < 96) continue;
+        let f;
+        try { f = parseFrame(await gunzip(await fs.promises.readFile(path.join(dir, `${h}.bin`)))); } catch { continue; }
+        if (f.nx !== EU.grid.nx) continue;
+        const day = londonDay(new Date(t0 + h * 36e5));
+        let a = days.get(day);
+        if (!a) days.set(day, (a = { s: new Float32Array(idx.length), n: new Uint8Array(idx.length) }));
+        for (let k = 0; k < idx.length; k++) {
+          const v = f.lut[f.q[idx[k]]];
+          if (Number.isFinite(v)) { a.s[k] += v; a.n[k] += 1; }
+        }
+        await new Promise((r) => setImmediate(r));                   // the server's other work goes between frames
+      }
+      trend.data = {
+        run: new Date(t0).toISOString(), box: { ...B, nLat, nLon },
+        days: [...days.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+          .map(([day, a]) => ({ day, t: Array.from(a.s, (s, k) => (a.n[k] >= 3 ? Math.round((s / a.n[k]) * 10) / 10 : null)) })),
+      };
+      trend.run = run;
+    } finally { trend.building = false; }
+    return;
+  }
+}
+/** The GEFS ensemble average's daily mean temperature at a place: { model, members, run, days: [{ day, t }] }. */
+function trendAt(lat, lon) {
+  const d = trend.data;
+  if (!d) return null;
+  const B = d.box;
+  const i = Math.round((lat - B.lat0) / B.step), j = Math.round((lon - B.lon0) / B.step);
+  if (i < 0 || j < 0 || i >= B.nLat || j >= B.nLon) return null;
+  const k = i * B.nLon + j;
+  return { model: 'GEFS', members: 31, run: d.run, days: d.days.map((x) => ({ day: x.day, t: x.t[k] })).filter((x) => x.t != null) };
+}
+
 /* ── radar ─────────────────────────────────────────────────────────────────── */
 const HALF_KM = 200;                                                         // a place's crop reaches 200 km each way
 /* the home page's UK-wide radar: the UK and Ireland, at 2 km (1 km radar coarsened) */
@@ -881,6 +951,15 @@ export function mountLocationWeather(app, { lightning = null } = {}) {
       return sendJson(req, res, out || { none: true });
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
+  /* the two weeks ahead (Phase G): the GEFS ensemble average, built in the background from each new run */
+  app.get('/api/location/trend', (req, res) => {
+    const p = point(req, res);
+    if (!p) return undefined;
+    res.set('Cache-Control', 'public, max-age=900');
+    return sendJson(req, res, trendAt(p.lat, p.lon) || { none: true });
+  });
+  setTimeout(() => { buildTrend().catch(() => {}); }, 45e3).unref?.();
+  setInterval(() => { buildTrend().catch(() => {}); }, 30 * 60e3).unref?.();
 
   /* inflate each new NOVA run's frames before anyone asks (the first place after a run costs ~1 s) */
   const warm = () => { try { novaThunderAt(52.5, -1.5); } catch { /* no NOVA yet */ } };

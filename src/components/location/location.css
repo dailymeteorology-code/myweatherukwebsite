@@ -543,9 +543,11 @@
   border-radius: inherit; border-bottom-left-radius: 0; border-bottom-right-radius: 0;
   pointer-events: none;
   background-image:
+    var(--fern, none),
     linear-gradient(180deg, rgba(244, 250, 255, 0.62) 0%, rgba(228, 242, 255, 0.22) 38%, rgba(228, 242, 255, 0) 100%),
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='180'%3E%3Cfilter id='a' x='0' y='0'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 2.6 -1.35'/%3E%3C/filter%3E%3Cfilter id='b' x='0' y='0'%3E%3CfeTurbulence type='turbulence' baseFrequency='0.014 0.075' numOctaves='3' seed='11'/%3E%3CfeColorMatrix values='0 0 0 0 0.92 0 0 0 0 0.97 0 0 0 0 1 0 0 0 1.5 -0.32'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23b)' opacity='0.75'/%3E%3Crect width='100%25' height='100%25' filter='url(%23a)'/%3E%3C/svg%3E");
-  background-size: 100% 100%, 260px 180px;
+  background-size: 520px 190px, 100% 100%, 260px 180px;
+  background-repeat: repeat-x, no-repeat, repeat;
   -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.78) 30%, rgba(0, 0, 0, 0.3) 70%, transparent 100%);
           mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.78) 30%, rgba(0, 0, 0, 0.3) 70%, transparent 100%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), inset 0 8px 16px -8px rgba(255, 255, 255, 0.7);
@@ -553,6 +555,22 @@
   transition: opacity 1.5s ease;
 }
 @media (prefers-reduced-motion: reduce) { .lw-glass.lw-frosted::after { transition: none; } }
+/* frost ferns at -5 C and below (SkyBackdrop.jsx fernImage, set on the page as --lw-fern) */
+.lw-glass.lw-ferns { --fern: var(--lw-fern); }
+/* misted glass in saturated air (CardMist): a faint haze, thicker low down, and the finest droplets */
+.lw-glass.lw-misted:not(.lw-frosted)::after {
+  content: '';
+  position: absolute; inset: 0; z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background-image:
+    linear-gradient(0deg, rgba(232, 240, 248, 0.2) 0%, rgba(232, 240, 248, 0.08) 55%, rgba(232, 240, 248, 0.03) 100%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='140'%3E%3Cfilter id='m' x='0' y='0'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.4' numOctaves='1' seed='9'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 5 -3.35'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23m)'/%3E%3C/svg%3E");
+  background-size: 100% 100%, 180px 140px;
+  opacity: var(--mist, 0.5);
+  transition: opacity 2s ease;
+}
+@media (prefers-reduced-motion: reduce) { .lw-glass.lw-misted::after { transition: none; } }
 
 /* ── the Today card (TodayCard.jsx, 15 Nov 2026): the forecast in words, and what matters today ── */
 .lw-today { margin-bottom: 14px; }
@@ -832,3 +850,9 @@
 .lw-aq { display: flex; gap: 6px; margin: 6px 0 2px; }
 .lw-aq span { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: var(--ink3); }
 .lw-aq i { display: block; width: 100%; height: 8px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
+
+/* the two weeks ahead (TrendCard.jsx, Phase G) */
+.lw-trend { margin-top: 14px; }
+.lw-trend-bars { display: block; width: 100%; height: 92px; margin-top: 10px; }
+.lw-trend-days { display: flex; margin-top: 2px; }
+.lw-trend-days span { flex: 1; min-width: 0; text-align: center; font-size: 11px; font-weight: 600; color: var(--ink3); }

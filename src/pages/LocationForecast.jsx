@@ -36,7 +36,7 @@ import LocationWarnings, { warningIcon, warningName, warningSpan, severityFill, 
 import LocationRadar from '@/components/location/LocationRadar';
 import LocationTiles from '@/components/location/LocationTiles';
 import LocationCharts, { tempColour } from '@/components/location/LocationCharts';
-import SkyBackdrop, { CardFrost, CardRain, CardSnow, WindowRain, skyDarkness } from '@/components/location/SkyBackdrop';
+import SkyBackdrop, { CardFrost, CardRain, CardSnow, WindowRain, CardMist, CardFog, skyDarkness } from '@/components/location/SkyBackdrop';
 import SkyPreview, { PREVIEW_START, previewSky } from '@/components/location/SkyPreview';
 import TodayCard from '@/components/location/TodayCard';
 import SituationCards from '@/components/location/SituationCards';
@@ -51,7 +51,10 @@ import ShareSheet from '@/components/location/ShareSheet';
 import { travelModel, travelSteps, dayRange, travelLabel } from '@/lib/location/travel';
 import { useInstall, useLocationApp } from '@/lib/location/app';
 import { useOutside, AlertsCard, CoastCard } from '@/components/location/OutsideCards';
+import TrendCard from '@/components/location/TrendCard';
 import { compareWords } from '@/lib/location/outside';
+import { fetchKp } from '@/lib/location/feeds';
+import { SHOWERS, auroraKp } from '@/lib/location/situations';
 import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
 import WxIcon from '@/components/location/WxIcon';
 import '@/components/location/location.css';
@@ -696,6 +699,7 @@ const TilesMemo = React.memo(LocationTiles);
 const PlacesMemo = React.memo(PlacesStrip);
 const AlertsMemo = React.memo(AlertsCard);
 const CoastMemo = React.memo(CoastCard);
+const TrendMemo = React.memo(TrendCard);
 
 /* the installed app opens with ?app=1 (public/location.webmanifest): straight to your Home place, else
    your first place, else the place last opened on this device */
@@ -903,6 +907,42 @@ export default function LocationForecast() {
   /* the page at the hour travelled to (the hero, the tiles and the sky read it); the model itself at now;
      a new place starts at now, and an hour gone from the forecast goes back to now */
   const travel = useMemo(() => (model && travelT != null ? travelModel(model, travelT) : model), [model, travelT]);
+  /* The sky's extras at the hour shown (Phase G, SkyBackdrop.jsx): a rainbow when the sun is low and
+     out with showers within an hour and a half; the aurora on a clear dark night when NOAA's Kp for that
+     time reaches what this latitude needs (situations.js auroraKp); shooting stars on a clear dark night,
+     many near a meteor shower's peak and the odd one otherwise. And on the cards: fog drifting over them
+     in fog, and their glass misting in saturated air. */
+  const [kpList, setKpList] = useState(null);
+  useEffect(() => { fetchKp().then(setKpList).catch(() => {}); }, []);
+  const skyExtras = useMemo(() => {
+    const none = { rainbow: 0, aurora: 0, meteors: 0, mist: 0, fog: 0 };
+    if (!model || !travel?.now) return none;
+    const n = travel.now, t = travel.at ?? Date.now();
+    const cover = n.tcc ?? 100;
+    const out = { ...none };
+    if (n.isDay && n.sun > 3 && n.sun < 42 && cover < 85 && !['heavyRain', 'torrentialRain', 'thunder', 'fog', 'mist', 'overcast', 'cloudy'].includes(n.cond)) {
+      const wet = model.full.some((h) => Math.abs(h.t - t) <= 90 * 60e3 && rateOf(h) >= 0.2) || (travelT == null && (model.now.precipRate ?? 0) >= 0.1);
+      if (wet) out.rainbow = Math.min(1, 0.55 + (85 - cover) / 120);
+    }
+    const dark = !n.isDay && n.sun < -12;
+    if (dark && cover < 60 && kpList?.length) {
+      const k = kpList.filter((x) => x.t <= t).pop() || kpList[0];
+      const need = auroraKp(model.lat);
+      if (k) out.aurora = Math.max(0, Math.min(1, (k.kp - need + 1) / 2.5)) * (1 - cover / 70);
+    }
+    if (dark && cover < 50) {
+      const d = new Date(t);
+      const md = (m, day) => Date.UTC(2001, m - 1, day);
+      const today = md(d.getMonth() + 1, d.getDate());
+      const shower = SHOWERS.find((x) => Math.abs(md(x.m, x.d) - today) <= 1.5 * 864e5);
+      out.meteors = shower ? Math.min(1, 0.25 + shower.zhr / 160) : 0.06;
+    }
+    const fogNow = n.cond === 'fog' || (n.vis != null && n.vis < 1);
+    if (fogNow) out.fog = n.vis != null && n.vis < 0.2 ? 1 : 0.6;
+    const spread = n.t2 != null && n.td != null ? n.t2 - n.td : null;
+    if (!fogNow && (n.rh ?? 0) >= 95 && (n.t2 ?? 0) > 0.5 && !isWet(n.cond) && (spread == null || spread <= 1.2)) out.mist = Math.min(1, 0.4 + ((n.rh ?? 95) - 95) / 8);
+    return out;
+  }, [model, travel, travelT, kpList]);
   useEffect(() => { setTravelT(null); }, [lat, lon]);
   useEffect(() => {
     if (travelT != null && model && !travelSteps(model).some((x) => x.t === travelT)) setTravelT(null);
@@ -1000,11 +1040,11 @@ export default function LocationForecast() {
       const rate = n.span > 0 ? (n.precip ?? 0) / n.span : n.precipRate ?? 0;
       /* the snow falling now (mm/h of water): the radar's rate times what of it is snow */
       const snow = n.span > 0 && n.snow != null ? n.snow / n.span : n.snowRate ?? 0;
-      return { cond: n.cond, sun: n.sun, morning: hourOf(travel.at ?? Date.now()) < 12, wind: n.wind ?? 8, wdir: n.wdir ?? 240, rate, snow, cloud: n.tcc ?? 60 };
+      return { cond: n.cond, sun: n.sun, morning: hourOf(travel.at ?? Date.now()) < 12, wind: n.wind ?? 8, wdir: n.wdir ?? 240, rate, snow, cloud: n.tcc ?? 60, rainbow: skyExtras.rainbow, aurora: skyExtras.aurora, meteors: skyExtras.meteors };
     }
     const sun = sunElevation(Date.now(), 52.5, -1.5);
     return { cond: 'partly', sun, morning: hourOf(Date.now()) < 12, wind: 10, wdir: 240, rate: 0, cloud: 45 };
-  }, [model, travel, preview]);
+  }, [model, travel, preview, skyExtras]);
   const togglePreview = () => {
     setHidePage(false);
     setPreview((p) => (p ? null : { ...PREVIEW_START, cond: model?.now.cond || PREVIEW_START.cond }));
@@ -1032,8 +1072,11 @@ export default function LocationForecast() {
       {model && !pageHidden && <CardRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
       {model && !pageHidden && <CardSnow cond={sky.cond} rate={sky.snow} wind={sky.wind} wdir={sky.wdir} />}
       {/* frost on the glass below freezing: the temperature now (the sky preview's snowy skies at -3 C) */}
-      {model && !pageHidden && <CardFrost temp={preview ? (sky.snow > 0 ? -3 : null) : travel.now.t2} />}
+      {model && !pageHidden && <CardFrost temp={preview ? (preview.extras?.ferns ? -8 : sky.snow > 0 ? -3 : null) : travel.now.t2} />}
       {model && !pageHidden && <WindowRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
+      {/* misted glass in saturated air, and fog drifting over the cards in fog (Phase G) */}
+      {model && !pageHidden && <CardMist amount={preview ? (preview.extras?.mist ? 0.85 : 0) : skyExtras.mist} />}
+      {model && !pageHidden && <CardFog amount={preview ? (preview.extras?.fog ? 0.9 : 0) : skyExtras.fog} wdir={sky.wdir} />}
 
       {outside && (
         <div role="dialog" aria-modal="true" aria-labelledby="lw-out" onClick={() => setOutside(null)}
@@ -1179,6 +1222,9 @@ export default function LocationForecast() {
                 {model.outlook?.days?.length
                   ? <OutlookMemo model={model} T={T} selected={openDay} onDay={openOutlookDay} warnings={warnings} onWarning={showWarning} />
                   : <DaysMemo model={model} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />}
+                {/* the days beyond them, as the GEFS ensemble average leans (TrendCard.jsx, Phase G) */}
+                <TrendMemo lat={model.lat} lon={model.lon} normal={feeds?.normal || null}
+                  fromDay={model.outlook?.days?.[model.outlook.days.length - 1]?.day || model.days[model.days.length - 1]?.day || null} />
               </div>
               <div id="lw-card-radar" className={slot('radar')}>
                 <div className="lw-glass lw-card">

@@ -15,12 +15,23 @@ const CLOUD = { clear: 5, mostlyClear: 25, partly: 55, mostlyCloudy: 75, cloudy:
 /* the types that are wind themselves start windy; any other can be made windy with the slider */
 const WIND = { windy: 44, blizzard: 38 };
 
-export const PREVIEW_START = { cond: 'clear', time: 'day', wind: 12 };
+export const PREVIEW_START = { cond: 'clear', time: 'day', wind: 12, extras: {} };
+
+/* the extras the sky and the cards show only when the weather calls for them (16 Nov 2026), each
+   switchable here: [key, label, when it can show] */
+export const EXTRAS = [
+  ['rainbow', 'Rainbow', 'by day'], ['aurora', 'Aurora', 'at night'], ['meteors', 'Shooting stars', 'at night'],
+  ['fog', 'Fog over the cards', ''], ['mist', 'Misted glass', ''], ['ferns', 'Frost ferns', ''],
+];
 
 /** the backdrop's settings for a preview choice */
 export function previewSky(p) {
   const t = TIMES.find((x) => x[0] === p.time) || TIMES[0];
-  return { cond: p.cond, sun: t[2], morning: t[3], wind: p.wind, wdir: 240, rate: RATE[p.cond] ?? 0, cloud: CLOUD[p.cond] ?? 92 };
+  const x = p.extras || {};
+  return {
+    cond: p.cond, sun: t[2], morning: t[3], wind: p.wind, wdir: 240, rate: RATE[p.cond] ?? 0, cloud: CLOUD[p.cond] ?? 92,
+    rainbow: x.rainbow ? 1 : 0, aurora: x.aurora ? 1 : 0, meteors: x.meteors ? 1 : 0,
+  };
 }
 
 /* the next stop when playing: every time of day for a weather type, then the next type */
@@ -68,6 +79,15 @@ export default function SkyPreview({ value, onChange, onClose, hidePage, onHideP
         <input type="range" min="0" max="60" step="2" value={value.wind} onChange={(e) => onChange((v) => ({ ...v, wind: Number(e.target.value) }))} />
         <b>{value.wind} mph</b>
       </label>
+
+      <div className="lw-preview-grid" role="group" aria-label="Extras" style={{ marginBottom: 10 }}>
+        {EXTRAS.map(([k, l, when]) => (
+          <button key={k} type="button" className="lw-chip" aria-pressed={!!value.extras?.[k]} title={when ? `Shows ${when}` : undefined}
+            onClick={() => onChange((v) => ({ ...v, extras: { ...(v.extras || {}), [k]: !v.extras?.[k] } }))}>
+            {l}{when ? <small style={{ opacity: 0.6 }}>{when}</small> : null}
+          </button>
+        ))}
+      </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
         <button type="button" className="lw-chip" aria-pressed={hidePage} onClick={() => onHidePage(!hidePage)}>

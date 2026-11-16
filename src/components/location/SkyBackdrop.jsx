@@ -98,7 +98,15 @@ function targetsOf(p) {
     windMph: Math.max(p.wind ?? 0, wind * 50),
     slant: Math.min(0.95, wind * 1.1) * towards,
     towards,
-    leaves: dry && !night ? Math.max(0, Math.min(1, (wind * 50 - 18) / 26)) : 0,
+    /* leaves on a windy day: autumn's brown ones through October and November (in its showers too),
+       a few green ones the rest of the year */
+    leaves: (dry || (p.autumn && p.group === 'rain' && rate < 2)) && !night ? Math.max(0, Math.min(1, (wind * 50 - 18) / 26)) * (p.autumn ? 1 : 0.45) : 0,
+    /* the page's own reckonings (LocationForecast.jsx skyExtras): a rainbow when the sun is low and out
+       with showers about, the aurora on a clear night when the Kp is high enough here, and shooting
+       stars on a clear night near a meteor shower's peak */
+    rainbow: !night ? Math.max(0, Math.min(1, p.rainbow || 0)) : 0,
+    aurora: night ? Math.max(0, Math.min(1, p.aurora || 0)) : 0,
+    meteors: night ? Math.max(0, Math.min(1, p.meteors || 0)) : 0,
     cloud: p.group === 'clear' || p.group === 'hot' ? Math.min(p.cloud, 8) : p.cloud,       // a clear sky keeps one or two small clouds
     heavy: ['rain', 'torrent', 'freezing', 'storm', 'snow', 'blizzard', 'fog'].includes(p.group) || p.cloud > 85 ? 1 : 0,
     stars: night && BRIGHT.has(p.group) ? 1 : 0,
@@ -108,7 +116,7 @@ function targetsOf(p) {
   };
 }
 /* how fast each eases to its target (seconds to get most of the way) */
-const TAU = { rain: 1.6, drizzle: 1.6, snow: 2, hail: 1.4, fog: 3, white: 2.5, storm: 1.5, torrent: 1.8, freeze: 2, heat: 3, wind: 2.5, windMph: 2.5, slant: 2, leaves: 2.5, cloud: 3, heavy: 3, stars: 2.5, glow: 2.5, moon: 2.5, warm: 2.5 };
+const TAU = { rain: 1.6, drizzle: 1.6, snow: 2, hail: 1.4, fog: 3, white: 2.5, storm: 1.5, torrent: 1.8, freeze: 2, heat: 3, wind: 2.5, windMph: 2.5, slant: 2, leaves: 2.5, cloud: 3, heavy: 3, stars: 2.5, glow: 2.5, moon: 2.5, warm: 2.5, rainbow: 4, aurora: 4, meteors: 2 };
 const toneOf = (p) => (p.phase === 'night' ? 'night' : p.phase !== 'day' && BRIGHT.has(p.group) ? 'warm'
   : p.group === 'storm' || p.group === 'torrent' ? 'storm' : ['rain', 'freezing'].includes(p.group) ? 'dayDark'
     : ['cloudy', 'snow', 'blizzard', 'fog'].includes(p.group) ? 'dayGrey' : 'day');
@@ -196,8 +204,45 @@ let FOG = null;
 const fogOnce = () => (FOG ||= fogSprite());
 
 const LEAF_COLOURS = ['#8A6D3B', '#A0522D', '#6B7F3A', '#C08A3E', '#7A5230'];
+const GREEN_LEAVES = ['#5E7F34', '#6F8F3C', '#4F6E2B'];
+/* development only: ?skystill=1 draws the sky still, straight at its targets (as for reduced motion),
+   so a screenshot shows a new effect without waiting for it to ease in */
+const STILL = !!import.meta.env?.DEV && typeof window !== 'undefined' && /[?&]skystill=1\b/.test(window.location.search);
+/* autumn's leaves: from mid September to early December */
+const isAutumn = (d = new Date()) => { const m = d.getMonth(), day = d.getDate(); return (m === 8 && day >= 15) || m === 9 || m === 10 || (m === 11 && day <= 10); };
 
-export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true, wind = 8, wdir = 240, rate = 0, cloud = 60, contained = false }) {
+/* the rainbow, drawn once for a window size: the primary bow (violet inside, red outside), a fainter
+   secondary bow outside it with its colours reversed and the dark band between them, fading toward the
+   ground. Centred low and to the left, away from the sun's glow on the right. */
+function rainbowSprite(W, H) {
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(W)); cv.height = Math.max(1, Math.round(H));
+  const ctx = cv.getContext('2d');
+  const cx = W * 0.3, cy = H * 1.02, R = Math.min(H * 0.82, W * 0.62 + H * 0.2), bw = R * 0.075;
+  const bow = (r0, r1, stops, alpha) => {
+    const g = ctx.createRadialGradient(cx, cy, r0, cx, cy, r1);
+    stops.forEach(([o, c]) => g.addColorStop(o, c.replace('A', alpha)));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cx, cy, r1, Math.PI, 2 * Math.PI); ctx.arc(cx, cy, r0, 2 * Math.PI, Math.PI, true); ctx.closePath(); ctx.fill();
+  };
+  const SPECTRUM = [[0, 'rgba(140,90,255,0)'], [0.12, 'rgba(140,90,255,A)'], [0.3, 'rgba(70,140,255,A)'], [0.48, 'rgba(70,220,120,A)'], [0.64, 'rgba(255,235,80,A)'], [0.8, 'rgba(255,150,60,A)'], [0.92, 'rgba(255,70,70,A)'], [1, 'rgba(255,70,70,0)']];
+  bow(R - bw, R, SPECTRUM, 0.85);
+  bow(R * 1.2, R * 1.2 + bw * 1.3, SPECTRUM.map(([o, c]) => [1 - o, c]).reverse(), 0.3);
+  /* the sky inside the bow is a little brighter than outside it */
+  const g = ctx.createRadialGradient(cx, cy, R * 0.5, cx, cy, R - bw);
+  g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, 'rgba(255,255,255,0.07)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(cx, cy, R - bw, Math.PI, 2 * Math.PI); ctx.closePath(); ctx.fill();
+  /* fading to nothing toward the ground */
+  ctx.globalCompositeOperation = 'destination-in';
+  const f = ctx.createLinearGradient(0, cy - R * 1.3, 0, cy);
+  f.addColorStop(0, 'rgba(0,0,0,1)'); f.addColorStop(0.55, 'rgba(0,0,0,0.85)'); f.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = f;
+  ctx.fillRect(0, 0, W, H);
+  return cv;
+}
+
+export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true, wind = 8, wdir = 240, rate = 0, cloud = 60, contained = false, rainbow = 0, aurora = 0, meteors = 0 }) {
   const group = skyGroup(cond);
   const phase = skyPhase(sun, morning);
   const [top, bottom] = SKIES[group][phase];
@@ -211,7 +256,8 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
 
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
-  const params = useMemo(() => ({ cond, group, phase, wind, wdir, rate, cloud }), [cond, group, phase, wind, wdir, rate, cloud]);
+  const params = useMemo(() => ({ cond, group, phase, wind, wdir, rate, cloud, rainbow, aurora, meteors, autumn: isAutumn() }),
+    [cond, group, phase, wind, wdir, rate, cloud, rainbow, aurora, meteors]);
   const paramsRef = useRef(params);
   useEffect(() => { paramsRef.current = params; }, [params]);
 
@@ -219,7 +265,7 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
     const cv = canvasRef.current;
     if (!cv) return undefined;
     const ctx = cv.getContext('2d');
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const reduce = STILL || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     let W = 0, H = 0, dpr = 1, raf = 0, last = performance.now(), clock = 0, onScreen = true;
     const k = contained ? 0.6 : 1;                         // drop, flake and bolt size on a card
     const sp = contained ? 0.45 : 1;                       // and their speed
@@ -229,6 +275,8 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
     let tone = { from: toneOf(paramsRef.current), to: toneOf(paramsRef.current), mix: 1 };
     let pools = null;
     let flash = { a: 0, next: 4, bolt: null };
+    let bowImg = null;                                     // the rainbow, made when first wanted for this size
+    let shooting = { next: 3, list: [] };                  // shooting stars in flight
 
     const resize = () => {
       if (contained) {
@@ -242,6 +290,7 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
       cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
       cv.style.width = `${W}px`; cv.style.height = `${H}px`;
       pools = makePools();
+      bowImg = null;
     };
     /* every particle the sky can ever need, made once for this size; the weather only decides how
        many of each are drawn, so more rain is more of the same drops and nothing reshuffles */
@@ -267,7 +316,10 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
         stones: Array.from({ length: n(150) }, () => ({ x: r() * W, y: r() * H, l: (5 + r() * 6) * k, v: 0.8 + r() * 0.5, w: 1.6 + r() * 1.6 })),
         fogs: Array.from({ length: 5 }, (_, i) => ({ x: r() * W, y: H * (0.35 + i * 0.13), sc: (1 + r() * 0.8) * (contained ? 0.35 : 1), v: (6 + r() * 8) * (contained ? 0.4 : 1) })),
         gusts: Array.from({ length: n(34) }, () => ({ x: r() * W, y: r() * H, l: (80 + r() * 160) * k, v: 0.7 + r() * 0.6, ph: r() * 6.3, a: 0.4 + r() * 0.6 })),
-        leaves: Array.from({ length: n(26) }, () => ({ x: r() * W, y: r() * H, s: (2.4 + r() * 2.4) * k, rot: r() * 6.3, spin: (r() - 0.5) * 9, v: 0.6 + r() * 0.8, ph: r() * 6.3, c: LEAF_COLOURS[Math.floor(r() * LEAF_COLOURS.length)] })),
+        leaves: Array.from({ length: n(26) }, () => {
+          const palette = isAutumn() ? LEAF_COLOURS : GREEN_LEAVES;
+          return { x: r() * W, y: r() * H, s: (2.4 + r() * 2.4) * k, rot: r() * 6.3, spin: (r() - 0.5) * 9, v: 0.6 + r() * 0.8, ph: r() * 6.3, c: palette[Math.floor(r() * palette.length)] };
+        }),
         splashes: Array.from({ length: n(140) }, () => ({ x: r() * W, y: H * (0.8 + r() * 0.2), t: r(), v: 1.4 + r() * 1.6 })),
         sheets: Array.from({ length: 5 }, () => ({ x: r() * W, w: (W * (0.12 + r() * 0.2)), v: 0.5 + r() * 0.5 })),
       };
@@ -325,6 +377,63 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
         ctx.globalAlpha = 1;
       }
 
+      /* the aurora: green curtains with violet tops, rippling slowly along the top of the sky, the
+         stronger the Kp is above what this latitude needs */
+      if (cur.aurora > 0.01 && !contained) {
+        const A = cur.aurora;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const base = H * 0.4;
+        for (let b = 0; b < 4; b++) {
+          const amp = H * (0.03 + b * 0.012), len = H * (0.16 + 0.05 * b), lift = b * H * 0.03;
+          const ph = clock * (0.1 + b * 0.04) + b * 1.7;
+          const edge = (x) => base - lift + Math.sin(x * 0.0042 + ph) * amp + Math.sin(x * 0.011 - ph * 1.3) * amp * 0.4;
+          ctx.beginPath();
+          for (let x = -24; x <= W + 24; x += 16) { const y = edge(x); if (x === -24) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+          for (let x = W + 24; x >= -24; x -= 16) ctx.lineTo(x, edge(x) - len);
+          ctx.closePath();
+          const g = ctx.createLinearGradient(0, base - lift - len - amp * 1.4, 0, base - lift + amp);
+          g.addColorStop(0, 'rgba(170,90,255,0)');
+          g.addColorStop(0.42, `rgba(150,95,255,${(0.09 * A).toFixed(3)})`);
+          g.addColorStop(0.8, `rgba(80,255,165,${(0.27 * A * (1 - b * 0.15)).toFixed(3)})`);
+          g.addColorStop(1, 'rgba(80,255,165,0)');
+          ctx.fillStyle = g;
+          ctx.fill();
+        }
+        /* the curtains' folds: faint upright rays that drift along */
+        ctx.lineWidth = 2;
+        for (let x = 0; x < W; x += 9) {
+          const w = 0.5 + 0.5 * Math.sin(x * 0.037 + clock * 0.35) * Math.sin(x * 0.011 - clock * 0.2);
+          if (w < 0.25) continue;
+          const y0 = base + Math.sin(x * 0.0042 + clock * 0.1) * H * 0.03;
+          ctx.strokeStyle = `rgba(120,255,190,${(0.075 * A * w).toFixed(3)})`;
+          ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y0 - H * (0.12 + 0.1 * w)); ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      /* shooting stars on a clear night near a meteor shower's peak: one every few seconds at the
+         biggest showers, the odd one otherwise */
+      if (cur.meteors > 0.02 && cur.stars > 0.3 && !reduce && !contained) {
+        shooting.next -= dt;
+        if (shooting.next <= 0) {
+          const dir = Math.random() < 0.65 ? 1 : -1;
+          shooting.list.push({ x: W * (0.1 + Math.random() * 0.75), y: H * (0.04 + Math.random() * 0.3), vx: dir * (420 + Math.random() * 300), vy: 170 + Math.random() * 150, age: 0, life: 0.55 + Math.random() * 0.5 });
+          shooting.next = (3 + 22 * (1 - cur.meteors)) * (0.5 + Math.random());
+        }
+        ctx.lineCap = 'round';
+        for (const m of shooting.list) {
+          m.age += dt; m.x += m.vx * dt; m.y += m.vy * dt;
+          const a = Math.sin(Math.PI * Math.min(1, m.age / m.life)) * cur.stars;
+          const tx = m.x - m.vx * 0.14, ty = m.y - m.vy * 0.14;
+          const g = ctx.createLinearGradient(tx, ty, m.x, m.y);
+          g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, `rgba(255,255,255,${(0.9 * a).toFixed(3)})`);
+          ctx.strokeStyle = g; ctx.lineWidth = 1.6;
+          ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(m.x, m.y); ctx.stroke();
+        }
+        shooting.list = shooting.list.filter((m) => m.age < m.life);
+      }
+
       /* clouds: as many as the cover asks for fade in or out, drifting downwind faster the windier
          it is, and their shade cross-fades */
       const towards = cur.towards;
@@ -350,6 +459,14 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
         }
       }
       ctx.globalAlpha = 1;
+
+      /* a rainbow, opposite the sun, when it is low and out with showers about */
+      if (cur.rainbow > 0.01 && !contained) {
+        bowImg ||= rainbowSprite(W, H);
+        ctx.globalAlpha = Math.min(1, cur.rainbow) * (0.45 + 0.1 * Math.sin(clock * 0.3));
+        ctx.drawImage(bowImg, 0, 0, W, H);
+        ctx.globalAlpha = 1;
+      }
 
       /* fog banks */
       if (cur.fog > 0.01) {
@@ -624,7 +741,7 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
 
   /* a reduced-motion reader still gets the new sky when the weather changes */
   useEffect(() => {
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) window.dispatchEvent(new Event('resize'));
+    if (STILL || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) window.dispatchEvent(new Event('resize'));
   }, [params]);
 
   return (
@@ -1040,11 +1157,53 @@ export function CardSnow({ cond, rate = 0, wind = 0, wdir = 240, selector = TOP_
    page, and the band grows deeper and whiter as it gets colder (full strength by about -6 C). The cards
    are looked for again every second and a half, so a change of layout (a warning appearing) is
    followed; above freezing it all goes. */
+/* Frost ferns: ice feathers growing down from a card's top edge, branching at sixty degrees as ice
+   does, made once and shared by every card (the CSS reads it as --lw-fern). Only at -5 C and below. */
+let FERN = null;
+function fernImage() {
+  if (FERN) return FERN;
+  const W = 520, H = 190, s = 2;
+  const cv = document.createElement('canvas');
+  cv.width = W * s; cv.height = H * s;
+  const ctx = cv.getContext('2d');
+  ctx.scale(s, s);
+  ctx.lineCap = 'round';
+  const r = rng(4021);
+  const branch = (x, y, ang, len, depth, w, a) => {
+    if (depth < 0 || len < 4) return;
+    const x2 = x + Math.cos(ang) * len, y2 = y + Math.sin(ang) * len;
+    ctx.strokeStyle = `rgba(255,255,255,${a.toFixed(2)})`;
+    ctx.lineWidth = w;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x2, y2); ctx.stroke();
+    /* the feathers: short spikes both sides, shorter toward the tip */
+    const n = Math.floor(len / 4.5);
+    ctx.lineWidth = Math.max(0.5, w * 0.55);
+    ctx.beginPath();
+    for (let i = 1; i < n; i++) {
+      const t = i / n, px = x + (x2 - x) * t, py = y + (y2 - y) * t;
+      const sl = len * 0.2 * (1 - t * 0.8) * (0.55 + r() * 0.6);
+      for (const sgn of [-1, 1]) { const b = ang + sgn * (Math.PI / 3); ctx.moveTo(px, py); ctx.lineTo(px + Math.cos(b) * sl, py + Math.sin(b) * sl); }
+    }
+    ctx.stroke();
+    const kids = 1 + Math.floor(r() * 2);
+    for (let j = 0; j < kids; j++) {
+      const t = 0.3 + r() * 0.55;
+      branch(x + (x2 - x) * t, y + (y2 - y) * t, ang + (r() < 0.5 ? -1 : 1) * (Math.PI / 3) * (0.85 + r() * 0.3), len * (0.42 + r() * 0.2), depth - 1, w * 0.72, a * 0.9);
+    }
+  };
+  for (let i = 0; i < 11; i++) branch((i + r() * 0.8) * (W / 11), -3, Math.PI / 2 + (r() - 0.5) * 1.5, 45 + r() * 85, 3, 1.15, 0.62);
+  FERN = `url(${cv.toDataURL('image/png')})`;
+  return FERN;
+}
+
 export function CardFrost({ temp, selector = '.lw-wrap .lw-glass' }) {
   const cold = temp != null && Number.isFinite(temp) && temp <= 0;
   useEffect(() => {
     if (!cold) return undefined;
     const s = Math.min(1, 0.3 - temp / 8.5);                       // 0 C: 0.3 .. -6 C: 1
+    /* at -5 C and below the frost grows ferns */
+    const ferns = temp <= -5;
+    if (ferns) document.documentElement.style.setProperty('--lw-fern', fernImage());
     const apply = () => {
       const all = [...document.querySelectorAll(selector)].filter((el) => el.offsetParent !== null);
       const top = topCards(TOP_CARDS).filter((el) => all.includes(el));
@@ -1057,10 +1216,11 @@ export function CardFrost({ temp, selector = '.lw-wrap .lw-glass' }) {
         const f = pick.get(el);
         if (f) {
           el.classList.add('lw-frosted');
+          el.classList.toggle('lw-ferns', ferns);
           el.style.setProperty('--frost', f.toFixed(2));
           el.style.setProperty('--frost-h', `${Math.round(34 + 120 * f)}px`);
         } else if (el.classList.contains('lw-frosted')) {
-          el.classList.remove('lw-frosted');
+          el.classList.remove('lw-frosted', 'lw-ferns');
           el.style.removeProperty('--frost'); el.style.removeProperty('--frost-h');
         }
       }
@@ -1070,12 +1230,87 @@ export function CardFrost({ temp, selector = '.lw-wrap .lw-glass' }) {
     return () => {
       clearInterval(id);
       for (const el of document.querySelectorAll('.lw-frosted')) {
-        el.classList.remove('lw-frosted');
+        el.classList.remove('lw-frosted', 'lw-ferns');
         el.style.removeProperty('--frost'); el.style.removeProperty('--frost-h');
       }
     };
   }, [cold, temp, selector]);
   return null;
+}
+
+/* ── misted glass: in saturated air (the dew point within a degree of the temperature, nothing
+   falling) the cards' glass mists over a little, as a window does, more the closer the air is to
+   saturation; frost takes its place below freezing ── */
+export function CardMist({ amount = 0, selector = '.lw-wrap .lw-glass' }) {
+  const on = amount > 0.05;
+  const a = Math.round(Math.min(1, amount) * 20) / 20;
+  useEffect(() => {
+    if (!on) return undefined;
+    const apply = () => {
+      for (const el of document.querySelectorAll(selector)) {
+        if (el.offsetParent === null) continue;
+        el.classList.add('lw-misted');
+        el.style.setProperty('--mist', a.toFixed(2));
+      }
+    };
+    apply();
+    const id = setInterval(apply, 2000);
+    return () => {
+      clearInterval(id);
+      for (const el of document.querySelectorAll('.lw-misted')) { el.classList.remove('lw-misted'); el.style.removeProperty('--mist'); }
+    };
+  }, [on, a, selector]);
+  return null;
+}
+
+/* ── fog drifting over the cards: in fog, a few banks of it pass slowly in front of the page, faint
+   enough to read through ── */
+export function CardFog({ amount = 0, wdir = 240 }) {
+  const ref = useRef(null);
+  const on = amount > 0.05;
+  const amt = useRef(amount);
+  amt.current = amount;
+  const towards = Math.sin(((wdir ?? 240) + 180) * (Math.PI / 180)) >= 0 ? 1 : -1;
+  useEffect(() => {
+    const cv = ref.current;
+    if (!on || !cv) return undefined;
+    const ctx = cv.getContext('2d');
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const fog = fogOnce();
+    let W = 0, H = 0, dpr = 1, raf = 0, last = performance.now(), banks = [];
+    const resize = () => {
+      W = window.innerWidth; H = window.innerHeight; dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+      cv.style.width = `${W}px`; cv.style.height = `${H}px`;
+      const r = rng(Math.round(W * 7 + H));
+      banks = Array.from({ length: 4 }, (_, i) => ({ x: r() * W, y: H * (0.18 + i * 0.22), sc: 1.5 + r() * 0.9, v: 6 + r() * 8 }));
+    };
+    const draw = (now) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      ctx.globalAlpha = 0.15 * Math.min(1, amt.current);
+      for (const b of banks) {
+        const w = fog.width * b.sc, h = fog.height * b.sc;
+        b.x += b.v * dt * towards;
+        if (towards > 0 && b.x - w / 2 > W) b.x = -w / 2;
+        if (towards < 0 && b.x + w / 2 < 0) b.x = W + w / 2;
+        ctx.drawImage(fog, b.x - w / 2, b.y - h / 2, w, h);
+      }
+      ctx.globalAlpha = 1;
+      raf = !reduce && !document.hidden ? requestAnimationFrame(draw) : 0;
+    };
+    resize();
+    raf = requestAnimationFrame(draw);
+    const onResize = () => { resize(); if (reduce) draw(performance.now()); };
+    const onVis = () => { if (!document.hidden && !raf && !reduce) { last = performance.now(); raf = requestAnimationFrame(draw); } };
+    window.addEventListener('resize', onResize);
+    document.addEventListener('visibilitychange', onVis);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', onResize); document.removeEventListener('visibilitychange', onVis); };
+  }, [on, towards]);
+  if (!on) return null;
+  return <canvas ref={ref} aria-hidden="true" style={{ position: 'fixed', inset: 0, zIndex: 2, pointerEvents: 'none' }} />;
 }
 
 /* ── rain on the cards, as on a window ─────────────────────────────────────────
