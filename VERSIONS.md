@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.57.011 | 2026-11-16 | Patch | — | Ready for a public address: limits on sign-in attempts, codes, sign-ups and reset links; server functions limited to the ones the pages use; visitor addresses trusted only from the tunnel | iPhone app and public address |
+| 5.58.000 | 2026-11-16 | Update | — | Sign in with Apple (in the iPhone app) and Google; in the app the site is an ordinary user's, with no admin controls | iPhone app and public address |
+| 5.57.011 | 2026-11-16 | Patch | a7cf8f2 | Ready for a public address: limits on sign-in attempts, codes, sign-ups and reset links; server functions limited to the ones the pages use; visitor addresses trusted only from the tunnel | iPhone app and public address |
 | 5.57.010 | 2026-11-16 | Patch | bba9271 | Model Data: the timeline bar fixed (crushed in Live, buttons shrinking) | — |
 | 5.57.009 | 2026-11-16 | Patch | a8bb0a2 | Model Data: storm replays from the GFS archive | — |
 | 5.57.008 | 2026-11-16 | Patch | b0346df | Location Weather: the best-time finder in the hourly forecast: pick washing, a BBQ, a dog walk or a run and every good hour gets green under it across the whole forecast, with each day's best spell between 07:00 and 22:00 listed (scored by Out and about's rules) | Location Weather overhaul (Nov) |

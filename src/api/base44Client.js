@@ -30,6 +30,28 @@ const API = import.meta.env.VITE_API_BASE_URL || '/api';
  */
 const TOKEN_KEY = 'base44_access_token';
 
+/* ── inside the iPhone app ──────────────────────────────────────────────────
+ * The app (MyWeatherUK-app, SiteView) shows this site in a web view whose user agent says
+ * "MyWeatherUKApp/<version>". There the site is the visitor's site: an admin account signs in as an
+ * ordinary user (me() below reports role "user"), so no admin page, menu or control ever shows, and the
+ * owner's automatic admin sign-in is never tried. Sign in with Apple, and Google's sign-in sheet, go
+ * through the app (window.ReactNativeWebView), which answers with a 'mwuk-signin' event.
+ */
+const IN_APP = typeof navigator !== 'undefined' && /\bMyWeatherUKApp\//.test(navigator.userAgent || '');
+const appBridge = () => (IN_APP && typeof window !== 'undefined' && window.ReactNativeWebView) || null;
+
+/* back from Google's sign-in on the website: the server hands the session over in the address's
+   fragment (#mwuk_token=…), which never reaches any server; keep it and clean the address */
+if (typeof window !== 'undefined' && /[#&]mwuk_token=/.test(window.location.hash || '')) {
+  try {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const token = params.get('mwuk_token');
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    localStorage.removeItem('mwuk_auto_login_off');
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  } catch { /* storage off: the sign-in is lost, the page still loads */ }
+}
+
 /**
  * Set when you press Log out, so an explicit sign-out isn't undone by the
  * automatic admin login below. Cleared when you sign in again.
@@ -256,7 +278,7 @@ const entities = new Proxy(
 let autoLoginInFlight = null;
 
 function tryAutoLogin() {
-  if (autoLoginDisabled()) return Promise.resolve(null);
+  if (IN_APP || autoLoginDisabled()) return Promise.resolve(null);
   if (autoLoginInFlight) return autoLoginInFlight;
 
   // The server only auto-logs-in the owner: a request straight from the
@@ -321,7 +343,15 @@ const auth = {
       err.status = 401;
       throw err;
     }
-    return user;
+    /* in the app, never the admin: every page then shows what an ordinary user sees */
+    return IN_APP && user.role === 'admin' ? { ...user, role: 'user' } : user;
+  },
+
+  /** Which sign-in buttons work here: { apple, google }. */
+  async providers() {
+    let google = false;
+    try { google = !!(await request('/auth/providers'))?.google; } catch { /* no button */ }
+    return { apple: !!appBridge(), google };
   },
 
   async loginViaEmailPassword(email, password) {
@@ -341,16 +371,37 @@ const auth = {
     return auth.loginViaEmailPassword(email, password);
   },
 
-  loginWithProvider(provider) {
-    // Social sign-in needs an OAuth client registered with the provider and a
-    // public callback URL, neither of which exists on a local box. Fail loudly
-    // rather than silently doing nothing when the button is pressed.
-    const err = new Error(
-      `${provider === 'google' ? 'Google' : provider} sign-in is not available in the ` +
-        'self-hosted build — sign in with your email and password instead.'
-    );
-    if (typeof window !== 'undefined') window.alert(err.message);
-    return Promise.reject(err);
+  /** Sign in with 'apple' or 'google'. In the app the app does it (Apple's sheet, or Google's in a
+      secure sign-in sheet) and answers with the session; on the website Google's page opens here and
+      comes back with it (#mwuk_token, above). Resolves once signed in and on the way to `redirect`. */
+  loginWithProvider(provider, redirect = '/') {
+    const next = typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/';
+    const bridge = appBridge();
+    if (bridge) {
+      return new Promise((resolve, reject) => {
+        const done = (e) => {
+          window.removeEventListener('mwuk-signin', done);
+          const m = e.detail || {};
+          if (m.ok && m.token) {
+            writeToken(m.token);
+            setAutoLoginDisabled(false);
+            window.location.href = next;
+            resolve(m);
+          } else {
+            const err = new Error(m.message || 'Sign-in was cancelled.');
+            err.cancelled = !!m.cancelled;
+            reject(err);
+          }
+        };
+        window.addEventListener('mwuk-signin', done);
+        bridge.postMessage(JSON.stringify({ type: 'signin', provider }));
+      });
+    }
+    if (provider === 'google' && typeof window !== 'undefined') {
+      window.location.href = `${API}/auth/google/start?next=${encodeURIComponent(next)}`;
+      return new Promise(() => {});                              // the page is leaving
+    }
+    return Promise.reject(new Error(`${provider === 'apple' ? 'Apple' : provider} sign-in works in the MyWeatherUK iPhone app.`));
   },
 
   async register({ email, password, full_name } = {}) {

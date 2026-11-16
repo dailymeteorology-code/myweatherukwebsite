@@ -18,6 +18,7 @@ import db from './db.js';
 import { publicUser } from './base44Server.js';
 import { sendEmail } from './integrations.js';
 import { clientIp, exhausted, forget, limited, note } from './entityAccess.js';
+import { socialRoutes } from './socialAuth.js';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const OTP_TTL_MS = 15 * 60 * 1000;
@@ -199,6 +200,9 @@ function cleanPreferences(p) {
 
 export function authRouter() {
   const router = express.Router();
+
+  /* Sign in with Apple or Google (socialAuth.js) */
+  router.use(socialRoutes({ hashPassword, sessionTtlMs: SESSION_TTL_MS }));
 
   router.get('/me', (req, res) => {
     const user = userFromRequest(req);

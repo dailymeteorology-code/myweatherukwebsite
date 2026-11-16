@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LogIn, Mail, Lock, Loader2, Eye, EyeOff } from "lucide-react";
 import AuthLayout from "@/components/AuthLayout";
-import GoogleIcon from "@/components/GoogleIcon";
+import SocialSignIn from "@/components/auth/SocialSignIn";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -28,10 +28,6 @@ export default function Login() {
     }
   };
 
-  const handleGoogle = () => {
-    base44.auth.loginWithProvider("google", "/");
-  };
-
   return (
     <AuthLayout
       icon={LogIn}
@@ -46,23 +42,7 @@ export default function Login() {
         </>
       }
     >
-      <Button
-        variant="outline"
-        className="w-full h-12 text-sm font-semibold mb-6 bg-transparent border-slate-700/50 text-slate-200 hover:bg-slate-800/50 hover:border-slate-600"
-        onClick={handleGoogle}
-      >
-        <GoogleIcon className="w-5 h-5 mr-2" />
-        Continue with Google
-      </Button>
-
-      <div className="relative mb-6">
-        <div className="absolute inset-0 flex items-center">
-          <div className="w-full border-t border-slate-700/60" />
-        </div>
-        <div className="relative flex justify-center text-xs uppercase tracking-wider">
-          <span className="bg-[#111a2c] px-3 text-slate-500">or</span>
-        </div>
-      </div>
+      <SocialSignIn redirect="/" onError={setError} />
 
       {error && (
         <div className="mb-5 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm font-medium">

@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { UserPlus, Mail, Lock, Loader2, Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import AuthLayout from "@/components/AuthLayout";
-import GoogleIcon from "@/components/GoogleIcon";
+import SocialSignIn from "@/components/auth/SocialSignIn";
 import { toast } from "@/components/ui/use-toast";
 
 const inputClass = "pl-10 h-12 bg-slate-900/60 border-slate-700/50 text-slate-100 placeholder:text-slate-600 rounded-xl focus:border-sky-500/50 focus:ring-sky-500/20";
@@ -92,8 +92,6 @@ export default function Register() {
     }
   };
 
-  const handleGoogle = () => base44.auth.loginWithProvider("google", "/");
-
   if (showOtp) {
     return (
       <AuthLayout
@@ -145,21 +143,7 @@ export default function Register() {
         </>
       }
     >
-      <Button
-        variant="outline"
-        className="w-full h-12 text-sm font-semibold mb-6 bg-transparent border-slate-700/50 text-slate-200 hover:bg-slate-800/50 hover:border-slate-600"
-        onClick={handleGoogle}
-      >
-        <GoogleIcon className="w-5 h-5 mr-2" />
-        Continue with Google
-      </Button>
-
-      <div className="relative mb-6">
-        <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-700/60" /></div>
-        <div className="relative flex justify-center text-xs uppercase tracking-wider">
-          <span className="bg-[#111a2c] px-3 text-slate-500">or</span>
-        </div>
-      </div>
+      <SocialSignIn redirect="/" onError={setError} />
 
       {error && (
         <div className="mb-5 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm font-medium">{error}</div>
