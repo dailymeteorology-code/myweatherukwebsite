@@ -122,7 +122,8 @@ class ECMWFEns:
         return f'{host}/{run:%Y%m%d}/{run:%H}z/ifs/0p25/enfo/{run:%Y%m%d%H}0000-{h}h-enfo-ef'
 
     def schedule(self, run):
-        return list(range(0, 241, 6)) if run.hour in (0, 12) else list(range(0, 145, 6))
+        # 00Z and 12Z to T+360, 06Z and 18Z to T+144 (00Z and 12Z stopped at T+240 here until 16 Nov 2026)
+        return list(range(0, 361, 6)) if run.hour in (0, 12) else list(range(0, 145, 6))
 
     def _has(self, run, h):
         return any(exists(self.base(run, h, host) + '.index') for host in self.hosts)
@@ -233,20 +234,24 @@ class GEFS:
     def __init__(self):
         self._idx, self._ll = {}, {}
 
-    def url(self, run, h, m):
+    def url(self, run, h, m, kind='a'):
+        """A member's file: the 0.25 deg one to T+240; after that only the 0.5 deg files exist, the much-used
+        fields in 'a' and the rest (gusts, CAPE, visibility, dew point, helicity, cloud ceiling) in 'b'."""
         mem = 'gec00' if m == 0 else f'gep{m:02d}'
-        return f'{self.BUCKET}/gefs.{run:%Y%m%d}/{run:%H}/atmos/pgrb2sp25/{mem}.t{run:%H}z.pgrb2s.0p25.f{h:03d}'
+        if h <= 240:
+            return f'{self.BUCKET}/gefs.{run:%Y%m%d}/{run:%H}/atmos/pgrb2sp25/{mem}.t{run:%H}z.pgrb2s.0p25.f{h:03d}'
+        return f'{self.BUCKET}/gefs.{run:%Y%m%d}/{run:%H}/atmos/pgrb2{kind}p5/{mem}.t{run:%H}z.pgrb2{kind}.0p50.f{h:03d}'
 
     def schedule(self, run):
-        return list(range(0, 241, 6))
+        return list(range(0, 385, 6))                      # to T+384, 16 days (it was T+240 here until 16 Nov 2026)
 
     def runs(self, n=None):
         return recent_runs(lambda r, h: exists(self.url(r, h, 30) + '.idx'), self.schedule, n=n)
 
-    def _recs(self, run, h, m):
-        k = (run, h, m)
+    def _recs(self, run, h, m, kind='a'):
+        k = (run, h, m, kind if h > 240 else 's')
         if k not in self._idx:
-            lines = [l for l in get(self.url(run, h, m) + '.idx', tries=3, timeout=30).decode().splitlines() if l.strip()]
+            lines = [l for l in get(self.url(run, h, m, kind) + '.idx', tries=3, timeout=30).decode().splitlines() if l.strip()]
             recs = []
             for i, l in enumerate(lines):
                 p = l.split(':')
@@ -260,12 +265,17 @@ class GEFS:
         var, level = key
 
         def one(m):
+            kind = 'a'
             recs = self._recs(run, h, m)
             c = [r for r in recs if r['var'] == var and r['level'] == level]
+            if not c and h > 240:                           # past T+240: the 0.5 deg 'b' file holds the rest
+                kind = 'b'
+                recs = self._recs(run, h, m, 'b')
+                c = [r for r in recs if r['var'] == var and r['level'] == level]
             if not c:
                 raise KeyError(f'{var} at T+{h}')
             r = c[-1] if var != 'APCP' else min(c, key=lambda r: _span(r['desc']))   # APCP: the shortest bucket
-            blob = get(self.url(run, h, m), (r['start'], r['end']), tries=3, timeout=60)
+            blob = get(self.url(run, h, m, kind), (r['start'], r['end']), tries=3, timeout=60)
             a, meta = decode_grib(blob)
             return regrid(a, meta, self._ll), r['desc']
         with cf.ThreadPoolExecutor(16) as ex:

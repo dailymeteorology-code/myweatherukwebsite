@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.58.000 | 2026-11-16 | Update | — | Sign in with Apple (in the iPhone app) and Google; in the app the site is an ordinary user's, with no admin controls | iPhone app and public address |
+| 5.58.001 | 2026-11-16 | Patch | — | Model Data: every model to the end of its run (GFS to T+384; ECMWF IFS, AIFS and ENS to T+360; GEFS to T+384), and new steps appear without a reload | — |
+| 5.58.000 | 2026-11-16 | Update | 3017553 | Sign in with Apple (in the iPhone app) and Google; in the app the site is an ordinary user's, with no admin controls | iPhone app and public address |
 | 5.57.011 | 2026-11-16 | Patch | a7cf8f2 | Ready for a public address: limits on sign-in attempts, codes, sign-ups and reset links; server functions limited to the ones the pages use; visitor addresses trusted only from the tunnel | iPhone app and public address |
 | 5.57.010 | 2026-11-16 | Patch | bba9271 | Model Data: the timeline bar fixed (crushed in Live, buttons shrinking) | — |
 | 5.57.009 | 2026-11-16 | Patch | a8bb0a2 | Model Data: storm replays from the GFS archive | — |

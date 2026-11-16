@@ -819,8 +819,10 @@ class ECMWF:
         self._idx, self._host, self._ix = {}, {}, None
 
     def schedule(self, run):
+        # ECMWF's open data (checked 16 Nov 2026): 00Z and 12Z to T+360 (3-hourly to 144, then 6-hourly),
+        # 06Z and 18Z 3-hourly to T+144 (it was T+240 and T+90 here until 16 Nov 2026)
         long = run.hour in (0, 12)
-        return list(range(0, 145, 3)) + list(range(150, 241, 6)) if long else list(range(0, 91, 3))
+        return list(range(0, 145, 3)) + list(range(150, 361, 6)) if long else list(range(0, 145, 3))
 
     def base(self, run, h, host, wave=False):
         path, stem = ('ifs/0p25/wave', 'wave-fc') if wave else (self.path, self.stem)
@@ -986,7 +988,7 @@ class AIFS(ECMWF):
                 snow_cover=[('sfc', 'fscov')], soil_t=[('sol', 'sot', 1)], soil_m=[('sol', 'vsw', 1)])
 
     def schedule(self, run):
-        return list(range(0, 241, 6))
+        return list(range(0, 361, 6))                      # every run to T+360 (it was T+240 here until 16 Nov 2026)
 
     variables = ['precip_rate', 'rain_rate', 'conv_rain', 'precip_total', 'conv_total', 'ptype', 'snow_rate', 'frozen_pct', 'snow_total',
                  'snow_acc', 'snow_cover', 'frz', 'wbfz', 't2', 'td2', 'rh2', 'tskin', 'feels', 'windchill', 'wind10', 'wdir10', 'wind100',
@@ -1098,7 +1100,7 @@ class GFS:
         self._idx, self._ix = {}, None
 
     def schedule(self, run):
-        return list(range(0, 121)) + list(range(123, 241, 3))
+        return list(range(0, 121)) + list(range(123, 385, 3))   # to T+384, 16 days (it was T+240 here until 16 Nov 2026)
 
     def url(self, run, h, wave=False):
         if wave:

@@ -316,12 +316,14 @@ function useRunFrames(model, run, v, wantStep, on) {
   const [frames, setFrames] = useState({});
   const [status, setStatus] = useState(null);
   const key = on && model && run && (model.variables || model.fields)?.includes(v) ? `${model.id}/${runTag(run.run)}/${v}` : null;
+  const runLen = useRef(0);
+  runLen.current = run?.steps?.length || 0;
   useEffect(() => {
     setFrames({}); setStatus(null);
     if (!key) return undefined;
     const [m, rt, vv] = key.split('/');
     const ac = new AbortController();
-    let alive = true, timer = 0;
+    let alive = true, timer = 0, behindPolls = 0;
     /* as the main layer's (framePool), four on their way: the main layer keeps the rest of the
        browser's six connections to the site */
     const pool = framePool({
@@ -339,7 +341,9 @@ function useRunFrames(model, run, v, wantStep, on) {
         if (!alive) return;
         setStatus((o) => (o && o.state === st.state && o.done?.length === st.done?.length && o.missing?.length === st.missing?.length ? o : st));
         pool.add(st.done || []);
-        if (st.state !== 'complete' && !timer) timer = setTimeout(poll, 1200);
+        /* fewer steps than the run has now: the server is topping the layer up (see the main loader) */
+        const behind = st.state === 'complete' && (st.steps?.length ?? 0) < runLen.current && behindPolls++ < 240;
+        if ((st.state !== 'complete' || behind) && !timer) timer = setTimeout(poll, behind ? 2500 : 1200);
       } catch { if (alive && !timer) timer = setTimeout(poll, 3000); }
     };
     poll();
@@ -1129,11 +1133,14 @@ export default function ModelData() {
     }
     targetValid.current = t;
   }, [key]);                                                 // eslint-disable-line react-hooks/exhaustive-deps
+  const runLen = useRef(0);
+  runLen.current = run?.steps?.length || 0;
+  const pollAgain = useRef(null);
   useEffect(() => {
     if (!key) return undefined;
     const [m, rt, v] = key.split('/');
     const ac = new AbortController();
-    let alive = true, timer = 0;
+    let alive = true, timer = 0, asking = false, behindPolls = 0;
     if (targetValid.current != null) wantStep.current = Math.max(0, Math.round((targetValid.current - Date.parse(run.run)) / 3600e3));
     setFrames({}); setStatus(null); colourCache.current.clear(); contourCache.current.clear();
     /* every step the server has, the one on screen first and then outwards from it, six on their way
@@ -1148,18 +1155,27 @@ export default function ModelData() {
     const poll = async () => {
       timer = 0;
       if (!alive) return;
+      asking = true;
       try {
         const st = await fetch(`${API}/frames/${m}/${rt}/${v}/status?first=${Math.max(0, wantStep.current)}`, { signal: ac.signal }).then((r) => r.json());
         if (!alive) return;
         setStatus(st);
         pool.add(st.done || []);
-        if (st.state !== 'complete' && !timer) timer = setTimeout(poll, 600);
+        /* the run has grown since this layer was made (a run still arriving, or a model now listed further
+           ahead): the server tops it up, so keep asking until its status has the new steps (16 Nov 2026: the
+           page stopped at "complete" and showed GFS to T+240 of T+384 until a reload) */
+        const behind = st.state === 'complete' && (st.steps?.length ?? 0) < runLen.current && behindPolls++ < 300;
+        if ((st.state !== 'complete' || behind) && !timer) timer = setTimeout(poll, behind ? 2000 : 600);
       } catch { if (alive && !timer) timer = setTimeout(poll, 2000); }
+      asking = false;
     };
+    pollAgain.current = () => { if (alive && !timer && !asking) poll(); };
     poll();
-    return () => { alive = false; ac.abort(); pool.stop(); clearTimeout(timer); };
+    return () => { alive = false; pollAgain.current = null; ac.abort(); pool.stop(); clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);                                              // the key names the run; run.run is read with it
+  /* the run grew while its layer is open (the catalogue lists more of it): ask the server again, which tops it up */
+  useEffect(() => { pollAgain.current?.(); }, [run?.steps?.length]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const liveSrc = isLive ? liveItem.src : null;
   const liveWant = useRef(new Set());
