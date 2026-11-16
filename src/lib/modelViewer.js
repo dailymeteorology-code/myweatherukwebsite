@@ -554,6 +554,10 @@ SCALES.rain_agree = { ...SCALES.prob, ticks: [10, 25, 50, 75, 100] };
 SCALES.t850_anom = { stops: DIVERGE(-15, 15), ticks: [-15, -10, -5, 0, 5, 10, 15] };
 SCALES.z500_anom = { stops: DIVERGE(-30, 30), ticks: [-30, -20, -10, 0, 10, 20, 30] };
 SCALES.mslp_anom = { stops: DIVERGE(-30, 30), ticks: [-30, -20, -10, 0, 10, 20, 30] };
+/* the storms' ingredients (16 Nov 2026): deep wind shear, the supercell composite and the energy-helicity index */
+SCALES.shear6 = { stops: [[15, '#e6f5d0', 90], [20, '#c7e9c0', 130], [30, '#7fcdbb', 175], [40, '#41b6c4', 200], [50, '#2c7fb8', 215], [60, '#253494', 225], [80, '#7a0177', 235]], floor: 15, ticks: [20, 30, 40, 50, 60, 80] };
+SCALES.scp = { stops: [[0.5, '#fff5b1', 120], [1, '#fed976', 170], [2, '#fd8d3c', 200], [4, '#e31a1c', 215], [8, '#800026', 230], [12, '#4a0040', 240]], floor: 0.5, ticks: [1, 2, 4, 8, 12] };
+SCALES.ehi3 = { stops: [[0.3, '#e0f3db', 110], [0.5, '#a8ddb5', 160], [1, '#fed976', 190], [2, '#fd8d3c', 210], [3, '#e31a1c', 225], [5, '#800026', 235]], floor: 0.3, ticks: [0.5, 1, 2, 3, 5] };
 export const scaleFor = (key) => (TONE === 'light' && LIGHT_SCALES[key]) || SCALES[key] || { stops: TEMP, ticks: [] };
 /** The chance colours for a kind of question: snow, rain, wind, cold, heat, storm, ice or sky. */
 export const probScaleKey = (family) => (PROB_FAMILIES[family] ? `prob_${family}` : 'prob');

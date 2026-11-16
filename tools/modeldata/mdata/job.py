@@ -132,9 +132,9 @@ def recipe(model, run_s, var, steps, d, status):
         if args is None:
             status['missing'].append(h)
             continue
-        with np.errstate(all='ignore'):
-            a = np.asarray(fn(*args), np.float32)
         vt = run + timedelta(hours=h)
+        with np.errstate(all='ignore'):
+            a = np.asarray(fn(*args, vt=vt) if getattr(fn, 'wants_time', False) else fn(*args), np.float32)   # an anomaly: its day's normal
         write_frame(d / f'{h}.bin', a, VARIABLES[var], {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat(),
                                                         'recipe': list(inputs_of(var))})
         status['done'].append(h)

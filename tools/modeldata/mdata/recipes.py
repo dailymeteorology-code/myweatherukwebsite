@@ -118,7 +118,19 @@ RECIPES = {
     'tt': (('t850', 'rh850', 't500'), lambda t8, rh8, t5: t8 + _td(t8, rh8) - 2 * t5, None),
     'kindex': (('t850', 't700', 't500', 'rh850', 'rh700'),
                lambda t8, t7, t5, r8, r7: (t8 - t5) + _td(t8, r8) - (t7 - _td(t7, r7)), None),
+    # the storms' ingredients (16 Nov 2026): Thompson et al.'s supercell composite (most-unstable CAPE, 0-3 km
+    # helicity, deep shear: nothing below 10 m/s, full weight from 20 m/s) and the 0-3 km energy-helicity index
+    'scp': (('cape_mu', 'srh3', 'shear6'), lambda c, s, sh: np.clip(c / 1000.0, 0, None) * np.clip(s / 50.0, 0, None)
+            * np.where(sh / 1.943844 < 10, 0.0, np.clip(sh / 1.943844 / 20.0, 0, 1)),
+            dict(label='Supercell composite (SCP)', unit='', group='Convection', lo=0, hi=20)),
+    'ehi3': (('cape_sb', 'srh3'), lambda c, s: np.clip(c, 0, None) * np.clip(s, 0, None) / 160000.0,
+             dict(label='Energy-helicity index 0-3 km (EHI)', unit='', group='Convection', lo=0, hi=10)),
 }
+try:                                                    # against the 1991-2020 normals (mdata/climate.py)
+    from .climate import ANOMALY_RECIPES
+    RECIPES.update(ANOMALY_RECIPES)
+except Exception:                                       # noqa: BLE001
+    pass
 # code layers (classes, not values): stored lo 0 hi 254 so each class is its own byte; never blended between steps or cells
 CODED = {'frost_risk', 'ice_risk', 'beaufort'}
 

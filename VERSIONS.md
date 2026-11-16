@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.57.005 | 2026-11-16 | Patch | — | Model Data: a road's forecast: any road by its number, the layer along it through the run, your drive drawn through it and said in words | Model Data STRATA redesign (Nov) |
+| 5.57.006 | 2026-11-16 | Patch | — | Model Data: the storms' ingredients (deep shear, supercell composite, energy-helicity index) and anomalies against 1991-2020 (850 hPa temperature, 500 hPa height, pressure) | Model Data STRATA redesign (Nov) |
+| 5.57.005 | 2026-11-16 | Patch | 7d5ff8e | Model Data: a road's forecast: any road by its number, the layer along it through the run, your drive drawn through it and said in words | Model Data STRATA redesign (Nov) |
 | 5.57.004 | 2026-11-16 | Patch | bee1640 | Model Data: every model at a pin, the members' plume, the air above (skew-T), cross-sections, where the air came from, and ensemble scenarios | Model Data STRATA redesign (Nov) |
 | 5.57.003 | 2026-11-16 | Patch | fd3cee1 | Model Data: MWUK Consensus (the middle of nine models) with its agreement layers; compare as a difference map or with a swipe line | Model Data STRATA redesign (Nov) |
 | 5.57.002 | 2026-11-16 | Patch | ce3388d | Location Weather: a rainbow when the sun comes out between showers, the aurora on clear nights when the Kp is high enough here, shooting stars around meteor showers, fog drifting over the cards, misted glass in saturated air, frost ferns at -5 C and below, autumn leaves in the gales; and the two weeks ahead (the GEFS ensemble average against the 1991-2020 normal). Admins can switch each effect on in the Sky preview | Location Weather overhaul (Nov) |

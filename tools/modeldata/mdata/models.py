@@ -187,6 +187,7 @@ VARIABLES = {
     'cin_mu':       dict(label='CIN (most unstable)', unit='J/kg', group='Convection', lo=-800, hi=0),
     'li':           dict(label='Lifted index', unit='K', group='Convection', lo=-12, hi=15),
     'srh3':         dict(label='Storm-relative helicity 0-3 km', unit='m²/s²', group='Convection', lo=-100, hi=700),
+    'shear6':       dict(label='Wind shear 0-5.5 km', unit='kt', group='Convection', lo=0, hi=120),
     'lightning':    dict(label='Lightning (past hour)', unit='flashes/km²', group='Convection', lo=0, hi=5, scale='sqrt'),
     'pw':           dict(label='Precipitable water', unit='mm', group='Convection', lo=0, hi=60),
     # upper air
@@ -1080,6 +1081,9 @@ class GFS:
         'kindex': [('TMP', '850 mb'), ('TMP', '700 mb'), ('TMP', '500 mb'), ('RH', '850 mb'), ('RH', '700 mb')],
         'shf': [('SHTFL', 'surface')], 'lhf': [('LHTFL', 'surface')], 'lw_down': [('DLWRF', 'surface')],
         'olr': [('ULWRF', 'top of atmosphere')],
+        # the deep shear for the storms' ingredients (16 Nov 2026): GFS's open files have no 0-6 km shear, so
+        # the difference between the 500 hPa and the 10 m wind, about the lowest 5.5 km
+        'shear6': [('UGRD', '500 mb'), ('VGRD', '500 mb'), ('UGRD', '10 m above ground'), ('VGRD', '10 m above ground')],
     }
     WAVE = {'swh', 'pp1d', 'mwd'}
     CATEGORY = {'CRAIN', 'CSNOW', 'CFRZR', 'CICEP'}
@@ -1088,7 +1092,7 @@ class GFS:
                  'mslp', 'tcc', 'lcc', 'mcc', 'hcc', 'vis', 'fog_vis', 'cape_sb', 'cape_ml', 'cape_mu', 'cin_sb', 'cin_ml', 'cin_mu', 'li', 'kindex',
                  'srh3', 'pw', 'hpbl', 't925', 't850', 't700', 't500', 'z850', 'z500', 'thick', 'rh850', 'rh700', 'wind925', 'wind850',
                  'wind700', 'wind500', 'wind300', 'wind250', 'w700', 'vort500', 'trop_p', 'sw_down', 'lw_down', 'olr', 'shf', 'lhf', 'wx',
-                 'swh', 'pp1d', 'mwd', 'z10hpa', 't10hpa', 'u10hpa', 'z50hpa', 't50hpa']
+                 'swh', 'pp1d', 'mwd', 'z10hpa', 't10hpa', 'u10hpa', 'z50hpa', 't50hpa', 'shear6']
 
     def __init__(self):
         self._idx, self._ix = {}, None
@@ -1167,6 +1171,8 @@ class GFS:
             return np.clip(A[0] * 100.0, 0, 100).astype(np.float32)
         if var == 'wdir10':
             return _wdir(A[0], A[1])
+        if var == 'shear6':                                # knots: the 500 hPa wind less the 10 m wind
+            return np.hypot(A[0] - A[2], A[1] - A[3]) * 1.943844
         if var == 'windchill':
             return _windchill(A[0] - 273.15, np.hypot(A[1], A[2]) * MPH)
         if var in ('wind10', 'wind100', 'wind925', 'wind850', 'wind700', 'wind500', 'wind300', 'wind250'):
