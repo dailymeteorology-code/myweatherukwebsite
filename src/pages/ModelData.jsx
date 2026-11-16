@@ -60,7 +60,7 @@ import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES, SNOW_AMOUNT_LEVELS, cmText } from '@
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Screen', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { consensus: 'MWUK Consensus', frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE', arpege: 'ARPEGE', arome: 'AROME', ecmwf_ensm: 'ECMWF ENS mean', aifs_ensm: 'AIFS ENS mean', replay: 'Storm replays' };
+const SHORT_NAMES = { consensus: 'MWUK', frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE', arpege: 'ARPEGE', arome: 'AROME', ecmwf_ensm: 'ECMWF ENS mean', aifs_ensm: 'AIFS ENS mean', replay: 'Storm replays' };
 /* models whose runs are fixed moments in the past (the Storm replays: each run is a storm, mdata/replays.py):
    never "newer" or "next", and the tools that read today's GFS are not offered */
 const STATIC_RUNS = new Set(['replay']);

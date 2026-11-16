@@ -548,7 +548,7 @@ export function setKeyScale(k) { KEY_SCALE = Math.max(1, Math.min(2, Number(k) |
 export const toneOf = () => TONE;
 /* what a cached colour table was made with: the colours chosen and the map's tone */
 const palId = () => `${PALETTE}|${TONE}`;
-/* MWUK Consensus's share of models giving rain (a chance, so the chances' colours), and the anomalies
+/* MWUK's share of models giving rain (a chance, so the chances' colours), and the anomalies
    against 1991-2020 (two-way) (16 Nov 2026) */
 SCALES.rain_agree = { ...SCALES.prob, ticks: [10, 25, 50, 75, 100] };
 SCALES.t850_anom = { stops: DIVERGE(-15, 15), ticks: [-15, -10, -5, 0, 5, 10, 15] };

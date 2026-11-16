@@ -2,7 +2,7 @@
    pin", "Skew-T at a pin", "cross-section", "back-trajectories"), drawn from server/modelExtras.js:
 
    - Every model: the layer on show at the pin, from each model's newest run (as much of it as is made),
-     one line a model, with MWUK Consensus in bold when it has the layer.
+     one line a model, with MWUK (the middle of the models) in bold when it has the layer.
    - Sounding: NOAA GFS's temperature, dew point and wind up through the air above the pin, as a
      skew-T log-p diagram, with the rising air's path (a surface parcel), its hodograph and the
      usual indices, worked out here from the GFS levels, and a plain reading of what they mean.
@@ -124,7 +124,7 @@ export function ModelsAtPoint({ t, phone, place, lat, lon, v, label, unit, model
   return (
     <ToolCard t={t} phone={phone} title={`${label}: every model`} sub={`${place} · each model's newest run`} onClose={onClose}
       info={['Each line is one model’s newest run at this spot, for the layer on the map. Where the lines bunch together the models agree and the forecast is surer; where they fan out, it is not.',
-        'MWUK Consensus, in bold, is the middle of the models at each hour. A model whose layer has not been made yet shows no line: open it on the map once and it appears here.',
+        'MWUK, in bold, is the middle of the models at each hour. A model whose layer has not been made yet shows no line: open it on the map once and it appears here.',
         'Point at the chart, or press on it on a phone or tablet, to read every model at that time.']}>
       <div style={{ position: 'relative' }}>
         <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block', touchAction: 'pan-y', userSelect: 'none' }}

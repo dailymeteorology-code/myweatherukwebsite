@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.58.003 | 2026-11-16 | Patch | — | Model Data: a layer made from other layers waits for them to cover the whole run (AIFS 06Z precipitation type stopped at T+240) | — |
+| 5.58.004 | 2026-11-16 | Patch | — | Model Data: MWUK Consensus is now called MWUK | — |
+| 5.58.003 | 2026-11-16 | Patch | f4f0e69 | Model Data: a layer made from other layers waits for them to cover the whole run (AIFS 06Z precipitation type stopped at T+240) | — |
 | 5.58.002 | 2026-11-16 | Patch | 291181a | Model Data: precipitation type on the MWUK Consensus: its own rain rate in the kind the models give there (the middle of their rain, sleet and snow, or ice where at least two, and half of those with something falling, show ice), to the end of the run while two models give a type; a model's layer made before its run had all come out is now finished first | — |
 | 5.58.001 | 2026-11-16 | Patch | 5416664 | Model Data: every model to the end of its run (GFS to T+384; ECMWF IFS, AIFS and ENS to T+360; GEFS to T+384), and new steps appear without a reload | — |
 | 5.58.000 | 2026-11-16 | Update | 3017553 | Sign in with Apple (in the iPhone app) and Google; in the app the site is an ordinary user's, with no admin controls | iPhone app and public address |

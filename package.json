@@ -1,7 +1,7 @@
 {
   "name": "myweatheruk-selfhost",
   "private": true,
-  "version": "5.58.3",
+  "version": "5.58.4",
   "type": "module",
   "description": "The full MyWeatherUK site, self-hosted. No Base44 runtime dependency.",
   "scripts": {

@@ -1,4 +1,4 @@
-"""MWUK Consensus: the middle of every model's forecast (16 Nov 2026, at the user's request: "a
+"""MWUK (named MWUK Consensus until 16 Nov 2026): the middle of every model's forecast (16 Nov 2026, at the user's request: "a
 consensus map, the median of all models", with "an agreement / spread layer").
 
 Members. The nine single models that cover the whole of the UK and Ireland: the Met Office UKV and
@@ -57,7 +57,7 @@ MIN_TYPED = 2                  # ptype: its rate from those, its kind while two 
 STATE = DATA / 'consensus.json'
 LEADS = list(range(0, 121, 3)) + list(range(126, 361, 6))   # to T+360 (16 Nov 2026): GFS, IFS, AIFS and AIGFS reach it
 
-SOURCE_CONS = ('MWUK Consensus: the median of nine models (Met Office UKV and Global, ECMWF IFS and AIFS, NOAA GFS and AIGFS, '
+SOURCE_CONS = ('MWUK: the median of nine models (Met Office UKV and Global, ECMWF IFS and AIFS, NOAA GFS and AIGFS, '
                'DWD ICON-EU, ECCC GDPS, Meteo-France ARPEGE), on the UKV 2 km grid')
 VARIABLES_CONS = {
     'rain_agree': dict(label='Models showing rain', unit='%', group='Precipitation', lo=0, hi=100),
@@ -130,7 +130,7 @@ def catalog_entry(models, save=True):
         write_json(STATE, {k: v for k, v in state.items() if now - _utc(k) <= timedelta(hours=48)})
     if not runs:
         return None
-    return {'id': 'consensus', 'label': 'MWUK Consensus', 'res_km': 2.0, 'grid': grid_of('consensus'), 'source': SOURCE_CONS,
+    return {'id': 'consensus', 'label': 'MWUK', 'res_km': 2.0, 'grid': grid_of('consensus'), 'source': SOURCE_CONS,
             'variables': VARS, 'runs': runs}
 
 
@@ -142,7 +142,7 @@ def _subjob(mid, run_s, var, first):
 
 
 class ConsensusModel:
-    id, label, res_km = 'consensus', 'MWUK Consensus', 2.0
+    id, label, res_km = 'consensus', 'MWUK', 2.0
     variables = VARS
 
     def __init__(self):
@@ -166,7 +166,7 @@ class ConsensusModel:
                 e = catalog_entry(cat['models'], save=False)
                 r = next((x for x in (e or {}).get('runs', []) if _utc(x['run']) == run), None)
             if r is None:
-                raise KeyError(f'MWUK Consensus has no run {key}')
+                raise KeyError(f'MWUK has no run {key}')
             self._entries[key] = r
         return self._entries[key]
 
@@ -366,7 +366,7 @@ class ConsensusModel:
                 except Exception:
                     continue
             if len(got) < MIN_TYPED:
-                raise KeyError(f'MWUK Consensus: {len(got)} members with a type at T+{h}')
+                raise KeyError(f'MWUK: {len(got)} members with a type at T+{h}')
             with _COMBINE:
                 n_wet = np.sum([g[0] for g in got], 0)
                 n_ice = np.sum([g[1] for g in got], 0)
@@ -413,7 +413,7 @@ class ConsensusModel:
                 except Exception:
                     continue
             if len(us) < MIN_NOW:
-                raise KeyError(f'MWUK Consensus: {len(us)} members at T+{h}')
+                raise KeyError(f'MWUK: {len(us)} members at T+{h}')
             with np.errstate(all='ignore'):
                 uu, vv = np.nanmean(us, 0), np.nanmean(vs, 0)
             return np.mod(np.degrees(np.arctan2(-uu, -vv)), 360.0).astype(np.float32)
@@ -425,7 +425,7 @@ class ConsensusModel:
             except Exception:
                 continue
         if len(stack) < MIN_NOW:
-            raise KeyError(f'MWUK Consensus: {len(stack)} members at T+{h}')
+            raise KeyError(f'MWUK: {len(stack)} members at T+{h}')
         with _COMBINE:
             A = np.stack(stack)
             with np.errstate(all='ignore'):
