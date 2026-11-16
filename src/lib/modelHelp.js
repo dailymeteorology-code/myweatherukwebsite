@@ -23,7 +23,7 @@ export const MODEL_ABOUT = {
   arome: 'Météo-France’s AROME, in 2.5 km squares over France, the Low Countries, southern Britain and Ireland, hourly to 51 hours. Built for showers and thunderstorms.',
   ecmwf_ensm: 'The average of ECMWF’s ensemble: its model run 50 times from slightly different starts. It shows the most likely outcome, and its spread shows how sure the forecast is.',
   aifs_ensm: 'The average of ECMWF’s AI ensemble (AIFS ENS), 50 runs to about two weeks.',
-  consensus: 'MWUK Consensus: the middle forecast of nine models (the Met Office UKV and Global, ECMWF and its AI model, GFS and its AI model, ICON-EU, Canada’s GDPS and France’s ARPEGE), cell by cell, on a 2 km map. When they disagree it takes neither extreme. Each runs from the models’ newest runs at 00, 06, 12 and 18 UTC (a slow model joins with its last one). Models showing rain and the temperature and pressure spreads show how far they agree.',
+  consensus: 'MWUK Consensus: the middle forecast of nine models (the Met Office UKV and Global, ECMWF and its AI model, GFS and its AI model, ICON-EU, Canada’s GDPS and France’s ARPEGE), cell by cell, on a 2 km map. When they disagree it takes neither extreme. Each runs from the models’ newest runs at 00, 06, 12 and 18 UTC (a slow model joins with its last one). Models showing rain and the temperature and pressure spreads show how far they agree. Its precipitation type is its own rate in the kind the models give there: the middle of their rain, sleet and snow, or ice where at least two, and half of those with something falling, show ice.',
 };
 
 /* questions to start with: each picks a model, a layer and the hour now (the first model in the list

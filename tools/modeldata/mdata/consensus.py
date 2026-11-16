@@ -53,6 +53,7 @@ SRC_OF = {'rain_agree': ['precip_rate'], 't2_spread': ['t2'], 'mslp_spread': ['m
 RAIN = 0.2                     # mm/h: a member gives rain there
 MIN_MEMBERS = 4                # a step is listed while at least this many members reach it
 MIN_NOW = 3                    # and made while at least this many have a frame there
+MIN_TYPED = 2                  # ptype: its rate from those, its kind while two give one (few do past T+144)
 STATE = DATA / 'consensus.json'
 LEADS = list(range(0, 121, 3)) + list(range(126, 361, 6))   # to T+360 (16 Nov 2026): GFS, IFS, AIFS and AIGFS reach it
 
@@ -364,7 +365,7 @@ class ConsensusModel:
                     got.append(self._kinds(mid, mrun, (vt - mrun).total_seconds() / 3600, idx))
                 except Exception:
                     continue
-            if len(got) < MIN_NOW:
+            if len(got) < MIN_TYPED:
                 raise KeyError(f'MWUK Consensus: {len(got)} members with a type at T+{h}')
             with _COMBINE:
                 n_wet = np.sum([g[0] for g in got], 0)
