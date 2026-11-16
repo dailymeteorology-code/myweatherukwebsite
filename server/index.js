@@ -22,9 +22,10 @@ import { fileURLToPath } from 'node:url';
 
 import db, { isValidEntityName } from './db.js';
 import { setFunctionInvoker } from './base44Server.js';
-import { authRouter, ensureAdminAccount, userFromRequest, requireAdmin } from './auth.js';
+import { authRouter, ensureAdminAccount, userFromRequest, requireAdmin, isDirectLocalRequest } from './auth.js';
 import {
   canRead, canWrite, isOwner, visibleRows, redactRows, prepareCreate, prepareUpdate, broadcastable, readLevel, limited, clientIp,
+  functionAllowed,
 } from './entityAccess.js';
 import { mountPublicFlows } from './publicFlows.js';
 import { invokeLLM, sendEmail } from './integrations.js';
@@ -494,6 +495,14 @@ app.get('/api/world-warnings/cap', async (req, res) => {
 
 app.post('/api/functions/:name', async (req, res) => {
   const { name } = req.params;
+
+  /* visitors: only the functions the pages call (entityAccess.js PUBLIC_FUNCTIONS), and not too often */
+  const admin = userFromRequest(req)?.role === 'admin';
+  const local = isDirectLocalRequest(req);
+  if (!functionAllowed(name, { admin, local })) return res.status(403).json({ error: 'Not allowed' });
+  if (!admin && !local && limited('fn-ip', clientIp(req), 120, 5 * 60e3)) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a few minutes and try again.' });
+  }
 
   const override = overridden(name);
   if (override) {

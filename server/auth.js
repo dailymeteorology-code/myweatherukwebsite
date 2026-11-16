@@ -17,11 +17,20 @@ import express from 'express';
 import db from './db.js';
 import { publicUser } from './base44Server.js';
 import { sendEmail } from './integrations.js';
+import { clientIp, exhausted, forget, limited, note } from './entityAccess.js';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const OTP_TTL_MS = 15 * 60 * 1000;
 const RESET_TTL_MS = 60 * 60 * 1000;
 const MIN_PASSWORD = 8;
+
+/* ── limits, for a site that can be reached from the internet ────────────────
+   Wrong passwords: 10 per visitor and 10 per account in 15 minutes (then a wait), so a password cannot
+   be guessed. A code: 5 wrong tries and it is void (a new one must be asked for). Sign-ups, new codes
+   and reset links: a few an hour per visitor and per address, so the site cannot be made to email
+   codes to the world. The admin is never locked out of this PC itself: it signs in automatically. */
+const MIN15 = 15 * 60e3, HOUR = 3600e3;
+const TOO_MANY = 'Too many attempts. Please wait a few minutes and try again.';
 
 /**
  * Sign the browser in as the admin automatically, with no login step.
@@ -263,6 +272,9 @@ export function authRouter() {
         .status(400)
         .json({ error: `Password must be at least ${MIN_PASSWORD} characters` });
     }
+    if (limited('reg-ip', clientIp(req), 5, HOUR) || limited('reg-to', email, 3, HOUR)) {
+      return res.status(429).json({ error: TOO_MANY });
+    }
 
     const existing = db.findUserByEmail(email);
     if (existing?.verified) {
@@ -295,6 +307,7 @@ export function authRouter() {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const otpCode = String(req.body?.otpCode || '').trim();
 
+    if (limited('otp-ip', clientIp(req), 30, MIN15)) return res.status(429).json({ error: TOO_MANY });
     const user = db.findUserByEmail(email);
     if (!user || !user.otp_code) {
       return res.status(400).json({ error: 'No pending verification for that address' });
@@ -302,9 +315,16 @@ export function authRouter() {
     if (user.otp_expires && user.otp_expires < Date.now()) {
       return res.status(400).json({ error: 'That code has expired — request a new one' });
     }
+    if (exhausted('otp-bad', email, 5, OTP_TTL_MS)) {
+      /* five wrong tries: this code is void, so it cannot be guessed */
+      db.updateUser(user.id, { otp_code: null, otp_expires: null });
+      return res.status(429).json({ error: 'Too many wrong codes. Ask for a new code and try again.' });
+    }
     if (user.otp_code !== otpCode) {
+      note('otp-bad', email);
       return res.status(400).json({ error: 'Invalid verification code' });
     }
+    forget('otp-bad', email);
 
     db.updateUser(user.id, {
       verified: true,
@@ -317,6 +337,10 @@ export function authRouter() {
 
   router.post('/resend-otp', async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
+    if (limited('otp-send-ip', clientIp(req), 5, HOUR) || limited('otp-send-to', email, 3, HOUR)) {
+      return res.status(429).json({ error: TOO_MANY });
+    }
+    forget('otp-bad', email);                                // a fresh code gets fresh tries
     const user = db.findUserByEmail(email);
     if (!user || user.verified) {
       // Don't reveal which addresses exist.
@@ -332,10 +356,17 @@ export function authRouter() {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
 
+    const ip = clientIp(req);
+    if (exhausted('login-ip', ip, 10, MIN15) || exhausted('login-acct', email, 10, MIN15)) {
+      return res.status(429).json({ error: 'Too many sign-in attempts. Please wait 15 minutes and try again.' });
+    }
     const user = db.findUserByEmail(email);
     if (!user || !verifyPassword(password, user)) {
+      note('login-ip', ip);
+      note('login-acct', email);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
+    forget('login-acct', email);
     if (!user.verified) {
       return res.status(403).json({ error: 'Verify your email address before signing in' });
     }
@@ -352,6 +383,9 @@ export function authRouter() {
 
   router.post('/reset-request', async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
+    if (limited('reset-ip', clientIp(req), 5, HOUR) || limited('reset-to', email, 3, HOUR)) {
+      return res.status(429).json({ error: TOO_MANY });
+    }
     const user = db.findUserByEmail(email);
     // Always answer the same way, so this can't be used to enumerate accounts.
     if (user) {
@@ -366,6 +400,7 @@ export function authRouter() {
   router.post('/reset', (req, res) => {
     const resetToken = String(req.body?.resetToken || '');
     const newPassword = String(req.body?.newPassword || '');
+    if (limited('reset-try-ip', clientIp(req), 20, MIN15)) return res.status(429).json({ error: TOO_MANY });
 
     if (newPassword.length < MIN_PASSWORD) {
       return res

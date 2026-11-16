@@ -137,8 +137,43 @@ export function limited(bucket, key, max, windowMs) {
   if (hits.size > 5000) for (const [kk, v] of hits) if (!v.some((t) => now - t < 864e5)) hits.delete(kk);
   return false;
 }
-/** The client's address, through a tunnel's forwarding header where there is one. */
+const prune = (now) => { if (hits.size > 5000) for (const [kk, v] of hits) if (!v.some((t) => now - t < 864e5)) hits.delete(kk); };
+/** True when `key` already has `max` calls counted in `windowMs` (this one is not counted: see note). */
+export function exhausted(bucket, key, max, windowMs) {
+  const k = `${bucket}|${key}`, now = Date.now();
+  const list = (hits.get(k) || []).filter((t) => now - t < windowMs);
+  hits.set(k, list);
+  return list.length >= max;
+}
+/** Count one call against `key`: a failed sign-in, a wrong code. */
+export function note(bucket, key) {
+  const k = `${bucket}|${key}`, now = Date.now();
+  const list = hits.get(k) || [];
+  list.push(now);
+  hits.set(k, list);
+  prune(now);
+}
+/** Clear what was counted against `key` (a right password, a fresh code). */
+export function forget(bucket, key) {
+  hits.delete(`${bucket}|${key}`);
+}
+
+/** The client's address. A forwarding header (Cloudflare's CF-Connecting-IP, X-Forwarded-For) is
+    believed only from this PC itself, where the tunnel's connector runs: a device on the network could
+    send any header it liked to dodge the limits. */
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 export function clientIp(req) {
+  const peer = req.socket?.remoteAddress || 'unknown';
+  if (!LOOPBACK.has(peer)) return peer;
   const fwd = String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return fwd || req.socket?.remoteAddress || 'unknown';
+  return fwd || peer;
+}
+
+/* ── the server functions (/api/functions/:name) ──────────────────────────────
+   Visitors may run only those the site's own pages call. The rest are scheduled jobs and probes (one,
+   getMetOfficeForecast, spends the site's Met Office DataHub quota on every call): the admin's, or this
+   PC's own (direct local requests, as the server's own jobs make them). */
+export const PUBLIC_FUNCTIONS = new Set(['getMetOfficeLocationWeather', 'getMetOfficeWarnings', 'historicalLightning', 'sendOutlookEmailAlert']);
+export function functionAllowed(name, { admin = false, local = false } = {}) {
+  return admin || local || PUBLIC_FUNCTIONS.has(name);
 }
