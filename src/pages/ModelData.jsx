@@ -60,7 +60,10 @@ import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES, SNOW_AMOUNT_LEVELS, cmText } from '@
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Screen', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { consensus: 'MWUK Consensus', frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE', arpege: 'ARPEGE', arome: 'AROME', ecmwf_ensm: 'ECMWF ENS mean', aifs_ensm: 'AIFS ENS mean' };
+const SHORT_NAMES = { consensus: 'MWUK Consensus', frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE', arpege: 'ARPEGE', arome: 'AROME', ecmwf_ensm: 'ECMWF ENS mean', aifs_ensm: 'AIFS ENS mean', replay: 'Storm replays' };
+/* models whose runs are fixed moments in the past (the Storm replays: each run is a storm, mdata/replays.py):
+   never "newer" or "next", and the tools that read today's GFS are not offered */
+const STATIC_RUNS = new Set(['replay']);
 /* who makes each model, its grid, and where the files come from (picker groups and the credit line) */
 const MODEL_INFO = {
   frost: ['MyWeatherUK', '2 km', 'MyWeatherUK’s own snow model'],
@@ -81,6 +84,8 @@ const MODEL_INFO = {
   arpege: ['Météo-France', '0.1°', 'Météo-France open data', 'Météo-France'], arome: ['Météo-France', '2.5 km', 'Météo-France open data', 'Météo-France'],
   /* the ensembles in Forecast mode: the mean of their 50 members (tools/modeldata/mdata/ensmean.py) */
   ecmwf_ensm: ['ECMWF', '0.25°', 'ECMWF open data, the mean of 50 members', 'ECMWF'], aifs_ensm: ['ECMWF', '0.25°', 'ECMWF open data, the mean of 50 members', 'ECMWF'],
+  /* 16 Nov 2026: the GFS runs from just before famous storms, from NOAA's archive on AWS */
+  replay: ['Past storms', '0.25°', 'NOAA GFS archive via AWS', 'AWS'],
 };
 /* a regional model's own area (west, south, east, north), brought into view when it is picked while
    the map is somewhere else: MEPS covers the Nordic countries and the Baltic only */
@@ -436,24 +441,28 @@ const runDays = (runs) => {
   return out;
 };
 /* a run as its list names it: when it started, how far it reaches, and whether it is the newest */
-const runText = (r, runs) => `${runLabel(r.run)} · T+${r.steps[r.steps.length - 1]}${r.run === runs[0].run ? ' · latest' : ''}`;
-const runOptions = (runs) => runDays(runs).map(([day, rs]) => (
+const runText = (r, runs) => (r.name ? `${r.name} · ${runLabelYear(r.run)}`
+  : `${runLabel(r.run)} · T+${r.steps[r.steps.length - 1]}${r.run === runs[0].run ? ' · latest' : ''}`);
+const runOptions = (runs) => (runs.some((r) => r.name)          // the Storm replays: one storm a line, no day headings
+  ? runs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runText(r, runs)}</option>)
+  : runDays(runs).map(([day, rs]) => (
   <optgroup key={day} label={day} style={{ color: '#111' }}>
     {rs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runText(r, runs)}</option>)}
   </optgroup>
-));
+)));
 const runLabel = (iso) => dateTimeWords(iso, 'en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', hour: '2-digit' }).replace(',', '') + 'Z';
+const runLabelYear = (iso) => dateTimeWords(iso, 'en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit' }).replace(',', '') + 'Z';
 /* what the key says about a frame: the model, the run and the lead time, and the shorter version
    that a narrow window has room for */
 function creditOf(m, rn, lead) {
-  const when = rn ? ` · run ${runLabel(rn.run)}${lead != null ? ` · T+${lead}` : ''}` : '';
+  const when = rn ? `${rn.name ? ` · ${rn.name} · GFS run ${runLabelYear(rn.run)}` : ` · run ${runLabel(rn.run)}`}${lead != null ? ` · T+${lead}` : ''}` : '';
   const who = m.members ? `${m.label} · ${m.members} members` : `${m.id === 'ukv' ? 'UKV' : m.label} ${MODEL_INFO[m.id]?.[1] || ''}`.trim();
   return { credit: `${who}${when} · ${MODEL_INFO[m.id]?.[2] || 'open data'}`, creditShort: `${SHORT_NAMES[m.id] || m.label}${when}` };
 }
 /* the STRATA graphic's badge (15 Nov 2026): the model and its run's hour in white, the lead time in
    the accent; and the source, as the foot of the frame */
 const runHour = (iso) => `${String(new Date(iso).getUTCHours()).padStart(2, '0')}Z`;
-const badgeOf = (m, rn, lead) => [`${SHORT_NAMES[m.id] || m.label}${rn ? ` ${runHour(rn.run)}` : ''}`.toUpperCase(), lead != null ? `T+${lead}` : ''];
+const badgeOf = (m, rn, lead) => [(rn?.name ? `${rn.name} · GFS ${runHour(rn.run)}` : `${SHORT_NAMES[m.id] || m.label}${rn ? ` ${runHour(rn.run)}` : ''}`).toUpperCase(), lead != null ? `T+${lead}` : ''];
 const sourceOf = (m) => MODEL_INFO[m.id]?.[2] || 'open data';
 /* the next run, in words (15 Nov 2026): its hour and, once the server has seen a few of the model's
    runs land (server/modelData.js nextRuns), when it usually arrives and how long that is from now; a
@@ -808,6 +817,7 @@ export default function ModelData() {
   const [ptool, setPtool] = useState(null);                    // { kind, lat, lon, place, ... }
   const [sectionFrom, setSectionFrom] = useState(null);      // a cross-section's first end, waiting for the second
   const [traj, setTraj] = useState(null);                    // { busy } | { data } | { err }
+  useEffect(() => { if (STATIC_RUNS.has(modelId)) { setPtool(null); setSectionFrom(null); } }, [modelId]);
   const [road, setRoad] = useState(null);                    // a road's forecast: { busy } | { data } | { err }
   const hlRings = useMemo(() => {
     if (!hl) return null;
@@ -1104,9 +1114,19 @@ export default function ModelData() {
   const lastValid = useRef(link && link.mode !== 'observed' && link.mode !== 'live' ? link.t : null);    // the address's time, to land on first
   const targetValid = useRef(null);
   const wantStep = useRef(0);
+  const keyModel = useRef(null);
   useEffect(() => {
-    targetValid.current = lastValid.current;
-  }, [key]);
+    let t = lastValid.current;
+    const was = keyModel.current;
+    keyModel.current = model?.id || null;
+    /* a storm replay: a time from today or from another storm means nothing in it, so the same lead
+       time from storm to storm, and the start when a replay is first opened */
+    if (run && STATIC_RUNS.has(model?.id)) {
+      const r0 = Date.parse(run.run), end = r0 + (run.steps?.[run.steps.length - 1] || 0) * 3600e3;
+      if (t == null || t < r0 || t > end) t = r0 + (was === model.id ? wantStep.current || 0 : 0) * 3600e3;
+    }
+    targetValid.current = t;
+  }, [key]);                                                 // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!key) return undefined;
     const [m, rt, v] = key.split('/');
@@ -2393,7 +2413,8 @@ export default function ModelData() {
   const liveTime = run ? new Date(run.run).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) : null;
   const chipSub = !cat ? (err || 'Finding the latest runs…') : isObs ? (obsDays ? `${obsDays.length} day${obsDays.length === 1 ? '' : 's'} recorded` : 'Loading the archive…')
     : isLive ? (liveTime ? `Live · latest ${liveTime}` : 'Live · starting…')
-    : model ? `${SHORT_NAMES[model.id] || model.label} · ${MODEL_INFO[model.id]?.[1] || ''}${run ? ` · run ${runLabel(run.run)}` : ''}` : 'Loading…';
+    : model ? (run?.name ? `${run.name} · GFS ${runLabelYear(run.run)}`        // a storm replay: the storm first
+      : `${SHORT_NAMES[model.id] || model.label} · ${MODEL_INFO[model.id]?.[1] || ''}${run ? ` · run ${runLabel(run.run)}` : ''}`) : 'Loading…';
 
   /* the layer on show as the picker's button: its category's icon on a navy badge and its name */
   const layerIcon = categoryOf((isObs ? obsItem.group : isLive ? liveItem.group : isProb ? preset.group : vmeta?.group) || '').icon;
@@ -2752,7 +2773,7 @@ export default function ModelData() {
     </button>
   );
   /* the models, grouped by who makes them: a picker on desktops, buttons on phones and tablets */
-  const modelGroups = (list) => ['MyWeatherUK', 'Met Office', 'ECMWF', 'DWD', 'Météo-France', 'MET Norway', 'ECCC', 'NOAA'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
+  const modelGroups = (list) => ['MyWeatherUK', 'Met Office', 'ECMWF', 'DWD', 'Météo-France', 'MET Norway', 'ECCC', 'NOAA', 'Past storms'].map((g) => [g, (list || []).filter((m) => m.runs?.length && (MODEL_INFO[m.id]?.[0] || 'NOAA') === g)]).filter(([, ms]) => ms.length);
   const chooseModel = (id) => {
     if (isProb) { setEnsId(id); setEnsRunIso(null); return; }
     setModelId(id); setRunIso(null);
@@ -2796,10 +2817,10 @@ export default function ModelData() {
   const modelField = (list, value) => topField('Model', model ? modelText(model) : '', (
     <select className="md-field-sel" value={value} onChange={(e) => chooseModel(e.target.value)} aria-label="Model">{modelOptions(list)}</select>
   ), model ? `${model.label} · ${MODEL_INFO[model.id]?.[2] || model.source || ''}` : 'Model');
-  const nr = model && !timeSteps ? nextRunText(nextRuns[model.id], clock) : null;
+  const nr = model && !timeSteps && !STATIC_RUNS.has(model.id) ? nextRunText(nextRuns[model.id], clock) : null;
   /* a newer run than the one on show: whole (green), or still arriving (amber: the page stays on the
      last whole run until most of a new one is in) */
-  const newer = model && run && !timeSteps && model.runs?.[0] && Date.parse(model.runs[0].run) > Date.parse(run.run) ? model.runs[0] : null;
+  const newer = model && run && !timeSteps && !STATIC_RUNS.has(model.id) && model.runs?.[0] && Date.parse(model.runs[0].run) > Date.parse(run.run) ? model.runs[0] : null;
   /* whole: as long as the last run from the same hour (the UKV's 18Z only ever reaches T+54), or, with
      none to go by, most of the way to the longest run */
   const sameHour = newer ? model.runs.slice(1).find((r) => runHour(r.run) === runHour(newer.run)) : null;
@@ -2808,9 +2829,9 @@ export default function ModelData() {
   const runNote = newer
     ? <span className={`md-field-note ${newerWhole ? 'is-new' : 'is-wait'}`}><i />{newerWhole ? `newer ${runHour(newer.run)}` : `${runHour(newer.run)} arriving`}</span>
     : nr ? <span className="md-field-note">{nr.short}</span> : null;
-  const runField = model && !timeSteps && run && topField(<>Run{runNote}</>, runText(run, model.runs), (
+  const runField = model && !timeSteps && run && topField(<>{STATIC_RUNS.has(model.id) ? 'Storm' : 'Run'}{runNote}</>, runText(run, model.runs), (
     <select className="md-field-sel" value={run.run} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} aria-label="Run">{runOptions(model.runs)}</select>
-  ), `When the model run started (UTC), and how far ahead it reaches.${newer ? ` A newer run, ${runLabel(newer.run)}, is ${newerWhole ? 'in the list' : 'arriving'}.` : ''}${nr ? ` ${nr.long}` : ''}`);
+  ), STATIC_RUNS.has(model.id) ? `${run.note || ''} What NOAA's GFS forecast from its run just before (UTC), three days ahead.` : `When the model run started (UTC), and how far ahead it reaches.${newer ? ` A newer run, ${runLabel(newer.run)}, is ${newerWhole ? 'in the list' : 'arriving'}.` : ''}${nr ? ` ${nr.long}` : ''}`);
   const runSelect = model && !timeSteps && (
     <div style={{ position: 'relative' }}>
       <select value={run?.run || ''} onChange={(e) => (isProb ? setEnsRunIso : setRunIso)(e.target.value)} style={{ ...sel, ...(narrow ? { width: '100%', padding: '10px 34px 10px 14px', fontSize: 13.5 } : {}) }}
@@ -3453,7 +3474,7 @@ export default function ModelData() {
                 </>
               )}
               {numeric && fin.length <= 1 && steps.length > 1 && <span style={{ fontSize: 11.5, color: T.ink2 }}>The other steps are still loading.</span>}
-              {!timeSteps && (
+              {!timeSteps && !STATIC_RUNS.has(model?.id) && (
                 <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', paddingTop: 2 }}>
                   {[...(isProb ? [['plume', 'Members', 'Every member of the ensemble here, through the run']] : [['models', 'Every model', 'This layer from every model\u2019s newest run, here']]),
                     ['sounding', 'The air above', 'A sounding (skew-T) from NOAA GFS: temperature, moisture and wind up through the air'],

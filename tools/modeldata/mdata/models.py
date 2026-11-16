@@ -1770,6 +1770,13 @@ try:
     SOURCES['consensus'] = SOURCE_CONS
 except Exception:                                    # noqa: BLE001  (never at the cost of the other models)
     pass
+# Storm replays (mdata/replays.py, 16 Nov 2026): the GFS runs from just before famous storms, from the archive
+try:
+    from .replays import SOURCE_REPLAY, Replay   # noqa: E402
+    MODELS['replay'] = Replay()
+    SOURCES['replay'] = SOURCE_REPLAY
+except Exception:                                    # noqa: BLE001
+    pass
 # variables whose frames are differences of an accumulation between consecutive steps
 DIFFERENCED = {('ifs', 'precip_rate'), ('aifs', 'precip_rate'), ('ifs', 'sw_down'), ('aifs', 'sw_down'),
                ('ifs', 'lw_down'), ('aifs', 'lw_down'), ('ifs', 'olr'),

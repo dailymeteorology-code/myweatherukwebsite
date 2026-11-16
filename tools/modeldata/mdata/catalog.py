@@ -41,8 +41,15 @@ def model_entry(m):
         return {'id': m.id, 'error': str(e)[:200], 'runs': []}
     return {'id': m.id, 'label': m.label, 'res_km': m.res_km, 'grid': grid_of(m.id), 'source': SOURCES[m.id], 'variables': m.variables,
             'runs': [dict({'run': r.isoformat(), 'steps': s, 'complete': complete(m, r, s, runs)},
-                          **({'kept': True} if r in getattr(m, 'kept_runs', ()) else {}))
+                          **({'kept': True} if r in getattr(m, 'kept_runs', ()) else {}),
+                          **_named(m, r))
                      for r, s in runs]}
+
+
+def _named(m, r):
+    """A run with a name of its own (the Storm replays, mdata/replays.py: each run is a storm)."""
+    n = getattr(m, 'names', {}).get(r.isoformat())
+    return {'name': n[0], 'note': n[1]} if n else {}
 
 
 def frost_entry():
@@ -110,6 +117,9 @@ def mix_entry(models):
             'runs': pairs(by['ukv']['runs'], by['icon']['runs'])}
 
 
+KEEP_ALL = {'replay'}
+
+
 def prune(keep_hours=36):
     """Frames of runs older than `keep_hours` (relative to the newest run of that model)."""
     import shutil
@@ -122,6 +132,8 @@ def prune(keep_hours=36):
         root = frames_root(g)
         model_dirs += [m for m in root.glob('*') if m.name != 'ens'] + list((root / 'ens').glob('*'))
     for md in model_dirs:
+        if md.name in KEEP_ALL:                            # the Storm replays: old runs on purpose, made once and kept
+            continue
         runs = sorted(p for p in md.iterdir() if p.is_dir() and len(p.name) == 14)
         if not runs:
             continue

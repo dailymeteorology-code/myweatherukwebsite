@@ -37,18 +37,24 @@ const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', '
   'aigfs', 'gdps', 'meps',               // 15 Nov 2026: NOAA AIGFS, ECCC GDPS, MET Norway MEPS (mdata/models_more.py)
   'arpege', 'arome',                     // Météo-France ARPEGE (wide grid) and AROME (the UK's 2 km grid): mdata/mf.py
   'ecmwf_ensm', 'aifs_ensm',             // the ensembles' means in Forecast mode, from the Chances view's members (mdata/ensmean.py)
-  'consensus']);                         // MWUK Consensus, the middle of nine models (mdata/consensus.py, 16 Nov 2026)
+  'consensus',                           // MWUK Consensus, the middle of nine models (mdata/consensus.py, 16 Nov 2026)
+  'replay']);                            // Storm replays: the GFS runs from just before famous storms (mdata/replays.py, 16 Nov 2026)
 /* ICON's files are each the whole of Europe (~1 MB a field a step), so every layer of a run is
    ~5 GB: only the much-used layers are warmed for it; the rest are made when someone opens them */
 const WARM_FIRST_ONLY = new Set(['icon', 'icon_europe', 'aigfs', 'gdps', 'meps', 'arpege', 'arome']);   // the new models too: the wide grid is bigger now
 /* MWUK Mix (mdata/mix.py) is made from the UKV's and ICON's own frames when someone opens it: never warmed, so it
    never adds downloads of its own in the background */
-const NO_WARM = new Set(['mix', 'aifs_ensm', 'consensus']);   // the Consensus: nine models' layers a field, made only when opened   // the AIFS ensemble mean: 50 members a field, made only when opened
+const NO_WARM = new Set(['mix', 'aifs_ensm', 'consensus', 'replay']);   // the Consensus: nine models' layers a field, made only when opened   // the AIFS ensemble mean: 50 members a field, made only when opened
 /* models warmed with only these layers (15 Nov 2026, "faster ECMWF ENS"): the ECMWF ENS mean's
    temperature and pressure, whose 50 members each (~1.5 GB a field a run) are fetched in the
    background as each run lands, so its first open is not a five-minute wait (the Chances view
    shares them) */
 const WARM_ONLY = { ecmwf_ensm: ['t2', 'mslp'] };
+/* the Storm replays' runs are fixed moments in the past: each storm's pressure and gusts are made once in
+   the background (kept for good: mdata/catalog.py KEEP_ALL), so a storm opens at once; the rest when opened.
+   Never a "next run" either. */
+const STATIC_RUNS = new Set(['replay']);
+const REPLAY_WARM = ['mslp', 'gust10', 'gust_peak'];
 /* TCM FROST, MyWeatherUK's snow model: its runs come from its own mirror (server/tcmFrost.js),
    already made, on the 2 km grid; nothing is ever fetched for it here */
 const MIRRORED = new Set(['frost']);
@@ -298,6 +304,7 @@ function noteArrivals(cat) {
   lastNote = now;
   let changed = false;
   for (const m of [...(cat?.models || []), ...(cat?.ensembles || [])]) {
+    if (STATIC_RUNS.has(m.id)) continue;
     const first = !arrivals[m.id];
     const seen = (arrivals[m.id] ||= {});
     const fresh = (m.runs || []).map((r) => r.run).filter((r) => seen[r] == null).sort();
@@ -313,6 +320,7 @@ const median = (xs) => { if (!xs.length) return null; const s = [...xs].sort((a,
 function nextRuns() {
   const out = {};
   for (const [id, seen] of Object.entries(arrivals)) {
+    if (STATIC_RUNS.has(id)) continue;
     const runs = Object.keys(seen).sort();
     const times = runs.map((r) => Date.parse(r));
     const gaps = times.slice(1).map((t, i) => t - times[i]).filter((g) => g > 0);
@@ -417,6 +425,9 @@ function refreshCatalog() {
         const first = (WARM_ONLY[m.id] || PREFETCH).filter((x) => m.variables?.includes(x));
         const rest = r.complete && !WARM_FIRST_ONLY.has(m.id) && !WARM_ONLY[m.id] ? (m.variables || []).filter((x) => !first.includes(x)) : [];
         for (const v of [...first, ...rest]) warm.push([m.id, tag, v]);
+      }
+      for (const m of (cat?.models || []).filter((x) => STATIC_RUNS.has(x.id))) {
+        for (const r of m.runs || []) for (const v of REPLAY_WARM.filter((x) => m.variables?.includes(x))) warm.push([m.id, runTag(r.run), v]);
       }
       const wanted = new Set(warm.map(([mid, tag, v]) => `${mid}/${tag}/${v}`));
       for (let i = queue.length - 1; i >= 0; i--) if (queue[i].prefetch === true && !wanted.has(queue[i].key)) queue.splice(i, 1);

@@ -305,7 +305,7 @@ export function mountModelExtras(app, { DATA }) {
     if (values.size > 200000) values.clear();
     return v;
   }
-  const SKIP = new Set(['frost', 'mix', 'consensus', 'gefs_aer', 'ecmwf_ensm', 'aifs_ensm']);
+  const SKIP = new Set(['frost', 'mix', 'consensus', 'gefs_aer', 'ecmwf_ensm', 'aifs_ensm', 'replay']);
   app.get('/api/modeldata/point', async (req, res) => {
     const v = String(req.query.v || '');
     const lat = num(req.query.lat, -89, 89), lon = num(req.query.lon, -180, 180);
