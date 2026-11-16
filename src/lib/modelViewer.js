@@ -12,6 +12,7 @@
    drawPanes), each on its own grid if it needs to be (withGrid). */
 import { ukZone } from '@/lib/ukZone';
 import { GRIDS, projection } from '@/lib/modelGrids';
+import { drawDrawings } from '@/lib/mapDrawings';
 import { CALC } from '@/lib/modelCalc';
 import { canDrawCells, drawCells, lutSize } from '@/lib/modelGL';
 import { dateTimeWords } from '@/lib/dateFmt';
@@ -1576,6 +1577,10 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
         if (m && !(T.floor != null && m.v < T.floor)) drawStar(c, X(m.gx), Y(m.gy), u, st, `${fmtValue(m.v, T.unit)}${m.place ? ` · ${m.place}` : ''}`, rect);
       }
     });
+  }
+  if (L.drawings) {                                       // the admin's drawings (lib/mapDrawings): over all but the title and key
+    const P = projection(GRID.name);
+    drawDrawings(ctx, L.drawings.list, (lon, lat) => { const [gx, gy] = P.toGrid(lon, lat); return [X(gx), Y(gy)]; }, u, L.drawings.draft);
   }
   if (L.chrome) drawChrome(ctx, rect, u, L.chrome, st);
   ctx.restore();

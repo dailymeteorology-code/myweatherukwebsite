@@ -20,9 +20,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { resolveEnsPython } from './pastFuture/index.js';
 import { FROST_RUNS } from './tcmFrost.js';
+import { mountModelExtras } from './modelExtras.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TOOL = path.resolve(HERE, '..', 'tools', 'modeldata');
@@ -286,13 +288,19 @@ function refreshLive(lane) {
    record is made are marked unknown (0), not "now", so they never skew how late runs usually land. */
 const ARRIVALS_FILE = path.join(DATA, 'run_arrivals.json');
 let arrivals = readJson(ARRIVALS_FILE) || {};
+let lastNote = 0;
 function noteArrivals(cat) {
   const now = Date.now();
+  /* runs that turned up while the catalogue was not being watched (the server starting, or a gap of more
+     than 15 minutes), and all but the newest of several turning up at once, have no known time (0) */
+  const blind = !lastNote || now - lastNote > 15 * 60e3;
+  lastNote = now;
   let changed = false;
   for (const m of [...(cat?.models || []), ...(cat?.ensembles || [])]) {
     const first = !arrivals[m.id];
     const seen = (arrivals[m.id] ||= {});
-    for (const r of m.runs || []) if (seen[r.run] == null) { seen[r.run] = first ? 0 : now; changed = true; }
+    const fresh = (m.runs || []).map((r) => r.run).filter((r) => seen[r] == null).sort();
+    fresh.forEach((r, i) => { seen[r] = first || blind || i < fresh.length - 1 ? 0 : now; changed = true; });
     const keys = Object.keys(seen).sort();
     for (const k of keys.slice(0, Math.max(0, keys.length - 40))) { delete seen[k]; changed = true; }
   }
@@ -309,13 +317,62 @@ function nextRuns() {
     const gaps = times.slice(1).map((t, i) => t - times[i]).filter((g) => g > 0);
     const every = median(gaps);
     if (!every) continue;
-    const late = runs.filter((r) => seen[r] > 0).map((r) => seen[r] - Date.parse(r)).filter((x) => x > 0);
+    /* runs that share the moment they were seen came in a batch: none of those times is an arrival */
+    const at = {};
+    for (const r of runs) if (seen[r] > 0) at[seen[r]] = (at[seen[r]] || 0) + 1;
+    const late = runs.filter((r) => seen[r] > 0 && at[seen[r]] === 1).map((r) => seen[r] - Date.parse(r)).filter((x) => x > 0 && x < 24 * 3600e3);
     const latency = late.length >= 2 ? median(late) : null;
     const next = times[times.length - 1] + every;
     out[id] = { next: new Date(next).toISOString(), every_h: every / 3600e3, due: latency != null ? new Date(next + latency).toISOString() : null,
       latency_min: latency != null ? Math.round(latency / 60e3) : null, seen: late.length };
   }
   return out;
+}
+
+/* Shared views (15 Nov 2026): the page posts a 1200 x 630 picture of its map with the view's address
+   (?m=&r=&v=&t=&at=...); /m/<id> is a small page whose link preview (Open Graph and Twitter cards) is
+   that picture and which sends a person on to the Model Data page as it was. Kept on D: under
+   modeldata/shares, at most 3000 (the oldest go first); 20 an hour from one address, 400 a day in all. */
+const SHARES = path.join(DATA, 'shares');
+const SHARE_W = 1200, SHARE_H = 630;
+const shareHits = new Map();
+let shareDay = { day: '', n: 0 };
+function shareLimited(ip) {
+  const now = Date.now(), day = new Date().toISOString().slice(0, 10);
+  if (shareDay.day !== day) shareDay = { day, n: 0 };
+  if (shareDay.n >= 400) return true;
+  const a = (shareHits.get(ip) || []).filter((t) => now - t < 3600e3);
+  if (a.length >= 20) return true;
+  a.push(now); shareHits.set(ip, a); shareDay.n += 1;
+  if (shareHits.size > 5000) shareHits.clear();
+  return false;
+}
+/* a JPEG's width and height (its first SOF marker), or null */
+function jpegSize(b) {
+  if (b[0] !== 0xff || b[1] !== 0xd8) return null;
+  let i = 2;
+  while (i + 9 < b.length) {
+    if (b[i] !== 0xff) return null;
+    const m = b[i + 1], len = b.readUInt16BE(i + 2);
+    if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return [b.readUInt16BE(i + 7), b.readUInt16BE(i + 5)];
+    i += 2 + len;
+  }
+  return null;
+}
+const escHtml = (x) => String(x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const SAFE_Q = /^[A-Za-z0-9_.,:;~%=&+\-]*$/;
+async function pruneShares() {
+  try {
+    const names = (await fs.promises.readdir(SHARES)).filter((n) => n.endsWith('.json'));
+    if (names.length <= 3000) return;
+    const st = await Promise.all(names.map(async (n) => [n, (await fs.promises.stat(path.join(SHARES, n))).mtimeMs]));
+    st.sort((a, b) => a[1] - b[1]);
+    for (const [n] of st.slice(0, names.length - 2500)) {
+      const id = n.slice(0, -5);
+      await fs.promises.rm(path.join(SHARES, n), { force: true });
+      await fs.promises.rm(path.join(SHARES, `${id}.jpg`), { force: true });
+    }
+  } catch { /* nothing to prune */ }
 }
 
 /* Météo-France's files have no index: each new ARPEGE and AROME run's files are walked in the
@@ -466,6 +523,7 @@ async function refreshPoint(cat) {
 
 export function mountModelData(app) {
   fs.mkdirSync(DATA, { recursive: true });
+  mountModelExtras(app, { DATA });                 // every model at a pin, soundings, cross-sections, the air's path, scenarios, roads (16 Nov 2026)
   if (!fs.existsSync(path.join(DATA, 'static', 'sat_day.jpg'))) python(['mdata.static'], (c, e) => c && console.warn(`[modeldata] static build failed: ${e.slice(-300)}`));
   if (!fs.existsSync(path.join(DATA, 'static', 'eu', 'sat_day.jpg'))) {
     python(['mdata.static'], (c, e) => c && console.warn(`[modeldata] wide static build failed: ${e.slice(-300)}`), { MDATA_GRID: 'eu' });
@@ -491,6 +549,65 @@ export function mountModelData(app) {
   setTimeout(refreshLong, 90 * 1000).unref();
   setInterval(refreshLong, 6 * 3600 * 1000).unref();
   /* each model's next run and when it usually lands (the countdown beside the run) */
+  /* a shared view: its picture and address in, its link out */
+  app.post('/api/modeldata/share', async (req, res) => {
+    const ip = String(req.get('cf-connecting-ip') || req.get('x-forwarded-for') || req.ip || '').split(',')[0].trim();
+    if (shareLimited(ip)) return res.status(429).json({ error: 'Too many links made just now: try again in a while.' });
+    const { img, q, title, desc } = req.body || {};
+    const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(img || ''));
+    if (!m) return res.status(400).json({ error: 'No picture came with it.' });
+    const buf = Buffer.from(m[1], 'base64');
+    const wh = jpegSize(buf);
+    if (buf.length > 1.5e6 || !wh || wh[0] !== SHARE_W || wh[1] !== SHARE_H) return res.status(400).json({ error: 'That picture is not one the page makes.' });
+    const query = String(q || '');
+    if (query.length > 1500 || !SAFE_Q.test(query)) return res.status(400).json({ error: 'That address is not one the page makes.' });
+    const id = crypto.randomBytes(6).toString('base64url');
+    try {
+      await fs.promises.mkdir(SHARES, { recursive: true });
+      await fs.promises.writeFile(path.join(SHARES, `${id}.jpg`), buf);
+      await fs.promises.writeFile(path.join(SHARES, `${id}.json`), JSON.stringify({
+        q: query, title: String(title || 'Model Data').slice(0, 140), desc: String(desc || '').slice(0, 300), at: new Date().toISOString(),
+      }));
+    } catch (e) { return res.status(500).json({ error: 'The link could not be saved.' }); }
+    pruneShares();
+    res.json({ id, url: `/m/${id}` });
+  });
+  app.get('/api/modeldata/share/:id.jpg', (req, res) => {
+    const { id } = req.params;
+    if (!/^[A-Za-z0-9_-]{6,16}$/.test(id)) return res.status(404).end();
+    const f = path.join(SHARES, `${id}.jpg`);
+    if (!fs.existsSync(f)) return res.status(404).end();
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    res.type('image/jpeg').sendFile(f);
+  });
+  app.get('/m/:id', (req, res) => {
+    const { id } = req.params;
+    const meta = /^[A-Za-z0-9_-]{6,16}$/.test(id) ? readJson(path.join(SHARES, `${id}.json`)) : null;
+    if (!meta || !SAFE_Q.test(meta.q || '')) return res.redirect(302, '/ModelData');
+    const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
+    const host = String(req.get('x-forwarded-host') || req.get('host') || 'localhost:8787').split(',')[0].trim();
+    const base = `${proto}://${host}`;
+    const to = `/ModelData${meta.q ? `?${meta.q}` : ''}`;
+    const img = `${base}/api/modeldata/share/${id}.jpg`;
+    const t = escHtml(meta.title), d = escHtml(meta.desc || 'Weather model maps on MyWeatherUK');
+    res.set('Cache-Control', 'public, max-age=600');
+    res.type('html').send(`<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${t} · MyWeatherUK</title>
+<meta name="description" content="${d}">
+<meta property="og:type" content="website"><meta property="og:site_name" content="MyWeatherUK">
+<meta property="og:title" content="${t}"><meta property="og:description" content="${d}">
+<meta property="og:url" content="${escHtml(`${base}/m/${id}`)}">
+<meta property="og:image" content="${escHtml(img)}"><meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="${SHARE_W}"><meta property="og:image:height" content="${SHARE_H}">
+<meta property="og:image:alt" content="${t}">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${t}">
+<meta name="twitter:description" content="${d}"><meta name="twitter:image" content="${escHtml(img)}">
+<meta http-equiv="refresh" content="0; url=${escHtml(to)}">
+</head><body style="font-family:system-ui,sans-serif"><p><a href="${escHtml(to)}">Open the map on MyWeatherUK</a></p>
+<script>location.replace(${JSON.stringify(to)})</script></body></html>`);
+  });
+
   app.get('/api/modeldata/nextruns', (req, res) => {
     res.set('Cache-Control', 'no-cache');
     res.json(nextRuns());

@@ -22,7 +22,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   PenLine, Undo2, Loader2, Play, Pause, ChevronLeft, ChevronRight, Download, Film, ImageIcon, ZoomIn, ZoomOut, Maximize,
   Waves, MapPin, ChevronDown, X, Layers, Star, Minus, Plus, Zap, Route, Grid3x3, Navigation, CloudSun, Cloud,
-  Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard, Snowflake, Ratio, ChevronsLeft, ChevronsRight,
+  Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard, Snowflake, Ratio, ChevronsLeft, ChevronsRight, Link2, Share2,
 } from 'lucide-react';
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, framePool, runTag, fieldLayer, frameContours, drawScene,
@@ -44,6 +44,8 @@ import { warmCells } from '@/lib/modelGL';
 import { dateWords, dateTimeWords, timeWords } from '@/lib/dateFmt';
 import { countyCells, describe } from '@/lib/mapCaption';
 import RegionPicker, { gridBox, loadCounties } from '@/components/modeldata/RegionPicker';
+import DrawBar from '@/components/modeldata/DrawBar';
+import { readDrawings, saveDrawings, shapePoints, isClosed } from '@/lib/mapDrawings';
 import LongRange from '@/components/modeldata/LongRange';
 import { tweenFrame } from '@/lib/modelTween';
 import { GRIDS, gridOfModel, projection } from '@/lib/modelGrids';
@@ -468,6 +470,30 @@ function nextRunText(nr, now) {
     ? { short: `${name} due now`, long: `Next run: ${name}, usually here about ${at}: due now.` }
     : { short: `${name} later than usual`, long: `Next run: ${name}, usually here about ${at}: later than usual.` };
 }
+/* The view in the address (15 Nov 2026): what is on show is read from it when the page opens (it wins
+   over what was last used here) and kept in it as things change, so a copied address, or a share link
+   (/m/<id>, made with a picture of the map for its preview), opens the same map.
+   mode; m the model; r the run; v the layer; t the time (UTC); at = lat,lon,km across,km tall; c the
+   counties outlined; area a drawn outline (lon,lat_lon,lat_...); pin = lat,lon and pn its name; cmp
+   the second window's model or 'warnings', cv its layer; p, thr, dir a chance; l the live layer; o
+   the observed one */
+const tCompact = (ms) => `${new Date(ms).toISOString().slice(0, 16).replace(/[-:]/g, '')}Z`;
+const tParse = (x) => { const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})?Z?$/.exec(x || ''); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +(m[5] || 0)) : null; };
+function readLink() {
+  try {
+    const q = new URLSearchParams(window.location.search);
+    if (![...q.keys()].length) return null;
+    const nums = (k, n) => { const a = (q.get(k) || '').split(',').map(Number); return a.length === n && a.every(Number.isFinite) ? a : null; };
+    const area = (q.get('area') || '').split('_').map((xy) => xy.split(',').map(Number)).filter((a) => a.length === 2 && a.every(Number.isFinite));
+    const thr = q.get('thr') == null ? NaN : Number(q.get('thr'));
+    return {
+      mode: MODES.includes(q.get('mode')) ? q.get('mode') : 'forecast', m: q.get('m'), r: tParse(q.get('r')), v: q.get('v'), t: tParse(q.get('t')),
+      at: nums('at', 4), c: q.get('c') ? q.get('c').split(',') : null, area: area.length >= 3 ? area : null, pin: nums('pin', 2), pn: q.get('pn'),
+      cmp: q.get('cmp'), cv: q.get('cv'), p: q.get('p'), thr: Number.isFinite(thr) ? thr : null, dir: ['above', 'below'].includes(q.get('dir')) ? q.get('dir') : null,
+      l: q.get('l'), o: q.get('o'),
+    };
+  } catch { return null; }
+}
 /* the line under a live layer's headline */
 const liveLine = (it) => (it.src === 'radar' || it.src === 'radar_type'
   ? `The Met Office 1 km rain radar, every 15 minutes${it.src === 'radar_type' ? ', each echo typed by the UKV and the station reports' : ''}`
@@ -622,16 +648,18 @@ function Sparkline({ values, at, onPick, w = 268, h = 54 }) {
 
 export default function ModelData() {
   const [prefs] = useState(readPrefs);
+  const [link] = useState(readLink);          // the address the page opened with (null without one): it wins over what was saved here
   const [cat, setCat] = useState(null);
   const [err, setErr] = useState(null);
-  const [modelId, setModelId] = useState(prefs.modelId || 'ukv');
+  const [modelId, setModelId] = useState((link?.mode === 'forecast' && link.m) || prefs.modelId || 'ukv');
   const [runIso, setRunIso] = useState(null);
-  const [varKey, setVarKey] = useState(prefs.varKey || 'precip_rate');
+  const [varKey, setVarKey] = useState((link?.mode === 'forecast' && link.v) || prefs.varKey || 'precip_rate');
   const [status, setStatus] = useState(null);
   const [frames, setFrames] = useState({});
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(prefs.speed || 450);
+  const [loopFrom, setLoopFrom] = useState(null);            // Live: the time the loop starts from (16 Nov 2026; null: the whole of it)
   /* Simple mode (15 Nov 2026, at the user's request; off unless turned on in Map): questions to start
      with, the main layers only, and the map described in words under the top bar */
   const [simple, setSimple] = useState(!!prefs.simple);
@@ -650,22 +678,23 @@ export default function ModelData() {
   const [showClouds, setShowClouds] = useState(!!prefs.showClouds);
   const [roadsBy, setRoadsBy] = useState({});                // each grid's road network
   const [obsDays, setObsDays] = useState(null);
-  const [obsKey, setObsKey] = useState(OBS[prefs.obsKey] ? prefs.obsKey : 't2_max');
+  const [obsKey, setObsKey] = useState(OBS[link?.o] ? link.o : OBS[prefs.obsKey] ? prefs.obsKey : 't2_max');
   const [obsSummary, setObsSummary] = useState({});
   const [obsStrikes, setObsStrikes] = useState({});
   const [obsPanel, setObsPanel] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1000);
-  const [mode, setMode] = useState(MODES.includes(prefs.mode) ? prefs.mode : 'forecast');
-  const [ensId, setEnsId] = useState('ecmwf_ens');
+  const [mode, setMode] = useState(link ? link.mode : MODES.includes(prefs.mode) ? prefs.mode : 'forecast');
+  const [ensId, setEnsId] = useState((link?.mode === 'prob' && link.m) || 'ecmwf_ens');
   const [ensRunIso, setEnsRunIso] = useState(null);
-  const [presetKey, setPresetKey] = useState('gust');
-  const [thr, setThr] = useState(50);
-  const [dir, setDir] = useState('above');
+  const linkPreset = link?.p && PRESET[link.p] ? PRESET[link.p] : null;
+  const [presetKey, setPresetKey] = useState(linkPreset ? linkPreset.key : 'gust');
+  const [thr, setThr] = useState(link?.thr ?? linkPreset?.thr ?? 50);
+  const [dir, setDir] = useState(link?.dir || linkPreset?.dir || 'above');
   const isProb = mode === 'prob';
   const isLive = mode === 'live';
   const isObs = mode === 'observed';
   const isLong = mode === 'long';          // Long range: the polar vortex and the MJO, as charts over the map (components/modeldata/LongRange)
   const obsItem = OBS[obsKey];
-  const [liveKey, setLiveKey] = useState(LIVE[prefs.liveKey] ? prefs.liveKey : 'radar');
+  const [liveKey, setLiveKey] = useState(LIVE[link?.l] ? link.l : LIVE[prefs.liveKey] ? prefs.liveKey : 'radar');
   const [liveCat, setLiveCat] = useState(null);
   const [strikes, setStrikes] = useState(null);
   const [showLightning, setShowLightning] = useState(prefs.showLightning ?? true);
@@ -675,7 +704,8 @@ export default function ModelData() {
   /* the risk overlay: on, the source (a NOVA run or a saved outlook), over the day on show or a
      span of dates and times, simplified or detailed, and how strongly it is drawn */
   const { user } = useAuth() || {};
-  const isAdmin = user?.role === 'admin';
+  /* (the development build only: localStorage md-dev-admin = 1 shows the admin's tools, to test them without signing in) */
+  const isAdmin = user?.role === 'admin' || (import.meta.env.DEV && (() => { try { return localStorage.getItem('md-dev-admin') === '1'; } catch { return false; } })());
   const [ov, setOv] = useState(() => ({ on: false, src: 'nova', run: null, span: 'day', from: '', to: '', look: 'smooth', outlook: null, alpha: 0.85, ...(prefs.ov || {}) }));
   const setOvK = (k, v) => setOv((o) => ({ ...o, [k]: v }));
   const [ovRuns, setOvRuns] = useState(null);       // the last 48 hours' runs
@@ -709,7 +739,8 @@ export default function ModelData() {
   setPalette(palette);
   useEffect(() => () => setPalette('normal'), []);
   /* the second window: another run, model or layer at the same valid time, or the warnings */
-  const [cmp, setCmp] = useState(() => ({ on: false, kind: 'run', model: null, v: null, split: 'auto', swap: false, ...(prefs.cmp || {}), run: null }));
+  const [cmp, setCmp] = useState(() => ({ on: false, kind: 'run', model: null, v: null, split: 'auto', swap: false, ...(prefs.cmp || {}), run: null,
+    ...(link ? { on: !!link.cmp, kind: link.cmp === 'warnings' ? 'warnings' : 'run', model: link.cmp && link.cmp !== 'warnings' ? link.cmp : null, v: link.cv || null, swap: false } : {}) }));
   const setCmpK = (k, v) => setCmp((o) => ({ ...o, [k]: v }));
   const [cmpOpen, setCmpOpen] = useState(false);
   const [newRun, setNewRun] = useState(null);
@@ -751,12 +782,24 @@ export default function ModelData() {
   const [q, setQ] = useState('');
   const [mapOpen, setMapOpen] = useState(false);              // the Layers panel
   const [regionsOpen, setRegionsOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);          // Share: a link to this map, with its picture
+  const [share, setShare] = useState(null);                  // { busy } | { url, img, title } | { err }
+  const [copied, setCopied] = useState(false);
   const [pin, setPin] = useState(null);                     // a clicked point: its value through the steps
   /* a county picked from the search (components/modeldata/RegionPicker), outlined in green over the
      map, on each grid's cells; it stays until another place is picked or it is closed */
   const [hl, setHl] = useState(null);
   /* an area being drawn (15 Nov 2026): its corners on the grid, until Done makes it the outline */
   const [drawing, setDrawing] = useState(null);
+  /* the admin's drawings over the map (16 Nov 2026, lib/mapDrawings): outlines in any colour, kept in
+     this browser and drawn into the downloads; while the tools are open the map is drawn on, not moved */
+  const [drawOn, setDrawOn] = useState(false);
+  const [drawTool, setDrawTool] = useState({ kind: 'free', colour: '#ef4444', w: 5 });
+  const [drawings, setDrawings] = useState(readDrawings);
+  const [drawDraft, setDrawDraft] = useState(null);         // { kind, pts: grid cells, hover } while one is being drawn
+  useEffect(() => { saveDrawings(drawings); }, [drawings]);
+  const drawRef = useRef({});
+  drawRef.current = { drawOn, drawDraft };
   const hlRings = useMemo(() => {
     if (!hl) return null;
     const out = {};
@@ -1021,6 +1064,16 @@ export default function ModelData() {
     if (!ok(cat.models, modelId)) { const m = cat.models?.find((x) => x.runs?.length); if (m) setModelId(m.id); }
     if (!ok(cat.ensembles, ensId)) { const m = cat.ensembles?.find((x) => x.runs?.length); if (m) setEnsId(m.id); }
   }, [cat, modelId, ensId]);
+  /* the run named in the address, once the catalogue lists it (gone by now: the latest, at the same time) */
+  const linkRun = useRef(link?.r ?? null);
+  useEffect(() => {
+    if (!cat || linkRun.current == null) return;
+    const prob = link.mode === 'prob';
+    const m = (prob ? cat.ensembles : cat.models)?.find((x) => x.id === (prob ? ensId : modelId));
+    const r = m?.runs?.find((x) => Date.parse(x.run) === linkRun.current);
+    linkRun.current = null;
+    if (r) (prob ? setEnsRunIso : setRunIso)(r.run);
+  }, [cat]);                                               // eslint-disable-line react-hooks/exhaustive-deps
   const lastRunOf = useRef({});
   useEffect(() => {
     if (timeSteps || !model || !run || curRunIso) return;
@@ -1039,7 +1092,7 @@ export default function ModelData() {
   const key = !timeSteps && run && model ? `${model.id}/${runTag(run.run)}/${fieldKey}` : null;
   /* switching variable, model or run keeps the same valid time: remember it before the
      switch, then land on that time (or the nearest the new run has) once its steps are known */
-  const lastValid = useRef(null);
+  const lastValid = useRef(link && link.mode !== 'observed' && link.mode !== 'live' ? link.t : null);    // the address's time, to land on first
   const targetValid = useRef(null);
   const wantStep = useRef(0);
   useEffect(() => {
@@ -1287,6 +1340,16 @@ export default function ModelData() {
   }, [timeSteps, steps]);
   useEffect(() => { if (timeSteps) atLatest.current = idx >= steps.length - 1; }, [timeSteps, idx, steps.length]);
   useEffect(() => { if (timeSteps) atLatest.current = true; }, [timeSteps, liveSrc]);
+  /* the observed day named in the address, once the days are listed */
+  const linkDay = useRef(link?.mode === 'observed' ? link.t : null);
+  useEffect(() => {
+    if (!isObs || linkDay.current == null || !steps.length) return;
+    let best = 0;
+    steps.forEach((st, i) => { if (Math.abs(st - linkDay.current) < Math.abs(steps[best] - linkDay.current)) best = i; });
+    linkDay.current = null;
+    atLatest.current = false;
+    setIdx(best);
+  }, [isObs, steps]);
   useEffect(() => {
     if (timeSteps || !run || !steps.length) return;
     if (targetValid.current == null) { setIdx((i) => Math.min(i, steps.length - 1)); return; }
@@ -1355,7 +1418,19 @@ export default function ModelData() {
     const s = Math.min(R.w / (x1 - x0), (R.h * (tight ? 1 : 0.8)) / (y1 - y0));
     setView({ cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 - (tight ? 0 : (R.h * 0.02) / s), s });
   }, [windowRects]);
-  useEffect(() => { if (!view && size) fit(REGIONS.uk.box); }, [size, view, fit]);
+  const linkAt = useRef(link?.at || null);
+  useEffect(() => {
+    if (view || !size) return;
+    const R = windowRects()?.a;
+    if (linkAt.current && R) {
+      const [lat, lon, wkm, hkm] = linkAt.current;
+      linkAt.current = null;
+      const [cx, cy] = projection(gridName).toGrid(lon, lat), km = GRIDS[gridName].dx / 1000;
+      setView({ cx, cy, s: Math.max(0.3, Math.min(30, Math.min(R.w / Math.max(1, wkm / km), R.h / Math.max(1, hkm / km)))) });
+      return;
+    }
+    fit(REGIONS.uk.box);
+  }, [size, view, fit]);                                   // eslint-disable-line react-hooks/exhaustive-deps
   /* after a question: the step nearest the hour now (the run's own steps, once they are listed) */
   useEffect(() => {
     if (!nowAfter || !run || !steps.length || timeSteps) return;
@@ -1574,6 +1649,13 @@ export default function ModelData() {
      once instead of in the worker, `ms` is the time for a window with no frame yet. A frame part-way between two steps
      (raw.tween) is worked out here, its companion layers with it, and all that follows draws it as
      it would any frame. */
+  const drawLayer = useMemo(() => {
+    if (!drawings.length && !drawDraft) return null;
+    const P = projection(gridName);
+    const pts = drawDraft ? (drawDraft.kind === 'shape' && drawDraft.hover ? [...drawDraft.pts, drawDraft.hover] : drawDraft.pts) : null;
+    return { list: drawings, draft: drawDraft && pts.length ? { kind: drawDraft.kind, colour: drawTool.colour, w: drawTool.w, draft: true,
+      closed: drawDraft.kind === 'shape' ? false : isClosed(drawDraft.kind), pts: shapePoints(drawDraft.kind, pts, P.fromGrid) } : null };
+  }, [drawings, drawDraft, drawTool, gridName]);
   const layersFor = useCallback((P, raw, sync = false, ms = null) => {
     const tw = raw?.tween, C = P.caches, st = staticsBy[P.grid];
     const f = tw ? tweenFrame(disp(tw.a), disp(tw.b), tw.t, P.scaleKey, cellBox(disp(tw.a), tw.box), nearOf(tw, disp)) : disp(raw);
@@ -1629,6 +1711,7 @@ export default function ModelData() {
       warnings: wn.on && at != null ? { alpha: wn.alpha, look: wn.look, labels: wn.labels, areas: warningsAt(at, P.grid, isObs, sync === 'smooth' ? WARN_FADE : 0) } : null,
       highlight: drawing?.pts?.length > 1 && P.grid === gridName ? { rings: [drawing.pts], name: 'drawing' }
         : hlRings ? { rings: hlRings[P.grid] || [], name: hl.name } : null,
+      drawings: drawLayer,
       pressure: mslF ? {
         lines: msl.isobars ? pressureLines(mslF, msl.every, P.resKm, C.pressure, later) : null,
         list: msl.symbols || msl.centres ? pressureCentres(mslF, C.centre, later) : null, symbols: msl.symbols, centres: msl.centres,
@@ -1636,7 +1719,7 @@ export default function ModelData() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disp, style, basemapFor, staticsBy, showCities, smooth, showContours, fontsOk, showStar, isObs, isLive, showLightning, strikes, showRoads, roadsBy, showGrid, obsSummary, obsKey,
-    obsStrikes, strikeStyle, riskFor, gridName, wn, warningsAt, msl, bump, calcTick, layerAlpha, palette, hlRings, drawing]);
+    obsStrikes, strikeStyle, riskFor, gridName, wn, warningsAt, msl, bump, calcTick, layerAlpha, palette, hlRings, drawing, drawLayer]);
   useEffect(() => { colourCache.current.clear(); contourCache.current.clear(); smoothCache.current.clear(); }, [thr, dir, scaleKey]);
   useEffect(() => { Object.values(cachesB).forEach((m) => m.clear()); }, [cachesB, dataB?.key, thr, dir, scaleB]);
 
@@ -1770,11 +1853,12 @@ export default function ModelData() {
   useEffect(() => {
     if (!playing || steps.length < 2) return undefined;
     const t = setInterval(() => setIdx((i) => {
-      const n = (i + 1) % steps.length;
+      const lo = isLive && loopFrom != null ? Math.max(0, steps.findIndex((x) => x >= loopFrom)) : 0;
+      const n = i + 1 >= steps.length || i + 1 < lo ? lo : i + 1;
       return frames[steps[n]] ? n : i;
     }), speed);
     return () => clearInterval(t);
-  }, [playing, steps, frames, speed]);
+  }, [playing, steps, frames, speed, isLive, loopFrom]);
 
   /* keyboard: left/right step, Home/End, space plays, + and - zoom, Esc closes panels */
   const keyRef = useRef({});
@@ -1799,6 +1883,7 @@ export default function ModelData() {
       else if (e.key === ' ' && tag !== 'BUTTON') { e.preventDefault(); setPlaying((p) => !p); }
       else if (e.key === '+' || e.key === '=') z?.(1.35);
       else if (e.key === '-' || e.key === '_') z?.(1 / 1.35);
+      else if (e.key === 'Escape' && (drawRef.current.drawDraft || drawRef.current.drawOn)) { if (drawRef.current.drawDraft) setDrawDraft(null); else setDrawOn(false); }
       else if (e.key === 'Escape') { setPin(null); setHl(null); setDrawing(null); setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setExp((x) => ({ ...x, open: false })); }
     };
     window.addEventListener('keydown', onKey);
@@ -1852,7 +1937,22 @@ export default function ModelData() {
     return () => c.removeEventListener('wheel', onWheel);
   });
   const pressAt = useRef(null);
+  const dprOf = () => canvasRef.current.width / canvasRef.current.getBoundingClientRect().width;
+  const finishShape = (pts) => {
+    if (pts?.length >= 3) setDrawings((l) => [...l, { kind: 'shape', colour: drawTool.colour, w: drawTool.w, closed: true, pts: shapePoints('shape', pts, projection(gridName).fromGrid) }]);
+    setDrawDraft(null);
+  };
   const onDown = (e) => {
+    if (drawOn && isAdmin && view && pointers.current.size === 0 && e.button !== 2) {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      pressAt.current = { x: e.clientX, y: e.clientY };
+      gesture.current = { draw: true, last: [e.clientX, e.clientY] };
+      const at = toGrid(e.clientX, e.clientY);
+      if (drawTool.kind !== 'shape') setDrawDraft({ kind: drawTool.kind, pts: [[at.gx, at.gy], [at.gx, at.gy]] });
+      return;
+    }
+    if (gesture.current?.draw) { gesture.current = null; if (drawDraft?.kind !== 'shape') setDrawDraft(null); }   // a second finger: move and zoom instead
     e.currentTarget.setPointerCapture?.(e.pointerId);
     pressAt.current = pointers.current.size ? null : { x: e.clientX, y: e.clientY };
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1864,6 +1964,21 @@ export default function ModelData() {
   const onMove = (e) => {
     if (!view) return;
     if (pointers.current.has(e.pointerId)) pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (gesture.current?.draw) {
+      if (pointers.current.size !== 1) return;
+      const at = toGrid(e.clientX, e.clientY), g = gesture.current;
+      if (drawTool.kind === 'free') {
+        if (Math.hypot(e.clientX - g.last[0], e.clientY - g.last[1]) < 3) return;
+        g.last = [e.clientX, e.clientY];
+        setDrawDraft((d) => (d ? { ...d, pts: [...d.pts, [at.gx, at.gy]] } : d));
+      } else if (drawTool.kind !== 'shape') setDrawDraft((d) => (d ? { ...d, pts: [d.pts[0], [at.gx, at.gy]] } : d));
+      return;
+    }
+    if (drawOn && drawDraft?.kind === 'shape' && !pointers.current.size) {   // the next side, following the pointer
+      const at = toGrid(e.clientX, e.clientY);
+      setDrawDraft((d) => (d?.kind === 'shape' ? { ...d, hover: [at.gx, at.gy] } : d));
+      return;
+    }
     const g = gesture.current;
     const dpr = canvasRef.current.width / canvasRef.current.getBoundingClientRect().width;
     if (pressAt.current && Math.hypot(e.clientX - pressAt.current.x, e.clientY - pressAt.current.y) >= 5) pressAt.current = null;
@@ -1891,6 +2006,28 @@ export default function ModelData() {
     setHover({ ...spot, text: Number.isFinite(v) ? (at.second ? fmtPoint(v, scaleB, metaB) : fmtPoint(v)) : warn, warn: Number.isFinite(v) ? warn : null });
   };
   const onUp = (e) => {
+    if (gesture.current?.draw) {
+      const p0 = pressAt.current, click = !!p0 && Math.hypot(e.clientX - p0.x, e.clientY - p0.y) < 5;
+      pointers.current.delete(e.pointerId);
+      gesture.current = null;
+      pressAt.current = null;
+      if (e.type !== 'pointerup') { if (drawTool.kind !== 'shape') setDrawDraft(null); return; }
+      if (drawTool.kind === 'shape') {
+        if (!click) return;
+        const at = toGrid(e.clientX, e.clientY);
+        const pts = drawDraft?.kind === 'shape' ? drawDraft.pts : [];
+        /* pressing the first corner again closes the shape */
+        if (pts.length >= 3 && Math.hypot((at.gx - pts[0][0]) * view.s, (at.gy - pts[0][1]) * view.s) < 14 * dprOf()) { finishShape(pts); return; }
+        setDrawDraft({ kind: 'shape', pts: [...pts, [at.gx, at.gy]] });
+        return;
+      }
+      const d = drawDraft;
+      setDrawDraft(null);
+      if (d && !click && d.pts.length >= 2) {
+        setDrawings((l) => [...l, { kind: d.kind, colour: drawTool.colour, w: drawTool.w, closed: isClosed(d.kind), pts: shapePoints(d.kind, d.pts, projection(gridName).fromGrid) }]);
+      }
+      return;
+    }
     const p = pressAt.current;
     if (p && e.type === 'pointerup' && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 5 && view) {
       const at = toGrid(e.clientX, e.clientY);
@@ -2112,9 +2249,9 @@ export default function ModelData() {
     : sk === 'wdir10' || sk === 'mwd' ? `from the ${compass(v)} · ${Math.round(v)}°` : fmtValue(v, meta?.unit));
 
   /* panels: on a phone one at a time, as sheets from the bottom; elsewhere as cards */
-  const panelOpen = { data: varOpen, layers: mapOpen, compare: cmpOpen, regions: regionsOpen, export: exp.open, summary: obsPanel && !sidePanel, mode: modeOpen, shape: shapeOpen };
+  const panelOpen = { data: varOpen, layers: mapOpen, compare: cmpOpen, regions: regionsOpen, export: exp.open, summary: obsPanel && !sidePanel, mode: modeOpen, shape: shapeOpen, share: shareOpen };
   const closePanels = () => {
-    setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setShapeOpen(false);
+    setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setShapeOpen(false); setShareOpen(false);
     setExp((e) => (e.open ? { ...e, open: false } : e));
     if (!sidePanel) setObsPanel(false);
   };
@@ -2130,6 +2267,7 @@ export default function ModelData() {
     if (name === 'summary') setObsPanel(true);
     if (name === 'mode') setModeOpen(true);
     if (name === 'shape') setShapeOpen(true);
+    if (name === 'share') { setShareOpen(true); makeShare(); }
   };
   const ask = (qn) => {
     const ms = cat?.models || [];
@@ -2467,6 +2605,10 @@ export default function ModelData() {
       </div>
       <div className="md-sec">
         <LayerRow icon={<Star size={14} />} label="Simple mode" note="questions to start with, the main layers only, and the map in words" on={simple} onClick={() => setSimple((x) => !x)} />
+        {isAdmin && narrow && (
+          <LayerRow icon={<PenLine size={14} />} label="Draw on the map" note="admin: outlines in any colour, in the downloads too" on={drawOn}
+            onClick={() => { setDrawOn((o) => !o); setDrawDraft(null); closePanels(); }} />
+        )}
       </div>
       <div className="md-sec">
         <span className="md-sec-t">Show on the map</span>
@@ -2570,6 +2712,90 @@ export default function ModelData() {
     <div style={{ display: 'grid', gap: 4 }}>
       <span style={{ fontSize: 11, fontWeight: 650, color: T.ink2 }}>{label}</span>
       {el}
+    </div>
+  );
+  /* what is on show, as the address's query (with the run named whenever one was picked, and always in
+     a share link, whose picture is of that run) */
+  const linkQuery = (withRun) => {
+    if (!cat) return null;
+    const q = new URLSearchParams();
+    if (mode !== 'forecast') q.set('mode', mode);
+    if (isLong) return q.toString();
+    if (isProb) { q.set('m', ensId); q.set('p', presetKey); q.set('thr', fmtThr(thr)); q.set('dir', dir); }
+    else if (isLive) q.set('l', liveKey);
+    else if (isObs) q.set('o', obsKey);
+    else { q.set('m', modelId); q.set('v', varKey); }
+    if (!timeSteps && run && (withRun || curRunIso)) q.set('r', tCompact(Date.parse(run.run)));
+    if (validMs != null && !isLive) q.set('t', tCompact(validMs));
+    const R = windowRects()?.a;
+    if (view && R) {
+      const [lon, lat] = projection(gridName).fromGrid(view.cx, view.cy), km = GRIDS[gridName].dx / 1000;
+      q.set('at', [lat.toFixed(3), lon.toFixed(3), Math.round((R.w / view.s) * km), Math.round((R.h / view.s) * km)].join(','));
+    }
+    if (hl) {
+      if (String(hl.id).startsWith('drawn')) q.set('area', hl.polys[0][0].map(([lo, la]) => `${lo.toFixed(3)},${la.toFixed(3)}`).join('_'));
+      else q.set('c', String(hl.id).split('+').join(','));
+    }
+    if (pin) {
+      const [lo, la] = projection(gridName).fromGrid(pin.gx, pin.gy);
+      q.set('pin', `${la.toFixed(4)},${lo.toFixed(4)}`);
+      if (pin.label) q.set('pn', pin.label);
+    }
+    if (kindB === 'warnings') q.set('cmp', 'warnings');
+    else if (kindB === 'run' && modelB) { q.set('cmp', modelB.id); if (cmp.v) q.set('cv', cmp.v); }
+    return q.toString().replace(/%2C/g, ',');
+  };
+  const qNow = linkQuery(false);
+  useEffect(() => {
+    if (qNow == null || playing || interacting) return undefined;
+    const t = setTimeout(() => {
+      const url = `${window.location.pathname}${qNow ? `?${qNow}` : ''}`;
+      if (url !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(window.history.state, '', url);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [qNow, playing, interacting]);
+  /* Share: a 1200 x 630 picture of the frame (the size link previews use) and the view's address go to
+     the server, which gives back a short link (/m/<id>) that opens this map and shows that picture */
+  const makeShare = async () => {
+    if (!frame || !view || !cat) { setShare({ err: 'The map is still loading: try again in a moment.' }); return; }
+    setShare({ busy: true }); setCopied(false);
+    try {
+      const cv = document.createElement('canvas');
+      cv.width = 1200; cv.height = 630;
+      renderAt(frame, cv.getContext('2d'), 1200, 630);
+      const img = cv.toDataURL('image/jpeg', 0.84);
+      const who = isObs ? 'Observed' : isLive ? 'Live' : `${SHORT_NAMES[model.id] || model.label}${isProb ? ' chances' : ''}`;
+      const what = isProb ? `${layerLabel} ${dir === 'above' ? '≥' : '≤'} ${fmtThr(thr)} ${fmeta?.unit || ''}`.trim() : layerLabel;
+      const title = `${who} · ${what}${validLabel ? ` · ${validLabel}` : ''}`;
+      const desc = caption || (run && !timeSteps ? `Run ${runLabel(run.run)} · T+${step} · MyWeatherUK Model Data` : 'MyWeatherUK Model Data');
+      const r = await fetch(`${API}/share`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ img, q: linkQuery(true), title, desc }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.url) throw new Error(d.error || `The link could not be made (${r.status}).`);
+      setShare({ url: `${window.location.origin}${d.url}`, img, title });
+    } catch (e) { setShare({ err: e.message || 'The link could not be made.' }); }
+  };
+  const copyShare = async () => {
+    try { await navigator.clipboard.writeText(share.url); setCopied(true); } catch { /* the field can be selected and copied by hand */ }
+  };
+  const shareBody = (
+    <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'minmax(0, 1fr)' }}>
+      {share?.busy && <div style={{ fontSize: 12.5, color: T.ink2, display: 'flex', gap: 8, alignItems: 'center' }}><Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />Making the link and its picture…</div>}
+      {share?.err && <div style={{ fontSize: 12.5, color: T.light ? '#b91c1c' : '#fca5a5', lineHeight: 1.4 }}>{share.err}</div>}
+      {share?.url && (
+        <>
+          <img src={share.img} alt="The picture shown with the link" style={{ width: '100%', aspectRatio: '1200 / 630', borderRadius: 12, display: 'block', boxShadow: T.chipShadow }} />
+          <input readOnly value={share.url} onFocus={(e) => e.target.select()} aria-label="The link" style={{ ...sel, width: '100%', boxSizing: 'border-box', padding: '9px 12px', cursor: 'text' }} />
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button type="button" className="md-act" onClick={copyShare}><Link2 size={15} />{copied ? 'Copied' : 'Copy link'}</button>
+            {typeof navigator !== 'undefined' && navigator.share && (
+              <button type="button" className="md-act" onClick={() => navigator.share({ url: share.url, title: share.title }).catch(() => {})}><Share2 size={15} />Share…</button>
+            )}
+          </div>
+          <div style={{ fontSize: 11.5, color: T.ink2, lineHeight: 1.45 }}>
+            It opens {isLive ? 'this live layer, at its latest' : isObs ? 'this observed day' : 'this model, run, layer and time'}, on this part of the map{hl ? `, with ${hl.name} outlined` : ''}{pin ? ' and the pin' : ''}. Posted or sent in a message, it shows this picture.
+          </div>
+        </>
+      )}
     </div>
   );
   /* a comparison as saved: the first window's model and layer, and the second window's choices (never
@@ -2736,6 +2962,33 @@ export default function ModelData() {
   const speedField = topField('Speed', speedName, (
     <select className="md-field-sel" value={speed} onChange={(e) => setSpeed(Number(e.target.value))} aria-label="Playback speed">{speedOptions}</select>
   ), 'How fast the map plays (GIFs and videos time themselves)');
+  /* Live: where the loop starts (16 Nov 2026, at the user's request): any quarter-hour in it, played to the latest */
+  const loopTimes = isLive ? steps.filter((x, k) => k < steps.length - 2 && new Date(x).getUTCMinutes() % 15 === 0) : [];
+  const hhmm = (ms) => new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' });
+  const agoText = (ms) => { const m = Math.max(0, Math.round((Date.now() - ms) / 60e3)); return m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''} ago` : `${m} min ago`; };
+  const chooseLoop = (v) => {
+    setLoopFrom(v);
+    if (v != null) { const k = steps.findIndex((x) => x >= v); if (k >= 0 && idx < k) setIdx(k); }
+  };
+  const loopOptions = (
+    <>
+      <option value="" style={{ color: '#111' }}>The whole loop</option>
+      {loopTimes.map((x) => <option key={x} value={x} style={{ color: '#111' }}>From {hhmm(x)} ({agoText(x)})</option>)}
+    </>
+  );
+  const loopName = loopFrom == null ? 'The whole loop' : `From ${hhmm(loopFrom)}`;
+  const loopField = isLive && loopTimes.length > 1 && topField('Loop', loopName, (
+    <select className="md-field-sel" value={loopFrom ?? ''} onChange={(e) => chooseLoop(e.target.value ? Number(e.target.value) : null)} aria-label="Where the loop starts">{loopOptions}</select>
+  ), 'Where the radar loop starts: it plays from there to the latest');
+  const loopRow = isLive && loopTimes.length > 1 && (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+      <span style={{ color: T.ink2, fontSize: 12.5 }}>Loop from</span>
+      <div style={{ position: 'relative' }}>
+        <select value={loopFrom ?? ''} onChange={(e) => chooseLoop(e.target.value ? Number(e.target.value) : null)} style={{ ...sel, padding: '7px 26px 7px 10px' }} aria-label="Where the loop starts">{loopOptions}</select>
+        <ChevronDown style={{ position: 'absolute', right: 8, top: 9, width: 13, height: 13, pointerEvents: 'none', opacity: 0.7 }} />
+      </div>
+    </div>
+  );
   const waiting = pending + pendingB + pendingX;
   const lengthSec = (job) => {
     const list = motionFrames(job);
@@ -2849,6 +3102,20 @@ export default function ModelData() {
   const areaCells = useMemo(() => (hlRings ? maskCells(hlRings[gridName] || [], gridName) : null), [hlRings, gridName]);
   const [counties, setCounties] = useState(null);
   useEffect(() => { let on = true; loadCounties().then((c) => on && setCounties(c)); return () => { on = false; }; }, []);
+  const linkMarks = useRef(link && (link.c || link.area || link.pin) ? link : null);
+  useEffect(() => {
+    const L = linkMarks.current;
+    if (!L || !view || (L.c && !counties)) return;
+    linkMarks.current = null;
+    if (L.c) {
+      const joined = L.c.map((id) => counties.find((x) => x.id === id)).filter(Boolean).reduce((a, b) => joinAreas(a, b), null);
+      if (joined) setHl(joined);
+    } else if (L.area) {
+      const lons = L.area.map((r) => r[0]), lats = L.area.map((r) => r[1]);
+      setHl({ id: 'drawn-link', name: 'Your area', polys: [[L.area]], bbox: [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)] });
+    }
+    if (L.pin) { const [gx, gy] = projection(gridName).toGrid(L.pin[1], L.pin[0]); setPin({ gx, gy, label: L.pn || undefined }); }
+  }, [view, counties]);                                    // eslint-disable-line react-hooks/exhaustive-deps
   /* the map in words, worked out when the browser has a moment rather than as a frame arrives (16 Nov
      2026: every county's cells, ~0.2 s the first time, held the first frame back from the screen) */
   const [caption, setCaption] = useState('');
@@ -3152,7 +3419,7 @@ export default function ModelData() {
       {layout === 'tablet' && mapOpen && card('Map', null, closePanels, mapBody, { right: 10, top: topH, width: 330 })}
       {layout === 'tablet' && cmpOpen && card('Compare', null, closePanels, compareBody, { right: 10, top: topH, width: 320 })}
       {layout === 'tablet' && regionsOpen && card('Zoom to', null, closePanels, regionList, { right: 10, bottom: botH, width: 300 })}
-      {layout === 'tablet' && exp.open && card('Download', null, closePanels, <>{exportBody}<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback speed</span>{speedSelect}</div></>,
+      {layout === 'tablet' && exp.open && card('Download', null, closePanels, <>{exportBody}<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback speed</span>{speedSelect}</div>{loopRow}</>,
         { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
 
       <style>{'.md-noscroll::-webkit-scrollbar{display:none}.md-noscroll{scrollbar-width:none}'
@@ -3165,6 +3432,7 @@ export default function ModelData() {
           <IconBtn title="Zoom out (−)" onClick={() => zoomBy(1 / 1.35)}><ZoomOut size={15} /></IconBtn>
           <IconBtn title="UK & Ireland" onClick={() => fit(REGIONS.uk.box)}><Maximize size={14} /></IconBtn>
           <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => setRegionsOpen((o) => !o)}><MapIcon size={14} /></IconBtn>
+          {isAdmin && <IconBtn on={drawOn} title="Draw on the map (admin)" onClick={() => { setDrawOn((o) => !o); setDrawDraft(null); }}><PenLine size={14} /></IconBtn>}
         </div>
       )}
       {layout === 'desktop' && regionsOpen && (
@@ -3176,6 +3444,14 @@ export default function ModelData() {
           pointerEvents: 'none', padding: '5px 11px', fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap', borderRadius: hover.warn ? 14 : 999 }}>
           {hover.text}{hover.warn && <div style={{ fontSize: 11.5, fontWeight: 650, color: T.ink2 }}>{hover.warn}</div>}
         </div>
+      )}
+      {isAdmin && drawOn && (
+        <DrawBar tool={drawTool} setTool={setDrawTool} phone={phone} shapePoints={drawDraft?.kind === 'shape' ? drawDraft.pts.length : 0}
+          onFinishShape={() => finishShape(drawDraft?.pts)} canUndo={drawings.length > 0} count={drawings.length}
+          onUndo={() => setDrawings((l) => l.slice(0, -1))}
+          onClear={() => { if (window.confirm('Clear every drawing from the map?')) setDrawings([]); }}
+          onDone={() => { setDrawOn(false); setDrawDraft(null); }}
+          style={{ ...T.glass, position: 'absolute', zIndex: 7, ...(phone ? { left: 10, right: 10, bottom: botH } : { left: '50%', transform: 'translateX(-50%)', top: topH, maxWidth: 'calc(100% - 140px)' }) }} />
       )}
       {newRun && (
         <div style={{ ...T.capsule, position: 'absolute', left: 10, bottom: botH, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center', zIndex: 3 }}>
@@ -3212,9 +3488,9 @@ export default function ModelData() {
         </div>
       )}
 
-      {!exp.open && !isLong && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || obsPanel || modeOpen || shapeOpen)) && pinCard}
+      {!exp.open && !isLong && !drawOn && !(phone && (varOpen || mapOpen || cmpOpen || regionsOpen || obsPanel || modeOpen || shapeOpen || shareOpen)) && pinCard}
       {/* the outlined county or area: its highest, lowest and average (phones: while no pin card is open) */}
-      {areaCard && !isLong && !exp.open && !(phone && (pin || varOpen || mapOpen || cmpOpen || regionsOpen || modeOpen || shapeOpen)) && areaCard}
+      {areaCard && !isLong && !exp.open && !(phone && (pin || varOpen || mapOpen || cmpOpen || regionsOpen || modeOpen || shapeOpen || shareOpen)) && areaCard}
       {/* drawing an area: how, and Undo, Done and Cancel */}
       {drawing && !isLong && (
         <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', ...noticePos, padding: '5px 6px 5px 14px', display: 'flex', gap: 6,
@@ -3239,6 +3515,7 @@ export default function ModelData() {
 
       {/* desktop: the export card above the timeline */}
       {layout === 'desktop' && exp.open && card('Download', null, () => setExp((e) => ({ ...e, open: false })), exportBody, { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
+      {!phone && shareOpen && !isLong && card('Share', 'a link to this map', closePanels, shareBody, { right: 10, bottom: botH, width: 340 })}
 
       {/* bottom bar */}
       {isLong ? null : layout === 'desktop' ? (
@@ -3252,7 +3529,13 @@ export default function ModelData() {
           {loadMeter}
           {timeLabel}
           {speedField}
-          <button type="button" className="md-act" aria-pressed={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => setExp((e) => ({ ...e, open: !e.open }))}>
+          {loopField}
+          {!isLong && (
+            <button type="button" className="md-act" aria-pressed={shareOpen} title="A link to this map, with a picture of it for its preview" onClick={() => openPanel('share')}>
+              <Share2 size={16} />Share
+            </button>
+          )}
+          <button type="button" className="md-act" aria-pressed={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => { setShareOpen(false); setExp((e) => ({ ...e, open: !e.open })); }}>
             <Download size={16} />Download
           </button>
         </div>
@@ -3268,6 +3551,7 @@ export default function ModelData() {
           {timeLabel}
           <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => openPanel('regions')} style={{ width: 38, height: 38 }}><MapIcon size={16} /></IconBtn>
           {isObs && <IconBtn on={obsPanel} title="The day's extremes" onClick={() => (sidePanel ? setObsPanel(false) : openPanel('summary'))} style={{ width: 38, height: 38 }}><Star size={16} /></IconBtn>}
+          {!isLong && <IconBtn on={shareOpen} title="Share: a link to this map, with a picture of it" onClick={() => openPanel('share')} style={{ width: 38, height: 38 }}><Share2 size={16} /></IconBtn>}
           <button type="button" className="md-act" aria-pressed={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => openPanel('export')}><Download size={16} />Download</button>
         </div>
       ) : (
@@ -3295,6 +3579,7 @@ export default function ModelData() {
             {tool(<Columns2 size={19} />, 'Compare', cmpOpen || cmp.on, () => openPanel('compare'))}
             {tool(<MapIcon size={19} />, 'Regions', regionsOpen, () => openPanel('regions'))}
             {isObs && tool(<Star size={19} />, 'Day', obsPanel, () => openPanel('summary'))}
+            {!isLong && tool(<Share2 size={19} />, 'Share', shareOpen, () => openPanel('share'))}
             {tool(<Download size={19} />, 'Download', exp.open, () => openPanel('export'))}
           </div>
         </div>
@@ -3348,10 +3633,11 @@ export default function ModelData() {
       )}
       {phone && cmpOpen && <Sheet title="Compare" onClose={closePanels} clear>{compareBody}</Sheet>}
       {phone && regionsOpen && <Sheet title="Zoom to" onClose={closePanels} clear>{regionList}</Sheet>}
+      {phone && shareOpen && !isLong && <Sheet title="Share" note="a link to this map" onClose={closePanels} clear>{shareBody}</Sheet>}
       {phone && exp.open && (
         <Sheet title="Download" onClose={closePanels}>
           {exportBody}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback speed</span>{speedSelect}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ color: T.ink2, fontSize: 12.5 }}>Playback speed</span>{speedSelect}</div>{loopRow}
         </Sheet>
       )}
       {phone && isObs && obsPanel && summaryBody && <Sheet title={summaryTitle} note={summaryNote} onClose={closePanels} clear>{summaryBody}</Sheet>}
