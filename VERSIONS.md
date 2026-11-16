@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.57.009 | 2026-11-16 | Patch | — | Model Data: storm replays from the GFS archive | — |
+| 5.57.010 | 2026-11-16 | Patch | — | Model Data: the timeline bar fixed (crushed in Live, buttons shrinking) | — |
+| 5.57.009 | 2026-11-16 | Patch | a8bb0a2 | Model Data: storm replays from the GFS archive | — |
 | 5.57.008 | 2026-11-16 | Patch | b0346df | Location Weather: the best-time finder in the hourly forecast: pick washing, a BBQ, a dog walk or a run and every good hour gets green under it across the whole forecast, with each day's best spell between 07:00 and 22:00 listed (scored by Out and about's rules) | Location Weather overhaul (Nov) |
 | 5.57.007 | 2026-11-16 | Patch | 3af30be | Location Weather: Out and about (washing, BBQ, dog walk, running, cycling headwind; garden frost, school snow day, heat and cold stress, solar and wind-farm output); Model Data: stargazing and aurora layers | Model Data STRATA redesign (Nov) |
 | 5.57.006 | 2026-11-16 | Patch | 91e7307 | Model Data: the storms' ingredients (deep shear, supercell composite, energy-helicity index) and anomalies against 1991-2020 (850 hPa temperature, 500 hPa height, pressure) | Model Data STRATA redesign (Nov) |

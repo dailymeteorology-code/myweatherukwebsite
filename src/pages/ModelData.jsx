@@ -854,6 +854,8 @@ export default function ModelData() {
     return () => window.removeEventListener('resize', on);
   }, []);
   const layout = vw < 640 ? 'phone' : vw < 1180 ? 'tablet' : 'desktop';
+  /* a tablet under 1000 px wide: too narrow for the load count and the word Download beside the timeline */
+  const tightBar = layout === 'tablet' && vw < 1000;
   const phone = layout === 'phone', narrow = layout !== 'desktop';
   setKeyScale(phone ? 1.6 : layout === 'tablet' ? 1.2 : 1);    // keys big enough to read on a small screen (downloads match)
   const [modeOpen, setModeOpen] = useState(false);            // phones: the view menu
@@ -3103,18 +3105,17 @@ export default function ModelData() {
   /* Live: where the loop starts (16 Nov 2026, at the user's request): any quarter-hour in it, played to the latest */
   const loopTimes = isLive ? steps.filter((x, k) => k < steps.length - 2 && new Date(x).getUTCMinutes() % 15 === 0) : [];
   const hhmm = (ms) => new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' });
-  const agoText = (ms) => { const m = Math.max(0, Math.round((Date.now() - ms) / 60e3)); return m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''} ago` : `${m} min ago`; };
   const chooseLoop = (v) => {
     setLoopFrom(v);
     if (v != null) { const k = steps.findIndex((x) => x >= v); if (k >= 0 && idx < k) setIdx(k); }
   };
   const loopOptions = (
     <>
-      <option value="" style={{ color: '#111' }}>The whole loop</option>
-      {loopTimes.map((x) => <option key={x} value={x} style={{ color: '#111' }}>From {hhmm(x)} ({agoText(x)})</option>)}
+      <option value="" style={{ color: '#111' }}>Whole loop</option>
+      {loopTimes.map((x) => <option key={x} value={x} style={{ color: '#111' }}>From {hhmm(x)}</option>)}
     </>
   );
-  const loopName = loopFrom == null ? 'The whole loop' : `From ${hhmm(loopFrom)}`;
+  const loopName = loopFrom == null ? 'Whole loop' : `From ${hhmm(loopFrom)}`;
   const loopField = isLive && loopTimes.length > 1 && topField('Loop', loopName, (
     <select className="md-field-sel" value={loopFrom ?? ''} onChange={(e) => chooseLoop(e.target.value ? Number(e.target.value) : null)} aria-label="Where the loop starts">{loopOptions}</select>
   ), 'Where the radar loop starts: it plays from there to the latest');
@@ -3574,7 +3575,7 @@ export default function ModelData() {
           <circle cx="10" cy="10" r="8" className="mdt-load-bg" />
           <circle cx="10" cy="10" r="8" className="mdt-load-fg" style={{ strokeDasharray: `${(pct * 50.27).toFixed(2)} 50.27` }} />
         </svg>
-        <span><b>{loadedCount}/{steps.length}</b>{!phone ? <i>{done ? 'all loaded' : etaText || 'loaded'}</i> : !done && etaText ? <i>{etaText}</i> : null}</span>
+        <span><b>{loadedCount}/{steps.length}</b>{!phone && !tightBar ? <i>{done ? 'all loaded' : etaText || 'loaded'}</i> : !done && etaText ? <i>{etaText}</i> : null}</span>
       </span>
     );
   })();
@@ -3583,7 +3584,7 @@ export default function ModelData() {
   const timeLabel = (
     <span className="mdt-time">
       <b><i>{dayPart}</i>{hourPart ? ` · ${hourPart}` : ''}</b>
-      <span>{subLabel}{phone && loadMeter}</span>
+      <span>{subLabel}{(phone || tightBar) && loadMeter}</span>
     </span>
   );
   /* a labelled tool on the phone's bottom bar: an icon over a word, a finger's width each */
@@ -3793,13 +3794,13 @@ export default function ModelData() {
 
       {/* bottom bar */}
       {isLong ? null : layout === 'desktop' ? (
-        <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'min(980px, calc(100% - 20px))', padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <IconBtn title="Back a day (Shift+←)" onClick={() => stepDay(-1)}><ChevronsLeft size={16} /></IconBtn>
-          <IconBtn title="Previous step (←)" onClick={stepBack}><ChevronLeft size={16} /></IconBtn>
+        <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'min(1180px, calc(100% - 20px))', padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <IconBtn title="Back a day (Shift+←)" onClick={() => stepDay(-1)} style={{ flexShrink: 0 }}><ChevronsLeft size={16} /></IconBtn>
+          <IconBtn title="Previous step (←)" onClick={stepBack} style={{ flexShrink: 0 }}><ChevronLeft size={16} /></IconBtn>
           {playBtn}
-          <IconBtn title="Next step (→)" onClick={stepFwd}><ChevronRight size={16} /></IconBtn>
-          <IconBtn title="On a day (Shift+→)" onClick={() => stepDay(1)}><ChevronsRight size={16} /></IconBtn>
-          <div style={{ flex: 1, minWidth: 80, display: 'flex', padding: '0 8px' }}>{slider}</div>
+          <IconBtn title="Next step (→)" onClick={stepFwd} style={{ flexShrink: 0 }}><ChevronRight size={16} /></IconBtn>
+          <IconBtn title="On a day (Shift+→)" onClick={() => stepDay(1)} style={{ flexShrink: 0 }}><ChevronsRight size={16} /></IconBtn>
+          <div style={{ flex: 1, minWidth: 180, display: 'flex', padding: '0 8px' }}>{slider}</div>
           {loadMeter}
           {timeLabel}
           {speedField}
@@ -3815,18 +3816,20 @@ export default function ModelData() {
         </div>
       ) : layout === 'tablet' ? (
         <div ref={botRef} style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 10, width: 'calc(100% - 20px)', maxWidth: 1060, padding: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <IconBtn title="Back a day" onClick={() => stepDay(-1)} style={{ width: 34, height: 34 }}><ChevronsLeft size={16} /></IconBtn>
-          <IconBtn title="Previous step" onClick={stepBack} style={{ width: 38, height: 38 }}><ChevronLeft size={17} /></IconBtn>
+          <IconBtn title="Back a day" onClick={() => stepDay(-1)} style={{ width: 34, height: 34, flexShrink: 0 }}><ChevronsLeft size={16} /></IconBtn>
+          <IconBtn title="Previous step" onClick={stepBack} style={{ width: 38, height: 38, flexShrink: 0 }}><ChevronLeft size={17} /></IconBtn>
           {playBtn}
-          <IconBtn title="Next step" onClick={stepFwd} style={{ width: 38, height: 38 }}><ChevronRight size={17} /></IconBtn>
-          <IconBtn title="On a day" onClick={() => stepDay(1)} style={{ width: 34, height: 34 }}><ChevronsRight size={16} /></IconBtn>
-          <div style={{ flex: 1, minWidth: 80, display: 'flex', padding: '0 6px' }}>{slider}</div>
-          {loadMeter}
+          <IconBtn title="Next step" onClick={stepFwd} style={{ width: 38, height: 38, flexShrink: 0 }}><ChevronRight size={17} /></IconBtn>
+          <IconBtn title="On a day" onClick={() => stepDay(1)} style={{ width: 34, height: 34, flexShrink: 0 }}><ChevronsRight size={16} /></IconBtn>
+          <div style={{ flex: 1, minWidth: 150, display: 'flex', padding: '0 6px' }}>{slider}</div>
+          {!tightBar && loadMeter}
           {timeLabel}
-          <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => openPanel('regions')} style={{ width: 38, height: 38 }}><MapIcon size={16} /></IconBtn>
-          {isObs && <IconBtn on={obsPanel} title="The day's extremes" onClick={() => (sidePanel ? setObsPanel(false) : openPanel('summary'))} style={{ width: 38, height: 38 }}><Star size={16} /></IconBtn>}
-          {!isLong && <IconBtn on={shareOpen} title="Share: a link to this map, with a picture of it" onClick={() => openPanel('share')} style={{ width: 38, height: 38 }}><Share2 size={16} /></IconBtn>}
-          <button type="button" className="md-act" aria-pressed={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => openPanel('export')}><Download size={16} />Download</button>
+          <IconBtn on={regionsOpen} title="Zoom to a region" onClick={() => openPanel('regions')} style={{ width: 38, height: 38, flexShrink: 0 }}><MapIcon size={16} /></IconBtn>
+          {isObs && <IconBtn on={obsPanel} title="The day's extremes" onClick={() => (sidePanel ? setObsPanel(false) : openPanel('summary'))} style={{ width: 38, height: 38, flexShrink: 0 }}><Star size={16} /></IconBtn>}
+          {!isLong && <IconBtn on={shareOpen} title="Share: a link to this map, with a picture of it" onClick={() => openPanel('share')} style={{ width: 38, height: 38, flexShrink: 0 }}><Share2 size={16} /></IconBtn>}
+          {tightBar
+            ? <IconBtn on={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => openPanel('export')} style={{ width: 38, height: 38, flexShrink: 0 }}><Download size={16} /></IconBtn>
+            : <button type="button" className="md-act" aria-pressed={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => openPanel('export')}><Download size={16} />Download</button>}
         </div>
       ) : (
         <div ref={botRef} className="md-phone-bar" style={{ ...T.glass, position: 'absolute', left: 10, right: 10, bottom: 16, borderRadius: 26, padding: '10px 12px 6px', display: 'grid', gap: 6 }}>
