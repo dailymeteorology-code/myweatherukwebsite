@@ -45,6 +45,7 @@ import { dateWords, dateTimeWords, timeWords } from '@/lib/dateFmt';
 import { countyCells, describe } from '@/lib/mapCaption';
 import RegionPicker, { gridBox, loadCounties } from '@/components/modeldata/RegionPicker';
 import DrawBar from '@/components/modeldata/DrawBar';
+import { AirPath, CrossSection, EnsemblePlume, ModelsAtPoint, Scenarios, Sounding, TRAJ_COLOURS } from '@/components/modeldata/PointTools';
 import { readDrawings, saveDrawings, shapePoints, isClosed } from '@/lib/mapDrawings';
 import LongRange from '@/components/modeldata/LongRange';
 import { tweenFrame } from '@/lib/modelTween';
@@ -801,6 +802,11 @@ export default function ModelData() {
   useEffect(() => { saveDrawings(drawings); }, [drawings]);
   const drawRef = useRef({});
   drawRef.current = { drawOn, drawDraft };
+  /* the point and column tools (16 Nov 2026, components/modeldata/PointTools): every model at the pin, the
+     members (Chances), the air above (GFS sounding), where the air came from, a cross-section, scenarios */
+  const [ptool, setPtool] = useState(null);                    // { kind, lat, lon, place, ... }
+  const [sectionFrom, setSectionFrom] = useState(null);      // a cross-section's first end, waiting for the second
+  const [traj, setTraj] = useState(null);                    // { busy } | { data } | { err }
   const hlRings = useMemo(() => {
     if (!hl) return null;
     const out = {};
@@ -1700,13 +1706,15 @@ export default function ModelData() {
      once instead of in the worker, `ms` is the time for a window with no frame yet. A frame part-way between two steps
      (raw.tween) is worked out here, its companion layers with it, and all that follows draws it as
      it would any frame. */
+  const trajLines = useMemo(() => (traj?.data?.trajectories || []).map((tr) => ({ kind: 'arrow', colour: TRAJ_COLOURS[tr.from_p] || '#111827', w: 4,
+    pts: tr.path.map(([la, lo]) => [lo, la]).reverse() })), [traj]);
   const drawLayer = useMemo(() => {
-    if (!drawings.length && !drawDraft) return null;
+    if (!drawings.length && !drawDraft && !trajLines.length) return null;
     const P = projection(gridName);
     const pts = drawDraft ? (drawDraft.kind === 'shape' && drawDraft.hover ? [...drawDraft.pts, drawDraft.hover] : drawDraft.pts) : null;
-    return { list: drawings, draft: drawDraft && pts.length ? { kind: drawDraft.kind, colour: drawTool.colour, w: drawTool.w, draft: true,
+    return { list: trajLines.length ? [...drawings, ...trajLines] : drawings, draft: drawDraft && pts?.length ? { kind: drawDraft.kind, colour: drawTool.colour, w: drawTool.w, draft: true,
       closed: drawDraft.kind === 'shape' ? false : isClosed(drawDraft.kind), pts: shapePoints(drawDraft.kind, pts, P.fromGrid) } : null };
-  }, [drawings, drawDraft, drawTool, gridName]);
+  }, [drawings, drawDraft, drawTool, gridName, trajLines]);
   const layersFor = useCallback((P, raw, sync = false, ms = null) => {
     const tw = raw?.tween, C = P.caches, st = staticsBy[P.grid];
     const f = tw ? tweenFrame(disp(tw.a), disp(tw.b), tw.t, P.scaleKey, cellBox(disp(tw.a), tw.box), nearOf(tw, disp)) : disp(raw);
@@ -1954,7 +1962,7 @@ export default function ModelData() {
       else if (e.key === '+' || e.key === '=') z?.(1.35);
       else if (e.key === '-' || e.key === '_') z?.(1 / 1.35);
       else if (e.key === 'Escape' && (drawRef.current.drawDraft || drawRef.current.drawOn)) { if (drawRef.current.drawDraft) setDrawDraft(null); else setDrawOn(false); }
-      else if (e.key === 'Escape') { setPin(null); setHl(null); setDrawing(null); setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setExp((x) => ({ ...x, open: false })); }
+      else if (e.key === 'Escape') { setPtool(null); setSectionFrom(null); setPin(null); setHl(null); setDrawing(null); setVarOpen(false); setMapOpen(false); setCmpOpen(false); setRegionsOpen(false); setModeOpen(false); setExp((x) => ({ ...x, open: false })); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -2127,7 +2135,11 @@ export default function ModelData() {
       const [gx, gy] = at.second && gridB !== gridName ? projection(gridName).toGrid(...projection(gridB).fromGrid(...onGridB(at))) : [at.gx, at.gy];
       if (gx >= 0 && gy >= 0 && gx < NX && gy < NY) {
         if (drawing) setDrawing((d) => ({ pts: [...(d?.pts || []), [gx, gy]] }));
-        else setPin({ gx, gy });
+        else if (sectionFrom) {
+          const P = projection(gridName), [lo1, la1] = P.fromGrid(sectionFrom.gx, sectionFrom.gy), [lo2, la2] = P.fromGrid(gx, gy);
+          setPtool({ kind: 'section', lat1: la1, lon1: lo1, lat2: la2, lon2: lo2, fromName: sectionFrom.name, toName: nearPlaceName(gx, gy) });
+          setSectionFrom(null);
+        } else setPin({ gx, gy });
       }
     }
     pressAt.current = null;
@@ -3296,6 +3308,55 @@ export default function ModelData() {
       </div>
     );
   })();
+  /* a point's name: the nearest place */
+  const nearPlaceName = (gx, gy) => {
+    const c = (statics?.cities || []).reduce((b, x) => { const d = Math.hypot(x.x - gx, x.y - gy); return !b || d < b.d ? { d, n: x.name } : b; }, null);
+    if (!c) return 'Here';
+    const km = (c.d * GRIDS[gridName].dx) / 1000;
+    return km < 6 ? c.n : km < 20 ? `Near ${c.n}` : `${Math.round(km)} km from ${c.n}`;
+  };
+  /* the newest whole GFS run, and its step nearest the time on show (soundings, sections, the air's path) */
+  const gfsAt = () => {
+    const g = cat?.models?.find((m) => m.id === 'gfs');
+    const r = g?.runs?.find((x) => !x.kept && x.complete) || g?.runs?.[0];
+    if (!r?.steps?.length) return null;
+    const t0 = Date.parse(r.run), want = validMs ?? Date.now();
+    return { run: r.run, step: r.steps.reduce((b, x) => (Math.abs(t0 + x * 3600e3 - want) < Math.abs(t0 + b * 3600e3 - want) ? x : b), r.steps[0]) };
+  };
+  const openTool = (kind, place) => {
+    if (!pin) return;
+    const [lon, lat] = projection(gridName).fromGrid(pin.gx, pin.gy);
+    setPtool({ kind, lat, lon, place, gx: pin.gx, gy: pin.gy });
+  };
+  useEffect(() => {
+    if (ptool?.kind !== 'trajectory') { setTraj(null); return undefined; }
+    const g = gfsAt();
+    if (!g) { setTraj({ err: 'No GFS run is listed just now.' }); return undefined; }
+    let on = true;
+    setTraj({ busy: true });
+    fetch(`/api/modeldata/trajectory?run=${encodeURIComponent(g.run)}&step=${g.step}&lat=${ptool.lat.toFixed(3)}&lon=${ptool.lon.toFixed(3)}&hours=72`)
+      .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => { if (on) setTraj(ok && !j.error ? { data: j } : { err: j.error || 'The air could not be traced back.' }); })
+      .catch((e) => { if (on) setTraj({ err: `It could not be fetched (${e.message}).` }); });
+    return () => { on = false; };
+  }, [ptool]);                                              // eslint-disable-line react-hooks/exhaustive-deps
+  /* Chances: every member's value at the pin through the run (the members are in the frames already) */
+  const plume = useMemo(() => {
+    if (ptool?.kind !== 'plume' || !isProb || !run) return null;
+    const first = steps.map((x) => frames[x]).find((f) => f?.head?.members);
+    if (!first) return null;
+    const M = first.head.members, out = { times: [], members: Array.from({ length: M }, () => []) };
+    for (const st of steps) {
+      const ef = frames[st];
+      if (!ef?.q || !ef.head?.members) continue;
+      const { nx, ny } = ef.head, k = ef.head.k || 8, n = nx * ny;
+      const i = Math.floor(ptool.gx / k), j = Math.floor(ptool.gy / k);
+      if (i < 0 || j < 0 || i >= nx || j >= ny) continue;
+      out.times.push(Date.parse(run.run) + st * 3600e3);
+      for (let m = 0; m < M; m++) { const v = ef.q[m * n + j * nx + i]; out.members[m].push(v === 255 ? null : ef.table[v]); }
+    }
+    return out;
+  }, [ptool, isProb, run, steps, frames]);
   const pinCard = pin && (() => {
     const vals = steps.map((s) => (frames[s] ? sampleFrame(disp(frames[s]), pin.gx, pin.gy) : NaN));
     const at = Math.min(idx, Math.max(0, steps.length - 1));
@@ -3347,6 +3408,18 @@ export default function ModelData() {
                 </>
               )}
               {numeric && fin.length <= 1 && steps.length > 1 && <span style={{ fontSize: 11.5, color: T.ink2 }}>The other steps are still loading.</span>}
+              {!timeSteps && (
+                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', paddingTop: 2 }}>
+                  {[...(isProb ? [['plume', 'Members', 'Every member of the ensemble here, through the run']] : [['models', 'Every model', 'This layer from every model\u2019s newest run, here']]),
+                    ['sounding', 'The air above', 'A sounding (skew-T) from NOAA GFS: temperature, moisture and wind up through the air'],
+                    ['trajectory', 'Where the air came from', 'The air over here traced back three days through the GFS winds'],
+                    ['section', 'Cross-section', 'A slice through the air from here to a second point you press on the map']].map(([k, l, title]) => (
+                    <button key={k} type="button" title={title} onClick={() => (k === 'section' ? setSectionFrom({ gx: pin.gx, gy: pin.gy, name: where }) : openTool(k, where))}
+                      style={{ border: 'none', cursor: 'pointer', padding: '5px 10px', borderRadius: 999, fontFamily: FONT, fontSize: 11.5, fontWeight: 700,
+                        background: ptool?.kind === k || (k === 'section' && sectionFrom) ? T.on : T.track, color: ptool?.kind === k || (k === 'section' && sectionFrom) ? T.onInk : T.ink }}>{l}</button>
+                  ))}
+                </div>
+              )}
             </>}
       </div>
     );
@@ -3381,6 +3454,11 @@ export default function ModelData() {
         <IconBtn title="Higher" onClick={() => nudge(1)} style={{ width: 26, height: 26, background: 'transparent', boxShadow: 'none' }}><Plus size={13} /></IconBtn>
       </div>
       {!narrow && <span style={{ fontSize: 11.5, color: T.ink2, whiteSpace: 'nowrap' }}>{model?.members ? `${model.members} members` : ''}</span>}
+      {model?.fields?.includes('mslp') && (
+        <button type="button" onClick={() => setPtool((o) => (o?.kind === 'scenarios' ? null : { kind: 'scenarios' }))} title="The ways the members split at this time (their pressure maps grouped)"
+          style={{ border: 'none', cursor: 'pointer', padding: '6px 11px', borderRadius: 999, fontFamily: FONT, fontSize: 12, fontWeight: 700, flexShrink: 0,
+            background: ptool?.kind === 'scenarios' ? T.on : T.track, color: ptool?.kind === 'scenarios' ? T.onInk : T.ink }}>Scenarios</button>
+      )}
     </div>
   );
   /* back and next go to the nearest step that has loaded (as the timeline does): never onto a blank map */
@@ -3543,6 +3621,34 @@ export default function ModelData() {
           {hover.text}{hover.warn && <div style={{ fontSize: 11.5, fontWeight: 650, color: T.ink2 }}>{hover.warn}</div>}
         </div>
       )}
+      {sectionFrom && (
+        <div style={{ ...T.capsule, position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: topH, zIndex: 7, padding: '8px 14px', fontSize: 12.5, fontWeight: 700, display: 'flex', gap: 10, alignItems: 'center' }}>
+          Press the map where the cross-section should end
+          <IconBtn title="Cancel (Esc)" onClick={() => setSectionFrom(null)} style={{ width: 24, height: 24 }}><X size={12} /></IconBtn>
+        </div>
+      )}
+      {ptool && (() => {
+        const close = () => setPtool(null), g = gfsAt();
+        const q = (o) => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+        const body = ptool.kind === 'models' ? (
+          <ModelsAtPoint t={T} phone={phone} place={ptool.place} lat={ptool.lat} lon={ptool.lon} v={varKey} label={vmeta?.label || varKey} unit={vmeta?.unit || ''} validMs={validMs} onClose={close}
+            names={SHORT_NAMES} models={[...(cat?.models || []).filter((m) => m.runs?.length && m.variables?.includes(varKey) && !['frost', 'gefs_aer', 'ecmwf_ensm', 'aifs_ensm', 'mix'].includes(m.id)).map((m) => m.id)]} />
+        ) : ptool.kind === 'plume' ? (
+          <EnsemblePlume t={T} phone={phone} place={ptool.place} data={plume} thr={thr} dir={dir} unit={fmeta?.unit || ''} label={preset.label} ensName={model?.label || ''} validMs={validMs} onClose={close} />
+        ) : ptool.kind === 'sounding' ? (
+          <Sounding t={T} phone={phone} place={ptool.place} onClose={close} url={g ? `/api/modeldata/sounding?${q({ run: g.run, step: g.step, lat: ptool.lat.toFixed(2), lon: ptool.lon.toFixed(2) })}` : null} />
+        ) : ptool.kind === 'trajectory' ? (
+          <AirPath t={T} phone={phone} place={ptool.place} data={traj?.data} busy={traj?.busy} err={traj?.err} onClose={close} />
+        ) : ptool.kind === 'section' ? (
+          <CrossSection t={T} phone={phone} fromName={ptool.fromName} toName={ptool.toName} onClose={close}
+            url={g ? `/api/modeldata/section?${q({ run: g.run, step: g.step, lat1: ptool.lat1.toFixed(2), lon1: ptool.lon1.toFixed(2), lat2: ptool.lat2.toFixed(2), lon2: ptool.lon2.toFixed(2) })}` : null} />
+        ) : ptool.kind === 'scenarios' && isProb && run && step != null ? (
+          <Scenarios t={T} phone={phone} lines={statics?.lines} ensName={model?.label || ''} onClose={close} url={`/api/modeldata/scenarios?${q({ ens: model.id, run: run.run, step })}`} />
+        ) : null;
+        if (!body) return null;
+        const pos = phone ? { left: 8, right: 8, bottom: botH, maxHeight: '74%' } : { left: 10, top: topH, width: 'min(800px, calc(100% - 96px))', maxHeight: `calc(100% - ${topH + botH + 8}px)` };
+        return <div className="md-noscroll" style={{ position: 'absolute', zIndex: 8, overflowY: 'auto', borderRadius: 22, ...pos }}>{body}</div>;
+      })()}
       {isAdmin && drawOn && (
         <DrawBar tool={drawTool} setTool={setDrawTool} phone={phone} shapePoints={drawDraft?.kind === 'shape' ? drawDraft.pts.length : 0}
           onFinishShape={() => finishShape(drawDraft?.pts)} canUndo={drawings.length > 0} count={drawings.length}

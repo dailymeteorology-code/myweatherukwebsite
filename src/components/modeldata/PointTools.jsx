@@ -179,7 +179,7 @@ export function ModelsAtPoint({ t, phone, place, lat, lon, v, label, unit, model
           </button>
         ))}
       </div>
-      {pending > 0 && <Busy t={t} text={`Reading ${pending} more model${pending === 1 ? '' : 's'}…`} />}
+      {pending > 0 && <Busy t={t} text={`Reading ${pending} more model${pending === 1 ? '' : 's'}… (the first time at a place can take up to a minute)`} />}
       {!pending && notMade.length > 0 && <div style={{ fontSize: 11.5, color: t.ink2 }}>Not made yet: {notMade.join(', ')}.</div>}
     </ToolCard>
   );
@@ -658,6 +658,70 @@ export function Scenarios({ t, phone, url, lines, ensName, onClose }) {
             ))}
           </div>
         </>
+      )}
+    </ToolCard>
+  );
+}
+
+/* ── the ensemble's members at the pin (a plume) ──────────────────────────────────────────────── */
+export function EnsemblePlume({ t, phone, place, data, thr, dir, unit, label, ensName, validMs, onClose }) {
+  const W = phone ? 480 : 760, H = 290, L = 44, R = 12, TOP = 12, B = 28;
+  const [hover, setHover] = useState(null);
+  const ok = data && data.times.length > 1;
+  const all = ok ? data.members.flat().filter((v) => v != null) : [];
+  const lo0 = all.length ? Math.min(...all, thr) : 0, hi0 = all.length ? Math.max(...all, thr) : 1;
+  const pad = (hi0 - lo0) * 0.08 || 1, yMin = lo0 - pad, yMax = hi0 + pad;
+  const x0 = ok ? data.times[0] : 0, x1 = ok ? data.times[data.times.length - 1] : 1;
+  const X = (ms) => L + ((ms - x0) / Math.max(1, x1 - x0)) * (W - L - R);
+  const Y = (v) => TOP + ((yMax - v) / (yMax - yMin)) * (H - TOP - B);
+  const mean = ok ? data.times.map((_, i) => { const v = data.members.map((m) => m[i]).filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; }) : [];
+  const path = (vals) => vals.map((v, i) => (v == null ? '' : `${i && vals[i - 1] != null ? 'L' : 'M'}${X(data.times[i]).toFixed(1)},${Y(v).toFixed(1)}`)).join('');
+  const step = (yMax - yMin) / 5, mag = 10 ** Math.floor(Math.log10(step || 1)), ts = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((k) => k >= step) || step;
+  const ticks = [];
+  for (let y = Math.ceil(yMin / ts) * ts; y <= yMax; y += ts) ticks.push(Math.round(y * 1000) / 1000);
+  const at = (e) => {
+    const r = e.currentTarget.getBoundingClientRect(), sx = ((e.clientX - r.left) / r.width) * W;
+    if (!ok || sx < L || sx > W - R) return null;
+    const ms = x0 + ((sx - L) / (W - L - R)) * (x1 - x0);
+    let best = 0;
+    data.times.forEach((x, i) => { if (Math.abs(x - ms) < Math.abs(data.times[best] - ms)) best = i; });
+    return best;
+  };
+  const row = hover != null && ok ? (() => {
+    const v = data.members.map((m) => m[hover]).filter((x) => x != null).sort((a, b) => a - b);
+    const n = v.filter((x) => (dir === 'below' ? x <= thr : x >= thr)).length;
+    return { ms: data.times[hover], n, of: v.length, min: v[0], max: v[v.length - 1], mean: mean[hover] };
+  })() : null;
+  return (
+    <ToolCard t={t} phone={phone} title={`${label}: every member`} sub={`${place} · ${ensName}`} onClose={onClose}
+      info={['Each thin line is one member of the ensemble: the same model run many times from slightly different starts. Together they show the range of what could happen at this spot.',
+        'The bold line is their average; the dashed red line is the threshold of the chance on the map. Where most lines are past it, the chance is high; where they fan out widely, the forecast is unsure.']}>
+      {!ok && <Busy t={t} text="Waiting for the members to load…" />}
+      {ok && (
+        <div style={{ position: 'relative' }}>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block', touchAction: 'pan-y', userSelect: 'none' }} role="img" aria-label={`Every member's ${label} at ${place}`}
+            onPointerDown={(e) => setHover(at(e))} onPointerMove={(e) => { if (e.pointerType === 'mouse' || e.buttons) setHover(at(e)); }} onPointerLeave={(e) => { if (e.pointerType === 'mouse') setHover(null); }}>
+            {ticks.map((y) => (
+              <g key={y}><line x1={L} x2={W - R} y1={Y(y)} y2={Y(y)} stroke={t.line} /><text x={L - 6} y={Y(y) + 4} textAnchor="end" fontSize="11" fill={t.ink2}>{y}</text></g>
+            ))}
+            {data.members.map((m, i) => <path key={i} d={path(m)} fill="none" stroke="#2f7fe0" strokeWidth={1} opacity={0.3} />)}
+            <line x1={L} x2={W - R} y1={Y(thr)} y2={Y(thr)} stroke="#dc2626" strokeWidth={1.6} strokeDasharray="6 4" />
+            <path d={path(mean)} fill="none" stroke={t.light ? '#0f172a' : '#f8fafc'} strokeWidth={3} />
+            {validMs != null && validMs >= x0 && validMs <= x1 && <line x1={X(validMs)} x2={X(validMs)} y1={TOP} y2={H - B} stroke={t.accent} strokeWidth={1.4} opacity={0.6} />}
+            {hover != null && <line x1={X(data.times[hover])} x2={X(data.times[hover])} y1={TOP} y2={H - B} stroke={t.ink} opacity={0.5} />}
+            {[0, Math.floor(data.times.length / 2), data.times.length - 1].map((i) => (
+              <text key={i} x={X(data.times[i])} y={H - 8} textAnchor={i === 0 ? 'start' : i === data.times.length - 1 ? 'end' : 'middle'} fontSize="11" fill={t.ink2}>{fmtDayShort(data.times[i])}</text>
+            ))}
+            <text x={L} y={TOP - 2} fontSize="11" fill={t.ink2}>{unit}</text>
+          </svg>
+          {row && (
+            <div style={{ position: 'absolute', top: 6, left: 52, pointerEvents: 'none', ...t.glass, borderRadius: 12, padding: '7px 10px', fontSize: 11.5, lineHeight: 1.45, color: t.ink3 }}>
+              <div style={{ fontWeight: 800, color: t.ink }}>{fmtT(row.ms)}</div>
+              <div><b style={{ color: t.ink }}>{row.n} of {row.of}</b> members {dir === 'below' ? 'at or below' : 'at or above'} {fmtNum(thr, unit)}</div>
+              <div>Average {fmtNum(row.mean, unit)} · lowest {fmtNum(row.min, unit)} · highest {fmtNum(row.max, unit)}</div>
+            </div>
+          )}
+        </div>
       )}
     </ToolCard>
   );
