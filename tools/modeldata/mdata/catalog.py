@@ -143,7 +143,7 @@ def main():
     from . import ens
     with cf.ThreadPoolExecutor(len(MODELS) + 1) as ex:
         ens_fut = ex.submit(ens.catalog_entries)
-        models = list(ex.map(model_entry, [m for m in MODELS.values() if m.id != 'mix']))
+        models = list(ex.map(model_entry, [m for m in MODELS.values() if m.id not in ('mix', 'consensus')]))
         ensembles = ens_fut.result()
     # a model whose listing failed this time keeps its last good runs
     models = [m if m['runs'] or m['id'] not in old else dict(old[m['id']], stale=True) for m in models]
@@ -160,6 +160,15 @@ def main():
     mix = mix_entry(models)
     if mix:
         models.append(mix)
+    try:                                                  # MWUK Consensus: its runs from its members' (mdata/consensus.py)
+        from .consensus import catalog_entry as consensus_entry
+        cons = consensus_entry([m for m in models if m['id'] != 'mix'])
+        if cons:
+            if 'consensus' in MODELS:
+                cons['variables'] = list(MODELS['consensus'].variables)
+            models.append(cons)
+    except Exception as e:                                # noqa: BLE001
+        print('consensus listing failed:', e)
     write_json(DATA / 'catalog.json', {
         'generated': datetime.now(timezone.utc).isoformat(), 'grid': grid_meta('uk'), 'grids': {g: grid_meta(g) for g in GRIDS},
         'variables': VARIABLES, 'models': models, 'ensembles': ensembles, 'ens_fields': ens.FIELDS})

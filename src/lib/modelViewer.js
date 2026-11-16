@@ -548,6 +548,12 @@ export function setKeyScale(k) { KEY_SCALE = Math.max(1, Math.min(2, Number(k) |
 export const toneOf = () => TONE;
 /* what a cached colour table was made with: the colours chosen and the map's tone */
 const palId = () => `${PALETTE}|${TONE}`;
+/* MWUK Consensus's share of models giving rain (a chance, so the chances' colours), and the anomalies
+   against 1991-2020 (two-way) (16 Nov 2026) */
+SCALES.rain_agree = { ...SCALES.prob, ticks: [10, 25, 50, 75, 100] };
+SCALES.t850_anom = { stops: DIVERGE(-15, 15), ticks: [-15, -10, -5, 0, 5, 10, 15] };
+SCALES.z500_anom = { stops: DIVERGE(-30, 30), ticks: [-30, -20, -10, 0, 10, 20, 30] };
+SCALES.mslp_anom = { stops: DIVERGE(-30, 30), ticks: [-30, -20, -10, 0, 10, 20, 30] };
 export const scaleFor = (key) => (TONE === 'light' && LIGHT_SCALES[key]) || SCALES[key] || { stops: TEMP, ticks: [] };
 /** The chance colours for a kind of question: snow, rain, wind, cold, heat, storm, ice or sky. */
 export const probScaleKey = (family) => (PROB_FAMILIES[family] ? `prob_${family}` : 'prob');
@@ -1588,8 +1594,12 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
 
 /** A two-window graphic in the frame R: the two windows, side by side ('cols') or stacked ('rows'),
     and the white line between them. */
-export function splitFrame(R, split, u) {
+export function splitFrame(R, split, u, at = 0.5) {
   const t = Math.max(2, Math.round(4 * u));
+  if (split === 'swipe') {                               // both windows over the whole frame, the line where one gives way to the other
+    const x = Math.round(R.x + R.w * Math.min(0.95, Math.max(0.05, at)) - t / 2);
+    return { split, line: { x, y: R.y, w: t, h: R.h }, a: R, b: R };
+  }
   if (split === 'rows') {
     const y = Math.round(R.y + (R.h - t) / 2);
     return { split, line: { x: R.x, y, w: R.w, h: t }, a: { x: R.x, y: R.y, w: R.w, h: y - R.y }, b: { x: R.x, y: y + t, w: R.w, h: R.y + R.h - y - t } };
@@ -1603,10 +1613,46 @@ export function splitFrame(R, split, u) {
 export function drawPanes(ctx, R, S, opts = {}) {
   ctx.save();
   if (opts.round) { roundRect(ctx, R.x, R.y, R.w, R.h, opts.round); ctx.clip(); }
-  for (const p of S.panes) withGrid(p.grid, () => drawScene(ctx, p.rect, p.view, opts.interacting ? { ...p.L, interacting: true } : p.L, { cache: opts.cache, u: S.u }));
+  for (const p of S.panes) withGrid(p.grid, () => drawScene(ctx, p.rect, p.view, opts.interacting ? { ...p.L, interacting: true } : p.L, { cache: opts.cache, u: S.u, clip: p.clip }));
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(S.line.x, S.line.y, S.line.w, S.line.h);
+  if (S.split === 'swipe') drawSwipe(ctx, R, S);
   ctx.restore();
+}
+/* the swipe's handle on its line, and which window is which on either side of it */
+function drawSwipe(ctx, R, S) {
+  const u = S.u, x = S.line.x + S.line.w / 2, y = R.y + R.h / 2, r = 17 * u;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.35)';
+  ctx.shadowBlur = 8 * u;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#0f1722';
+  for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(x + s * 3 * u, y - 6 * u); ctx.lineTo(x + s * 10 * u, y); ctx.lineTo(x + s * 3 * u, y + 6 * u); ctx.closePath(); ctx.fill(); }
+  ctx.font = `760 ${Math.round(12.5 * u)}px Inter, system-ui, sans-serif`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  (S.labels || []).forEach((t, i) => {
+    if (!t) return;
+    const w = ctx.measureText(t).width + 16 * u, h = 24 * u, ty = y + r + 10 * u, tx = i ? x + 6 * u : x - 6 * u - w;
+    ctx.beginPath();
+    roundRect(ctx, tx, ty, w, h, h / 2);
+    ctx.fillStyle = 'rgba(15,23,34,0.8)';
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(t, tx + 8 * u, ty + h / 2 + 0.5);
+  });
+  ctx.restore();
+}
+/** A two-way scale for a difference (16 Nov 2026): red where the first window is higher, blue where the
+    second is, white where they agree, over plus and minus `span` in the layer's unit. */
+export function diffScaleKey(unit, span) {
+  const s = Math.max(0.5, span), key = `diff|${unit}|${s}`;
+  if (!SCALES[key]) SCALES[key] = { stops: DIVERGE(-s, s), ticks: [-s, -s / 2, 0, s / 2, s].map((v) => Math.round(v * 10) / 10) };
+  return key;
 }
 
 /* the domain's edge melts into the background instead of ending in a hard line */

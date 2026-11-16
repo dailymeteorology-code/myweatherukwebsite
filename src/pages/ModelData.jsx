@@ -27,7 +27,7 @@ import {
 import {
   API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, framePool, runTag, fieldLayer, frameContours, drawScene,
   realtimeBasemap, fmtValue, download, makeGif, makeVideo, canMakeVideo, probFrame, loadLive, loadRoads, loadObserved, WX_NAMES, sampleFrame,
-  lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres, splitFrame, drawPanes, withGrid, viewOnGrid, WARN_COLOURS,
+  lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres, splitFrame, drawPanes, withGrid, viewOnGrid, WARN_COLOURS, diffScaleKey,
   coversMap, SEE_THROUGH, setPalette, scaleSwatch, radarTypeOf, RADAR_FAMILIES,
   setTone, onWxIcons, probScaleKey, scaleRamp, DISPLAY, INK, ACCENT, familyRate, onSatTiles, SAT_CREDIT, setKeyScale,
 } from '@/lib/modelViewer';
@@ -58,7 +58,7 @@ import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES, SNOW_AMOUNT_LEVELS, cmText } from '@
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Screen', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE', arpege: 'ARPEGE', arome: 'AROME', ecmwf_ensm: 'ECMWF ENS mean', aifs_ensm: 'AIFS ENS mean' };
+const SHORT_NAMES = { consensus: 'MWUK Consensus', frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE', arpege: 'ARPEGE', arome: 'AROME', ecmwf_ensm: 'ECMWF ENS mean', aifs_ensm: 'AIFS ENS mean' };
 /* who makes each model, its grid, and where the files come from (picker groups and the credit line) */
 const MODEL_INFO = {
   frost: ['MyWeatherUK', '2 km', 'MyWeatherUK’s own snow model'],
@@ -70,6 +70,7 @@ const MODEL_INFO = {
   icon: ['DWD', '6.5 km', 'Source: Deutscher Wetterdienst'], icon_europe: ['DWD', '6.5 km', 'Source: Deutscher Wetterdienst'],
   /* MWUK Mix: MyWeatherUK's blend of the UKV and ICON-EU on the UKV's 2 km grid (tools/modeldata/mdata/mix.py) */
   mix: ['MyWeatherUK', '2 km', 'MyWeatherUK blend of the Met Office UKV and DWD ICON-EU'],
+  consensus: ['MyWeatherUK', '2 km', 'MyWeatherUK: the middle of nine models'],
   /* 15 Nov 2026: NOAA's AI GFS, Canada's GDPS (tools/modeldata/mdata/models_more.py) */
   aigfs: ['NOAA', '0.25°', 'NOAA NOMADS', 'NOAA'], gdps: ['ECCC', '15 km', 'Environment and Climate Change Canada', 'Canada'],
   /* MET Norway's MEPS: HARMONIE-AROME at 2.5 km over the Nordic countries and the Baltic (read over OPeNDAP) */
@@ -1223,6 +1224,15 @@ export default function ModelData() {
   const fieldB = isProb ? preset.field : varB;
   const scaleB = isProb ? probScaleKey(probFamily(preset)) : varB;
   const gridB = modelB ? gridOfModel(modelB.id) : gridName;
+  /* the difference (16 Nov 2026, at the user's request): the first window minus the second, in one map,
+     for the same layer or two in one unit (not types, directions or levels of risk); and the swipe,
+     two windows over one frame with a line to drag between them */
+  const NO_DIFF = ['wx', 'ptype', 'radar_type', 'wdir10', 'mwd', 'snow_risk', 'snow_cond', 'frost_risk', 'ice_risk', 'beaufort'];
+  const unitB = cat?.variables?.[varB]?.unit;
+  const canDiff = kindB === 'run' && !isProb && !!vmeta && unitB != null && vmeta.unit === unitB && !NO_DIFF.includes(scaleKey) && !NO_DIFF.includes(varB);
+  const diffOn = canDiff && !!cmp.diff;
+  const twoWin = !!kindB && !diffOn;
+  const splitTwo = twoWin && cmp.split !== 'swipe';           // two windows side by side or stacked (a swipe keeps the whole frame)
   const wantStepB = useRef(0);
   const dataB = useRunFrames(modelB, runB, fieldB, wantStepB, !!modelB);
   const framesB = dataB?.frames || EMPTY, statusB = dataB?.status || null;
@@ -1399,15 +1409,15 @@ export default function ModelData() {
   }, [frameKey, size, sidePanel]);
 
   /* the two windows in a frame: side by side, or stacked where the frame is tall */
-  const splitOf = useCallback((R) => splitFrame(R, cmp.split === 'auto' ? (R.w / R.h >= 0.9 ? 'cols' : 'rows') : cmp.split, Math.min(R.w, R.h) / 1080), [cmp.split]);
+  const splitOf = useCallback((R) => splitFrame(R, cmp.split === 'auto' ? (R.w / R.h >= 0.9 ? 'cols' : 'rows') : cmp.split, Math.min(R.w, R.h) / 1080, cmp.at ?? 0.5), [cmp.split, cmp.at]);
   /* where each window is: `a` the first, `b` the second (none with one window) */
   const windowRects = useCallback(() => {
     const R = frameRect();
     if (!R) return null;
-    if (!kindB) return { R, a: R, b: null, sp: null };
+    if (!twoWin) return { R, a: R, b: null, sp: null };
     const sp = splitOf(R);
     return { R, sp, a: cmp.swap ? sp.b : sp.a, b: cmp.swap ? sp.a : sp.b };
-  }, [frameRect, kindB, splitOf, cmp.swap]);
+  }, [frameRect, twoWin, splitOf, cmp.swap]);
 
   /* fit a grid box into the frame; `tight` fills it (a re-framing), otherwise leaves room
      for the title card and the key */
@@ -1450,23 +1460,23 @@ export default function ModelData() {
   useEffect(() => {
     const R = windowRects()?.a;
     const old = lastRect.current;
-    lastRect.current = R ? { ...R, two: !!kindB } : null;
+    lastRect.current = R ? { ...R, two: splitTwo } : null;
     if (!view || !R || !old || (old.w === R.w && old.h === R.h)) return;
     /* going to or from two windows keeps the map's middle and about the same amount of map: the
        UK is tall, so it sits well in half a square at a little under the old scale */
-    if (old.two !== !!kindB) {
+    if (old.two !== splitTwo) {
       setView({ ...view, s: Math.max(0.3, Math.min(30, view.s * Math.sqrt((R.w * R.h) / (old.w * old.h)))) });
       return;
     }
     const hw = old.w / 2 / view.s, hh = old.h / 2 / view.s;
     fit([view.cx - hw, view.cy - hh, view.cx + hw, view.cy + hh], true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frameKey, sidePanel, layout, !!kindB, cmp.split]);
+  }, [frameKey, sidePanel, layout, splitTwo, cmp.split]);
   /* the stage settling or being resized is not a new shape to keep the view through, only news of
      how big the frame is (the canvas has no real size at all when the page first draws) */
   useEffect(() => {
     const R = windowRects()?.a;
-    if (R) lastRect.current = { ...R, two: !!kindB };
+    if (R) lastRect.current = { ...R, two: splitTwo };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size]);
 
@@ -1645,6 +1655,47 @@ export default function ModelData() {
     arrows: fcArrowsB, wx: fcWxB, cloud: fcCloudB, msl: fcMslB, under: fcUnderB, stack: stackB }),
   [gridB, scaleB, metaB, modelB, cachesB, chromeForB, arrowsOnB, selfArrowsB, wxOnB, ownWxB, cloudsOnB, mslOnB, ownMslB, underMetaB, underVarB, fcArrowsB, fcWxB, fcCloudB, fcMslB, fcUnderB, stackB]);
 
+  /* the difference's frame: the first window's cells, each less the second window's value at the same
+     place and time (on another grid, the second's cell under it), on a two-way scale of plus and minus
+     about a quarter of the layer's range (fixed steps for the common units) */
+  const DIFF_SPAN = { '°C': 8, hPa: 10, mph: 25, 'mm/h': 6, mm: 25, '%': 50, cm: 15, dam: 10, m: 500, 'J/kg': 1000, 'm/s': 12, kt: 25, 'W/m²': 200 };
+  const diffKey = diffOn ? diffScaleKey(vmeta.unit, DIFF_SPAN[vmeta.unit] ?? Math.max(1, Math.round(((vmeta.hi ?? 10) - (vmeta.lo ?? 0)) / 4))) : null;
+  const diffCache = useRef(new WeakMap());
+  const diffMaps = useRef({});
+  const diffRaw = useCallback((fa) => {
+    if (!diffKey || !fa?.q) return null;
+    const fb = frameBAt(Date.parse(fa.head.valid), false) || frameB;
+    if (!fb?.q) return null;
+    const hit = diffCache.current.get(fa);
+    if (hit && hit.fb === fb && hit.key === diffKey) return hit.f;
+    const span = Number(diffKey.split('|')[2]);
+    const W = fa.nx || NX, H = fa.ny || NY, K = fa.nx ? fa.k || 1 : 1;
+    /* where each of the first window's cells falls on the second window's grid (worked out once) */
+    let map = null;
+    if (gridB !== gridName) {
+      const mk = `${gridName}>${gridB}|${W}|${H}|${K}`;
+      if (!diffMaps.current[mk]) {
+        const PA = projection(gridName), PB = projection(gridB), m = new Float32Array(W * H * 2);
+        for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) { const [bx, by] = PB.toGrid(...PA.fromGrid(i * K + K / 2, j * K + K / 2)); m[(j * W + i) * 2] = bx; m[(j * W + i) * 2 + 1] = by; }
+        diffMaps.current = { [mk]: m };
+      }
+      map = diffMaps.current[mk];
+    }
+    const q = new Uint8Array(W * H);
+    withGrid(gridB, () => {
+      for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+        const k = j * W + i, va = fa.table[fa.q[k]];
+        const vb = Number.isFinite(va) ? (map ? sampleFrame(fb, map[k * 2], map[k * 2 + 1]) : sampleFrame(fb, i * K + K / 2, j * K + K / 2)) : NaN;
+        q[k] = Number.isFinite(vb) ? Math.max(0, Math.min(254, Math.round(((va - vb + span) / (2 * span)) * 254))) : 255;
+      }
+    });
+    const table = new Float32Array(256);
+    for (let v = 0; v < 255; v++) table[v] = -span + (v / 254) * 2 * span;
+    table[255] = NaN;
+    const f = { q, table, head: { ...fa.head, lo: -span, hi: span, scale: 'lin', var: 'diff' }, ...(fa.nx ? { nx: fa.nx, ny: fa.ny, k: fa.k } : {}) };
+    diffCache.current.set(fa, { fb, key: diffKey, f });
+    return f;
+  }, [diffKey, frameB, frameBAt, gridB, gridName]);
   /* The layers of one frame of one window; `sync` (exports: true, or 'smooth') works the sums out at
      once instead of in the worker, `ms` is the time for a window with no frame yet. A frame part-way between two steps
      (raw.tween) is worked out here, its companion layers with it, and all that follows draws it as
@@ -1753,12 +1804,31 @@ export default function ModelData() {
     const mark = (L, time, brand) => (L.chrome ? { ...L, chrome: { ...L.chrome, time, brand } } : L);
     const a = { view: V, grid: gridName }, b = { view: vB, grid: gridB };
     const slots = cmp.swap ? [{ ...b, L: LB }, { ...a, L: LA }] : [{ ...a, L: LA }, { ...b, L: LB }];
+    if (sp.split === 'swipe') {                           // the first over the whole frame (its title and key), the second right of the line
+      const lab = (L) => L.chrome?.badge?.filter(Boolean).join(' ') || '';
+      return {
+        u: Math.min(R.w, R.h) / 1080, line: sp.line, split: 'swipe', labels: [lab(slots[0].L), lab(slots[1].L)],
+        panes: [{ ...slots[0], rect: R, L: mark(slots[0].L, true, true) },
+          { ...slots[1], rect: R, clip: { x: sp.line.x, y: R.y, w: R.x + R.w - sp.line.x, h: R.h }, L: { ...slots[1].L, chrome: null } }],
+      };
+    }
     return {
       u: Math.min(R.w, R.h) / 1080, line: sp.line, split: sp.split,
       panes: [{ ...slots[0], rect: sp.a, L: mark(slots[0].L, true, rows) }, { ...slots[1], rect: sp.b, L: mark(slots[1].L, differ, !rows) }],
     };
   }, [splitOf, gridName, gridB, validMs, cmp.swap, layersFor, paneA, paneB, kindB, warningLayers, frameBAt, frameB]);
 
+  /* the difference's window: the first window's, its title and key saying what is taken from what */
+  const cachesD = useMemo(() => ({ colour: new Map(), contour: new Map(), smooth: new Map(), overlay: new Map(), pressure: new Map(), centre: new Map() }), []);
+  useEffect(() => { Object.values(cachesD).forEach((m) => m.clear()); }, [cachesD, diffKey, frameB]);
+  const paneDiff = useMemo(() => {
+    if (!diffOn || !diffKey) return null;
+    const nameA = SHORT_NAMES[model.id] || model.label, nameB = SHORT_NAMES[modelB.id] || modelB.label;
+    const sameModel = model.id === modelB.id;
+    const what = sameModel ? `the ${runLabel(run.run)} run minus the ${runLabel(runB.run)}` : `${nameA} minus ${nameB}`;
+    return { ...paneA, scaleKey: diffKey, meta: { label: vmeta.label, unit: vmeta.unit }, caches: cachesD, canContours: false, canStar: false, stack: [], underMeta: null,
+      chrome: (f, ms) => { const c = paneA.chrome(f, ms); return c && { ...c, variable: `${vmeta.label}: ${what}`, scale: scaleFor(diffKey), sub: 'Red: the first is higher · blue: the second is higher' }; } };
+  }, [diffOn, diffKey, paneA, cachesD, vmeta, model, modelB, run, runB]);
   /* the contour lines and isobars, highs and lows of the steps ahead (and just behind), worked
      out in the worker while this one is looked at, so stepping and playback find them ready */
   useEffect(() => {
@@ -1802,8 +1872,8 @@ export default function ModelData() {
     if (!c || !view || !R) return;
     const ctx = c.getContext('2d');
     const full = { x: 0, y: 0, w: c.width, h: c.height };
-    const S = kindB ? windowsFor(frame, R, view, false) : null;
-    const L = S ? null : layersFor(paneA, frame);
+    const S = twoWin ? windowsFor(frame, R, view, false) : null;
+    const L = S ? null : diffOn && paneDiff ? layersFor(paneDiff, diffRaw(frame)) : layersFor(paneA, frame);
     ctx.clearRect(0, 0, c.width, c.height);
     // the dimmed map around the frame: map, data and coastlines only (the overlays are for the
     // graphic itself, and drawing them twice doubled the cost of every pan)
@@ -1847,7 +1917,7 @@ export default function ModelData() {
       }
     }
     ctx.restore();
-  }, [view, frame, layersFor, paneA, windowsFor, kindB, gridName, frameRect, interacting, pin, T]);
+  }, [view, frame, layersFor, paneA, windowsFor, twoWin, diffOn, paneDiff, diffRaw, gridName, frameRect, interacting, pin, T]);
 
   /* playback */
   useEffect(() => {
@@ -1942,7 +2012,21 @@ export default function ModelData() {
     if (pts?.length >= 3) setDrawings((l) => [...l, { kind: 'shape', colour: drawTool.colour, w: drawTool.w, closed: true, pts: shapePoints('shape', pts, projection(gridName).fromGrid) }]);
     setDrawDraft(null);
   };
+  /* the swipe's line: is the pointer on it (canvas pixels, a finger's width either side)? */
+  const onSwipeLine = (clientX) => {
+    if (!twoWin || cmp.split !== 'swipe') return null;
+    const Wn = windowRects(), c = canvasRef.current, rr = c.getBoundingClientRect(), dpr = c.width / rr.width;
+    const px = (clientX - rr.left) * dpr;
+    return Wn?.sp && Math.abs(px - (Wn.sp.line.x + Wn.sp.line.w / 2)) < 22 * dpr ? { R: Wn.R, dpr, rr } : null;
+  };
   const onDown = (e) => {
+    const sw = pointers.current.size === 0 && !drawOn ? onSwipeLine(e.clientX) : null;
+    if (sw) {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      gesture.current = { swipe: sw };
+      return;
+    }
     if (drawOn && isAdmin && view && pointers.current.size === 0 && e.button !== 2) {
       e.currentTarget.setPointerCapture?.(e.pointerId);
       pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1964,6 +2048,13 @@ export default function ModelData() {
   const onMove = (e) => {
     if (!view) return;
     if (pointers.current.has(e.pointerId)) pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (gesture.current?.swipe) {
+      const { R, dpr, rr } = gesture.current.swipe;
+      const at = ((e.clientX - rr.left) * dpr - R.x) / R.w;
+      setCmp((o) => ({ ...o, at: Math.min(0.95, Math.max(0.05, at)) }));
+      return;
+    }
+    if (twoWin && cmp.split === 'swipe' && !pointers.current.size) e.currentTarget.style.cursor = onSwipeLine(e.clientX) ? 'ew-resize' : '';
     if (gesture.current?.draw) {
       if (pointers.current.size !== 1) return;
       const at = toGrid(e.clientX, e.clientY), g = gesture.current;
@@ -2001,11 +2092,12 @@ export default function ModelData() {
     const w = (wn.on || (at.second && kindB === 'warnings')) ? warningOver(at.second ? gridB : gridName, gx, gy) : null;
     const warn = w ? `${w.severity} warning · ${w.text}` : null;
     if (at.second && kindB === 'warnings') { setHover(warn ? { ...spot, text: warn } : null); return; }
-    const v = at.second ? withGrid(gridB, () => sampleFrame(disp(frameB), gx, gy)) : sampleFrame(disp(frame), gx, gy);
+    const v = at.second ? withGrid(gridB, () => sampleFrame(disp(frameB), gx, gy)) : diffOn ? sampleFrame(diffRaw(frame), gx, gy) : sampleFrame(disp(frame), gx, gy);
     if (!Number.isFinite(v) && !warn) { setHover(null); return; }
     setHover({ ...spot, text: Number.isFinite(v) ? (at.second ? fmtPoint(v, scaleB, metaB) : fmtPoint(v)) : warn, warn: Number.isFinite(v) ? warn : null });
   };
   const onUp = (e) => {
+    if (gesture.current?.swipe) { pointers.current.delete(e.pointerId); gesture.current = null; pressAt.current = null; return; }
     if (gesture.current?.draw) {
       const p0 = pressAt.current, click = !!p0 && Math.hypot(e.clientX - p0.x, e.clientY - p0.y) < 5;
       pointers.current.delete(e.pointerId);
@@ -2056,10 +2148,11 @@ export default function ModelData() {
     const R = frameRect();
     const v = { cx: view.cx, cy: view.cy, s: view.s * (W / R.w) };
     const out = { x: 0, y: 0, w: W, h: H };
-    if (kindB) { drawPanes(ctx, out, windowsFor(f, out, v, mode)); return; }
+    if (twoWin) { drawPanes(ctx, out, windowsFor(f, out, v, mode)); return; }
+    if (diffOn && paneDiff) { drawScene(ctx, out, v, layersFor(paneDiff, diffRaw(f?.tween ? f.tween.a : f), mode)); return; }
     if (f?.tween) f.tween.box = boxOf(out, v);
     drawScene(ctx, out, v, layersFor(paneA, f, mode));
-  }), [view, layersFor, paneA, windowsFor, kindB, frameRect, gridName]);
+  }), [view, layersFor, paneA, windowsFor, twoWin, diffOn, paneDiff, diffRaw, frameRect, gridName]);
   const stamp = (s) => (isObs ? dayOf(s) : isLive ? new Date(s).toISOString().slice(0, 16).replace(/[-:]/g, '') : `T${s}`);
   const secondName = () => (!kindB ? '' : kindB === 'warnings' ? '_with_warnings' : `_vs_${modelB.id}_${runTag(runB.run)}${isProb || varB === varKey ? '' : `_${varB}`}`);
   const fileBase = () => (isObs ? `MyWeatherUK_observed_${obsKey}${secondName()}_${frameKey}` : isLive ? `MyWeatherUK_live_${liveKey}${secondName()}_${frameKey}`
@@ -2844,7 +2937,12 @@ export default function ModelData() {
               ))}
             </>
           )}
-          {spec('Layout', <Seg small items={[['auto', 'Auto'], ['cols', 'Side by side'], ['rows', 'Stacked']]} value={cmp.split} onChange={(v) => setCmpK('split', v)} />)}
+          {kindB === 'run' && !isProb && (
+            <LayerRow icon={<Minus size={14} />} label="Show the difference" on={diffOn} onClick={() => canDiff && setCmpK('diff', !cmp.diff)}
+              note={canDiff ? 'one map: the first window minus the second (red where the first is higher)' : 'needs the same kind of layer in both windows'} />
+          )}
+          {!diffOn && spec('Layout', <Seg small items={[['auto', 'Auto'], ['cols', 'Side by side'], ['rows', 'Stacked'], ['swipe', 'Swipe']]} value={cmp.split} onChange={(v) => setCmpK('split', v)} />)}
+          {!diffOn && cmp.split === 'swipe' && <div style={{ fontSize: 11.5, color: T.ink2, lineHeight: 1.4 }}>Drag the white line across the map to show more of one window or the other.</div>}
           <button onClick={() => setCmpK('swap', !cmp.swap)} style={{ ...sel, justifySelf: 'start', padding: '7px 12px', display: 'flex', gap: 6, alignItems: 'center', background: T.btn }}><ArrowLeftRight size={13} />Swap the windows</button>
           {kindB === 'run' && pendingB > 0 && <div style={{ fontSize: 11, color: T.ink2, display: 'flex', gap: 6, alignItems: 'center' }}><Loader2 className="animate-spin" style={{ width: 12, height: 12 }} />Fetching the second window from {fetchedFrom(modelB?.id)} · {pendingB} to go</div>}
           {cmpSavable && (

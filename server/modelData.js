@@ -36,13 +36,14 @@ const STATIC_FILES = new Set(['basemap.png', 'basemap_light.png', 'sat_day.jpg',
 const MODELS = new Set(['ukv', 'mo_global', 'ifs', 'aifs', 'gfs', 'gefs_mean', 'gefs_aer', 'frost', 'icon', 'icon_europe', 'mix',
   'aigfs', 'gdps', 'meps',               // 15 Nov 2026: NOAA AIGFS, ECCC GDPS, MET Norway MEPS (mdata/models_more.py)
   'arpege', 'arome',                     // Météo-France ARPEGE (wide grid) and AROME (the UK's 2 km grid): mdata/mf.py
-  'ecmwf_ensm', 'aifs_ensm']);           // the ensembles' means in Forecast mode, from the Chances view's members (mdata/ensmean.py)
+  'ecmwf_ensm', 'aifs_ensm',             // the ensembles' means in Forecast mode, from the Chances view's members (mdata/ensmean.py)
+  'consensus']);                         // MWUK Consensus, the middle of nine models (mdata/consensus.py, 16 Nov 2026)
 /* ICON's files are each the whole of Europe (~1 MB a field a step), so every layer of a run is
    ~5 GB: only the much-used layers are warmed for it; the rest are made when someone opens them */
 const WARM_FIRST_ONLY = new Set(['icon', 'icon_europe', 'aigfs', 'gdps', 'meps', 'arpege', 'arome']);   // the new models too: the wide grid is bigger now
 /* MWUK Mix (mdata/mix.py) is made from the UKV's and ICON's own frames when someone opens it: never warmed, so it
    never adds downloads of its own in the background */
-const NO_WARM = new Set(['mix', 'aifs_ensm']);   // the AIFS ensemble mean: 50 members a field, made only when opened
+const NO_WARM = new Set(['mix', 'aifs_ensm', 'consensus']);   // the Consensus: nine models' layers a field, made only when opened   // the AIFS ensemble mean: 50 members a field, made only when opened
 /* models warmed with only these layers (15 Nov 2026, "faster ECMWF ENS"): the ECMWF ENS mean's
    temperature and pressure, whose 50 members each (~1.5 GB a field a run) are fetched in the
    background as each run lands, so its first open is not a five-minute wait (the Chances view
@@ -53,7 +54,7 @@ const WARM_ONLY = { ecmwf_ensm: ['t2', 'mslp'] };
 const MIRRORED = new Set(['frost']);
 const ENS_MODELS = new Set(['ecmwf_ens', 'aifs_ens', 'gefs']);
 /* each model's grid (mdata/common.py MODEL_GRID): its frames are kept apart, per grid */
-export const gridOf = (model) => (model === 'ukv' || model === 'frost' || model === 'icon' || model === 'mix' || model === 'arome' ? 'uk' : 'eu');
+export const gridOf = (model) => (model === 'ukv' || model === 'frost' || model === 'icon' || model === 'mix' || model === 'arome' || model === 'consensus' ? 'uk' : 'eu');
 const GRIDS = new Set(['uk', 'eu']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;

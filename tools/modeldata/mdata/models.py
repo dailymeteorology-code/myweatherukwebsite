@@ -1755,6 +1755,15 @@ SOURCES = {
     'mix': 'MWUK Mix: MyWeatherUK blend of the Met Office UKV 2 km (AWS) and DWD ICON-EU 6.5 km (Deutscher Wetterdienst), on the UKV grid',
     **SOURCES_MORE,
 }
+# MWUK Consensus (mdata/consensus.py, 16 Nov 2026): the middle of nine models, on the UKV's grid
+try:
+    from .consensus import SOURCE_CONS, VARIABLES_CONS, ConsensusModel   # noqa: E402
+    for _k, _v in VARIABLES_CONS.items():
+        VARIABLES.setdefault(_k, _v)
+    MODELS['consensus'] = ConsensusModel()
+    SOURCES['consensus'] = SOURCE_CONS
+except Exception:                                    # noqa: BLE001  (never at the cost of the other models)
+    pass
 # variables whose frames are differences of an accumulation between consecutive steps
 DIFFERENCED = {('ifs', 'precip_rate'), ('aifs', 'precip_rate'), ('ifs', 'sw_down'), ('aifs', 'sw_down'),
                ('ifs', 'lw_down'), ('aifs', 'lw_down'), ('ifs', 'olr'),
