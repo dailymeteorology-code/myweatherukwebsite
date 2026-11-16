@@ -25,7 +25,7 @@ import {
   Map as MapIcon, CloudLightning, Gauge, Columns2, ArrowLeftRight, TriangleAlert, Clapperboard, Snowflake, Ratio, ChevronsLeft, ChevronsRight,
 } from 'lucide-react';
 import {
-  API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, runTag, fieldLayer, frameContours, drawScene,
+  API, NX, NY, REGIONS, MAP_STYLES, FONT, scaleFor, loadFrame, framePool, runTag, fieldLayer, frameContours, drawScene,
   realtimeBasemap, fmtValue, download, makeGif, makeVideo, canMakeVideo, probFrame, loadLive, loadRoads, loadObserved, WX_NAMES, sampleFrame,
   lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres, splitFrame, drawPanes, withGrid, viewOnGrid, WARN_COLOURS,
   coversMap, SEE_THROUGH, setPalette, scaleSwatch, radarTypeOf, RADAR_FAMILIES,
@@ -40,6 +40,8 @@ import { areaStats, maskCells, typedShares } from '@/lib/areaStats';
 import { ESSENTIALS, MODEL_ABOUT, QUESTIONS } from '@/lib/modelHelp';
 import { readFavs, writeFavs, toggleLayer, addPlace, removePlace, addCompare, removeCompare } from '@/lib/modelFavs';
 import { ukZone } from '@/lib/ukZone';
+import { warmCells } from '@/lib/modelGL';
+import { dateWords, dateTimeWords, timeWords } from '@/lib/dateFmt';
 import { countyCells, describe } from '@/lib/mapCaption';
 import RegionPicker, { gridBox, loadCounties } from '@/components/modeldata/RegionPicker';
 import LongRange from '@/components/modeldata/LongRange';
@@ -309,25 +311,29 @@ function useRunFrames(model, run, v, wantStep, on) {
     if (!key) return undefined;
     const [m, rt, vv] = key.split('/');
     const ac = new AbortController();
-    const want = new Set();
-    let alive = true;
+    let alive = true, timer = 0;
+    /* as the main layer's (framePool), four on their way: the main layer keeps the rest of the
+       browser's six connections to the site */
+    const pool = framePool({
+      size: 4,
+      load: (s) => loadFrame(m, rt, vv, s, ac.signal),
+      near: (s) => Math.abs(s - (wantStep.current || 0)),
+      got: (b) => setFrames((o) => ({ ...o, ...b })),
+      failed: () => { if (alive && !timer) timer = setTimeout(poll, 2000); },
+    });
     const poll = async () => {
+      timer = 0;
       if (!alive) return;
       try {
         const st = await fetch(`${API}/frames/${m}/${rt}/${vv}/status?first=${Math.max(0, wantStep.current || 0)}`, { signal: ac.signal }).then((r) => r.json());
         if (!alive) return;
         setStatus((o) => (o && o.state === st.state && o.done?.length === st.done?.length && o.missing?.length === st.missing?.length ? o : st));
-        const todo = (st.done || []).filter((s) => !want.has(s)).sort((a, b) => Math.abs(a - wantStep.current) - Math.abs(b - wantStep.current));
-        const batch = todo.slice(0, 6);
-        await Promise.all(batch.map(async (s) => {
-          want.add(s);
-          try { const f = await loadFrame(m, rt, vv, s, ac.signal); if (alive) setFrames((o) => ({ ...o, [s]: f })); } catch { want.delete(s); }
-        }));
-        if (st.state !== 'complete' || todo.length > batch.length) setTimeout(poll, todo.length > batch.length ? 0 : 1200);
-      } catch { if (alive) setTimeout(poll, 3000); }
+        pool.add(st.done || []);
+        if (st.state !== 'complete' && !timer) timer = setTimeout(poll, 1200);
+      } catch { if (alive && !timer) timer = setTimeout(poll, 3000); }
     };
     poll();
-    return () => { alive = false; ac.abort(); };
+    return () => { alive = false; ac.abort(); pool.stop(); clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   return key ? { frames, status, key } : null;
@@ -418,7 +424,7 @@ function defaultRun(m) {
 const runDays = (runs) => {
   const out = [];
   for (const r of runs) {
-    const day = new Date(r.run).toLocaleDateString('en-GB', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' });
+    const day = dateWords(r.run, 'en-GB', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' });   // a kept formatter (lib/dateFmt): run on every render
     if (!out.length || out[out.length - 1][0] !== day) out.push([day, []]);
     out[out.length - 1][1].push(r);
   }
@@ -431,7 +437,7 @@ const runOptions = (runs) => runDays(runs).map(([day, rs]) => (
     {rs.map((r) => <option key={r.run} value={r.run} style={{ color: '#111' }}>{runText(r, runs)}</option>)}
   </optgroup>
 ));
-const runLabel = (iso) => new Date(iso).toLocaleString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', hour: '2-digit' }).replace(',', '') + 'Z';
+const runLabel = (iso) => dateTimeWords(iso, 'en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', hour: '2-digit' }).replace(',', '') + 'Z';
 /* what the key says about a frame: the model, the run and the lead time, and the shorter version
    that a narrow window has room for */
 function creditOf(m, rn, lead) {
@@ -447,7 +453,7 @@ const sourceOf = (m) => MODEL_INFO[m.id]?.[2] || 'open data';
 /* the next run, in words (15 Nov 2026): its hour and, once the server has seen a few of the model's
    runs land (server/modelData.js nextRuns), when it usually arrives and how long that is from now; a
    run past its usual time is 'due now', and one well past it 'later than usual' */
-const ukClock = (ms) => `${new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })} ${ukZone(new Date(ms))}`;
+const ukClock = (ms) => `${timeWords(ms, 'en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })} ${ukZone(new Date(ms))}`;
 function nextRunText(nr, now) {
   if (!nr?.next) return null;
   const name = runHour(nr.next);
@@ -1043,32 +1049,31 @@ export default function ModelData() {
     if (!key) return undefined;
     const [m, rt, v] = key.split('/');
     const ac = new AbortController();
-    const want = new Set();
-    let alive = true;
+    let alive = true, timer = 0;
     if (targetValid.current != null) wantStep.current = Math.max(0, Math.round((targetValid.current - Date.parse(run.run)) / 3600e3));
     setFrames({}); setStatus(null); colourCache.current.clear(); contourCache.current.clear();
-    const pull = async (step) => {
-      want.add(step);
-      try {
-        const f = await loadFrame(m, rt, v, step, ac.signal);
-        if (alive) setFrames((o) => ({ ...o, [step]: f }));
-      } catch { want.delete(step); }
-    };
+    /* every step the server has, the one on screen first and then outwards from it, six on their way
+       at all times, the page drawn again for a handful at a time (lib/modelViewer framePool); the
+       status is asked again only while the server is still making steps, or to retry a failed one */
+    const pool = framePool({
+      load: (s) => loadFrame(m, rt, v, s, ac.signal),
+      near: (s) => Math.abs(s - wantStep.current),
+      got: (b) => setFrames((o) => ({ ...o, ...b })),
+      failed: () => { if (alive && !timer) timer = setTimeout(poll, 1500); },
+    });
     const poll = async () => {
+      timer = 0;
       if (!alive) return;
       try {
         const st = await fetch(`${API}/frames/${m}/${rt}/${v}/status?first=${Math.max(0, wantStep.current)}`, { signal: ac.signal }).then((r) => r.json());
         if (!alive) return;
         setStatus(st);
-        /* the frame being looked at first, then outwards from it, eight at a time */
-        const todo = (st.done || []).filter((s) => !want.has(s)).sort((a, b) => Math.abs(a - wantStep.current) - Math.abs(b - wantStep.current));
-        const batch = todo.slice(0, 8);
-        await Promise.all(batch.map(pull));
-        if (st.state !== 'complete' || todo.length > batch.length) setTimeout(poll, todo.length > batch.length ? 0 : 600);
-      } catch { if (alive) setTimeout(poll, 2000); }
+        pool.add(st.done || []);
+        if (st.state !== 'complete' && !timer) timer = setTimeout(poll, 600);
+      } catch { if (alive && !timer) timer = setTimeout(poll, 2000); }
     };
     poll();
-    return () => { alive = false; ac.abort(); };
+    return () => { alive = false; ac.abort(); pool.stop(); clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);                                              // the key names the run; run.run is read with it
 
@@ -1078,22 +1083,21 @@ export default function ModelData() {
   useEffect(() => {
     if (!isLive || !liveProd?.times?.length || !liveProd.ext) return undefined;
     const ac = new AbortController();
-    let alive = true;
     const times = liveProd.times;
     const at = wantStep.current && times.some((t) => Date.parse(t) === wantStep.current) ? wantStep.current : Date.parse(times[times.length - 1]);
-    const todo = times.filter((t) => !liveWant.current.has(t)).sort((a, b) => Math.abs(Date.parse(a) - at) - Math.abs(Date.parse(b) - at));
-    (async () => {
-      for (let i = 0; i < todo.length && alive; i += 6) {
-        await Promise.all(todo.slice(i, i + 6).map(async (t) => {
-          liveWant.current.add(t);
-          try {
-            const f = await loadLive(liveItem.src, t, liveProd.ext, ac.signal);
-            if (alive) setFrames((o) => ({ ...o, [Date.parse(t)]: f }));
-          } catch { liveWant.current.delete(t); }
-        }));
-      }
-    })();
-    return () => { alive = false; ac.abort(); };
+    const todo = times.filter((t) => !liveWant.current.has(t));
+    todo.forEach((t) => liveWant.current.add(t));
+    const shown = new Set();
+    /* as the forecast layers' (lib/modelViewer framePool): six on their way at all times, nearest
+       the time on screen first; any not shown when this ends are asked for again next time */
+    const pool = framePool({
+      load: (t) => loadLive(liveItem.src, t, liveProd.ext, ac.signal),
+      near: (t) => Math.abs(Date.parse(t) - at),
+      got: (b) => { const add = {}; for (const t in b) { shown.add(t); add[Date.parse(t)] = b[t]; } setFrames((o) => ({ ...o, ...add })); },
+      failed: (t) => liveWant.current.delete(t),
+    });
+    pool.add(todo);
+    return () => { pool.stop(); ac.abort(); for (const t of todo) if (!shown.has(t)) liveWant.current.delete(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLive, liveSrc, liveProd]);
 
@@ -1512,6 +1516,9 @@ export default function ModelData() {
     if (bumpRaf.current) return;
     bumpRaf.current = requestAnimationFrame(() => { bumpRaf.current = 0; setCalcTick((n) => n + 1); });
   }, []);
+  /* the graphics card's program compiles while the first frames are on their way, and the map is
+     drawn again once it is ready (lib/modelGL warmCells: it used to freeze the page for ~1 s) */
+  useEffect(() => warmCells(bump), [bump]);
   const smoothCache = useRef(new Map());
   const overlayCache = useRef(new Map());
   /* where the live and observed layers are from (a forecast's key names its model and run) */
@@ -2842,9 +2849,15 @@ export default function ModelData() {
   const areaCells = useMemo(() => (hlRings ? maskCells(hlRings[gridName] || [], gridName) : null), [hlRings, gridName]);
   const [counties, setCounties] = useState(null);
   useEffect(() => { let on = true; loadCounties().then((c) => on && setCounties(c)); return () => { on = false; }; }, []);
-  const caption = useMemo(() => {
-    if (!counties || !frame || isImg || isLong) return '';
-    try { return describe(disp(frame), scaleKey, vmeta, countyCells(counties, gridName), gridName); } catch { return ''; }
+  /* the map in words, worked out when the browser has a moment rather than as a frame arrives (16 Nov
+     2026: every county's cells, ~0.2 s the first time, held the first frame back from the screen) */
+  const [caption, setCaption] = useState('');
+  useEffect(() => {
+    if (!counties || !frame || isImg || isLong) { setCaption(''); return undefined; }
+    const later = window.requestIdleCallback ? (f) => window.requestIdleCallback(f, { timeout: 800 }) : (f) => setTimeout(f, 60);
+    const cancel = window.cancelIdleCallback || clearTimeout;
+    const id = later(() => { try { setCaption(describe(disp(frame), scaleKey, vmeta, countyCells(counties, gridName), gridName)); } catch { setCaption(''); } });
+    return () => cancel(id);
   }, [counties, frame, disp, scaleKey, vmeta, gridName, isImg, isLong]);
   const areaWet = RAINY.has(scaleKey) || /^(precip|snow|rain|frzr|icep|conv)_(total|1h|6h|24h|acc)$/.test(scaleKey) ? 0.1 : null;
   const areaNow = useMemo(() => {
@@ -2876,7 +2889,7 @@ export default function ModelData() {
   /* a step as its day and time (Mon 16, 08:00), as the run's own steps are labelled elsewhere */
   const whenOf = (st) => {
     const ms = timeSteps ? st : Date.parse(run?.run || 0) + st * 3600e3;
-    return new Date(ms).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', '');
+    return dateTimeWords(ms, 'en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', '');
   };
   const areaCard = hl && !drawing && (() => {
     const A = areaNow, unit = vmeta?.unit;
@@ -3027,9 +3040,8 @@ export default function ModelData() {
   };
   stepDayRef.current = stepDay;
   const tipLabel = (ms) => {
-    const d = new Date(ms);
-    if (isObs) return d.toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' });
-    const t = d.toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', ' ·');
+    if (isObs) return dateWords(ms, 'en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' });
+    const t = dateTimeWords(ms, 'en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', ' ·');
     return timeSteps ? t : `${t} · T+${Math.round((ms - runMsT) / 3600e3)}`;
   };
   const slider = (

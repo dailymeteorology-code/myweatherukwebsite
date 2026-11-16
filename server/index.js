@@ -50,6 +50,7 @@ import { mountLocationWeather } from './locationWeather.js';
 import { mountWorldConditions } from './worldConditions.js';
 import { mountPatterns } from './patterns/index.js';
 import { mountImageSizes, warmImageSizes } from './imageSizes.js';
+import { fastStatic, assetHeaders } from './staticFast.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(here, '..');
@@ -605,7 +606,9 @@ app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y' }));
 if (IS_PROD) {
   const dist = path.join(ROOT, 'dist');
   if (fs.existsSync(dist)) {
-    app.use(express.static(dist));
+    // text files compressed and kept, /assets/ cached for a year (server/staticFast.js)
+    app.use(fastStatic(dist));
+    app.use(express.static(dist, { setHeaders: assetHeaders }));
     // Client-side routing: hand any non-API path back to index.html.
     app.get(/^(?!\/(api|uploads)\/).*/, (req, res) =>
       res.sendFile(path.join(dist, 'index.html'))

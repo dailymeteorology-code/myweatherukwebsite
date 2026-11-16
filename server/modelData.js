@@ -120,6 +120,40 @@ const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); }
    without holding up the site (a bulk synchronous read froze it for 2 s on 12 Nov 2026). */
 const readJsonAsync = async (f) => { try { return JSON.parse(await fs.promises.readFile(f, 'utf8')); } catch { return null; } };
 
+/* Frames kept in memory (16 Nov 2026). While the warming catches up after the PC has been off, that
+   drive took 0.3-1 s a frame: a run's 77 frames came in 30-90 s the first time anyone opened them, and
+   in about a second once in memory. Every frame sent is kept, and the much-used layers (PREFETCH) are
+   read in the moment a job finishes them, while Windows still has them in its file cache, so the first
+   person to open one gets it from memory too. Up to 900 MB, least recently used out first; a layer's
+   frames are forgotten whenever a job starts making it again. */
+const HOT_MAX = 900e6;
+const hot = new Map();                                // frame file -> its bytes, least recently used first
+let hotBytes = 0;
+function hotGet(f) {
+  const b = hot.get(f);
+  if (b) { hot.delete(f); hot.set(f, b); }
+  return b;
+}
+function hotPut(f, b) {
+  const old = hot.get(f);
+  if (old) { hot.delete(f); hotBytes -= old.length; }
+  hot.set(f, b);
+  hotBytes += b.length;
+  while (hotBytes > HOT_MAX && hot.size > 1) { const [k, v] = hot.entries().next().value; hot.delete(k); hotBytes -= v.length; }
+}
+function hotForget(dir) {
+  const within = dir + path.sep;
+  for (const [k, v] of hot) if (k.startsWith(within)) { hot.delete(k); hotBytes -= v.length; }
+}
+async function hotLoad(dir) {
+  const st = await readJsonAsync(path.join(dir, 'status.json'));
+  for (const s of st?.done || []) {
+    const f = path.join(dir, `${s}.bin`);
+    if (hot.has(f)) continue;
+    try { hotPut(f, await fs.promises.readFile(f)); } catch { /* not there after all */ }
+  }
+}
+
 function pump() {
   const count = (p) => [...running.values()].filter((r) => r.prefetch === p).length;
   queue.sort(before);
@@ -131,9 +165,12 @@ function pump() {
     if (count(job.prefetch) >= LIMIT(job.prefetch) || (job.prefetch && waiting)) { i++; continue; }
     queue.splice(i, 1);
     const entry = { child: null, prefetch: job.prefetch, killed: false };
+    const [jm, jr, jv] = job.key.split('/');
+    hotForget(frameDir(jm, jr, jv));                                       // its frames may be made anew
     entry.child = python([ENS_MODELS.has(job.args[0]) ? 'mdata.ens' : 'mdata.job', ...job.args], (code, err) => {
       if (running.get(job.key) === entry) running.delete(job.key);          // not the job started again in its place
       if (code && !entry.killed) console.warn(`[modeldata] job ${job.key} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
+      if (!code && PREFETCH.includes(jv)) hotLoad(frameDir(jm, jr, jv)).catch(() => {});   // much-used: into memory now
       pump();
     }, { MDATA_GRID: gridOf(job.args[0]), MDATA_THREADS: THREADS(job.prefetch), MDATA_LANE: job.prefetch ? 'background' : 'user' }, !job.prefetch);
     running.set(job.key, entry);
@@ -541,23 +578,32 @@ export function mountModelData(app) {
     res.set('Cache-Control', 'no-cache');
     res.sendFile(f);
   });
+  /* A frame file as it is (gzip), opened without waiting on the disk (16 Nov 2026). Each frame used to
+     be checked with existsSync first: on the busy D: drive that held the whole server up, so a run's
+     frames came out ~0.6 s apart and every other request waited behind them. The headers that let a
+     browser keep it go out only once the file has opened, so a missing frame is never kept as missing. */
+  const IMMUTABLE = 'public, max-age=86400, immutable';
+  const sendGz = (res, f) => {
+    const s = fs.createReadStream(f);
+    s.once('open', () => { res.set({ 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip', 'Cache-Control': IMMUTABLE }); s.pipe(res); });
+    s.once('error', (e) => { if (!res.headersSent) res.status(e.code === 'ENOENT' ? 404 : 500).end(); else res.destroy(e); });
+  };
   app.get('/api/modeldata/live/:product/:time', (req, res) => {
     const { product, time } = req.params;
     const m = /^(\d{8}T\d{4})\.(jpg|png|bin)$/.exec(time);
     if (!LIVE_PRODUCTS.has(product) || !m) return res.status(400).end();
     const f = path.join(DATA, 'live', product, time);
-    if (!fs.existsSync(f)) return res.status(404).end();
-    res.set('Cache-Control', 'public, max-age=86400, immutable');
-    if (m[2] === 'bin') { res.set({ 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip' }); return fs.createReadStream(f).pipe(res); }
-    res.sendFile(f);
+    if (m[2] === 'bin') return sendGz(res, f);
+    res.sendFile(f, { headers: { 'Cache-Control': IMMUTABLE } }, (e) => { if (e && !res.headersSent) res.status(404).end(); });
   });
 
   app.get('/api/modeldata/frames/:model/:run/:v/:step', (req, res) => {
     if (!valid(req.params) || !/^\d{1,3}$/.test(req.params.step)) return res.status(400).end();
     const { model, run, v, step } = req.params;
     const f = path.join(frameDir(model, run, v), `${step}.bin`);
-    if (!fs.existsSync(f)) return res.status(404).end();
-    res.set({ 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip', 'Cache-Control': 'public, max-age=86400, immutable' });
-    fs.createReadStream(f).pipe(res);
+    const send = (b) => { res.set({ 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip', 'Cache-Control': IMMUTABLE }); res.end(b); };
+    const b = hotGet(f);                                                   // kept in memory (hotPut)
+    if (b) return send(b);
+    fs.promises.readFile(f).then((buf) => { hotPut(f, buf); send(buf); }, (e) => res.status(e.code === 'ENOENT' ? 404 : 500).end());
   });
 }

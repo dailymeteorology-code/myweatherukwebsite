@@ -71,6 +71,7 @@ RADAR_TYPE_ENC = dict(lo=0, hi=254)
 UKV_VARS = ('t2', 'td2', 'wind10', 'gust10', 'mslp', 'tcc', 'vis', 'precip_rate', 'snow_rate')
 # residual spreading: field, length scale (km), largest believable station-minus-model difference
 SPREAD = {'t2': (45, 8), 'td2': (45, 8), 'wind10': (40, 25), 'gust10': (35, 30), 'mslp': (120, 6)}
+SECOND_KM = {'t2': 15, 'td2': 15}                # a second, closer pass for these (analyse)
 
 _U = UKV()
 
@@ -451,7 +452,7 @@ def analyse(t, reports):
         if v not in B:
             continue
         key = {'t2': 'temp', 'td2': 'dewp', 'wind10': 'wspd', 'gust10': 'wgst', 'mslp': 'pres'}[v]
-        st = []
+        st, obs = [], []
         for o in near.values():
             ob = o[key]
             if ob is None or (v == 'mslp' and o['elev'] > 150):     # QNH ~ MSLP only near sea level
@@ -459,8 +460,18 @@ def analyse(t, reports):
             bg = at_station(B[v], o)
             if np.isfinite(bg) and abs(ob - bg) <= lim:
                 st.append((o['gx'], o['gy'], ob - bg))
+                obs.append((o['gx'], o['gy'], ob))
         used[v] = len(st)
         A[v] = spread(st, B[v], L) if st else B[v]
+        if v in SECOND_KM and st:
+            # A second pass on what the first left at each station, spread close round it (16 Nov 2026).
+            # One pass averages a place's correction over every airport within ~60 km: at 15:30 Dunstable,
+            # 8 km from Luton, took more from Heathrow's and Stansted's warmer afternoon than from Luton's
+            # own 5 C and read 5.9 C, warmer than the UKV's 5.35 C. Two passes keep the wide fit and let
+            # the nearest station lead near it (Dunstable 5.4 C). Left-out airports scored alike (97 at
+            # 15:15 and 15:30: mean errors 0.69 and 0.80 C in one pass, 0.68 and 0.82 C in two).
+            first = A[v]
+            A[v] = spread([(x, y, ob - first[int(y), int(x)]) for x, y, ob in obs], first, SECOND_KM[v])
     A['wind10'] = np.maximum(A['wind10'], 0)
     A['gust10'] = np.maximum(A.get('gust10', A['wind10']), A['wind10'])
     A['td2'] = np.minimum(A['td2'], A['t2'])
@@ -867,6 +878,7 @@ def update():
         return stamp in days[day] and (t < cut or stamp in have)
     todo = [t for t in slots if not analysed(t)][:PER_CYCLE]
     made = []
+    published = False
     if todo:
         span_h = (datetime.now(timezone.utc) - min(todo)).total_seconds() / 3600 + 1.5
         try:
@@ -885,6 +897,19 @@ def update():
                 if 'radar_type' in extra:
                     write_frame(LIVE / 'radar_type' / f'{stamp}.bin', extra['radar_type'], RADAR_TYPE_ENC,
                                 {'product': 'radar_type', 'valid': t.isoformat(), 'k': 0.5, 'rate_hi': RT_HI, **info})
+                # The newest analysis goes out at once (16 Nov 2026): after the PC had been off all day a
+                # cycle's six catch-up analyses took over half an hour, and the "right now" layers (the
+                # home page, Location Weather, Model Data's Live) sat on the morning's temperatures until
+                # the whole cycle had finished. The older slots fill in behind it.
+                if not published:
+                    published = True
+                    for p in [*NOW, 'radar_type']:
+                        write_index(p, cut)
+                    try:
+                        from . import live
+                        live.catalog()
+                    except Exception as e:
+                        print(f'[now] catalogue: {type(e).__name__}: {e}', flush=True)
             update_day(t, A, near)
             made.append(f'{t:%H:%M}')
     # the type of times analysed before it existed (or whose type failed): only the two type layers,

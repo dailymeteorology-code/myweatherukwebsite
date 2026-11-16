@@ -169,29 +169,50 @@ void main() {
   outColour = v < 0.0 ? vec4(0.0) : (colour(v - d) + colour(v) * 2.0 + colour(v + d)) * 0.25;
 }`;
 
-let G = null, dead = typeof document === 'undefined';
+/* G: the card, ready to draw. P: its program while it is still being compiled.
 
-function shader(gl, type, src) {
-  const s = gl.createShader(type);
-  gl.shaderSource(s, src);
-  gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) || 'shader');
-  return s;
-}
-function setup() {
-  if (G || dead) return G;
+   Compiling the program takes the graphics card's driver about a second (1.1 s on this PC's card,
+   16 Nov 2026), and asking whether it has linked waits for all of it: it used to happen as the first
+   frame came in, and froze the page for that second. Now it starts as the page opens (warmCells) and
+   compiles alongside everything else (KHR_parallel_shader_compile); a map drawn before it is ready
+   is drawn the old way that once, and drawn again when it is (an export always waits for it). */
+let G = null, P = null, dead = typeof document === 'undefined', timer = 0;
+const waiting = new Set();
+
+function begin() {
+  if (G || P || dead) return;
   try {
     const canvas = document.createElement('canvas');
     canvas.width = 1024; canvas.height = 1024;
     const gl = canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true });
     if (!gl) throw new Error('no WebGL 2');
-    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); G = null; dead = true; });
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); G = null; P = null; dead = true; });
     canvas.addEventListener('webglcontextrestored', () => { dead = false; });
+    const parallel = gl.getExtension('KHR_parallel_shader_compile');
     const program = gl.createProgram();
-    gl.attachShader(program, shader(gl, gl.VERTEX_SHADER, VERTEX));
-    gl.attachShader(program, shader(gl, gl.FRAGMENT_SHADER, FRAGMENT));
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'program');
+    const vs = gl.createShader(gl.VERTEX_SHADER), fs = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(vs, VERTEX); gl.compileShader(vs);
+    gl.shaderSource(fs, FRAGMENT); gl.compileShader(fs);
+    gl.attachShader(program, vs); gl.attachShader(program, fs);
+    gl.linkProgram(program);                                  // no status asked for yet: that would wait for it
+    P = { gl, canvas, program, vs, fs, parallel };
+  } catch (e) {
+    console.warn('[modelGL] drawing layers the old way:', e.message);
+    dead = true;
+  }
+}
+/** the program has finished compiling (or no one can tell without waiting) */
+const compiled = () => !!P && (!P.parallel || P.gl.getProgramParameter(P.program, P.parallel.COMPLETION_STATUS_KHR));
+function setup(wait = true) {
+  if (G || dead) return G;
+  begin();
+  if (!P || (!wait && !compiled())) return G;
+  try {
+    const { gl, canvas, program, vs, fs } = P;
+    P = null;
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      throw new Error(gl.getShaderInfoLog(fs) || gl.getShaderInfoLog(vs) || gl.getProgramInfoLog(program) || 'program');
+    }
     gl.useProgram(program);
     const at = (n) => gl.getUniformLocation(program, n);
     const u = { cells: at('uCells'), lut: at('uLut'), size: at('uSize'), target: at('uTarget'), view: at('uView'), centre: at('uCentre'), k: at('uK'), nearest: at('uNearest'), soft: at('uSoft'), typed: at('uTyped') };
@@ -206,7 +227,29 @@ function setup() {
     dead = true;
     G = null;
   }
+  if (G || dead) { const list = [...waiting]; waiting.clear(); list.forEach((cb) => cb()); }
   return G;
+}
+/* until the program is ready: look again every 50 ms */
+function watch() {
+  if (timer || G || dead || !P) return;
+  timer = setTimeout(() => { timer = 0; if (compiled()) setup(true); else watch(); }, 50);
+}
+
+/** Starts making the program now and returns at once; `onReady` is called when layers can be drawn
+    this way (or never can be). Returns a function that forgets onReady. */
+export function warmCells(onReady) {
+  if (G || dead) return () => {};
+  if (onReady) waiting.add(onReady);
+  begin();
+  if (P && !P.parallel) setup(true);                          // no way to tell without waiting: wait now, early
+  else watch();
+  return () => { if (onReady) waiting.delete(onReady); };
+}
+/* the Model Data page itself: start as soon as the browser has a moment, before the page has even
+   asked for its first frame (only there: other pages never draw layers) */
+if (!dead && typeof location !== 'undefined' && /^\/modeldata/i.test(location.pathname)) {
+  (window.requestIdleCallback || ((f) => setTimeout(f, 200)))(() => warmCells(), { timeout: 1500 });
 }
 
 /* a texture kept by key, least recently used out first */
@@ -234,15 +277,17 @@ function texture(unit) {
   return t;
 }
 
-/** Can layers be drawn this way here? */
-export const canDrawCells = () => !!setup();
+/** Can layers be drawn this way here? (Yes while the program is still compiling, too: see drawCells.) */
+export const canDrawCells = () => { if (!G && !dead) begin(); return !!(G || P); };
 export const lutSize = LUT_SIZE;
 
 /** Draws a frame's region. a = { frame, q, W, H, K, lutKey, lut () => Uint8Array RGBA x LUT_SIZE,
     x, y, w, h (whole canvas px on the graphic), ox, oy (the graphic's point for cx, cy), s (canvas px
-    per display cell), cx, cy, nearest, soft }. Returns the canvas holding it at its top left, or null. */
+    per display cell), cx, cy, nearest, soft, wait }. Returns the canvas holding it at its top left, or
+    null: no card, or (without `wait`) the program not compiled yet, so the caller draws it the old
+    way this time. */
 export function drawCells(a) {
-  if (!setup()) return null;
+  if (!setup(!!a.wait)) { if (!a.wait) watch(); return null; }
   const { gl, canvas, u } = G;
   if (a.w > canvas.width || a.h > canvas.height) {
     canvas.width = Math.max(canvas.width, Math.ceil(a.w / 256) * 256);

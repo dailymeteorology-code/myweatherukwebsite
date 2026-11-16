@@ -31,6 +31,20 @@ ROOT = HERE.parent                                    # tools/modeldata
 REPO = ROOT.parents[1]                                # myweatheruk-selfhost
 sys.path.insert(0, str(REPO / 'tools' / 'tcm-nova'))  # AWS/GRIB/NetCDF helpers shared with TCM NOVA
 
+# Background work gives way on the disk (16 Nov 2026). The frames live on an external USB hard drive,
+# and after the PC had been off the warming's reads and writes queued every frame someone was waiting
+# for behind them: a run's 77 frames took 30-90 s to reach the page. Windows' background mode drops a
+# process's disk and processor priority to very low, so whatever a person is waiting for goes first.
+if os.environ.get('MDATA_LANE') == 'background' and os.name == 'nt':
+    try:
+        import ctypes
+        _k = ctypes.windll.kernel32
+        _k.GetCurrentProcess.restype = ctypes.c_void_p                  # a 64-bit handle, not ctypes' default int
+        _k.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        BACKGROUND_MODE = bool(_k.SetPriorityClass(_k.GetCurrentProcess(), 0x00100000))   # PROCESS_MODE_BACKGROUND_BEGIN
+    except Exception:
+        BACKGROUND_MODE = False
+
 _EXT = Path('D:/MyWeatherUK-data/modeldata')
 DATA = Path(os.environ.get('MODELDATA_DIR', _EXT if Path('D:/').exists() else REPO / 'server' / 'data' / 'modeldata'))
 FRAMES = DATA / 'frames'

@@ -5,21 +5,24 @@
    playhead sits on the step on show, and a press or drag anywhere picks the nearest step, with the
    time it lands on above the finger. */
 import React, { useMemo, useRef, useState } from 'react';
+import { dateWords, dateTimeWords, timeWords } from '@/lib/dateFmt';
 
 const LONDON = 'Europe/London';
-const dayKey = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: LONDON });
-const hourKey = (ms) => new Date(ms).toLocaleString('en-GB', { timeZone: LONDON, day: '2-digit', hour: '2-digit', hourCycle: 'h23' });
-const monthKey = (ms) => new Date(ms).toLocaleDateString('en-GB', { timeZone: LONDON, year: 'numeric', month: '2-digit' });
+/* kept formatters (lib/dateFmt): a 5-day run is 480 quarter hours to sort into days, and a new
+   formatter for each took ~150 ms as the page first loaded */
+const dayKey = (ms) => dateWords(ms, 'en-CA', { timeZone: LONDON });
+const hourKey = (ms) => dateTimeWords(ms, 'en-GB', { timeZone: LONDON, day: '2-digit', hour: '2-digit', hourCycle: 'h23' });
+const monthKey = (ms) => dateWords(ms, 'en-GB', { timeZone: LONDON, year: 'numeric', month: '2-digit' });
 
 /* the pieces of [t0, t1]: where each London day (hour, month) starts and ends, and its label */
 function segments(t0, t1, unit) {
   const out = [];
   const key = unit === 'hour' ? hourKey : unit === 'month' ? monthKey : dayKey;
   const label = unit === 'hour'
-    ? (ms) => new Date(ms).toLocaleTimeString('en-GB', { timeZone: LONDON, hour: '2-digit', minute: '2-digit' })
+    ? (ms) => timeWords(ms, 'en-GB', { timeZone: LONDON, hour: '2-digit', minute: '2-digit' })
     : unit === 'month'
-      ? (ms) => new Date(ms).toLocaleDateString('en-GB', { timeZone: LONDON, month: 'short' })
-      : (ms) => new Date(ms).toLocaleDateString('en-GB', { timeZone: LONDON, weekday: 'short', day: 'numeric' });
+      ? (ms) => dateWords(ms, 'en-GB', { timeZone: LONDON, month: 'short' })
+      : (ms) => dateWords(ms, 'en-GB', { timeZone: LONDON, weekday: 'short', day: 'numeric' });
   const stepMs = unit === 'hour' ? 15 * 60e3 : unit === 'month' ? 6 * 3600e3 : 15 * 60e3;
   let a = t0, k = key(t0);
   for (let t = t0 + stepMs; t <= t1 + stepMs; t += stepMs) {

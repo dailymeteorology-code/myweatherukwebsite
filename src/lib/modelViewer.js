@@ -14,6 +14,7 @@ import { ukZone } from '@/lib/ukZone';
 import { GRIDS, projection } from '@/lib/modelGrids';
 import { CALC } from '@/lib/modelCalc';
 import { canDrawCells, drawCells, lutSize } from '@/lib/modelGL';
+import { dateTimeWords } from '@/lib/dateFmt';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES } from '@/lib/frostKey';
 
@@ -658,6 +659,49 @@ export async function loadFrame(model, runTag, v, step, signal) {
 }
 
 export const runTag = (iso) => iso.replace(/[-:]/g, '').slice(0, 13) + 'Z';
+
+/** Fetching a run's frames (16 Nov 2026, the first load's speed). They used to be asked for eight at
+    a time: each eight waited for its slowest, then for another status check before the next eight
+    began, and every frame that came in drew the page again, so a 5-day UKV run the server already had
+    took ~8 s to come in on this PC. Here `size` are always on their way, the next one the nearest
+    by `near` (read at every pick, so a drag along the timeline mid-load turns it round), and what
+    arrives is handed on in one go at most every `every` ms; the step on screen (near 0) and the first
+    frame at once. A frame that failed is dropped from the list, so the next add() asks again (three
+    times at most). Returns { add(keys), stop() }. */
+export function framePool({ load, near, got, failed, size = 6, every = 120 }) {
+  const known = new Set(), tries = new Map(), queue = [];
+  let busy = 0, held = null, timer = 0, first = true, live = true;
+  const flush = () => {
+    timer = 0;
+    const b = held;
+    held = null;
+    if (live && b) got(b);
+  };
+  const keep = (k, f) => {
+    (held ||= {})[k] = f;
+    if (first || near(k) === 0) { first = false; clearTimeout(timer); flush(); }
+    else if (!timer) timer = setTimeout(flush, every);
+  };
+  const pump = () => {
+    while (live && busy < size && queue.length) {
+      let best = 0;
+      for (let i = 1; i < queue.length; i++) if (near(queue[i]) < near(queue[best])) best = i;
+      const k = queue.splice(best, 1)[0];
+      busy++;
+      Promise.resolve().then(() => load(k)).then((f) => { if (live) keep(k, f); }, (e) => {
+        if (!live || e?.name === 'AbortError') return;
+        const n = (tries.get(k) || 0) + 1;
+        tries.set(k, n);
+        if (n < 3) known.delete(k);
+        failed?.(k, e);
+      }).finally(() => { busy--; pump(); });
+    }
+  };
+  return {
+    add(keys) { for (const k of keys) if (!known.has(k)) { known.add(k); queue.push(k); } pump(); },
+    stop() { live = false; queue.length = 0; clearTimeout(timer); held = null; },
+  };
+}
 
 /* the chance (0-100 %) that the value is past a threshold, from every ensemble member:
    members are compared in their encoded bytes, so this takes a millisecond or two */
@@ -1390,7 +1434,7 @@ export const fmtValue = (v, unit) => {
   const s = a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1).replace(/\.0$/, '') : a >= 1 || a === 0 ? v.toFixed(1) : String(Number(v.toPrecision(2)));
   return `${s}${unit ? ` ${unit}` : ''}`;
 };
-const timeFmt = (iso, opts) => new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/London', ...opts });
+const timeFmt = (iso, opts) => dateTimeWords(iso, 'en-GB', { timeZone: 'Europe/London', ...opts });   // a kept formatter: drawn every frame
 export const FONT = '"Inter", -apple-system, "SF Pro Display", "Segoe UI", system-ui, sans-serif';
 /* the STRATA display face for headlines and big numbers (public/fonts, the motion graphics' own) */
 export const DISPLAY = '"Inter Tight", "Inter", -apple-system, "SF Pro Display", "Segoe UI", system-ui, sans-serif';
@@ -1429,8 +1473,11 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
       const x1 = Math.ceil(Math.min(clip.x + clip.w, X(W * K))), y1 = Math.ceil(Math.min(clip.y + clip.h, Y(H * K)));
       if (x1 <= x0 || y1 <= y0) return;
       const w = x1 - x0, h = y1 - y0;
+      /* on screen (opts.cache) a card still compiling its program is not waited for: this one draw
+         goes the old way and the page draws again when it is ready (lib/modelGL warmCells); an
+         export waits, so all its frames look alike */
       const out = drawCells({ frame: f, q: f.q, W, H, K, lutKey: `${cv.key}|${palId()}|${f.prob ? 'chance' : `${f.head?.lo}|${f.head?.hi}|${f.head?.scale}`}`, lut: () => colourTable(f, cv.key),
-        x: x0, y: y0, w, h, ox, oy, s, cx, cy, nearest: cv.nearest || opts.coarse, soft: cv.soft, typed: cv.typed });
+        x: x0, y: y0, w, h, ox, oy, s, cx, cy, nearest: cv.nearest || opts.coarse, soft: cv.soft, typed: cv.typed, wait: !opts.cache });
       if (out) {
         ctx.imageSmoothingEnabled = false;
         ctx.globalAlpha = alpha;
