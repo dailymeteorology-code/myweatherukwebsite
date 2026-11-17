@@ -924,6 +924,21 @@ export default function LocationForecast() {
     );
   }, [run]);
 
+  /* The app's home page (17 Nov 2026, the iOS-app redesign: "it shows the person's current location or they can
+     search up a location if they did not allow location"): opened with no place named, it finds where you are, as
+     the iPhone's Weather app does. A link naming a place, or the installed app's start place, still comes first;
+     after a no to sharing the location, the search shows, as before. */
+  const autoLocated = useRef(false);
+  useEffect(() => {
+    if (autoLocated.current) return;
+    const q = new URLSearchParams(routerLocation.search);
+    if (q.has('lat') || q.has('location') || appStartPlace(routerLocation.search)) return;
+    autoLocated.current = true;
+    const perms = typeof navigator !== 'undefined' ? navigator.permissions : null;
+    if (!perms?.query) { useMyLocation(); return; }
+    perms.query({ name: 'geolocation' }).then((st) => { if (st.state !== 'denied') useMyLocation(); }, () => useMyLocation());
+  }, [routerLocation.search, useMyLocation]);
+
   /* a link opens a place: ?lat=&lon=&name= exactly (the "copy a link" menu item), or ?location=Name */
   useEffect(() => {
     const q = new URLSearchParams(routerLocation.search);

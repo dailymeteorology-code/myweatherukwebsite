@@ -989,13 +989,15 @@ export default function ModelData() {
   const colourCache = useRef(new Map());
   const contourCache = useRef(new Map());
   const shellRef = useRef(null);
-  const [shellH, setShellH] = useState('calc(100dvh - 56px)');
+  /* the map fills the screen down to the app's tab bar (--app-tabbar-space, components/app/app-tabbar.css: the
+     floating bar's room on phones, the 56 px it always kept on larger screens) */
+  const [shellH, setShellH] = useState('calc(100dvh - var(--app-tabbar-space, 56px))');
   const sidePanel = isObs && obsPanel && (layout === 'desktop' || (layout === 'tablet' && vw >= 1000));   // docked beside the frame
 
   useEffect(() => {
     const measure = () => {
       const top = shellRef.current?.getBoundingClientRect().top ?? 0;
-      setShellH(`calc(100dvh - 56px - ${Math.max(0, Math.round(top + window.scrollY))}px)`);
+      setShellH(`calc(100dvh - var(--app-tabbar-space, 56px) - ${Math.max(0, Math.round(top + window.scrollY))}px)`);
     };
     measure();
     window.addEventListener('resize', measure);

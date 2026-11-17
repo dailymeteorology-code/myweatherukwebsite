@@ -1,0 +1,102 @@
+/* The app's tab bar (components/app/AppTabBar.jsx, 17 Nov 2026): Apple's Liquid Glass. A floating capsule of glass
+   over the page, lit along its rim, with a lens of brighter glass under the chosen tab that glides to the next one
+   with a little liquid stretch. Phones only (under 768 px), like the bar it replaced.
+
+   --app-tabbar-space is the room the bar takes at the foot of the screen: the Layout pads pages by it, and the
+   Model Data page ends its map above it. Larger screens keep the 56 px they always reserved. */
+:root { --app-tabbar-space: 56px; }
+@media (max-width: 767.98px) {
+  :root { --app-tabbar-space: calc(84px + env(safe-area-inset-bottom, 0px)); }
+}
+
+.atb {
+  --atb-pad: 5px;
+  --atb-tint: #3d9bff;
+  --atb-ink: rgba(236, 241, 250, 0.86);
+  position: fixed; z-index: 50; box-sizing: border-box;
+  left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+  height: 62px; padding: var(--atb-pad); border-radius: 31px;
+  display: flex; align-items: stretch;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0.08) 100%),
+    rgba(22, 27, 38, 0.44);
+  -webkit-backdrop-filter: blur(22px) saturate(1.9) brightness(1.08);
+  backdrop-filter: blur(22px) saturate(1.9) brightness(1.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.30), inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 12px 34px rgba(0, 0, 0, 0.36), 0 2px 8px rgba(0, 0, 0, 0.22);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+/* the rim: brighter where the light catches it (top left), fading round the far side */
+.atb::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.60), rgba(255, 255, 255, 0.10) 34%, rgba(255, 255, 255, 0.02) 62%, rgba(255, 255, 255, 0.28));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+}
+.atb.is-light {
+  --atb-tint: #0a7aff;
+  --atb-ink: rgba(17, 24, 39, 0.80);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.46) 52%, rgba(255, 255, 255, 0.58) 100%),
+    rgba(246, 248, 252, 0.30);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 rgba(255, 255, 255, 0.40),
+    0 12px 32px rgba(15, 23, 42, 0.18), 0 2px 8px rgba(15, 23, 42, 0.10);
+}
+.atb.is-light::before {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 1), rgba(255, 255, 255, 0.35) 40%, rgba(15, 23, 42, 0.06) 70%, rgba(255, 255, 255, 0.7));
+}
+@media (max-width: 767.98px) { .atb { display: flex; } }
+@media (min-width: 768px) { .atb { display: none; } }
+
+/* the lens under the chosen tab */
+.atb-lens {
+  position: absolute; top: var(--atb-pad); bottom: var(--atb-pad); left: var(--atb-pad);
+  width: calc((100% - 2 * var(--atb-pad)) / var(--atb-n));
+  translate: calc(var(--atb-i) * 100%) 0;
+  transition: translate 0.52s cubic-bezier(0.32, 1.28, 0.48, 1);
+  pointer-events: none;
+}
+.atb-lens::after {
+  content: ""; position: absolute; inset: 0; border-radius: 26px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.10));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42), inset 0 0 0 0.5px rgba(255, 255, 255, 0.22), 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+.atb.is-light .atb-lens::after {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(234, 239, 247, 0.85));
+  box-shadow: inset 0 1px 0 #fff, inset 0 0 0 0.5px rgba(15, 23, 42, 0.08), 0 4px 14px rgba(15, 23, 42, 0.12);
+}
+.atb-lens.is-moving::after { animation: atb-squash 0.5s cubic-bezier(0.3, 0.7, 0.3, 1); }
+@keyframes atb-squash {
+  0% { scale: 1 1; }
+  32% { scale: 1.18 0.9; }
+  66% { scale: 0.97 1.03; }
+  100% { scale: 1 1; }
+}
+
+.atb-item {
+  position: relative; z-index: 1; flex: 1 1 0; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  color: var(--atb-ink); text-decoration: none; border-radius: 26px;
+  font: 600 10px/1.1 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, system-ui, sans-serif; letter-spacing: -0.01em;
+  transition: color 0.25s ease;
+}
+.atb-item[aria-current="page"] { color: var(--atb-tint); }
+.atb-item svg { width: 22px; height: 22px; stroke-width: 2; transition: scale 0.18s ease; }
+.atb-item[aria-current="page"] svg { stroke-width: 2.3; }
+.atb-item:active svg { scale: 0.86; }
+.atb-item span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atb-item:focus-visible { outline: 2px solid var(--atb-tint); outline-offset: -3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .atb-lens { transition-duration: 0.01s; }
+  .atb-lens.is-moving::after { animation: none; }
+}
+/* glass without a backdrop blur would be a near-invisible wash: an opaque fill instead */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .atb { background: rgba(24, 29, 40, 0.96); }
+  .atb.is-light { background: rgba(250, 251, 253, 0.97); }
+}

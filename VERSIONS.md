@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.58.006 | 2026-11-16 | Patch | — | iPhone app: a live preview on the computer (/iphone-preview.html), the real site in an iPhone frame in the app's mode | — |
+| 5.59.000 | 2026-11-17 | Update | — | The app redesign begins: Home is the weather where you are, the old home page is the Hub (UK and Ireland), a Liquid Glass tab bar (Home, Model Data, TCM, Warnings, Settings, More), and new Warnings and More pages | — |
+| 5.58.006 | 2026-11-16 | Patch | 266881f | iPhone app: a live preview on the computer (/iphone-preview.html), the real site in an iPhone frame in the app's mode | — |
 | 5.58.005 | 2026-11-16 | Patch | 5ab8aa2 | Model Data: the MWUK model's watermark in the bottom right (and its credit line) reads MyWeatherUK Weather Model | — |
 | 5.58.004 | 2026-11-16 | Patch | 9e38d04 | Model Data: MWUK Consensus is now called MWUK | — |
 | 5.58.003 | 2026-11-16 | Patch | f4f0e69 | Model Data: a layer made from other layers waits for them to cover the whole run (AIFS 06Z precipitation type stopped at T+240) | — |

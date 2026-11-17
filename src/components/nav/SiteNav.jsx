@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Home, MapPin, Database, CloudLightning, Layers, Zap,
+  Home, MapPin, Database, CloudLightning, Layers, Zap, LayoutGrid, AlertTriangle,
   Archive, BarChart3, Target,
   Newspaper, Mail, Settings as SettingsIcon, CreditCard, ShieldAlert,
   ChevronDown, Menu, X, Radar, Sun, Moon, Snowflake,
@@ -42,13 +42,15 @@ import BannerMarks from '@/components/nav/BannerMarks';
  * reachable but known to be showing bad data. Nothing carries it at the
  * moment — Lightning Map and TCM Outlooks did, and no longer do.
  */
-const GROUPS = [
+export const GROUPS = [
   {
     id: 'forecast',
     label: 'Forecast',
     items: [
-      { label: 'Home', path: '/', icon: Home, blurb: 'Warnings, rain radar, live lightning and the weather around the world' },
-      { label: 'Location Weather', path: '/LocationWeather', icon: MapPin, blurb: 'Hour-by-hour forecast for anywhere in the UK and Ireland, from the Met Office UKV' },
+      /* 17 Nov 2026: the home page is the weather where you are; the old home page is the Hub */
+      { label: 'Home', path: '/', icon: Home, blurb: 'The forecast where you are, or anywhere you search, hour by hour from the Met Office UKV' },
+      { label: 'Hub', path: '/Hub', icon: LayoutGrid, blurb: 'Our graphics, live lightning, the weather across the UK and Ireland and the rain radar' },
+      { label: 'Warnings', path: '/Warnings', icon: AlertTriangle, blurb: 'Met Office and MyWeatherUK warnings in force and upcoming, on a map and in the archive' },
       { label: 'Model Data', path: '/ModelData', icon: Database, blurb: 'Maps from UKV, Met Office Global, ECMWF and GFS, plus live radar and satellite' },
       { label: 'Lightning', path: '/Lightning', icon: CloudLightning, blurb: 'Live strikes worldwide, past days to replay, and AI lightning warnings' },
       { label: 'TCM Outlooks', path: '/TCMOutlooks', icon: Zap, blurb: 'Where thunderstorms are likely in the coming days, from our TCM model' },
@@ -88,7 +90,7 @@ const GROUPS = [
 ];
 
 /** Account lives apart from the content groups, on the right of the bar. */
-const ACCOUNT_ITEMS = [
+export const ACCOUNT_ITEMS = [
   { label: 'Settings', path: '/Settings', icon: SettingsIcon, blurb: 'Units, language and your account' },
   { label: 'Subscription', path: '/Subscription', icon: CreditCard, blurb: 'Plans, what each one includes, and API credits' },
   { label: 'Admin', path: '/AdminSettings', icon: ShieldAlert, blurb: 'Run the site: warnings, graphics, news and settings', adminOnly: true },
@@ -465,10 +467,12 @@ function MobileSheet({ roles }) {
 
   return createPortal(
     <>
+      {/* On a phone the app's tab bar (components/app/AppTabBar.jsx) and its More tab are the menu now
+          (17 Nov 2026), so this button is not shown; the menu it opened stays for any page that opens it. */}
       <button
         onClick={() => setOpen(true)}
         aria-label="Open menu"
-        className="md:hidden fixed"
+        className="hidden"
         style={{
           top: 'calc(env(safe-area-inset-top, 0px) + 7px)',
           right: 10,

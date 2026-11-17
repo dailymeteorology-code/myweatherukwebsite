@@ -63,15 +63,18 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout
   : <>{children}</>;
 
 // ─── Route order — determines slide direction ─────────────────────────────
-const ROUTE_ORDER = ['/', '/Home', '/LocationWeather', '/News', '/Lightning', '/TCMOutlooks', '/TCMFrost', '/WeatherPatterns',
-  '/TCMArchive', '/MyWeatherArchive', '/ForecastVerification', '/WeatherScenarios', '/Settings', '/AdminSettings'];
+/* the app's tabs first, in the tab bar's order (components/app/AppTabBar.jsx), then the pages under More */
+const ROUTE_ORDER = ['/', '/Home', '/LocationWeather', '/ModelData', '/TCMOutlooks', '/TCMFrost', '/Warnings', '/Settings', '/More',
+  '/Hub', '/Lightning', '/News', '/WeatherPatterns', '/TCMArchive', '/MyWeatherArchive', '/ForecastVerification', '/WeatherScenarios',
+  '/AdminSettings'];
 function routeIndex(pathname) {
   const idx = ROUTE_ORDER.findIndex(r => pathname === r || pathname.startsWith(r + '/'));
   return idx === -1 ? 0 : idx;
 }
 
 const PAGE_LABELS = {
-  '/': 'Home', '/Home': 'Home', '/News': 'News', '/Lightning': 'Lightning',
+  '/': 'Home', '/Home': 'Home', '/Hub': 'Hub', '/Warnings': 'Warnings', '/More': 'More', '/ModelData': 'Model Data',
+  '/News': 'News', '/Lightning': 'Lightning',
   '/TCMOutlooks': 'TCM Outlooks', '/TCMFrost': 'TCM FROST', '/TCMNova': 'TCM NOVA', '/TCMV5': 'TCM NOVA', '/WeatherPatterns': 'Weather Patterns', '/GraphicStudio': 'Graphic Studio',
   '/Settings': 'Settings', '/AdminSettings': 'Admin',
   '/TCMArchive': 'Archive', '/MyWeatherArchive': 'Archive',
@@ -478,7 +481,7 @@ const AuthenticatedApp = () => {
           never takes the pointer. */}
       {versionLabel && (
         <div
-          className="fixed left-4 z-40 bottom-[calc(env(safe-area-inset-bottom,0px)+4.75rem)] md:bottom-4
+          className="fixed left-4 z-40 bottom-[calc(var(--app-tabbar-space)+2px)] md:bottom-4
                      text-[11px] leading-none tracking-wide pointer-events-none select-none"
           style={{ color: 'var(--text-muted)', opacity: 0.7 }}
         >
@@ -527,8 +530,8 @@ const AuthenticatedApp = () => {
               <Route path="/ForecastVerification" element={<LayoutWrapper currentPageName="ForecastVerification"><ForecastVerification /></LayoutWrapper>} />
               {/* the graphics in force are on the home page: these two pages are gone (MyWeatherGraphics
                   drew nothing; Graphics was removed on 22 Oct 2026), and old links land there */}
-              <Route path="/MyWeatherGraphics" element={<Navigate to="/" replace />} />
-              <Route path="/Graphics" element={<Navigate to="/" replace />} />
+              <Route path="/MyWeatherGraphics" element={<Navigate to="/Hub" replace />} />
+              <Route path="/Graphics" element={<Navigate to="/Hub" replace />} />
               <Route path="/GraphicStudio" element={<LayoutWrapper currentPageName="GraphicStudio"><GraphicStudio /></LayoutWrapper>} />
               {/* the public studio was the Thunderstorm Studio until 22 Oct 2026 */}
               <Route path="/ThunderstormStudio" element={<Navigate to="/GraphicStudio" replace />} />

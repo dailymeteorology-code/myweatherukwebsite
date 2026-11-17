@@ -280,6 +280,8 @@ export default function SkyBackdrop({ cond = 'cloudy', sun = 30, morning = true,
 
     const resize = () => {
       if (contained) {
+        /* the resize watcher can fire once more as the page closes (17 Nov 2026: switching app tabs did) */
+        if (!wrapRef.current) return;
         const r = wrapRef.current.getBoundingClientRect();
         W = Math.max(1, Math.round(r.width)); H = Math.max(1, Math.round(r.height));
         dpr = Math.min(window.devicePixelRatio || 1, 1.5);

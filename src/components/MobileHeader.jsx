@@ -4,7 +4,8 @@ import { ChevronLeft } from 'lucide-react';
 import { useLogo } from '@/components/MobileHeaderLogo';
 import BannerMarks from '@/components/nav/BannerMarks';
 
-const ROOT_PATHS = new Set(['/', '/Home', '/Lightning', '/TCMOutlooks', '/WeatherPatterns', '/Settings', '/AdminSettings', '/News']);
+/* the app's tabs' first pages have no Back (17 Nov 2026) */
+const ROOT_PATHS = new Set(['/', '/Home', '/ModelData', '/TCMOutlooks', '/Warnings', '/Settings', '/More', '/Hub', '/Lightning', '/WeatherPatterns', '/AdminSettings', '/News']);
 
 export default function MobileHeader({ siteSettings }) {
   const location = useLocation();

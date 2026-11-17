@@ -147,7 +147,8 @@ function useLightning() {
 
 /* ── the cities ─────────────────────────────────────────────────────────── */
 
-export default function CityConditions() {
+/* ukOnly (the Hub, 17 Nov 2026): the UK and Ireland's cities only. Dublin's reading still comes from the worldwide feed. */
+export default function CityConditions({ ukOnly = false }) {
   const [readings, setReadings] = useState({});   // id -> { current, cond, rate, cloud, valid } | { error }
   const [updatedAt, setUpdatedAt] = useState(null);
   const [tick, setTick] = useState(() => Date.now());   // each city's clock and sun, once a minute
@@ -223,7 +224,7 @@ export default function CityConditions() {
         bands={BANDS}
       />
 
-      {CITY_GROUPS.map((group, gi) => {
+      {(ukOnly ? CITY_GROUPS.filter((g) => g.id === 'uk') : CITY_GROUPS).map((group, gi) => {
         const list = byGroup[group.id] || [];
         // Marked on the card, so a glance across a band finds the hot one.
         const warmest = list.reduce(
@@ -248,7 +249,7 @@ export default function CityConditions() {
 
       {updatedAt && (
         <p className="mt-4 text-[10.5px]" style={{ color: 'var(--ink-3)' }}>
-          Right now · UK: Met Office UKV analysis · elsewhere: Met Office global model · updated{' '}
+          Right now · UK: Met Office UKV analysis · {ukOnly ? 'Dublin' : 'elsewhere'}: Met Office global model · updated{' '}
           {updatedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
           <span className="mx-1.5 opacity-40">·</span>
           lightning: Met Office (UK & Ireland), Blitzortung elsewhere

@@ -48,8 +48,10 @@
  * The mainPage value must match a key in the PAGES object exactly.
  */
 import Dashboard from './pages/Dashboard';
-import Home from './pages/Home';
+import Hub from './pages/Home';                     // the old home page: the Hub since 17 Nov 2026
 import LocationWeather from './pages/LocationForecast';
+import Warnings from './pages/Warnings';
+import More from './pages/More';
 import RequestAccess from './pages/RequestAccess';
 import Settings from './pages/Settings';
 import Subscription from './pages/Subscription';
@@ -58,8 +60,13 @@ import __Layout from './Layout.jsx';
 
 export const PAGES = {
     "Dashboard": Dashboard,
-    "Home": Home,
+    /* 17 Nov 2026, the iOS-app redesign: "Home" is the weather where you are (the landing page setting
+       names it), the old home page is the Hub, and the app's Warnings and More tabs are pages of their own */
+    "Home": LocationWeather,
+    "Hub": Hub,
     "LocationWeather": LocationWeather,
+    "More": More,
+    "Warnings": Warnings,
     "RequestAccess": RequestAccess,
     "Settings": Settings,
     "Subscription": Subscription,
