@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.64.002 | 2026-11-17 | Patch | — | The site's own server, ready to set up: everything it needs to run 24/7 on a free Oracle Cloud server, with automatic updates from GitHub and HTTPS for myweatheruk.com (deploy/oracle; not live yet) | — |
+| 5.64.003 | 2026-11-17 | Patch | — | Model Data can be tuned for the cloud server through its settings (workers, memory, how much is made in advance); nothing changes on the PC | — |
+| 5.64.002 | 2026-11-17 | Patch | 9496bcc | The site's own server, ready to set up: everything it needs to run 24/7 on a free Oracle Cloud server, with automatic updates from GitHub and HTTPS for myweatheruk.com (deploy/oracle; not live yet) | — |
 | 5.64.001 | 2026-11-17 | Patch | f373a1b | Model Data: a layer no longer waits for a new worker to start: a worker that has grown large keeps working until its replacement is ready | — |
 | 5.64.000 | 2026-11-17 | Update | a20aebe | TCM on a phone: one map screen, TCM NOVA first, V3 a switch away, Download, styles (outlook with strokes or high resolution), a star on the highest risk, a sliding day strip and an hour slider, each model one small download; TCM NOVA open to everyone with no globe; TCM V3 runs started by NOVA's route job when GitHub drops them; a minimal radar dock | — |
 | 5.63.001 | 2026-11-17 | Patch | 527f81c | Model Data and the whole site stop freezing: the server saves its database compactly (15 MB instead of 49 MB) and page views at most every 30 seconds, and Model Data's engine uses less memory, so the PC no longer pages to disk and the site no longer stands still for 5-20 seconds every couple of minutes | — |

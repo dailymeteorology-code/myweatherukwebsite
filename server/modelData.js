@@ -65,10 +65,23 @@ export const gridOf = (model) => (model === 'ukv' || model === 'frost' || model 
 const GRIDS = new Set(['uk', 'eu']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
-const MAX_USER_JOBS = 4;               // what someone is waiting for
+/* Settings a host can change in its .env (17 Nov 2026, for the cloud server the site is moving to: 2 cores,
+   12 GB). Unset, everything is as on the PC.
+     MODELDATA_WORKERS_UK / _EU    workers a grid at most (2 / 2)
+     MODELDATA_BG_WORKERS          of those, for the warming and the Location page's catching up (1)
+     MODELDATA_HOT_MB              frames kept in memory, MB (400)
+     MODELDATA_WARM                all | popular (PREFETCH + POPULAR + MWUK's own) | prefetch | off   (all)
+     MODELDATA_MAX_USER_JOBS / _PREFETCH_JOBS / _POINT_JOBS   jobs at once per lane (4 / 2 / 2)
+   and, read by each worker (tools/modeldata/mdata/worker.py), MDATA_SOFT_MB / MDATA_HARD_MB (1300 / 2400). */
+const envInt = (name, dflt, min = 1) => {
+  const v = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(v) ? Math.max(min, v) : dflt;
+};
+const WARM = ['all', 'popular', 'prefetch', 'off'].includes(process.env.MODELDATA_WARM) ? process.env.MODELDATA_WARM : 'all';
+const MAX_USER_JOBS = envInt('MODELDATA_MAX_USER_JOBS', 4);   // what someone is waiting for
 /* background warming: two at a time since the workers (17 Nov 2026). With one, and none at all while anyone
    waited, it never caught up: at 18:00 that day ECMWF's 00Z run had 0 of its 81 layers made, GFS's 12Z 3 of 102 */
-const MAX_PREFETCH_JOBS = 2;
+const MAX_PREFETCH_JOBS = envInt('MODELDATA_MAX_PREFETCH_JOBS', 2);
 /* downloads in flight per job: someone waiting gets the line; the warming and the Location page's
    catching up leave room for them (15 Nov 2026: three Location jobs and the warming, 16 downloads
    each, shared the 6 MB/s wireless link with the layer someone had asked for, and its first frame
@@ -92,7 +105,7 @@ function markBusy() {
   busyNow = busy;
   (busy ? fs.promises.writeFile(BUSY_FILE, String(Date.now())) : fs.promises.rm(BUSY_FILE, { force: true })).catch(() => {});
 }
-const MAX_POINT_JOBS = 2;              // the Location page's UKV frames: their own lane, not behind the warming,
+const MAX_POINT_JOBS = envInt('MODELDATA_MAX_POINT_JOBS', 2);   // the Location page's UKV frames: their own lane, not behind the warming,
                                         // so a new run is ready in minutes, not an hour
 
 /* The Python that makes the frames, kept running (server/mdWorkers.js, tools/modeldata/mdata/worker.py; 17 Nov
@@ -107,10 +120,10 @@ const workers = createWorkers({
   /* MWUK's wide-grid members are asked for through this server (mdata/consensus.py _subjob), not made by a
      Python of their own */
   env: { MDATA_SERVER: `http://127.0.0.1:${Number(process.env.API_PORT || 8787)}` },
-  keep: { uk: 1, eu: 1 }, max: { uk: 2, eu: 2 },
+  keep: { uk: 1, eu: 1 }, max: { uk: envInt('MODELDATA_WORKERS_UK', 2), eu: envInt('MODELDATA_WORKERS_EU', 2) },
   onChange: () => pump(),
 });
-const BG_WORKERS = 1;
+const BG_WORKERS = envInt('MODELDATA_BG_WORKERS', 1);
 /* The layers someone is looking at: the page asks how a layer is coming on every second or so until it has it
    all (ModelData.jsx), so a layer nobody has asked about for WATCH_MS is no longer anyone's to wait for. Its job
    gives way like the warming's. */
@@ -171,7 +184,7 @@ const readJsonAsync = async (f) => { try { return JSON.parse(await fs.promises.r
    person to open one gets it from memory too. Up to HOT_MAX, least recently used out first; a layer's
    frames are forgotten whenever a job starts making it again. 900 MB until 17 Nov 2026, when the PC (16 GB,
    26 GB in use) was paging so hard that frames "in memory" came back from the page file. */
-const HOT_MAX = 400e6;
+const HOT_MAX = envInt('MODELDATA_HOT_MB', 400, 0) * 1e6;
 const hot = new Map();                                // frame file -> its bytes, least recently used first
 let hotBytes = 0;
 function hotGet(f) {
@@ -523,18 +536,20 @@ function refreshCatalog() {
       if (cat) catCache = { at: Date.now(), cat };
       noteArrivals(cat);
       const warm = [];
-      for (const m of cat?.models || []) {
-        if (MIRRORED.has(m.id) || (NO_WARM.has(m.id) && !OWN_WARM[m.id])) continue;
+      /* how much is made before anyone asks (MODELDATA_WARM): all of it; the much-used and popular layers and
+         MWUK's own; the much-used only; or nothing */
+      for (const m of WARM === 'off' ? [] : cat?.models || []) {
+        if (MIRRORED.has(m.id) || (NO_WARM.has(m.id) && !(OWN_WARM[m.id] && WARM !== 'prefetch'))) continue;
         const r = m.runs?.length ? defaultRun(m) : null;
         if (!r) continue;
         const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';
         const only = OWN_WARM[m.id] || WARM_ONLY[m.id];
         const first = (only || PREFETCH).filter((x) => m.variables?.includes(x));
-        const popular = only ? [] : POPULAR.filter((x) => m.variables?.includes(x) && !first.includes(x));
-        const rest = r.complete && !WARM_FIRST_ONLY.has(m.id) && !only ? (m.variables || []).filter((x) => !first.includes(x) && !popular.includes(x)) : [];
+        const popular = only || WARM === 'prefetch' ? [] : POPULAR.filter((x) => m.variables?.includes(x) && !first.includes(x));
+        const rest = WARM === 'all' && r.complete && !WARM_FIRST_ONLY.has(m.id) && !only ? (m.variables || []).filter((x) => !first.includes(x) && !popular.includes(x)) : [];
         for (const v of [...first, ...popular, ...rest]) warm.push([m.id, tag, v]);
       }
-      for (const m of (cat?.models || []).filter((x) => STATIC_RUNS.has(x.id))) {
+      for (const m of WARM === 'off' ? [] : (cat?.models || []).filter((x) => STATIC_RUNS.has(x.id))) {
         for (const r of m.runs || []) for (const v of REPLAY_WARM.filter((x) => m.variables?.includes(x))) warm.push([m.id, runTag(r.run), v]);
       }
       const wanted = new Set(warm.map(([mid, tag, v]) => `${mid}/${tag}/${v}`));
