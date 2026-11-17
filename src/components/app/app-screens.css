@@ -1,0 +1,25 @@
+/* The app's screens (17 Nov 2026, the iOS-app redesign): the sections the tab bar opens, and the pages opened from
+   More. Sections are kept once opened (App.jsx AppFrame), so switching tabs is instant; a page opened from More
+   slides in from the right, as an iOS app pushes a screen. */
+/* A section that is not on screen: laid out at the full size of the screen as before, but invisible, untouchable
+   and out of the page's flow, so its maps and charts keep their size and the page's scroll is the shown one's. */
+.app-section[data-off] {
+  position: fixed; inset: 0; overflow: hidden; z-index: -1;
+  visibility: hidden; pointer-events: none;
+}
+
+/* backwards, not both: a translate left on the page after it lands would make it the frame for everything pinned
+   inside it (the old PageWrapper's lesson) */
+.app-push { animation: app-push-in 0.26s cubic-bezier(0.22, 0.9, 0.3, 1) backwards; }
+@keyframes app-push-in {
+  from { opacity: 0; translate: 22px 0; }
+  to { opacity: 1; translate: 0 0; }
+}
+@media (prefers-reduced-motion: reduce) { .app-push { animation: none; } }
+
+/* Radar, the Radar tab (pages/Radar.jsx): the radar fills the screen down to the tab bar */
+.app-radar { display: flex; flex-direction: column; }
+.app-radar-body { flex: 1; min-height: 0; padding: 12px max(12px, env(safe-area-inset-right, 0px)) 10px max(12px, env(safe-area-inset-left, 0px)); }
+.app-radar-body .lw-radar.is-fill { height: 100%; display: flex; flex-direction: column; border-radius: 22px; }
+.app-radar-body .lw-radar.is-fill .lw-radar-box { flex: 1; min-height: 0; }
+.app-radar-body .lw-radar.is-fill .lw-radar-map { height: 100% !important; }

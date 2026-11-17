@@ -27,7 +27,8 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.30), inset 0 -1px 0 rgba(255, 255, 255, 0.06),
     0 12px 34px rgba(0, 0, 0, 0.36), 0 2px 8px rgba(0, 0, 0, 0.22);
   -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
+  touch-action: none;                 /* a press can slide along the bar (AppTabBar.jsx) */
+  -webkit-user-select: none; user-select: none;
 }
 /* the rim: brighter where the light catches it (top left), fading round the far side */
 .atb::before {
@@ -57,8 +58,9 @@
   position: absolute; top: var(--atb-pad); bottom: var(--atb-pad); left: var(--atb-pad);
   width: calc((100% - 2 * var(--atb-pad)) / var(--atb-n));
   translate: calc(var(--atb-i) * 100%) 0;
-  transition: translate 0.52s cubic-bezier(0.32, 1.28, 0.48, 1);
-  pointer-events: none;
+  /* a springy move with a clear overshoot, as iOS's lens */
+  transition: translate 0.6s cubic-bezier(0.26, 1.48, 0.4, 1);
+  pointer-events: none; z-index: 0;
 }
 .atb-lens::after {
   content: ""; position: absolute; inset: 0; border-radius: 26px;
@@ -69,13 +71,33 @@
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(234, 239, 247, 0.85));
   box-shadow: inset 0 1px 0 #fff, inset 0 0 0 0.5px rgba(15, 23, 42, 0.08), 0 4px 14px rgba(15, 23, 42, 0.12);
 }
-.atb-lens.is-moving::after { animation: atb-squash 0.5s cubic-bezier(0.3, 0.7, 0.3, 1); }
-@keyframes atb-squash {
+.atb-lens::after { transition: scale 0.32s cubic-bezier(0.3, 1.5, 0.45, 1), background 0.2s ease, box-shadow 0.2s ease; }
+/* on the way: it lifts a little, stretches towards where it is going (more the further it goes), overshoots and
+   wobbles to a stop */
+.atb-lens.is-moving::after { animation: atb-liquid 0.64s cubic-bezier(0.3, 0.7, 0.25, 1); }
+@keyframes atb-liquid {
   0% { scale: 1 1; }
-  32% { scale: 1.18 0.9; }
-  66% { scale: 0.97 1.03; }
+  20% { scale: var(--atb-stretch) 0.86; }
+  46% { scale: 0.9 1.1; }
+  68% { scale: 1.05 0.96; }
+  84% { scale: 0.99 1.01; }
   100% { scale: 1 1; }
 }
+/* pressed: the lens lifts into a bigger, brighter droplet that spills past the bar's edge */
+.atb.is-lifted .atb-lens::after {
+  scale: 1.14 1.26;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.36), rgba(255, 255, 255, 0.14));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), inset 0 0 0 0.5px rgba(255, 255, 255, 0.35), 0 8px 24px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(255, 255, 255, 0.10);
+  -webkit-backdrop-filter: saturate(1.8) brightness(1.18); backdrop-filter: saturate(1.8) brightness(1.18);
+}
+.atb.is-light.is-lifted .atb-lens::after {
+  background: linear-gradient(180deg, #ffffff, rgba(240, 244, 250, 0.92));
+  box-shadow: inset 0 1px 0 #fff, inset 0 0 0 0.5px rgba(15, 23, 42, 0.10), 0 8px 22px rgba(15, 23, 42, 0.18);
+}
+.atb.is-dragging .atb-lens::after { animation: none; }
+/* the icon under a lifted lens is magnified, as glass would */
+.atb-item.is-under svg { scale: 1.2; }
+.atb-item.is-under span { scale: 1.06; }
 
 .atb-item {
   position: relative; z-index: 1; flex: 1 1 0; min-width: 0;
@@ -87,7 +109,7 @@
 .atb-item[aria-current="page"] { color: var(--atb-tint); }
 .atb-item svg { width: 22px; height: 22px; stroke-width: 2; transition: scale 0.18s ease; }
 .atb-item[aria-current="page"] svg { stroke-width: 2.3; }
-.atb-item:active svg { scale: 0.86; }
+.atb-item svg, .atb-item span { transition: scale 0.25s cubic-bezier(0.3, 1.6, 0.45, 1); }
 .atb-item span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .atb-item:focus-visible { outline: 2px solid var(--atb-tint); outline-offset: -3px; }
 

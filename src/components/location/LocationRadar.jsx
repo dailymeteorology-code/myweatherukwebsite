@@ -46,7 +46,9 @@ const STRENGTHS = [0.1, 0.4, 1, 2, 4, 8];
 
 const pinIcon = L.divIcon({ className: 'lw-pin', html: '<span class="lw-pin-dot"></span><span class="lw-pin-ring"></span>', iconSize: [22, 22], iconAnchor: [11, 11] });
 
-export default function LocationRadar({ lat, lon, scope = 'point', light = false }) {
+/* fill (the app's Radar tab, 17 Nov 2026): the map takes all the height it is given, and a finger can move it (nothing
+   under it to scroll) */
+export default function LocationRadar({ lat, lon, scope = 'point', light = false, fill = false }) {
   const V = VIEWS[scope] || VIEWS.point;
   const uk = scope === 'uk';
   const cLat = uk ? V.centre[0] : lat, cLon = uk ? V.centre[1] : lon;
@@ -67,7 +69,7 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
     const touch = L.Browser.mobile;
     const m = L.map(el.current, {
       zoomControl: false, attributionControl: true, minZoom: V.minZoom, maxZoom: V.maxZoom, zoomSnap: 0.5,
-      dragging: !touch, scrollWheelZoom: false, doubleClickZoom: true, touchZoom: true,
+      dragging: fill || !touch, scrollWheelZoom: fill, doubleClickZoom: true, touchZoom: true,
     });
     L.control.zoom({ position: 'bottomright' }).addTo(m);
     m.createPane('labels');
@@ -246,7 +248,7 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
 
   const f = frames[idx];
   return (
-    <div className={`lw-radar${uk ? ' is-uk' : ''}${light ? ' is-light' : ''}`}>
+    <div className={`lw-radar${uk ? ' is-uk' : ''}${light ? ' is-light' : ''}${fill ? ' is-fill' : ''}`}>
       {/* the map with only the time and the zoom buttons on it; the controls sit in the dark strip
           underneath, so nothing overlaps however narrow the screen */}
       <div className="lw-radar-box">

@@ -18,7 +18,8 @@ the site shows it in the bottom corner of every page.
 
 | Version | Date | Kind | Saved as | What changed | Chat |
 |---|---|---|---|---|---|
-| 5.59.002 | 2026-11-17 | Patch | — | TCM V3 runs on time: its GitHub job checks every 20 minutes and starts the due 03:00/15:00 run if it has not been published (GitHub ran today's 03:00 run eight hours late and skipped 15:00) | — |
+| 5.60.000 | 2026-11-17 | Update | — | The app's tabs: Radar takes Settings' place (Settings and the version number are in More now); each tab stays as you left it and opens instantly (the place on Home stays the same); the tab bar's glass lens moves like iOS's, and you can press and slide along it; no menu button at the foot of pages | — |
+| 5.59.002 | 2026-11-17 | Patch | 9b597fe | TCM V3 runs on time: its GitHub job checks every 20 minutes and starts the due 03:00/15:00 run if it has not been published (GitHub ran today's 03:00 run eight hours late and skipped 15:00) | — |
 | 5.59.001 | 2026-11-17 | Patch | 0b8f269 | Home: its automatic locate is quiet (no error, no outside-the-UK dialog, no flash of the empty search) and the home page opens offline | — |
 | 5.59.000 | 2026-11-17 | Update | be8e854 | The app redesign begins: Home is the weather where you are, the old home page is the Hub (UK and Ireland), a Liquid Glass tab bar (Home, Model Data, TCM, Warnings, Settings, More), and new Warnings and More pages | — |
 | 5.58.006 | 2026-11-16 | Patch | 266881f | iPhone app: a live preview on the computer (/iphone-preview.html), the real site in an iPhone frame in the app's mode | — |

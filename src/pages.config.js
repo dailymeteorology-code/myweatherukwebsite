@@ -52,6 +52,7 @@ import Hub from './pages/Home';                     // the old home page: the Hu
 import LocationWeather from './pages/LocationForecast';
 import Warnings from './pages/Warnings';
 import More from './pages/More';
+import Radar from './pages/Radar';                   // the app's Radar tab (17 Nov 2026)
 import RequestAccess from './pages/RequestAccess';
 import Settings from './pages/Settings';
 import Subscription from './pages/Subscription';
@@ -66,6 +67,7 @@ export const PAGES = {
     "Hub": Hub,
     "LocationWeather": LocationWeather,
     "More": More,
+    "Radar": Radar,
     "Warnings": Warnings,
     "RequestAccess": RequestAccess,
     "Settings": Settings,

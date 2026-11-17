@@ -32,6 +32,7 @@ import {
   setTone, onWxIcons, probScaleKey, scaleRamp, DISPLAY, INK, ACCENT, familyRate, onSatTiles, SAT_CREDIT, setKeyScale,
 } from '@/lib/modelViewer';
 import '@/components/modeldata/strata.css';
+import { useSectionActive } from '@/components/app/sectionActive';
 import LayerBrowser from '@/components/modeldata/LayerBrowser';
 import Timeline from '@/components/modeldata/Timeline';
 import { LAYER_DESC, POPULAR, probFamily, probLine, categoryOf } from '@/lib/modelLayers';
@@ -675,6 +676,9 @@ export default function ModelData() {
   const [frames, setFrames] = useState({});
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
+  /* the app keeps this page while another tab shows (App.jsx): it stops playing and leaves the address alone */
+  const sectionActive = useSectionActive();
+  useEffect(() => { if (!sectionActive) setPlaying(false); }, [sectionActive]);
   const [speed, setSpeed] = useState(prefs.speed || 450);
   const [loopFrom, setLoopFrom] = useState(null);            // Live: the time the loop starts from (16 Nov 2026; null: the whole of it)
   /* Simple mode (15 Nov 2026, at the user's request; off unless turned on in Map): questions to start
@@ -2901,13 +2905,13 @@ export default function ModelData() {
   };
   const qNow = linkQuery(false);
   useEffect(() => {
-    if (qNow == null || playing || interacting) return undefined;
+    if (qNow == null || playing || interacting || !sectionActive) return undefined;
     const t = setTimeout(() => {
       const url = `${window.location.pathname}${qNow ? `?${qNow}` : ''}`;
       if (url !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(window.history.state, '', url);
     }, 500);
     return () => clearTimeout(t);
-  }, [qNow, playing, interacting]);
+  }, [qNow, playing, interacting, sectionActive]);
   /* Share: a 1200 x 630 picture of the frame (the size link previews use) and the view's address go to
      the server, which gives back a short link (/m/<id>) that opens this map and shows that picture */
   const makeShare = async () => {

@@ -31,7 +31,9 @@ import Register from '@/pages/Register';
 import ForgotPassword from '@/pages/ForgotPassword';
 import ResetPassword from '@/pages/ResetPassword';
 import { Navigate } from 'react-router-dom';
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
+import '@/components/app/app-screens.css';
+import { SectionActiveContext } from '@/components/app/sectionActive';
 import { motion, AnimatePresence } from 'framer-motion';
 import { base44 } from '@/api/base44Client';
 
@@ -39,207 +41,136 @@ const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
 const MainPage = mainPageKey ? Pages[mainPageKey] : <></>;
 
-// ─── Dynamic landing page — reads SiteSettings.landing_page ──────────────
-function DynamicLandingPage() {
-  const [landingComp, setLandingComp] = useState(() => (
-    <LayoutWrapper currentPageName={mainPageKey}><MainPage /></LayoutWrapper>
-  ));
-  useEffect(() => {
-    base44.entities.SiteSettings.list().then(list => {
-      const lp = list[0]?.landing_page;
-      if (lp && Pages[lp]) {
-        const LandingPage = Pages[lp];
-        setLandingComp(<LayoutWrapper currentPageName={lp}><LandingPage /></LayoutWrapper>);
-      } else {
-        setLandingComp(<LayoutWrapper currentPageName={mainPageKey}><MainPage /></LayoutWrapper>);
-      }
-    }).catch(() => {});
-  }, []);
-  return landingComp;
-}
-
 const LayoutWrapper = ({ children, currentPageName }) => Layout
   ? <Layout currentPageName={currentPageName}>{children}</Layout>
   : <>{children}</>;
 
-// ─── Route order — determines slide direction ─────────────────────────────
-/* the app's tabs first, in the tab bar's order (components/app/AppTabBar.jsx), then the pages under More */
-const ROUTE_ORDER = ['/', '/Home', '/LocationWeather', '/ModelData', '/TCMOutlooks', '/TCMFrost', '/Warnings', '/Settings', '/More',
-  '/Hub', '/Lightning', '/News', '/WeatherPatterns', '/TCMArchive', '/MyWeatherArchive', '/ForecastVerification', '/WeatherScenarios',
-  '/AdminSettings'];
-function routeIndex(pathname) {
-  const idx = ROUTE_ORDER.findIndex(r => pathname === r || pathname.startsWith(r + '/'));
-  return idx === -1 ? 0 : idx;
-}
+/* ─── The app frame (17 Nov 2026, the iOS-app redesign) ───────────────────────
+   "This is an app, not a website, we are not changing pages, we are going into a new section." The tab bar's
+   sections (components/app/AppTabBar.jsx) are each made once, the first time they are opened, and then kept:
+   the others stay mounted but hidden while one shows, so going back to a section is instant and it is as you
+   left it (the place on Home, the map and its layer on Model Data, how far down you had scrolled). Each section
+   keeps the address it last had (its own <Routes location>), so a hidden one never reacts to another's. Pages
+   opened from More come and go as before, sliding in as an iOS app pushes a screen. The Layout, and with it the
+   tab bar, is made once for all of them. This replaced PageWrapper, whose fade out, wait, fade in, progress bar
+   and page-name flash made every tap feel like loading a new page. */
+const SECTIONS = [
+  { id: 'home', test: (p) => p === '/' || p === '/Home' || p === '/LocationWeather' },
+  { id: 'model', test: (p) => p === '/ModelData' },
+  { id: 'tcm', test: (p) => p === '/TCMOutlooks' || p === '/TCMNova' || p === '/TCMV5' },
+  { id: 'warnings', test: (p) => p === '/Warnings' },
+  { id: 'radar', test: (p) => p === '/Radar' },
+  { id: 'more', test: (p) => p === '/More' },
+];
+const sectionOf = (p) => SECTIONS.find((s) => s.test(p))?.id || null;
+/* pages the sections show, so they are not routed twice */
+const IN_SECTIONS = new Set(['Home', 'LocationWeather', 'Warnings', 'Radar', 'More']);
 
-const PAGE_LABELS = {
-  '/': 'Home', '/Home': 'Home', '/Hub': 'Hub', '/Warnings': 'Warnings', '/More': 'More', '/ModelData': 'Model Data',
-  '/News': 'News', '/Lightning': 'Lightning',
-  '/TCMOutlooks': 'TCM Outlooks', '/TCMFrost': 'TCM FROST', '/TCMNova': 'TCM NOVA', '/TCMV5': 'TCM NOVA', '/WeatherPatterns': 'Weather Patterns', '/GraphicStudio': 'Graphic Studio',
-  '/Settings': 'Settings', '/AdminSettings': 'Admin',
-  '/TCMArchive': 'Archive', '/MyWeatherArchive': 'Archive',
-  '/LocationWeather': 'Location', '/ForecastVerification': 'Verification', '/WeatherScenarios': 'Scenarios',
-};
-function getPageLabel(pathname) {
-  if (PAGE_LABELS[pathname]) return PAGE_LABELS[pathname];
-  return PAGE_LABELS['/' + pathname.split('/')[1]] || '';
-}
-
-// ─── Thin progress bar that sweeps across the top on navigation ───────────
-/* NO OVERLAY BETWEEN PAGES, and that is a decision rather than an omission.
-   Every route is in the main bundle — there is no chunk to fetch — so a
-   navigation is a React re-render and is over in a frame or two. Dropping a
-   loading screen in front of that would not cover a wait, it would MANUFACTURE
-   one, and the site would feel slower than it is. What a navigation actually
-   needs is acknowledgement, which is this: a light running the top edge, in
-   the same accent and the same 2px hairline as the boot screen's progress
-   track, so the two read as one family. Pages fetching their own data keep
-   their own in-place spinners, which is where a real wait belongs. */
-function NavProgressBar({ active }) {
-  return (
-    <AnimatePresence>
-      {active && (
-        <motion.div
-          key="nav-bar"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0, transition: { duration: 0.24, ease: 'easeOut' } }}
-          transition={{ duration: 0.12 }}
-          style={{ position: 'fixed', top: 0, left: 0, right: 0, height: 2, zIndex: 9999, pointerEvents: 'none' }}
-        >
-          <motion.div
-            initial={{ width: '6%' }}
-            animate={{ width: '88%' }}
-            exit={{ width: '100%', transition: { duration: 0.24, ease: 'easeOut' } }}
-            transition={{ duration: 1.6, ease: [0.1, 0.72, 0.28, 1] }}
-            style={{
-              position: 'absolute', top: 0, left: 0, height: '100%', borderRadius: '0 2px 2px 0',
-              background: 'linear-gradient(90deg, #1d74c4, #38bdf8, #7dd3fc)',
-              backgroundSize: '220% 100%',
-              animation: 'mwuk-progress-shimmer 1.1s linear infinite',
-              boxShadow: '0 0 12px rgba(56,189,248,0.8)',
-            }}
-          >
-            {/* Glowing leading edge. */}
-            <span style={{ position: 'absolute', right: -2, top: '50%', transform: 'translateY(-50%)', width: 18, height: 18, borderRadius: '50%', background: 'radial-gradient(circle, rgba(125,211,252,0.95) 0%, rgba(56,189,248,0.4) 44%, transparent 72%)', pointerEvents: 'none' }} />
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-}
-
-// ─── Page wrapper — handles directional slide + progress bar ─────────────
-function PageWrapper({ children }) {
-  const location = useLocation();
-  const prevIdxRef = useRef(routeIndex(location.pathname));
-  const [direction, setDirection] = useState(0);
-  const [navigating, setNavigating] = useState(false);
-  const timerRef = useRef(null);
-  const pageRef = useRef(null);
-
+/* the landing page: the admin's choice (SiteSettings.landing_page), else the main page */
+function LandingSection() {
+  const [Page, setPage] = useState(() => MainPage);
   useEffect(() => {
-    const next = routeIndex(location.pathname);
-    setDirection(next >= prevIdxRef.current ? 1 : -1);
-    prevIdxRef.current = next;
-    setNavigating(true);
-    clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      setNavigating(false);
-      // Belt and braces: if onAnimationComplete never fires (interrupted
-      // transition, reduced-motion), the filter must still not outlive the
-      // animation — it would re-anchor every fixed-position modal on the page.
-      if (pageRef.current) pageRef.current.style.filter = 'none';
-      /* 420ms, down from 550. The bar is acknowledging an instant navigation,
-         not covering a load; past about half a second it stops reading as
-         "done" and starts reading as "still going". */
-    }, 420);
-    return () => clearTimeout(timerRef.current);
-  }, [location.pathname]);
+    base44.entities.SiteSettings.list().then((list) => {
+      const lp = list[0]?.landing_page;
+      setPage(() => (lp && Pages[lp]) || MainPage);
+    }).catch(() => {});
+  }, []);
+  return <Page />;
+}
 
-  const label = getPageLabel(location.pathname);
+function SectionScreen({ id }) {
+  if (id === 'home') return <LandingSection />;
+  if (id === 'model') return <ModelData />;
+  if (id === 'tcm') {
+    return (
+      <Routes>
+        <Route path="/TCMNova" element={<TCMOutlooks forceEngine="nova" />} />
+        <Route path="/TCMV5" element={<TCMOutlooks forceEngine="nova" />} />
+        <Route path="*" element={<TCMOutlooks />} />
+      </Routes>
+    );
+  }
+  const Page = Pages[{ warnings: 'Warnings', radar: 'Radar', more: 'More' }[id]];
+  return Page ? <Page /> : null;
+}
 
-  /* NO BLUR ON THE PAGE WRAPPER, at any point in the transition.
-     A `filter` of anything other than `none` makes this element the containing
-     block for every `position: fixed` descendant of the page, so `inset: 0`
-     inside a page resolves against the full document box rather than the
-     viewport. That is how the Location Weather sky ended up 2323px tall and
-     its horizon a page and a half below the fold, and it is the same reason
-     modals rendered inside a page were centring halfway down it.
+function AppFrame() {
+  const location = useLocation();
+  const active = sectionOf(location.pathname);
+  /* each section opened so far, with the address it last had */
+  const [kept, setKept] = useState(() => (active ? { [active]: location } : {}));
+  useEffect(() => {
+    if (active) setKept((k) => (k[active] === location ? k : { ...k, [active]: location }));
+  }, [active, location]);
+  const sections = active ? { ...kept, [active]: location } : kept;
 
-     It used to be cleared imperatively once the enter animation finished (see
-     clearPageFilter, kept below as a belt-and-braces backstop). That does not
-     hold: Framer owns the style and rewrites `filter: blur(0px)` on every
-     subsequent render, and a weather page re-renders every time a fetch lands.
-     The only reliable fix is never to put a filter here at all — the fade,
-     the slide and the scale carry the transition perfectly well without it. */
-  const variants = {
-    initial: (dir) => ({ opacity: 0, y: 10, scale: 0.985, x: dir * 8 }),
-    animate: { opacity: 1, y: 0, scale: 1, x: 0,
-      transition: { duration: 0.34, ease: [0.22, 1, 0.36, 1] } },
-    exit: (dir) => ({ opacity: 0, y: -6, scale: 0.992, x: dir * -6,
-      transition: { duration: 0.15, ease: [0.4, 0, 1, 1] } }),
-  };
-
-  // Backstop for the containing-block problem described above: nothing sets a
-  // filter here any more, but if one ever creeps back in — a variant, a
-  // stylesheet, a future effect — this clears it rather than letting every
-  // fixed-position element on the page silently mis-resolve.
-  const clearPageFilter = (definition) => {
-    if (definition === 'animate' && pageRef.current) {
-      pageRef.current.style.filter = 'none';
-    }
-  };
+  /* each screen's scroll position: kept as you scroll, given back when you return to a section; a page opened
+     from More starts at the top */
+  const scrolls = useRef({});
+  const showing = useRef(active || location.pathname);
+  useEffect(() => {
+    const save = () => { scrolls.current[showing.current] = window.scrollY; };
+    window.addEventListener('scroll', save, { passive: true });
+    return () => window.removeEventListener('scroll', save);
+  }, []);
+  useLayoutEffect(() => {
+    const key = active || location.pathname;
+    if (showing.current === key) return;
+    showing.current = key;
+    window.scrollTo(0, active ? (scrolls.current[key] || 0) : 0);
+  }, [active, location.pathname]);
 
   return (
-    <>
-      <NavProgressBar active={navigating} />
-
-      {/* Page label flash — appears just below the progress bar */}
-      <AnimatePresence>
-        {navigating && label && (
-          <motion.span
-            key={`lbl-${location.pathname}`}
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18 }}
-            style={{
-              position: 'fixed', top: 6, left: '50%', transform: 'translateX(-50%)',
-              zIndex: 9998, pointerEvents: 'none',
-              /* Archivo, because that is the only face the site loads — the
-                 DM Sans this asked for was never there and it was quietly
-                 rendering in whatever system-ui resolved to. */
-              fontFamily: 'Archivo, system-ui, sans-serif',
-              fontSize: 9, fontWeight: 800, letterSpacing: '0.16em',
-              textTransform: 'uppercase', color: '#7dd3fc',
-              textShadow: '0 0 10px rgba(56,189,248,0.6)',
-            }}
-          >
-            {label}
-          </motion.span>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence mode="wait" custom={direction}>
-        <motion.div
-          ref={pageRef}
-          key={location.pathname}
-          custom={direction}
-          variants={variants}
-          initial="initial"
-          animate="animate"
-          exit="exit"
-          onAnimationComplete={clearPageFilter}
-          /* `filter` dropped from the hint along with the blur itself — and it
-             matters, because a will-change of anything but `auto` creates the
-             same containing block a real filter would. */
-          style={{ willChange: navigating ? 'transform, opacity' : 'auto' }}
-        >
-          {children}
-        </motion.div>
-      </AnimatePresence>
-    </>
+    <LayoutWrapper currentPageName={active || location.pathname.slice(1) || 'Home'}>
+      {Object.entries(sections).map(([id, loc]) => (
+        /* a hidden section keeps its full size, out of sight (app-screens.css): hidden with display: none, every
+           page that measures itself (Model Data's map, the radar, the charts) read a size of nothing and Model
+           Data drew itself with a negative corner and took the app down */
+        <div key={id} className="app-section" data-section={id} data-off={id !== active ? '' : undefined}
+          aria-hidden={id !== active ? true : undefined} {...(id !== active ? { inert: '' } : {})}>
+          <SectionActiveContext.Provider value={id === active}>
+            <Routes location={loc}>
+              <Route path="*" element={<SectionScreen id={id} />} />
+            </Routes>
+          </SectionActiveContext.Provider>
+        </div>
+      ))}
+      {!active && (
+        <div key={location.pathname} className="app-push">
+          <Routes>
+            {Object.entries(Pages).filter(([path]) => !IN_SECTIONS.has(path)).map(([path, Page]) => (
+              <Route key={path} path={`/${path}`} element={<Page />} />
+            ))}
+            <Route path="/AdminSettings" element={<AdminOnlyRoute><AdminSettings /></AdminOnlyRoute>} />
+            <Route path="/Lightning" element={<Lightning />} />
+            {/* The page was "TCM Lightning" for its whole life, so every bookmark, share and in-app deep link
+                still points at the old paths. They redirect rather than 404. */}
+            <Route path="/TCMLightning" element={<Navigate to="/Lightning" replace />} />
+            <Route path="/TCM" element={<Navigate to="/Lightning" replace />} />
+            <Route path="/WeatherCriteria" element={<Navigate to="/" replace />} />
+            <Route path="/News" element={<News />} />
+            {/* TCM FROST, MyWeatherUK's snow model (13 Nov 2026) */}
+            <Route path="/TCMFrost" element={<TCMFrost />} />
+            <Route path="/WeatherPatterns" element={<WeatherPatterns />} />
+            <Route path="/TCMArchive" element={<TCMArchive />} />
+            <Route path="/MyWeatherArchive" element={<MyWeatherArchive />} />
+            <Route path="/WeatherScenarios" element={<WeatherScenarios />} />
+            <Route path="/ForecastVerification" element={<ForecastVerification />} />
+            {/* the graphics in force are on the Hub: these two pages are gone (MyWeatherGraphics drew nothing;
+                Graphics was removed on 22 Oct 2026), and old links land there */}
+            <Route path="/MyWeatherGraphics" element={<Navigate to="/Hub" replace />} />
+            <Route path="/Graphics" element={<Navigate to="/Hub" replace />} />
+            <Route path="/GraphicStudio" element={<GraphicStudio />} />
+            {/* the public studio was the Thunderstorm Studio until 22 Oct 2026 */}
+            <Route path="/ThunderstormStudio" element={<Navigate to="/GraphicStudio" replace />} />
+            <Route path="/ModelFeedback" element={<Navigate to="/ForecastVerification" replace />} />
+            <Route path="/TCMVerification" element={<TCMVerification />} />
+            <Route path="/NewsletterSignup" element={<NewsletterSignup />} />
+            <Route path="*" element={<PageNotFound />} />
+          </Routes>
+        </div>
+      )}
+    </LayoutWrapper>
   );
 }
 
@@ -481,7 +412,7 @@ const AuthenticatedApp = () => {
           never takes the pointer. */}
       {versionLabel && (
         <div
-          className="fixed left-4 z-40 bottom-[calc(var(--app-tabbar-space)+2px)] md:bottom-4
+          className="hidden md:block fixed left-4 z-40 bottom-4
                      text-[11px] leading-none tracking-wide pointer-events-none select-none"
           style={{ color: 'var(--text-muted)', opacity: 0.7 }}
         >
@@ -489,65 +420,16 @@ const AuthenticatedApp = () => {
         </div>
       )}
       <Routes>
-        {/* Live streaming surface renders OUTSIDE PageWrapper. PageWrapper wraps
-            pages in an animated motion.div that applies transform/filter, which
-            creates a containing block — that traps this page's position:fixed
-            full-screen layout against a zero-height ancestor and renders blank.
-            Rendering it raw (no Layout chrome, no transition wrapper) fixes that. */}
+        {/* Live streaming renders outside the app frame: no Layout chrome, nothing around it. */}
         <Route path="/LiveStream" element={<LiveStream />} />
         <Route path="/livestream" element={<LiveStream />} />
-        {/* Everything else goes through the normal animated wrapper. */}
-        <Route path="*" element={
-          <PageWrapper>
-            <Routes>
-              {Object.entries(Pages).map(([path, Page]) => (
-                <Route key={path} path={`/${path}`} element={<LayoutWrapper currentPageName={path}><Page /></LayoutWrapper>} />
-              ))}
-              <Route path="/AdminSettings" element={<AdminOnlyRoute><LayoutWrapper currentPageName="AdminSettings"><AdminSettings /></LayoutWrapper></AdminOnlyRoute>} />
-              <Route path="/Lightning" element={<LayoutWrapper currentPageName="Lightning"><Lightning /></LayoutWrapper>} />
-              {/* The page was "TCM Lightning" for its whole life, so every
-                  bookmark, share and in-app deep link still points at the old
-                  paths. They redirect rather than 404. */}
-              <Route path="/TCMLightning" element={<Navigate to="/Lightning" replace />} />
-              <Route path="/TCM" element={<Navigate to="/Lightning" replace />} />
-              <Route path="/WeatherCriteria" element={<Navigate to="/" replace />} />
-              <Route path="/News" element={<LayoutWrapper currentPageName="News"><News /></LayoutWrapper>} />
-              <Route path="/ModelData" element={<LayoutWrapper currentPageName="ModelData"><ModelData /></LayoutWrapper>} />
-              {/* /TCMV5 is the V5 engine's own address. /TCMOutlooks still
-                  resolves to the same page — every existing link keeps
-                  working — but the engine you are looking at is now in the
-                  URL rather than implied by a remembered preference. */}
-              <Route path="/TCMNova" element={<LayoutWrapper currentPageName="TCMNova"><TCMOutlooks forceEngine="nova" /></LayoutWrapper>} />
-              {/* TCM NOVA replaced TCM V5; the old address keeps working */}
-              <Route path="/TCMV5" element={<LayoutWrapper currentPageName="TCMNova"><TCMOutlooks forceEngine="nova" /></LayoutWrapper>} />
-              <Route path="/TCMOutlooks" element={<LayoutWrapper currentPageName="TCMOutlooks"><TCMOutlooks /></LayoutWrapper>} />
-              {/* TCM FROST, MyWeatherUK's snow model (13 Nov 2026) */}
-              <Route path="/TCMFrost" element={<LayoutWrapper currentPageName="TCMFrost"><TCMFrost /></LayoutWrapper>} />
-              <Route path="/WeatherPatterns" element={<LayoutWrapper currentPageName="WeatherPatterns"><WeatherPatterns /></LayoutWrapper>} />
-              <Route path="/TCMArchive" element={<LayoutWrapper currentPageName="TCMArchive"><TCMArchive /></LayoutWrapper>} />
-              <Route path="/MyWeatherArchive" element={<LayoutWrapper currentPageName="MyWeatherArchive"><MyWeatherArchive /></LayoutWrapper>} />
-              <Route path="/WeatherScenarios" element={<LayoutWrapper currentPageName="WeatherScenarios"><WeatherScenarios /></LayoutWrapper>} />
-              <Route path="/ForecastVerification" element={<LayoutWrapper currentPageName="ForecastVerification"><ForecastVerification /></LayoutWrapper>} />
-              {/* the graphics in force are on the home page: these two pages are gone (MyWeatherGraphics
-                  drew nothing; Graphics was removed on 22 Oct 2026), and old links land there */}
-              <Route path="/MyWeatherGraphics" element={<Navigate to="/Hub" replace />} />
-              <Route path="/Graphics" element={<Navigate to="/Hub" replace />} />
-              <Route path="/GraphicStudio" element={<LayoutWrapper currentPageName="GraphicStudio"><GraphicStudio /></LayoutWrapper>} />
-              {/* the public studio was the Thunderstorm Studio until 22 Oct 2026 */}
-              <Route path="/ThunderstormStudio" element={<Navigate to="/GraphicStudio" replace />} />
-              <Route path="/ModelFeedback" element={<Navigate to="/ForecastVerification" replace />} />
-              <Route path="/TCMVerification" element={<LayoutWrapper currentPageName="TCMVerification"><TCMVerification /></LayoutWrapper>} />
-              <Route path="/NewsletterSignup" element={<LayoutWrapper currentPageName="NewsletterSignup"><NewsletterSignup /></LayoutWrapper>} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
-              <Route path="/forgot-password" element={<ForgotPassword />} />
-              <Route path="/reset-password" element={<ResetPassword />} />
-              {/* Landing page is public — no login wall for general site access. */}
-              <Route path="/" element={<DynamicLandingPage />} />
-              <Route path="*" element={<PageNotFound />} />
-            </Routes>
-          </PageWrapper>
-        } />
+        {/* signing in: full-screen pages of their own, without the app's frame */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        {/* everything else: the app (AppFrame above) */}
+        <Route path="*" element={<AppFrame />} />
       </Routes>
     </div>
   );

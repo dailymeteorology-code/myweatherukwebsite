@@ -468,30 +468,8 @@ function MobileSheet({ roles }) {
   return createPortal(
     <>
       {/* On a phone the app's tab bar (components/app/AppTabBar.jsx) and its More tab are the menu now
-          (17 Nov 2026), so this button is not shown; the menu it opened stays for any page that opens it. */}
-      <button
-        onClick={() => setOpen(true)}
-        aria-label="Open menu"
-        className="hidden"
-        style={{
-          top: 'calc(env(safe-area-inset-top, 0px) + 7px)',
-          right: 10,
-          zIndex: 41,
-          height: 34,
-          width: 34,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: 9,
-          border: 'none',
-          cursor: 'pointer',
-          background: isDark ? 'rgba(30,41,59,0.85)' : 'rgba(241,245,249,0.9)',
-          color: isDark ? '#cbd5e1' : '#475569',
-          backdropFilter: 'blur(8px)',
-        }}
-      >
-        <Menu size={19} />
-      </button>
+          (17 Nov 2026), so the phone's menu button is gone. (Hidden by a class at first, its inline display won
+          and it sat at the foot of every page, 17 Nov.) The menu it opened stays for any page that opens it. */}
 
       <AnimatePresence>
         {open && (

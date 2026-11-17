@@ -22,7 +22,7 @@ function LayoutContent({ children, currentPageName }) {
      More) carry their own large titles, so the phone's website bar stays off them, as an app has none. */
   const path = location.pathname;
   const isHome = path === '/' || path === '/Home';
-  const appScreen = isHome || ['/LocationWeather', '/Hub', '/Warnings', '/More'].includes(path);
+  const appScreen = isHome || ['/LocationWeather', '/Hub', '/Warnings', '/Radar', '/More'].includes(path);
 
   useEffect(() => {
     (async () => {

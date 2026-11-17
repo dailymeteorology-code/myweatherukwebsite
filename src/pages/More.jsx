@@ -66,6 +66,10 @@ export default function More() {
             </div>
           </section>
         ))}
+        {/* the app's version, here rather than over the tab bar (17 Nov 2026, at the user's request) */}
+        <p style={{ margin: '30px 0 6px', textAlign: 'center', fontSize: 13, color: c.sub, fontVariantNumeric: 'tabular-nums' }}>
+          MyWeatherUK {typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : ''}
+        </p>
       </div>
     </div>
   );
