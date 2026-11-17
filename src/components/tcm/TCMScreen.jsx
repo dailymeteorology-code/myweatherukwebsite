@@ -296,8 +296,10 @@ export default function TCMScreen() {
   const lensDays = days.length ? `${(dayI / days.length) * 100}%` : '0%';
 
   return (
-    <div ref={rootRef} className={`tc${isDark ? '' : ' is-light'}`} style={{ '--tc-top': `${topOffset}px` }}
-      onTouchStart={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()} onTouchEnd={(e) => e.stopPropagation()}>
+    /* touches are not stopped here: the map follows a pinch from the document (Leaflet's TouchZoom listens there),
+       and stopping them on the way left two fingers doing nothing (17 Nov 2026, the user: "zoom in and out with my
+       fingers on the radar and on TCM") */
+    <div ref={rootRef} className={`tc${isDark ? '' : ' is-light'}`} style={{ '--tc-top': `${topOffset}px` }}>
       <div ref={mapEl} className="tc-map" aria-label="Map of the TCM thunderstorm outlook" />
 
       <div className="tc-top">

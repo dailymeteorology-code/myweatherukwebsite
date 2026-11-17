@@ -36,6 +36,7 @@ import '@/components/app/app-screens.css';
 import { SectionActiveContext } from '@/components/app/sectionActive';
 import ScreenBoundary from '@/components/app/ScreenBoundary';
 import TCMScreen from '@/components/tcm/TCMScreen';
+import { prefetchRadar } from '@/components/radar/radarFeed';
 import { motion, AnimatePresence } from 'framer-motion';
 import { base44 } from '@/api/base44Client';
 
@@ -119,6 +120,21 @@ function AppFrame() {
   const active = sectionOf(location.pathname);
   /* each section opened so far, with the address it last had */
   const [kept, setKept] = useState(() => (active ? { [active]: location } : {}));
+  /* The Radar and TCM tabs made ready unseen once the app has settled (phones, where the tab bar has them; 17 Nov
+     2026, the user: Radar "basically instant", TCM "much much faster"): the radar's newest scan fetched
+     (components/radar/radarFeed.js), then each tab made, hidden, with its map laid out and its picture drawn, so a
+     tap only has to show it. One at a time, each when the phone has a moment. */
+  useEffect(() => {
+    if (!window.matchMedia?.(PHONE_Q).matches) return undefined;
+    const timers = [], idles = [];
+    const later = (fn) => idles.push(window.requestIdleCallback ? window.requestIdleCallback(fn, { timeout: 3000 }) : setTimeout(fn, 500));
+    const ahead = (id, pathname, ms) => timers.push(setTimeout(() => later(() => setKept((k) => (k[id] ? k
+      : { ...k, [id]: { pathname, search: '', hash: '', state: null, key: 'ahead' } }))), ms));
+    timers.push(setTimeout(prefetchRadar, 2500));
+    ahead('radar', '/Radar', 2600);
+    ahead('tcm', '/TCMOutlooks', 6000);
+    return () => { timers.forEach(clearTimeout); idles.forEach((h) => (window.cancelIdleCallback || clearTimeout)(h)); };
+  }, []);
   useEffect(() => {
     if (active) setKept((k) => (k[active] === location ? k : { ...k, [active]: location }));
   }, [active, location]);

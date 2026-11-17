@@ -58,8 +58,42 @@ const POLL_MS = 60e3;
 
 const inBox = (b, la, lo) => la >= b.s && la <= b.n && lo >= b.w && lo <= b.e;
 const inUKI = (la, lo) => inBox(UKI, la, lo);
-/** Does this strike belong in the merged picture? src 0 = Blitzortung, 1 = Met Office. */
-const keep = (src, la, lo, uk) => (uk === 'bz' ? src === 0 : src === 1 ? inUKI(la, lo) : !inUKI(la, lo));
+/** Does this strike belong in the merged picture? src 0 = Blitzortung, 1 = Met Office. `uk`: 'mo' the Met Office in
+ *  the UK & Ireland and Blitzortung elsewhere; 'bz' Blitzortung everywhere; 'all' both (17 Nov 2026, the user: "have
+ *  all the lightning strikes properly load"): Blitzortung everywhere and, in the UK & Ireland, the Met Office's
+ *  strikes too, less the ones Blitzortung also caught (seenByBz, below). In one day in the UK box the Met Office had
+ *  686 strikes and Blitzortung 4,017, so the Met Office alone showed a sixth of the storms. */
+const keep = (src, la, lo, uk) => (uk === 'bz' ? src === 0 : uk === 'all' ? src === 0 || inUKI(la, lo) : src === 1 ? inUKI(la, lo) : !inUKI(la, lo));
+
+/* The same flash seen by both networks: Blitzortung's strikes in the UK & Ireland go into cells of a second by a
+   tenth of a degree, and a Met Office strike with one in any of the 27 cells round its own (within about 1.5 s and
+   15 km) is that flash, already on the map. */
+const cellOf = (s, a, o) => `${s}|${a}|${o}`;
+function bzCells() {
+  const cells = new Set();
+  return {
+    add(t, la, lo) { if (inUKI(la, lo)) cells.add(cellOf(Math.round(t / 1000), Math.round(la * 10), Math.round(lo * 10))); },
+    has(t, la, lo) {
+      const s = Math.round(t / 1000), a = Math.round(la * 10), o = Math.round(lo * 10);
+      for (let ds = -1; ds <= 1; ds += 1) for (let da = -1; da <= 1; da += 1) for (let dd = -1; dd <= 1; dd += 1) if (cells.has(cellOf(s + ds, a + da, o + dd))) return true;
+      return false;
+    },
+  };
+}
+/** Leaves out of a flat [t, lat, lon, src, …] list the Met Office strikes Blitzortung also caught; `held` is where
+ *  Blitzortung's are looked for (the list itself unless given). */
+function dropSeen(out, held = out) {
+  const cells = bzCells();
+  for (let i = 0; i < held.length; i += 4) if (held[i + 3] === 0) cells.add(held[i], held[i + 1], held[i + 2]);
+  let w = 0;
+  for (let i = 0; i < out.length; i += 4) {
+    if (out[i + 3] === 1 && cells.has(out[i], out[i + 1], out[i + 2])) continue;
+    if (w !== i) { out[w] = out[i]; out[w + 1] = out[i + 1]; out[w + 2] = out[i + 2]; out[w + 3] = out[i + 3]; }
+    w += 4;
+  }
+  out.length = w;
+  return out;
+}
 
 /* ── UK time ────────────────────────────────────────────────────────────── */
 
@@ -321,6 +355,8 @@ export function createLightning({ ingest } = {}) {
         }
       }
     }
+    // both networks: a Met Office strike Blitzortung also caught is left out (it is on the map already)
+    if (uk === 'all') dropSeen(out);
     // in time order
     const n = out.length / 4;
     const idx = new Uint32Array(n);
@@ -351,6 +387,17 @@ export function createLightning({ ingest } = {}) {
         if (out.length > 120000) return { seq, strikes: [], reset: true };
       }
     }
+    /* both networks: the Met Office's strikes come a minute or two after Blitzortung's of the same flashes, so
+       each is checked against Blitzortung's held round its time */
+    if (uk === 'all') {
+      let from = Infinity, to = -Infinity;
+      for (let i = 0; i < out.length; i += 4) if (out[i + 3] === 1) { from = Math.min(from, out[i]); to = Math.max(to, out[i]); }
+      if (to >= from) {
+        const c = cols[0], held = [];
+        for (let i = c.a; i < c.b; i += 1) if (c.t[i] >= from - 2000 && c.t[i] <= to + 2000) held.push(c.t[i], c.la[i], c.lo[i], 0);
+        dropSeen(out, held);
+      }
+    }
     return { seq, strikes: out, reset: false };
   }
 
@@ -364,12 +411,14 @@ export function createLightning({ ingest } = {}) {
     const regions = {};
     for (const r of Object.keys(REGIONS)) regions[r] = { last5: 0, last15: 0, lastHour: 0, today: 0, last24: 0, bins: new Array(nb).fill(0), newest: null };
     const hoursSeen = new Set();
+    const cells = uk === 'all' ? bzCells() : null;            // both networks: Blitzortung's, met first (src 0)
     for (const src of [0, 1]) {
       const c = cols[src];
       for (let i = c.a; i < c.b; i += 1) {
         const t = c.t[i], la = c.la[i], lo = c.lo[i];
         if (src === 0 && t >= now - 24 * 3600e3) hoursSeen.add(Math.floor(t / 3600e3));
         if (!keep(src, la, lo, uk) || t > now + 60e3) continue;
+        if (cells) { if (src === 0) cells.add(t, la, lo); else if (cells.has(t, la, lo)) continue; }
         for (const r of Object.keys(REGIONS)) {
           if (!inBox(REGIONS[r], la, lo)) continue;
           const g = regions[r];
@@ -399,7 +448,7 @@ export function createLightning({ ingest } = {}) {
         },
         blitzortung: {
           name: 'Blitzortung.org', status: bzStatus?.status || 'unknown', sockets: bzStatus?.sockets ?? null,
-          lastStrikeAgeMs: bzStatus?.lastStrikeAgeMs ?? null, covers: uk === 'bz' ? 'everywhere' : 'outside the UK & Ireland',
+          lastStrikeAgeMs: bzStatus?.lastStrikeAgeMs ?? null, covers: uk === 'mo' ? 'outside the UK & Ireland' : 'everywhere',
           heldInMemory: cols[0].size,
           // hours of the last 24 with any Blitzortung strike: a gap means neither this server nor
           // the cloud capture was listening
@@ -668,7 +717,7 @@ const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 export function mountLightning(app, { ingest } = {}) {
   const L = createLightning({ ingest });
   L.start();
-  const opts = (q) => ({ region: REGION_OK.has(q.region) ? q.region : 'uk', uk: q.uk === 'bz' ? 'bz' : 'mo' });
+  const opts = (q) => ({ region: REGION_OK.has(q.region) ? q.region : 'uk', uk: q.uk === 'bz' || q.uk === 'all' ? q.uk : 'mo' });
 
   app.get('/api/lightning/summary', (req, res) => sendJson(req, res, L.summary(opts(req.query).uk)));
 

@@ -1501,15 +1501,25 @@ export default function ModelData() {
   /* The map keeps to the data (17 Nov 2026, at the user's request: "the boundaries on where the person can go is
      how far the data extends"): it cannot be dragged off the model's grid, nor zoomed out past the whole of it,
      and when all of it is in view it sits in the middle. */
+  /* Measured against the part of the map you can see: on a phone the map runs on under the bars above and below
+     it, and measured against the whole screen the south of the UK grid (the Channel and northern France) stayed
+     under the dock and the tab bar and could not be brought up (17 Nov 2026, the user: "unable to move down on
+     models which show the UK and parts of France"). */
   const clampView = useCallback((v) => {
     const R = windowRects()?.a;
     if (!v || !R || !NX || !NY) return v;
-    const s = Math.max(Math.min(R.w / NX, R.h / NY), Math.min(30, v.s));
-    const hw = R.w / (2 * s), hh = R.h / (2 * s);
-    const cx = 2 * hw >= NX ? NX / 2 : Math.max(hw, Math.min(NX - hw, v.cx));
-    const cy = 2 * hh >= NY ? NY / 2 : Math.max(hh, Math.min(NY - hh, v.cy));
+    const ins = bleedInset();
+    const I = ins ? { x: R.x, y: R.y + ins.top, w: R.w, h: Math.max(80, R.h - ins.top - ins.bottom) } : R;
+    const s = Math.max(Math.min(I.w / NX, I.h / NY), Math.min(30, v.s));
+    /* along one side: a map longer than the view moves until its edge meets the view's edge; a shorter one sits
+       in the middle of the view (`o` is the frame's middle, where the view's centre is drawn) */
+    const along = (c, n, lo, len, o) => (n * s <= len
+      ? n / 2 - (lo + len / 2 - o) / s
+      : Math.max((o - lo) / s, Math.min(n - (lo + len - o) / s, c)));
+    const cx = along(v.cx, NX, I.x, I.w, R.x + R.w / 2);
+    const cy = along(v.cy, NY, I.y, I.h, R.y + R.h / 2);
     return cx === v.cx && cy === v.cy && s === v.s ? v : { cx, cy, s };
-  }, [windowRects]);
+  }, [windowRects, bleedInset]);
   /* fit a grid box into the frame; `tight` fills it (a re-framing), otherwise leaves room
      for the title card and the key (on a bled phone map, between the bars) */
   const fit = useCallback((box, tight) => {

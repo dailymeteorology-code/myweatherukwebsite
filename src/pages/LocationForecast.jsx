@@ -21,7 +21,7 @@
      • fourteen detail tiles and ten interactive charts
    The route key stays "LocationWeather" (pages.config.js), so every old link still works;
    ?location=Name opens a place directly. */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useUnits } from '@/components/useUnits';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -757,6 +757,25 @@ function appStartPlace(search) {
   const d = localPlaces();
   return placeWith(d, 'home') || d.places[0] || lastOpenedPlace();
 }
+/* Where the home page last found you ({ lat, lon, name }), kept on this device: shown first when the page opens,
+   while it finds you again (17 Nov 2026). */
+const HERE_KEY = 'lw-last-here';
+function lastHere() {
+  try {
+    const h = JSON.parse(localStorage.getItem(HERE_KEY) || 'null');
+    return h && Number.isFinite(h.lat) && Number.isFinite(h.lon) ? h : null;
+  } catch { return null; }
+}
+function saveHere(l) {
+  try { if (Number.isFinite(l?.lat) && Number.isFinite(l?.lon)) localStorage.setItem(HERE_KEY, JSON.stringify({ lat: l.lat, lon: l.lon, name: l.name || '' })); } catch { /* storage blocked */ }
+}
+/* km between two { lat, lon } */
+function kmApart(a, b) {
+  const r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLon = (b.lon - a.lon) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLon / 2) ** 2;
+  return 12742 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 /* "at 14:20 (3 h ago)", for the forecast shown without a connection */
 function savedWhen(at) {
   if (!at) return 'earlier';
@@ -846,7 +865,9 @@ export default function LocationForecast() {
 
   /* one search at a time: a newer one aborts the older */
   /* auto: the home page's own locate (below): a place outside the UK leaves the search, no dialog */
-  const run = useCallback(async (p, { quiet = false, auto = false } = {}) => {
+  /* staleMs: what was fetched for the place up to this long ago is shown while the fresh forecast loads (the home
+     page's first place), not only the last 20 minutes' */
+  const run = useCallback(async (p, { quiet = false, auto = false, staleMs = 0 } = {}) => {
     const name = (p?.name || '').trim();
     const hasCoords = Number.isFinite(p?.lat) && Number.isFinite(p?.lon);
     if (!name && !hasCoords) return;
@@ -857,7 +878,8 @@ export default function LocationForecast() {
     if (!quiet) { setLoading(true); setError(null); setOutside(null); setGeoError(''); setSheetT(null); }
     /* a place opened in the last 20 minutes shows at once from what was fetched then, and is brought up
        to date in place (ukvLocation.js cachedLocation) */
-    const cached = !quiet && cachedLocation({ lat: p.lat, lon: p.lon, name });
+    const older = !quiet && staleMs ? cachedLocationAny({ lat: p.lat, lon: p.lon, name }) : null;
+    const cached = !quiet && (cachedLocation({ lat: p.lat, lon: p.lon, name }) || (older && Date.now() - older.at < staleMs ? older.body : null));
     if (cached?.location) {
       setResp(cached);
       setPlace({ name: cached.location.name, lat: cached.location.lat, lon: cached.location.lon, region: p.region || '' });
@@ -870,6 +892,7 @@ export default function LocationForecast() {
       setResp(body);
       setOffline(null);
       setPlace({ name: body.location.name, lat: body.location.lat, lon: body.location.lon, region: p.region || '' });
+      if (auto) saveHere(body.location);                    // where it found you, shown first next time
       if (!quiet) {
         if (!cached) { setDayIdx(0); setOpenDay(ukDay(Date.now())); }
         rememberSearch(userRef.current, { name: body.location.name, region: p.region || '', lat: body.location.lat, lon: body.location.lon })
@@ -949,7 +972,11 @@ export default function LocationForecast() {
         clearTimeout(wait);
         setLocating(false);
         if (chosenRef.current) return;
-        run({ lat: pos.coords.latitude, lon: pos.coords.longitude }, { auto: true });
+        const at = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        /* still where it found you last time: that place is already on show (and being brought up to date) */
+        const was = lastHere();
+        if (was && kmApart(was, at) < 1.5) return;
+        run(at, { auto: true });
       },
       done,
       { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 },
@@ -961,12 +988,20 @@ export default function LocationForecast() {
     const q = new URLSearchParams(routerLocation.search);
     if (q.has('lat') || q.has('location') || appStartPlace(routerLocation.search)) return;
     autoLocated.current = true;
+    /* where it found you last time, shown at once while it finds you again (17 Nov 2026, the user: the page's
+       loading "much much" faster); a new place replaces it only if you have moved */
+    const here = lastHere();
+    if (here) run({ lat: here.lat, lon: here.lon, name: here.name }, { auto: true, staleMs: 60 * 60e3 });
+    /* In the iPhone app the app answers for the location (its bridge, MyWeatherUK-app src/lib/bridge.ts, asks
+       once). The page's own permission says "denied" there (the site is plain http on the home network), so it
+       is not asked: asking it left the app on the search (17 Nov 2026, the user: "it is not loading in the
+       person's current location"). */
     const perms = typeof navigator !== 'undefined' ? navigator.permissions : null;
-    if (!perms?.query) { autoLocate(); return; }
+    if (window.__mwukBridge || !perms?.query) { autoLocate(); return; }
     perms.query({ name: 'geolocation' }).then(
-      (st) => { if (st.state !== 'denied') autoLocate(); else if (!chosenRef.current) setLoading(false); },
+      (st) => { if (st.state !== 'denied') autoLocate(); else if (!chosenRef.current && !here) setLoading(false); },
       () => autoLocate());
-  }, [routerLocation.search, autoLocate]);
+  }, [routerLocation.search, autoLocate, run]);
 
   /* a link opens a place: ?lat=&lon=&name= exactly (the "copy a link" menu item), or ?location=Name */
   useEffect(() => {
@@ -1002,6 +1037,12 @@ export default function LocationForecast() {
   /* the page at the hour travelled to (the hero, the tiles and the sky read it); the model itself at now;
      a new place starts at now, and an hour gone from the forecast goes back to now */
   const travel = useMemo(() => (model && travelT != null ? travelModel(model, travelT) : model), [model, travelT]);
+  /* The cards below the first screen are drawn just after it (17 Nov 2026, the user: the page's loading "much much"
+     faster): the place, now, today and the hours show as soon as the forecast is in, and the rest follow a moment
+     later as background work the page can break off (React's deferred value). Until they have caught up with a new
+     forecast they keep showing the last one, so nothing jumps; on the very first forecast they are not there yet. */
+  const late = useDeferredValue(model);
+  const lateTravel = useDeferredValue(travel);
   /* The sky's extras at the hour shown (Phase G, SkyBackdrop.jsx): a rainbow when the sun is low and
      out with showers within an hour and a half; the aurora on a clear dark night when NOAA's Kp for that
      time reaches what this latitude needs (situations.js auroraKp); shooting stars on a clear dark night,
@@ -1296,39 +1337,39 @@ export default function LocationForecast() {
                 <div id="lw-card-hourly" className={slot('hourly')}>
                   <HourlyMemo model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} onHour={setSheetT} sheetT={sheetT} bestFor={bestFor} onBestFor={setBestFor} />
                 </div>
-                <div id="lw-card-precip" className={slot('precip')}><PrecipMemo model={model} /></div>
-                <div id="lw-card-indices" className={slot('indices')} style={{ order: 2 }}><EverydayIndices model={model} /></div>
+                <div id="lw-card-precip" className={slot('precip')}>{late && <PrecipMemo model={late} />}</div>
+                <div id="lw-card-indices" className={slot('indices')} style={{ order: 2 }}>{late && <EverydayIndices model={late} />}</div>
                 {/* road ice and fog, snow settling, the night sky, event days: each only when it has
                     something to say (SituationCards.jsx) */}
                 <div id="lw-card-situations" className={`${slot('situations', ['roads', 'settle', 'nightsky', 'events', 'coast'])} lw-situations`}>
                   {atCommutePlace && <CommuteMemo data={placesData} onChange={changePlaces} />}
-                  <SituationsMemo model={model} />
+                  {late && <SituationsMemo model={late} />}
                   <CoastMemo outside={feeds} />
                 </div>
-                <div id="lw-card-detail" className={slot('detail')}><ChartsMemo model={model} dayIdx={dayIdx} onDay={pickDay} /></div>
+                <div id="lw-card-detail" className={slot('detail')}>{late && <ChartsMemo model={late} dayIdx={dayIdx} onDay={pickDay} />}</div>
                 {/* lightning near here, heavy rain on its way, the AI lightning warning, the storm type and
                     hail: only when there is something to watch (StormWatch.jsx) */}
-                <div id="lw-card-storm" className={slot('storm', ['storm', 'thunder'])}><StormMemo model={model} /></div>
-                <div id="lw-card-thunder" className={slot('thunder')}><ThunderMemo model={model} /></div>
+                <div id="lw-card-storm" className={slot('storm', ['storm', 'thunder'])}>{late && <StormMemo model={late} />}</div>
+                <div id="lw-card-thunder" className={slot('thunder')}>{late && <ThunderMemo model={late} />}</div>
               </div>
               <div className="lw-col">
-                <div id="lw-card-tiles" className={slot('tiles')}><TilesMemo model={travel} outside={feeds} /></div>
+                <div id="lw-card-tiles" className={slot('tiles')}>{lateTravel && <TilesMemo model={lateTravel} outside={feeds} />}</div>
               </div>
               <div id="lw-card-days" className={slot('days')}>
-                {model.outlook?.days?.length
-                  ? <OutlookMemo model={model} T={T} selected={openDay} onDay={openOutlookDay} warnings={warnings} onWarning={showWarning} />
-                  : <DaysMemo model={model} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />}
+                {late && (late.outlook?.days?.length
+                  ? <OutlookMemo model={late} T={T} selected={openDay} onDay={openOutlookDay} warnings={warnings} onWarning={showWarning} />
+                  : <DaysMemo model={late} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />)}
                 {/* the days beyond them, as the GEFS ensemble average leans (TrendCard.jsx, Phase G) */}
-                <TrendMemo lat={model.lat} lon={model.lon} normal={feeds?.normal || null}
-                  fromDay={model.outlook?.days?.[model.outlook.days.length - 1]?.day || model.days[model.days.length - 1]?.day || null} />
+                {late && <TrendMemo lat={late.lat} lon={late.lon} normal={feeds?.normal || null}
+                  fromDay={late.outlook?.days?.[late.outlook.days.length - 1]?.day || late.days[late.days.length - 1]?.day || null} />}
               </div>
               <div id="lw-card-radar" className={slot('radar')}>
                 <div className="lw-glass lw-card">
                   <div className="lw-title"><Radar />Rain radar<span className="lw-title-aside">Met Office 1 km · then UKV</span></div>
-                  <RadarMemo lat={model.lat} lon={model.lon} />
+                  {late && <RadarMemo lat={late.lat} lon={late.lon} />}
                 </div>
               </div>
-              <div id="lw-card-snow" className={slot('snow')}><SnowMemo model={model} /></div>
+              <div id="lw-card-snow" className={slot('snow')}>{late && <SnowMemo model={late} />}</div>
             </div>
 
             <p className="lw-source">

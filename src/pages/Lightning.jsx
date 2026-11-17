@@ -41,6 +41,9 @@ import WarningDetail from '@/components/aiw/WarningDetail';
 if (typeof window !== 'undefined' && !window.L) window.L = L;
 
 const VIEWS = { uk: { center: [54.6, -3.8], zoom: 6 }, europe: { center: [50.5, 10], zoom: 4 }, world: { center: [22, 10], zoom: 2 } };
+/* on a narrow screen the UK view is fitted to the UK and Ireland (at zoom 6 a phone showed a slice of them) */
+const UK_FIT = [[49.8, -10.6], [58.8, 1.9]];
+const narrow = (m) => m.getSize().x < 700;
 const REGION_LABEL = { uk: 'UK & Ireland', europe: 'Europe', world: 'World' };
 const WINDOWS = [{ id: '1h', label: '1 h', mins: 60 }, { id: '3h', label: '3 h', mins: 180 }, { id: 'today', label: 'Today' }, { id: '24h', label: '24 h', mins: 1440 }];
 const DEFAULT_WINDOW = { uk: 'today', europe: '3h', world: '1h' };
@@ -59,12 +62,17 @@ const basemap = (light) => `https://server.arcgisonline.com/ArcGIS/rest/services
 const RV_TICKS = [10, 20, 30, 40, 50, 60].map((dbz) => { const r = (10 ** (dbz / 10) / 200) ** (1 / 1.6); return { dbz, mm: r < 1 ? r.toFixed(1) : r < 10 ? r.toFixed(0) : String(Math.round(r / 5) * 5) }; });
 
 /* ── preferences ──────────────────────────────────────────────────────────── */
-const PREFS_KEY = 'lx_prefs_v1';
-const DEFAULT_PREFS = { region: 'uk', layers: ['strikes', 'heat', 'aiw', 'aiwTrack'], colour: 'age', uk: 'mo', sound: false, windows: DEFAULT_WINDOW };
+/* v2 (17 Nov 2026, the user: "have all the lightning strikes properly load"): UK & Ireland strikes from both networks
+   by default (uk 'all'). The Met Office alone (the old default) showed about a sixth of them: on one day in the UK
+   box it had 686 strikes and Blitzortung 4,017. A v1 setting keeps everything but that choice. */
+const PREFS_KEY = 'lx_prefs_v2';
+const DEFAULT_PREFS = { region: 'uk', layers: ['strikes', 'heat', 'aiw', 'aiwTrack'], colour: 'age', uk: 'all', sound: false, windows: DEFAULT_WINDOW };
 function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null');
     if (p) return { ...DEFAULT_PREFS, ...p, windows: { ...DEFAULT_WINDOW, ...(p.windows || {}) } };
+    const v1 = JSON.parse(localStorage.getItem('lx_prefs_v1') || 'null');
+    if (v1) { const { uk: _old, ...rest } = v1; return { ...DEFAULT_PREFS, ...rest, windows: { ...DEFAULT_WINDOW, ...(rest.windows || {}) } }; }
     const old = localStorage.getItem('tcm_region');                     // the page's previous setting
     if (['uk', 'europe', 'world'].includes(old)) return { ...DEFAULT_PREFS, region: old };
   } catch { /* defaults */ }
@@ -218,6 +226,7 @@ export default function Lightning() {
     });
     m.on('contextmenu', (e) => setPanel({ kind: 'here', lat: e.latlng.lat, lon: e.latlng.lng }));
     map.current = m;
+    if (live.current.region === 'uk' && narrow(m)) m.fitBounds(UK_FIT, { animate: false, padding: [6, 6] });
     setMapReady(true);
     return () => { m.remove(); map.current = null; setMapReady(false); };
   }, []);
@@ -239,13 +248,15 @@ export default function Lightning() {
   }, [prefs.layers, mode.kind, mapReady]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { dots.current?.redraw(); }, [prefs.colour]);
 
-  /* the view */
-  const firstView = useRef(true);
+  /* the view: flown to when the region changes (not when the map first comes, which starts there) */
+  const viewOf = useRef(region);
   useEffect(() => {
-    if (!map.current) return;
-    if (firstView.current) { firstView.current = false; return; }
+    const m = map.current;
+    if (!m || viewOf.current === region) return;
+    viewOf.current = region;
+    if (region === 'uk' && narrow(m)) { m.flyToBounds(UK_FIT, { duration: 0.9, padding: [6, 6] }); return; }
     const v = VIEWS[region];
-    map.current.flyTo(v.center, v.zoom, { duration: 0.9 });
+    m.flyTo(v.center, v.zoom, { duration: 0.9 });
   }, [region, mapReady]);
   /* Full screen. The map always fills the window at once (fixed, its section lifted above the site's
      bars — it used to stay inside a stacking layer below the top bar, which then covered the map's
@@ -316,7 +327,9 @@ export default function Lightning() {
       if (token === loadToken.current) setLoading(false);
     }
   }, []);
-  useEffect(() => { if (mapReady) load(); }, [mapReady, region, prefs.uk, mode.kind, mode.day, win, load]);
+  /* asked for straight away (the map and its layers are made in the effect above, before this one runs): waiting
+     for mapReady first cost a second render of the whole page, about 2 s on a slower phone */
+  useEffect(() => { load(); }, [region, prefs.uk, mode.kind, mode.day, win, load]);
 
   /* ── live: what has arrived since, every 3 seconds ── */
   useEffect(() => {
@@ -634,12 +647,15 @@ export default function Lightning() {
               </div>
               <p className="lx-pop-label">UK & Ireland strikes from</p>
               <div className="lx-seg lx-seg-sm">
+                <button type="button" aria-selected={prefs.uk === 'all'} onClick={() => set({ uk: 'all' })}>Both</button>
                 <button type="button" aria-selected={prefs.uk === 'mo'} onClick={() => set({ uk: 'mo' })}>Met Office</button>
                 <button type="button" aria-selected={prefs.uk === 'bz'} onClick={() => set({ uk: 'bz' })}>Blitzortung</button>
               </div>
-              <p className="lx-fine">{prefs.uk === 'mo'
-                ? 'The Met Office network, recorded around the clock; strikes reach the map a minute or two after they happen. Blitzortung everywhere else.'
-                : 'Blitzortung everywhere: within seconds, but only recorded while this site’s server is running.'}</p>
+              <p className="lx-fine">{prefs.uk === 'all'
+                ? 'Every strike either network caught: Blitzortung everywhere, within seconds, and the Met Office’s too, a minute or two later (a flash both caught is shown once).'
+                : prefs.uk === 'mo'
+                  ? 'The Met Office network, recorded around the clock; strikes reach the map a minute or two after they happen. Blitzortung everywhere else.'
+                  : 'Blitzortung everywhere: within seconds, but only recorded while this site’s server is running.'}</p>
             </div>
           )}
 
@@ -761,7 +777,7 @@ export default function Lightning() {
                     <div className="lx-hours" title="Each block is an hour: filled when Blitzortung was being recorded, here or by the backup recorder">
                       {feeds.blitzortung.hours.map((h, i) => <i key={i} className={h ? 'is-on' : ''} />)}
                     </div>
-                    <p className="lx-fine">Blitzortung recorded for {capturedHours} of the last 24 hours. While this PC is off a recorder on GitHub keeps listening, and its strikes are added here when the site is back (within 20 minutes). UK & Ireland strikes come from the Met Office, whose own 48-hour feed fills any gap.{lastLive ? <> Map updated <Ago t={lastLive} />.</> : ''}</p>
+                    <p className="lx-fine">Blitzortung recorded for {capturedHours} of the last 24 hours. While this PC is off a recorder on GitHub keeps listening, and its strikes are added here when the site is back (within 20 minutes).{prefs.uk === 'bz' ? '' : prefs.uk === 'all' ? ' In the UK & Ireland the Met Office’s strikes are added too; its own 48-hour feed fills any gap.' : ' UK & Ireland strikes come from the Met Office, whose own 48-hour feed fills any gap.'}{lastLive ? <> Map updated <Ago t={lastLive} />.</> : ''}</p>
                   </>
                 )}
               </section>

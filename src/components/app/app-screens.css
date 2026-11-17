@@ -1,6 +1,13 @@
 /* The app's screens (17 Nov 2026, the iOS-app redesign): the sections the tab bar opens, and the pages opened from
    More. Sections are kept once opened (App.jsx AppFrame), so switching tabs is instant; a page opened from More
    slides in from the right, as an iOS app pushes a screen. */
+/* No zooming the whole page (17 Nov 2026, the user: "can not zoom in on a locked page like the warnings page when
+   there are no warnings, and the More page, or any page which does not involve live data"). Two fingers zoom the
+   maps themselves (Radar, TCM, Model Data, the warnings map), which take a pinch as their own; everywhere else the
+   page stays as it is. The viewport tag in index.html does this in the iPhone app; this does it in Safari, which
+   ignores that tag. A locked map (the warnings map with nothing in force) drops its own pinch, so it stays still. */
+html { touch-action: pan-x pan-y; }
+
 /* A section that is not on screen: laid out at the full size of the screen as before, but invisible, untouchable
    and out of the page's flow, so its maps and charts keep their size and the page's scroll is the shown one's. */
 .app-section[data-off] {

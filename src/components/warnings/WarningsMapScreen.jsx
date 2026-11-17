@@ -327,9 +327,9 @@ export default function WarningsMapScreen({ warnings = [], loading = false, chec
   const extraFilters = sevFilter.length + typeFilter.length + (showInForce ? 0 : 1) + (showUpcoming ? 0 : 1);
 
   return (
-    /* touches stay on the map: the app's pull-to-refresh would read a drag down the map as a reload */
-    <div ref={rootRef} className={`wm${isDark ? '' : ' is-light'}${empty ? ' is-empty' : ''}${selected ? ' has-sheet' : ''}`} style={{ '--wm-top': `${topOffset}px` }}
-      onTouchStart={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()} onTouchEnd={(e) => e.stopPropagation()}>
+    /* touches are not stopped here (they were for the pull-to-refresh, now gone): the map follows a pinch from the
+       document, where Leaflet's TouchZoom listens */
+    <div ref={rootRef} className={`wm${isDark ? '' : ' is-light'}${empty ? ' is-empty' : ''}${selected ? ' has-sheet' : ''}`} style={{ '--wm-top': `${topOffset}px` }}>
       <div ref={mapEl} className="wm-map" aria-label="Map of the UK's weather warnings" />
 
       {/* a day with nothing on it: the map greyed out and held still, and the news in the middle */}

@@ -152,31 +152,9 @@ export function radarCropMapping(head, box, W, H) {
     radar's analysis, the kind-and-strength bytes of a model's ptype), each pixel then in its kind's
     colours (rain in the radar's own). */
 export function paintRadarCrop(crop, map, W, H, type = null) {
-  const sc = scaleFor('radar');
-  const { lo, hi, scale } = crop.head;
-  const a = scale === 'sqrt' ? Math.sqrt(Math.max(lo, 0)) : lo, b = scale === 'sqrt' ? Math.sqrt(hi) : hi;
-  const luts = [];
-  for (let f = 0; f < (type ? RADAR_FAMILIES.length : 1); f++) {
-    const lut = new Uint32Array(256);
-    for (let v = 0; v < 255; v++) {
-      const val = scale === 'sqrt' ? (a + (v / 254) * (b - a)) ** 2 : a + (v / 254) * (b - a);
-      const c = f ? familyColour(f, val) : colourAt(sc, val);
-      if (c) lut[v] = (c[3] << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
-    }
-    luts.push(lut);
-  }
+  const { luts, famOf } = radarColours(crop.head, type?.crop.head);
   const lut = luts[0];
-  /* each type cell's family (its nearest cell to each pixel: a type is never blended) */
-  let famOf = null, tq = null, tmap = null, tnx = 0;
-  if (type) {
-    const th = type.crop.head;
-    famOf = new Uint8Array(256);
-    for (let q = 0; q < 255; q++) {
-      const v = Math.round(th.lo + (q / 254) * (th.hi - th.lo));
-      famOf[q] = th.hi > 12 ? (v >= 1 && v <= 252 ? Math.floor((v - 1) / 63) : 0) : PTYPE_FAMILY[v] ?? 0;
-    }
-    tq = type.crop.q; tmap = type.map; tnx = th.nx;
-  }
+  const tq = type?.crop.q, tmap = type?.map, tnx = type?.crop.head.nx || 0;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
@@ -199,6 +177,114 @@ export function paintRadarCrop(crop, map, W, H, type = null) {
   }
   ctx.putImageData(img, 0, 0);
   return new Promise((ok) => cv.toBlob((bl) => ok(bl ? URL.createObjectURL(bl) : cv.toDataURL()), 'image/png'));
+}
+
+/* A crop's colours: one table a byte for the rain (the radar's scale) and, with a type crop, one for each kind
+   (snow, sleet...), plus each type byte's kind. The same for every crop with the same encoding, so kept. */
+const colourCache = new Map();
+function radarColours(head, typeHead = null) {
+  const key = `${head.lo}|${head.hi}|${head.scale}|${typeHead ? `${typeHead.lo}|${typeHead.hi}` : '-'}`;
+  const hit = colourCache.get(key);
+  if (hit) return hit;
+  const sc = scaleFor('radar');
+  const { lo, hi, scale } = head;
+  const a = scale === 'sqrt' ? Math.sqrt(Math.max(lo, 0)) : lo, b = scale === 'sqrt' ? Math.sqrt(hi) : hi;
+  const luts = [];
+  for (let f = 0; f < (typeHead ? RADAR_FAMILIES.length : 1); f++) {
+    const lut = new Uint32Array(256);
+    for (let v = 0; v < 255; v++) {
+      const val = scale === 'sqrt' ? (a + (v / 254) * (b - a)) ** 2 : a + (v / 254) * (b - a);
+      const c = f ? familyColour(f, val) : colourAt(sc, val);
+      if (c) lut[v] = (c[3] << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
+    }
+    luts.push(lut);
+  }
+  /* each type cell's family (its nearest cell to each pixel: a type is never blended) */
+  let famOf = null;
+  if (typeHead) {
+    const th = typeHead;
+    famOf = new Uint8Array(256);
+    for (let q = 0; q < 255; q++) {
+      const v = Math.round(th.lo + (q / 254) * (th.hi - th.lo));
+      famOf[q] = th.hi > 12 ? (v >= 1 && v <= 252 ? Math.floor((v - 1) / 63) : 0) : PTYPE_FAMILY[v] ?? 0;
+    }
+  }
+  const out = { luts, famOf };
+  if (colourCache.size > 16) colourCache.clear();
+  colourCache.set(key, out);
+  return out;
+}
+
+/* ── drawn straight into a picture (the app's Radar tab, 17 Nov 2026: "basically instant") ──────────────
+   paintRadarCrop needs a mapping worked out for every pixel (1.5 million projections, a quarter of a second
+   on a phone for each shape of crop) and then a PNG made and read back for each frame. Here each pixel's place
+   on the display grid comes from a coarse net of projected points, every 8 px (the projection is smooth: under
+   3 m off anywhere on the UK's map, against 1 km cells), and the crop is read as the picture is filled, about
+   20 ms a frame, with nothing kept but the net. */
+const NET = 8;
+let netCache = null;
+function projectedNet(box, W, H) {
+  const key = `${box.latMin}|${box.latMax}|${box.lonMin}|${box.lonMax}|${W}|${H}`;
+  if (netCache?.key === key) return netCache;
+  const nx = Math.ceil(W / NET) + 1, ny = Math.ceil(H / NET) + 1;
+  const xs = new Float64Array(nx * ny), ys = new Float64Array(nx * ny);
+  const yt = mercY(box.latMax), yb = mercY(box.latMin);
+  for (let r = 0; r < ny; r++) {
+    const lat = Math.atan(Math.sinh(yt - ((r * NET + 0.5) / H) * (yt - yb))) / D;
+    for (let c = 0; c < nx; c++) {
+      const [x, y] = laea(box.lonMin + ((c * NET + 0.5) / W) * (box.lonMax - box.lonMin), lat);
+      xs[r * nx + c] = x; ys[r * nx + c] = y;
+    }
+  }
+  netCache = { key, nx, xs, ys };
+  return netCache;
+}
+
+/** A crop (and its precipitation type, a crop too, or null) drawn into `img`, an ImageData covering the lon/lat
+    Mercator `box`; every pixel is written, so one ImageData can be used for frame after frame. */
+export function drawRadarFrame(img, crop, box, type = null) {
+  const W = img.width, H = img.height;
+  const N = projectedNet(box, W, H), nn = N.nx;
+  const { luts, famOf } = radarColours(crop.head, type?.head);
+  const lut = luts[0];
+  const out = new Uint32Array(img.data.buffer);
+  const { q, head } = crop, nx = head.nx, ny = head.ny, inv = 1 / head.dx, x0 = head.x0, y0 = head.y0;
+  const tq = famOf ? type.q : null, th = type?.head;
+  const tnx = th?.nx || 0, tny = th?.ny || 0, tinv = th ? 1 / th.dx : 0, tx0 = th?.x0 || 0, ty0 = th?.y0 || 0;
+  const rx = new Float64Array(nn), ry = new Float64Array(nn);
+  for (let py = 0; py < H; py++) {
+    /* this row of the net, between the two net rows round it */
+    const r = Math.floor(py / NET), v = (py - r * NET) / NET;
+    for (let c = 0; c < nn; c++) {
+      const a = r * nn + c, b = a + nn;
+      rx[c] = N.xs[a] + (N.xs[b] - N.xs[a]) * v;
+      ry[c] = N.ys[a] + (N.ys[b] - N.ys[a]) * v;
+    }
+    for (let px = 0, k = py * W; px < W; px++, k++) {
+      const c = (px / NET) | 0, u = (px - c * NET) / NET;
+      const x = rx[c] + (rx[c + 1] - rx[c]) * u, y = ry[c] + (ry[c + 1] - ry[c]) * u;
+      const fx = (x - x0) * inv, fy = (y0 - y) * inv;
+      const i = Math.floor(fx), j = Math.floor(fy);
+      if (i < 0 || j < 0 || i >= nx - 1 || j >= ny - 1) { out[k] = 0; continue; }
+      const tx = fx - i, ty = fy - j, o = j * nx + i;
+      let a0 = q[o], a1 = q[o + 1], a2 = q[o + nx], a3 = q[o + nx + 1];
+      if (a0 === 255) a0 = 0;
+      if (a1 === 255) a1 = 0;
+      if (a2 === 255) a2 = 0;
+      if (a3 === 255) a3 = 0;
+      const val = Math.round((a0 * (1 - tx) + a1 * tx) * (1 - ty) + (a2 * (1 - tx) + a3 * tx) * ty);
+      let col = lut[val];
+      if (col && tq) {
+        const gx = (x - tx0) * tinv, gy = (ty0 - y) * tinv;
+        const ti = Math.floor(gx), tj = Math.floor(gy);
+        if (ti >= 0 && tj >= 0 && ti < tnx - 1 && tj < tny - 1) {
+          const f = famOf[tq[tj * tnx + ti + (gx - ti >= 0.5 ? 1 : 0) + (gy - tj >= 0.5 ? tnx : 0)]];
+          if (f) col = luts[f][val];
+        }
+      }
+      out[k] = col;
+    }
+  }
 }
 
 /** The UK and Ireland, as the server's scope=uk crop covers them (the radar coarsened to 2 km). */

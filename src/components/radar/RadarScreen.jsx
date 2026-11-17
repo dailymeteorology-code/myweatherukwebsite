@@ -9,9 +9,12 @@
    in a small glass dock above the tab bar: play, RADAR or UKV, the time, and a thin slider you can grab anywhere,
    green for the radar and blue for the forecast with Now between them. The key sits small in the top right.
 
-   Sharp: each frame is drawn once at 1200 px across from the 1 km radar (the UKV's own 2 km grid ahead), and only
-   two pictures are ever on the map, the one on show and the next, swapped when the next has loaded, so a phone
-   holds two big pictures rather than twenty.
+   Sharp and quick (17 Nov 2026, the user: "significantly faster, to a point it is basically instant", and "stopped
+   at the current latest scan, it doesn't move unless the user wants to"): the frames come from radarFeed.js, which
+   fetches the newest scan before the tab is first opened; each frame is drawn at 1200 px across from the 1 km radar
+   (the UKV's own 2 km grid ahead) straight into one canvas on the map when it is shown, about 20 ms, with no
+   picture files made. The tab opens paused on the newest scan, stays on the newest as new scans come in, and moves
+   only when play is pressed or the slider is moved.
 
    The data are the Location page's radar (server/locationWeather.js /api/location/radar and its frames); the
    forecast is the newest UKV run Model Data has made the rain for (/api/modeldata/catalog); pressure lines are
@@ -24,10 +27,11 @@ import 'leaflet/dist/leaflet.css';
 import { Pause, Play, Layers, Loader2, X, CloudRain, Zap, Gauge, Satellite, ChevronDown, ChevronUp } from 'lucide-react';
 import { useTheme } from '@/components/ThemeContext';
 import { useSectionActive } from '@/components/app/sectionActive';
-import { laeaInverse, mercHeight, paintRadarCrop, parseRadarCrop, radarBox, radarCropMapping, radarStamp, UK_RADAR_VIEW } from '@/lib/ukRadar';
-import { familyColour, KIND_ORDER, RADAR_FAMILIES, loadFrame, loadLive, pressureLines, withGrid, runTag } from '@/lib/modelViewer';
+import { drawRadarFrame, laeaInverse, mercHeight, radarBox, UK_RADAR_VIEW } from '@/lib/ukRadar';
+import { familyColour, KIND_ORDER, RADAR_FAMILIES, loadFrame, loadLive, pressureLines, withGrid } from '@/lib/modelViewer';
 import { projection } from '@/lib/modelGrids';
 import { localPlaces } from '@/lib/location/places';
+import { loadRadar, subscribeRadar } from './radarFeed';
 import './radar-screen.css';
 import '@/components/app/liquid-glass.css';
 
@@ -40,7 +44,6 @@ const SAT_WMS = 'https://view.eumetsat.int/geoserver/wms';
 const FIT = [[49.8, -10.8], [59.3, 2.3]];
 const W = 1200;                                  // each frame's picture, px across (about 1 km a pixel)
 const OPACITY = 0.9;
-const AHEAD_H = 9;                               // the forecast's reach after the newest radar
 /* a lightning strike's colour by age: white when new, through yellow and orange, to red after three hours */
 const AGE = [[0, '#ffffff'], [20, '#fde047'], [60, '#fb923c'], [120, '#ef4444'], [180, '#991b1b']];
 const ageColour = (mins) => (AGE.findLast(([m]) => mins >= m) || AGE[0])[1];
@@ -77,39 +80,47 @@ function relative(ms, now) {
   return min < 0 ? `${txt} ago` : `in ${txt}`;
 }
 
-/* The forecast part: the newest UKV run whose rain Model Data has made for the hours after the radar (three runs
-   tried, newest first), each step with whether its precipitation type is made too. Null when none has it yet. */
-async function newestUkv(fromMs, signal) {
-  const cat = await fetch('/api/modeldata/catalog', { signal }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  const runs = (cat?.models || []).find((m) => m.id === 'ukv')?.runs || [];
-  for (const r of runs.slice(0, 3)) {
-    const tag = runTag(r.run), runMs = Date.parse(r.run);
-    const first = Math.max(0, Math.round((fromMs - runMs) / 36e5));
-    const st = await fetch(`/api/modeldata/frames/ukv/${tag}/precip_rate/status?first=${first}`, { signal }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
-    const done = new Set(st?.done || []);
-    const out = (r.steps || []).map((h) => ({ h, t: runMs + h * 36e5 }))
-      .filter(({ h, t }) => t > fromMs && t <= fromMs + AHEAD_H * 36e5 && done.has(h))
-      .map(({ h, t }) => ({ run: tag, h, valid: new Date(t).toISOString() }));
-    if (out.length >= 3) {
-      const pt = await fetch(`/api/modeldata/frames/ukv/${tag}/ptype/status?first=${first}`, { signal }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
-      const typed = new Set(pt?.done || []);
-      return { run: { tag, runMs, steps: r.steps || [] }, future: out.map((f) => ({ ...f, typed: typed.has(f.h) })) };
-    }
+/* Leaflet's picture layer with a canvas in place of an <img> (as its own L.SVGOverlay takes an element): each frame
+   is drawn into it straight from its bytes, with no picture file made and read back */
+const CanvasOverlay = L.ImageOverlay.extend({
+  _initImage() {
+    const el = (this._image = this._url);
+    L.DomUtil.addClass(el, 'leaflet-image-layer');
+    if (this._zoomAnimated) L.DomUtil.addClass(el, 'leaflet-zoom-animated');
+    if (this.options.className) L.DomUtil.addClass(el, this.options.className);
+    el.onselectstart = L.Util.falseFn;
+    el.onmousemove = L.Util.falseFn;
+  },
+});
+
+/* the newest radar scan that is ready to show (else the newest scan) */
+function newestScan(frames) {
+  let last = -1;
+  for (let i = frames.length - 1; i >= 0; i--) {
+    if (frames[i].kind !== 'radar') continue;
+    if (frames[i].ready) return i;
+    if (last < 0) last = i;
   }
-  return null;
+  return last;
 }
 
 export default function RadarScreen() {
   const { isDark } = useTheme();
   const active = useSectionActive();
-  const rootRef = useRef(null), mapEl = useRef(null), mapRef = useRef(null), bufs = useRef([]), front = useRef(0), made = useRef([]);
+  const rootRef = useRef(null), mapEl = useRef(null), mapRef = useRef(null);
+  const overlay = useRef(null), canvasEl = useRef(null), pix = useRef(null), drawn = useRef('');
   const boltLayer = useRef(null), satLayer = useRef(null), isoLayer = useRef(null);
-  const [frames, setFrames] = useState([]);
-  const [idx, setIdx] = useState(0);
-  const [playing, setPlaying] = useState(true);
-  const [state, setState] = useState('loading');
-  const [round, setRound] = useState(0);
-  const [ukvRun, setUkvRun] = useState(null);            // { tag, runMs, steps } of the forecast part
+  /* the frames (radarFeed.js): each { kind, valid, url, ready, crop, tcrop, run? } */
+  const [feed, setFeed] = useState(null);
+  useEffect(() => subscribeRadar(setFeed), []);
+  const frames = feed?.frames || [];
+  const state = feed?.state || 'loading';
+  const ukvRun = feed?.run || null;                       // { tag, runMs, steps } of the forecast part
+  const [idx, setIdx] = useState(-1);
+  const [playing, setPlaying] = useState(false);
+  /* on the newest scan until moved by hand; back on it when left there */
+  const follow = useRef(true);
+  const shownAt = useRef(null);                           // the time on show, kept when the frames change
   const [strikes, setStrikes] = useState(null);
   const [layers, setLayers] = useState(readLayers);
   const [layersOpen, setLayersOpen] = useState(false);
@@ -131,6 +142,8 @@ export default function RadarScreen() {
     const locate = () => navigator.geolocation.getCurrentPosition((p) => use(p.coords.latitude, p.coords.longitude), fromHome,
       { maximumAge: 10 * 60e3, timeout: 12000, enableHighAccuracy: false });
     if (!navigator.geolocation) fromHome();
+    /* in the iPhone app the app answers (its bridge); the page's own permission says "denied" there */
+    else if (window.__mwukBridge) locate();
     else if (navigator.permissions?.query) navigator.permissions.query({ name: 'geolocation' }).then((st) => (st.state === 'granted' ? locate() : fromHome())).catch(fromHome);
     else fromHome();
     return () => { alive = false; };
@@ -150,7 +163,7 @@ export default function RadarScreen() {
     return () => window.removeEventListener('resize', measure);
   }, [active]);
 
-  /* the map, made once, with its two picture holders for the radar */
+  /* the map, made once, with the canvas the radar is drawn into */
   const frameRef = useRef(null);
   useEffect(() => {
     const el = mapEl.current;
@@ -160,7 +173,10 @@ export default function RadarScreen() {
     m.createPane('sat'); m.getPane('sat').style.zIndex = 250;
     m.createPane('isobars'); m.getPane('isobars').style.zIndex = 450; m.getPane('isobars').style.pointerEvents = 'none';
     m.createPane('labels'); m.getPane('labels').style.zIndex = 650; m.getPane('labels').style.pointerEvents = 'none';
-    bufs.current = [0, 1].map(() => L.imageOverlay('data:image/gif;base64,R0lGODlhAQABAAAAACw=', bounds, { opacity: 0, interactive: false, className: 'rs-frame' }).addTo(m));
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = mercHeight(box, W);
+    canvasEl.current = cv;
+    overlay.current = new CanvasOverlay(cv, bounds, { opacity: 0, interactive: false, className: 'rs-frame' }).addTo(m);
     mapRef.current = m;
     const frame = () => {
       const r = rootRef.current?.getBoundingClientRect();
@@ -207,119 +223,67 @@ export default function RadarScreen() {
     return () => t.forEach((x) => x.remove());
   }, [isDark]);
 
-  /* the frames: the radar's and the newest UKV's, fetched four at a time and each drawn once; the newest radar
-     scan first, shown straight away; on a refresh the old set stays up until the new one is ready */
-  useEffect(() => {
-    const ac = new AbortController();
-    const urls = [];
-    let alive = true;
-    if (!frames.length) setState('loading');
-    (async () => {
-      try {
-        const index = await fetch('/api/location/radar', { signal: ac.signal }).then((r) => r.json());
-        const past = index.past || [];
-        const fromMs = past.length ? Date.parse(past[past.length - 1]) : Date.now();
-        const ukv = await newestUkv(fromMs, ac.signal);
-        const future = ukv?.future || index.future || [];
-        if (alive) setUkvRun(ukv?.run || (index.future?.[0] ? { tag: index.future[0].run, runMs: null, steps: [] } : null));
-        const at = 'scope=uk';
-        const typed = new Set(index.pastTyped || []);
-        const list = [
-          ...past.map((t) => ({
-            kind: 'radar', valid: Date.parse(t), url: `/api/location/radar/frame?src=radar&t=${radarStamp(t)}&${at}&km=1`,
-            typeUrl: typed.has(t) ? `/api/location/radar/frame?src=radar&t=${radarStamp(t)}&kind=type&${at}` : null,
-          })),
-          ...future.map((f) => ({
-            kind: 'ukv', valid: Date.parse(f.valid), run: f.run, url: `/api/location/radar/frame?src=ukv&run=${f.run}&h=${f.h}&${at}`,
-            typeUrl: f.typed ? `/api/location/radar/frame?src=ukv&run=${f.run}&h=${f.h}&kind=type&${at}` : null,
-          })),
-        ];
-        if (!list.length) { if (!frames.length) setState('none'); return; }
-        const H = mercHeight(box, W);
-        const maps = {};
-        const out = new Array(list.length).fill(null);
-        const newest = Math.max(0, past.length - 1);
-        const order = [newest, ...list.keys()].filter((k, i) => i === 0 || k !== newest);
-        let next = 0, shownFirst = false;
-        const worker = async () => {
-          while (next < order.length && alive) {
-            const k = order[next++];
-            try {
-              const get = (u) => fetch(u, { signal: ac.signal }).then((r) => (r.ok ? r.arrayBuffer() : null));
-              const [buf, tbuf] = await Promise.all([get(list[k].url), list[k].typeUrl ? get(list[k].typeUrl).catch(() => null) : null]);
-              if (!buf || !alive) continue;
-              const mapFor = (c) => {
-                const key = `${c.head.x0}|${c.head.y0}|${c.head.dx}|${c.head.nx}|${c.head.ny}`;
-                maps[key] = maps[key] || radarCropMapping(c.head, box, W, H);
-                return maps[key];
-              };
-              const crop = parseRadarCrop(buf);
-              const tcrop = tbuf ? parseRadarCrop(tbuf) : null;
-              const url = await paintRadarCrop(crop, mapFor(crop), W, H, tcrop ? { crop: tcrop, map: mapFor(tcrop) } : null);
-              urls.push(url);
-              out[k] = { ...list[k], img: url };
-              /* the newest scan on its own while the rest are drawn (a first load only) */
-              if (k === newest && alive && !shownFirst && !made.current.length) {
-                shownFirst = true;
-                setFrames([out[k]]); setIdx(0); setState('ready');
-              }
-            } catch { /* a missing frame is skipped */ }
-          }
-        };
-        await Promise.all([worker(), worker(), worker(), worker()]);
-        if (!alive) return;
-        const ok = out.filter(Boolean);
-        if (!ok.length) { if (!frames.length) setState('none'); return; }
-        const lastPast = ok.map((f) => f.kind).lastIndexOf('radar');
-        const old = made.current;
-        made.current = urls.splice(0);
-        setFrames(ok);
-        setIdx((i) => (round === 0 ? Math.max(0, lastPast) : Math.min(i, ok.length - 1)));
-        setState('ready');
-        setTimeout(() => old.forEach((u) => URL.revokeObjectURL(u)), 4000);   // after the new set is on show
-      } catch (e) {
-        if (alive && e?.name !== 'AbortError' && !frames.length) setState('none');
-      }
-    })();
-    return () => { alive = false; ac.abort(); urls.forEach((u) => URL.revokeObjectURL(u)); };
-  }, [box, round]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => { made.current.forEach((u) => URL.revokeObjectURL(u)); }, []);
-
-  /* a new scan every fifteen minutes: look again every five while the tab is on show */
+  /* the frames (radarFeed.js): everything the timeline needs whenever the tab comes on show (the newest scan is
+     usually in already), and the list of scans read again every five minutes while it shows */
   useEffect(() => {
     if (!active) return undefined;
-    const t = setInterval(() => { if (document.visibilityState === 'visible') setRound((r) => r + 1); }, 5 * 60e3);
+    loadRadar();
+    const t = setInterval(() => { if (document.visibilityState === 'visible') loadRadar(true); }, 5 * 60e3);
     return () => clearInterval(t);
   }, [active]);
 
-  /* one frame on show: the next picture goes into the hidden holder, and the two swap once it has loaded */
-  const showSeq = useRef(0);
-  useEffect(() => {
-    const f = frames[idx], [a, b] = bufs.current;
-    if (!a || !b) return;
-    const shown = front.current ? b : a, spare = front.current ? a : b;
-    const op = layers.radar ? OPACITY : 0;
-    if (!f) { a.setOpacity(0); b.setOpacity(0); return; }
-    if (shown._url === f.img) { shown.setOpacity(op); spare.setOpacity(0); return; }
-    const seq = ++showSeq.current;
-    const swap = () => {
-      if (seq !== showSeq.current) return;
-      spare.setOpacity(op); shown.setOpacity(0);
-      front.current = 1 - front.current;
-    };
-    if (spare._url === f.img) { swap(); return; }
-    spare.once('load', swap);
-    spare.setUrl(f.img);
-  }, [idx, frames, layers.radar]);
-
-  /* playing: a beat a frame, a longer pause on Now and at the end; it rests while another tab shows */
+  /* Which frame is on show as the frames change: the newest scan while following it (from the start, and whenever
+     left on it), else the same time as before. Nothing moves on its own. */
   const lastPast = frames.map((f) => f.kind).lastIndexOf('radar');
   useEffect(() => {
-    if (!playing || !active || frames.length < 2) return undefined;
+    if (!frames.length) return;
+    if (follow.current) { setIdx(Math.max(0, newestScan(frames))); return; }
+    const at = shownAt.current;
+    let best = 0;
+    frames.forEach((fr, i) => { if (Math.abs(fr.valid - at) < Math.abs(frames[best].valid - at)) best = i; });
+    setIdx(best);
+  }, [frames]);
+  useEffect(() => { if (frames[idx]) shownAt.current = frames[idx].valid; }, [idx, frames]);
+  /* moved by hand: following the newest scan again only when left on it */
+  const pick = (i, play = false) => {
+    follow.current = !play && i === lastPast;
+    setIdx(i);
+  };
+
+  /* the frame on show, drawn into the map's canvas when it changes; while one is still on its way the last picture
+     stays, faded, and the time says it is loading */
+  const f = frames[idx];
+  useEffect(() => {
+    const ov = overlay.current, cv = canvasEl.current;
+    if (!ov || !cv) return;
+    if (!layers.radar) { ov.setOpacity(0); return; }
+    if (!f?.ready) { ov.setOpacity(drawn.current ? OPACITY * 0.35 : 0); return; }
+    const key = `${f.url}|${f.tcrop ? 1 : 0}`;
+    if (drawn.current !== key) {
+      const ctx = cv.getContext('2d');
+      if (!pix.current) pix.current = ctx.createImageData(cv.width, cv.height);
+      drawRadarFrame(pix.current, f.crop, box, f.tcrop);
+      ctx.putImageData(pix.current, 0, 0);
+      drawn.current = key;
+    }
+    ov.setOpacity(OPACITY);
+  }, [f, layers.radar, box]);
+
+  /* playing (only when asked): a beat a frame, a longer pause on Now and at the end, each frame waited for if it is
+     not in yet; it rests while another tab shows */
+  const nextReady = frames.length > 1 && !!frames[(idx + 1) % frames.length]?.ready;
+  useEffect(() => {
+    if (!playing || !active || !nextReady) return undefined;   // a frame not in yet: comes round again when it is
     const hold = idx === lastPast || idx === frames.length - 1 ? 1400 : 520;
-    const t = setTimeout(() => setIdx((i) => (i + 1) % frames.length), hold);
+    const t = setTimeout(() => setIdx((idx + 1) % frames.length), hold);
     return () => clearTimeout(t);
-  }, [playing, active, idx, frames.length, lastPast]);
+  }, [playing, active, idx, frames.length, lastPast, nextReady]);
+  const togglePlay = () => {
+    if (playing) { setPlaying(false); follow.current = idx === lastPast; return; }
+    follow.current = false;
+    if (idx >= frames.length - 1) setIdx(0);                // from the start again after the end
+    setPlaying(true);
+  };
 
   /* lightning: the Met Office's strikes of the last three hours, every two minutes while on */
   useEffect(() => {
@@ -386,7 +350,6 @@ export default function RadarScreen() {
   }, [layers.pressure, active, ukvRun?.tag]);
   const isoCache = useRef(new Map());                    // key -> lines (null while on its way)
   const isoFailed = useRef(new Set());
-  const f = frames[idx];
   /* a frame's pressure: its key, and how to fetch it */
   const isoFor = (fr) => {
     if (!fr) return null;
@@ -472,15 +435,16 @@ export default function RadarScreen() {
     scrub.current = e.pointerId;
     try { track.current.setPointerCapture(e.pointerId); } catch { /* follows without */ }
     setPlaying(false);
-    setIdx(stepAt(e.clientX));
+    pick(stepAt(e.clientX));
   };
-  const onMove = (e) => { if (scrub.current === e.pointerId) setIdx(stepAt(e.clientX)); };
+  const onMove = (e) => { if (scrub.current === e.pointerId) pick(stepAt(e.clientX)); };
   const onUp = (e) => { if (scrub.current === e.pointerId) scrub.current = null; };
   const onKey = (e) => {
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { e.preventDefault(); setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }
-    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { e.preventDefault(); setPlaying(false); setIdx((i) => Math.min(n - 1, i + 1)); }
-    if (e.key === 'Home') { e.preventDefault(); setPlaying(false); setIdx(0); }
-    if (e.key === 'End') { e.preventDefault(); setPlaying(false); setIdx(n - 1); }
+    const go = (i) => { e.preventDefault(); setPlaying(false); pick(Math.max(0, Math.min(n - 1, i))); };
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') go(idx - 1);
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') go(idx + 1);
+    if (e.key === 'Home') go(0);
+    if (e.key === 'End') go(n - 1);
   };
 
   const now = Date.now();
@@ -490,8 +454,8 @@ export default function RadarScreen() {
   const runText = f?.run ? `${f.run.slice(9, 11)}Z run` : '';
 
   return (
-    <div ref={rootRef} className={`rs${isDark ? '' : ' is-light'}`} style={{ '--rs-top': `${topOffset}px` }}
-      onTouchStart={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()} onTouchEnd={(e) => e.stopPropagation()}>
+    /* touches are not stopped here: the map follows a pinch from the document (Leaflet's TouchZoom listens there) */
+    <div ref={rootRef} className={`rs${isDark ? '' : ' is-light'}`} style={{ '--rs-top': `${topOffset}px` }}>
       <div ref={mapEl} className="rs-map" aria-label="Rain radar map of the UK and Ireland" />
 
       {/* "Radar" on the map, a word under it, and the layers in glass beside it */}
@@ -552,13 +516,15 @@ export default function RadarScreen() {
           ahead, and which UKV run) on the left, and the slider, green for the radar and blue for the forecast */}
       <div className="rs-dock lq">
         <div className="rs-now">
-          <button type="button" className="rs-play" onClick={() => setPlaying((p) => !p)} disabled={n < 2} aria-label={playing ? 'Pause' : 'Play'}>
+          <button type="button" className="rs-play" onClick={togglePlay} disabled={n < 2} aria-label={playing ? 'Pause' : 'Play'}>
             {playing && n > 1 ? <Pause /> : <Play />}
           </button>
           {f ? (
             <>
               <b className={`rs-time ${isLive ? 'is-live' : 'is-fc'}`}>{hhmm(f.valid)}</b>
-              <small className="rs-rel">{relative(f.valid, now)}{!isLive && runText ? ` · UKV ${runText.replace(' run', '')}` : ''}</small>
+              <small className="rs-rel">
+                {f.ready ? <>{relative(f.valid, now)}{!isLive && runText ? ` · UKV ${runText.replace(' run', '')}` : ''}</> : <><Loader2 className="animate-spin" />Loading</>}
+              </small>
             </>
           ) : (
             <span className="rs-loading">{state === 'none' ? 'No radar to show' : <><Loader2 className="animate-spin" />Loading…</>}</span>

@@ -224,18 +224,33 @@ export function toBNG(lat, lon) {
 }
 
 export const NOVA_BOX = [[49.5, -11.6], [61.2, 2.4]];
-/* each picture pixel's place on the grid, worked out once per grid */
+/* Each picture pixel's place on the grid, worked out once per grid. Only every 8th pixel each way goes through the
+   projection; the pixels between are drawn from those (the projection is smooth: a few metres off at most, against
+   2 km cells). Every pixel through it took 1.2 s on a phone before the first picture showed (17 Nov 2026, the
+   user: TCM's loading "much much" faster). */
 const gridPixels = new Map();
+const NET = 8;
 function novaPixels(grid, W) {
   const key = `${grid.x0}|${grid.y0}|${grid.dx_m}|${W}`;
   if (gridPixels.has(key)) return gridPixels.get(key);
   const P = pixelsOf(NOVA_BOX, W);
+  const nw = Math.ceil(P.W / NET) + 1, nh = Math.ceil(P.H / NET) + 1;
+  const gx = new Float64Array(nw * nh), gy = new Float64Array(nw * nh);
+  for (let r = 0; r < nh; r++) {
+    const lat = P.lat(r * NET);
+    for (let c = 0; c < nw; c++) {
+      const [x, y] = toBNG(lat, P.lon(c * NET));
+      gx[r * nw + c] = (x - grid.x0) / grid.dx_m - 0.5; gy[r * nw + c] = (y - grid.y0) / grid.dx_m - 0.5;
+    }
+  }
   const fx = new Float32Array(P.W * P.H), fy = new Float32Array(P.W * P.H);
   for (let py = 0; py < P.H; py++) {
-    const lat = P.lat(py);
+    const r = Math.floor(py / NET), v = (py - r * NET) / NET;
     for (let px = 0; px < P.W; px++) {
-      const [x, y] = toBNG(lat, P.lon(px));
-      fx[py * P.W + px] = (x - grid.x0) / grid.dx_m - 0.5; fy[py * P.W + px] = (y - grid.y0) / grid.dx_m - 0.5;
+      const c = Math.floor(px / NET), u = (px - c * NET) / NET, a = r * nw + c, b = a + nw;
+      const xt = gx[a] + (gx[a + 1] - gx[a]) * u, xb = gx[b] + (gx[b + 1] - gx[b]) * u;
+      const yt = gy[a] + (gy[a + 1] - gy[a]) * u, yb = gy[b] + (gy[b + 1] - gy[b]) * u;
+      fx[py * P.W + px] = xt + (xb - xt) * v; fy[py * P.W + px] = yt + (yb - yt) * v;
     }
   }
   const out = { P, fx, fy };
