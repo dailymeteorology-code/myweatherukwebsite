@@ -11,12 +11,14 @@ import WxIcon from '@/components/location/WxIcon';
 import { useUnits } from '@/components/useUnits';
 import { storyCards } from '@/lib/location/story';
 import { condLabel, compass, hhmm, PRECIP_KINDS } from '@/lib/ukvLocation';
+import { useImmersive } from '@/components/app/immersive';
 
 const DUR = 7500;                                  // ms a card stays before the next
 const barH = (r) => (r < 0.1 ? 3 : Math.min(100, 18 + Math.sqrt(r) * 28));
 
 export default function StoryMode({ model, onSky, onClose, onShare }) {
   const U = useUnits();
+  useImmersive();                                       // the app's tab bar out of the way while it plays
   const deg = (c) => (c == null ? '—' : `${Math.round(U.temp(c))}°`);
   const cards = useMemo(() => storyCards(model, U), [model, U]);
   const [i, setI] = useState(0);

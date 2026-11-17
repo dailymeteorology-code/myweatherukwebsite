@@ -30,6 +30,9 @@
   touch-action: none;                 /* a press can slide along the bar (AppTabBar.jsx) */
   -webkit-user-select: none; user-select: none;
 }
+/* a full-screen view open (components/app/immersive.js, e.g. Play the forecast): the bar steps down out of sight */
+.atb { transition: translate 0.32s cubic-bezier(0.3, 0.7, 0.25, 1), opacity 0.22s ease; }
+html[data-immersive] .atb { translate: 0 calc(100% + 40px); opacity: 0; pointer-events: none; }
 /* the rim: brighter where the light catches it (top left), fading round the far side */
 .atb::before {
   content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;

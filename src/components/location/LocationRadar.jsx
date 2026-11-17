@@ -294,11 +294,6 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
           ))}
           <span className="lw-kind-note">light → heavy</span>
         </div>
-        <div className="lw-radar-split">
-          {lastPast >= 0 && lastPast < frames.length - 1 ? 'Grey steps: Met Office radar, every 15 minutes · blue steps: UKV forecast rain.' : 'Met Office radar, every 15 minutes.'}
-          {' Rain, snow, sleet and ice each in their own colours (the type from the UKV and the station temperatures).'}
-          {bolts && strikes && (strikes.length ? ' Lightning (Met Office): white is new, red is three hours old.' : ' No lightning in the last three hours.')}
-        </div>
       </div>
     </div>
   );

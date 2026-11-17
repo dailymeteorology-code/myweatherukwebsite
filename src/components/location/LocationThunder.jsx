@@ -89,7 +89,7 @@ export default function LocationThunder({ model }) {
       </div>
       <p className="lw-pnote">
         {hh ? <><b>{when(hh.t)}</b> · {pct(hh.p)} chance of a thunderstorm within about {hh.nb} km{hlv ? ` · ${hlv.word} risk` : ''} · {hh.src === 'hyper' ? 'Hyper-Short nowcast' : hh.src === 'blend' ? 'nowcast handing over to the Main Run' : 'Main Run'}</>
-          : 'The chance of a thunderstorm near here each hour. Hover over the bars for an hour.'}
+          : '\u00a0'}
       </p>
       {byDay.length > 1 && (
         <div className="lw-tdays" aria-label="The riskiest hour of each day">
@@ -106,14 +106,6 @@ export default function LocationThunder({ model }) {
       <div className="lw-tlegend">
         {[...THUNDER_LEVELS].reverse().map((l) => <span key={l.key}><i style={{ background: l.colour }} />{l.word} {l.min}%+</span>)}
       </div>
-      <p className="lw-nova-note">
-        <Zap size={12} strokeWidth={2.6} />
-        <span>
-          Thunderstorm risk comes from <b>MyWeatherUK&rsquo;s own TCM NOVA model</b>: its Hyper-Short nowcast of the radar and lightning
-          {nova.runs?.hyper ? ` (run ${runHour(nova.runs.hyper.run)})` : ''} for the next few hours, then its Main Run, seven forecast models through TCM V5 at 2 km
-          {nova.runs?.main ? ` (run ${runHour(nova.runs.main.run)})` : ''}. NOVA is still learning: its chances are not yet calibrated against observed storms.
-        </span>
-      </p>
     </div>
   );
 }

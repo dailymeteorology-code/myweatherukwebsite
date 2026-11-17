@@ -867,3 +867,25 @@
 .lw-best-say b { color: var(--ink); font-weight: 650; }
 .lw-hour.is-best::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: -2px; height: 4px; border-radius: 3px; background: #84cc16; box-shadow: 0 0 8px rgba(132, 204, 22, 0.55); pointer-events: none; }
 .lw-hour.is-ideal::after { background: #22c55e; box-shadow: 0 0 8px rgba(34, 197, 94, 0.6); }
+
+/* ── thunderstorms, snow, the night sky and the two weeks ahead: one card swiped left and right (SwipeCards.jsx,
+   17 Nov 2026). Each page is a card the width of the box; the box takes the height of the page on show. ── */
+.lw-swipe-wrap { position: relative; }
+.lw-swipe {
+  display: flex; align-items: flex-start; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory;
+  scrollbar-width: none; overscroll-behavior-x: contain; touch-action: pan-x pan-y; border-radius: 22px;
+  transition: height 0.28s cubic-bezier(0.3, 0.7, 0.25, 1);
+}
+.lw-swipe::-webkit-scrollbar { display: none; }
+.lw-swipe-page { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; scroll-snap-stop: always; }
+.lw-swipe-page:empty { display: none; }
+.lw-swipe-page > .lw-card { margin: 0; }
+.lw-swipe-dots { display: flex; justify-content: center; gap: 7px; padding: 9px 0 0; }
+.lw-swipe-dots button {
+  width: 7px; height: 7px; padding: 0; border: 0; border-radius: 99px; cursor: pointer;
+  background: var(--ink3); opacity: 0.6; transition: width 0.25s ease, opacity 0.25s ease;
+}
+.lw-swipe-dots button.is-on { width: 18px; background: var(--ink); opacity: 0.9; }
+/* the smaller cards under it: one column on a phone, two side by side on a computer */
+.lw-smalls { display: flex; flex-direction: column; gap: 14px; }
+@media (min-width: 1024px) { .lw-smalls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }

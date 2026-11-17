@@ -121,7 +121,7 @@ export default function LocationSnow({ model }) {
             {hp ? (
               <><b>{dayName(ukDay(hp.t0 + 60e3), today)} {hhmm(Math.max(hp.t0, run0))}–{hhmm(hp.t)}</b> · {pct(hp.chance)} chance of snow falling
                 {hp.acc_cm >= 0.2 ? ` · ${cmText(hp.acc_cm)} expected by then` : ''}{hlv ? ` · ${hlv.name} risk over the 24 hours to then` : ''}</>
-            ) : 'The chance of snow falling here in each period, coloured by the snow risk. Hover over the bars for one.'}
+            ) : '\u00a0'}
           </p>
         </>
       )}
@@ -144,14 +144,6 @@ export default function LocationSnow({ model }) {
           {[...SNOW_RISK_LEVELS].reverse().map((l) => <span key={l.level} title={`${l.rule} in 24 hours`}><i style={{ background: l.colour }} />{l.name}: {l.rule}</span>)}
         </div>
       )}
-      <p className="lw-nova-note lw-frost-note">
-        <Snowflake size={12} strokeWidth={2.6} />
-        <span>
-          Snow risk comes from <b>MyWeatherUK&rsquo;s own MWUK FROST model</b>: {fr.members ? `${fr.members} forecasts` : 'every forecast'} from the Met Office UKV and Global,
-          ECMWF&rsquo;s IFS and AIFS, NOAA&rsquo;s GFS and the ECMWF and NOAA ensembles, each brought down to 2 km over the hills and blended
-          (run {runHour(fr.run)}). Amounts are fresh snow falling, not the depth lying.
-        </span>
-      </p>
     </div>
   );
 }

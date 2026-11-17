@@ -39,14 +39,12 @@ import LocationCharts, { tempColour } from '@/components/location/LocationCharts
 import SkyBackdrop, { CardFrost, CardRain, CardSnow, WindowRain, CardMist, CardFog, skyDarkness } from '@/components/location/SkyBackdrop';
 import SkyPreview, { PREVIEW_START, previewSky } from '@/components/location/SkyPreview';
 import TodayCard from '@/components/location/TodayCard';
-import SituationCards from '@/components/location/SituationCards';
-import EverydayIndices from '@/components/location/EverydayIndices';
+import SituationCards, { NightSkyCard } from '@/components/location/SituationCards';
+import SwipeCards from '@/components/location/SwipeCards';
 import StormWatch from '@/components/location/StormWatch';
 import { SaveStar, PlacesStrip, CompareSheet, CommuteCard } from '@/components/location/YourPlaces';
 import { loadPlaces, savePlaces, placeWith, samePlace, localPlaces } from '@/lib/location/places';
 import HourSheet, { hourFor, momentParam, parseMoment } from '@/components/location/HourSheet';
-import { mattersToday } from '@/lib/location/forecastText';
-import TimeTravel from '@/components/location/TimeTravel';
 import StoryMode from '@/components/location/StoryMode';
 import ShareSheet from '@/components/location/ShareSheet';
 import { travelModel, travelSteps, dayRange, travelLabel } from '@/lib/location/travel';
@@ -70,10 +68,6 @@ import {
 import { snowRiskLevel, cmText } from '@/lib/frostKey';
 
 const REFRESH_MS = 5 * 60e3;                       // a new radar scan every 15 minutes: the next hour follows each one
-const runName = (iso) => {
-  const d = new Date(iso);
-  return `${String(d.getUTCHours()).padStart(2, '0')}Z ${d.toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' })}`;
-};
 
 /* ── the hourly strip ────────────────────────────────────────────────────── */
 const COL_W = 58;                                  // every column of the strip (.lw-hour, border-box)
@@ -288,7 +282,7 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning, onHour, sheetT, b
               {anyThunder && (
                 <span className="lw-h-ts" style={ts ? { color: ts.colour } : undefined}
                   title={ts ? `${ts.word} thunderstorm risk: ${Math.round(h.nova.p)}% (TCM NOVA)` : undefined}>
-                  {ts ? <><Zap size={10} strokeWidth={2.6} fill="currentColor" />{Math.round(h.nova.p)}%</> : ''}
+                  {ts ? <Zap size={11} strokeWidth={2.6} fill="currentColor" /> : ''}
                 </span>
               )}
               {anySnow && (
@@ -301,9 +295,6 @@ function HourlyCard({ model, T, stripRef, warnings, onWarning, onHour, sheetT, b
         })}
         </div>
       </div>
-      {anyThunder && (
-        <p className="lw-hours-note"><Zap size={11} strokeWidth={2.6} fill="currentColor" />Thunderstorm risk each hour from <b>MyWeatherUK&rsquo;s TCM NOVA</b></p>
-      )}
       {anySnow && (
         <p className="lw-hours-note lw-snow-note">
           <Snowflake size={11} strokeWidth={2.6} />Snow chance each hour from <b>MyWeatherUK&rsquo;s snow conditions index</b>
@@ -513,10 +504,9 @@ function OutlookCard({ model, T, selected, onDay: pick, warnings, onWarning }) {
   const gLo = Math.min(...los, ...his), gHi = Math.max(...his, ...los);
   const span = Math.max(1, gHi - gLo);
   const nowT = model.now.t2;
-  const sources = [...new Set(ds.flatMap((d) => d.models))];
   return (
     <div className="lw-glass lw-card lw-outlook">
-      <div className="lw-title"><CalendarDays />{`${ds.length}-day forecast`}<span className="lw-title-aside">{sources.map(sourceName).join(' · ')}</span></div>
+      <div className="lw-title"><CalendarDays />{`${ds.length}-day forecast`}</div>
       {ds.map((d) => {
         const on = d.day === selected;
         const lo = d.lo ?? d.hi, hi = d.hi ?? d.lo;
@@ -586,11 +576,6 @@ function OutlookCard({ model, T, selected, onDay: pick, warnings, onWarning }) {
           </div>
         );
       })}
-      <p className="lw-outlook-note">
-        Tap a day for its day and night. Days {sources.includes('mo_global') ? 'to the fifth or so ' : ''}from the <b>MWUK Mix</b>, MyWeatherUK&rsquo;s
-        blend of the Met Office UKV and DWD ICON-EU{sources.includes('mo_global') ? <>, then the <b>Met Office Global</b></> : ''}.
-        Snow from <b>MWUK FROST</b>, thunderstorms from <b>TCM NOVA</b>.
-      </p>
     </div>
   );
 }
@@ -604,7 +589,7 @@ function DaysCard({ model, T, dayIdx, onDay: pick, warnings, onWarning }) {
   const nowT = model.now.t2;
   return (
     <div className="lw-glass lw-card">
-      <div className="lw-title"><CalendarDays />{`${ds.length}-day forecast`}<span className="lw-title-aside">Met Office UKV</span></div>
+      <div className="lw-title"><CalendarDays />{`${ds.length}-day forecast`}</div>
       {ds.map((d) => {
         const i = model.days.indexOf(d);
         const on = i === dayIdx;
@@ -748,6 +733,7 @@ const PlacesMemo = React.memo(PlacesStrip);
 const AlertsMemo = React.memo(AlertsCard);
 const CoastMemo = React.memo(CoastCard);
 const TrendMemo = React.memo(TrendCard);
+const NightSkyMemo = React.memo(NightSkyCard);
 
 /* the installed app opens with ?app=1 (public/location.webmanifest): straight to your Home place, else
    your first place, else the place last opened on this device */
@@ -1140,9 +1126,6 @@ export default function LocationForecast() {
   /* the cards that matter most today (the Today card's chips) come up the page on a phone */
   /* (not the tiles or the days: those are the general cards, and a cold-feel or frost chip pointing
      at the tiles would lift fourteen of them up the page) */
-  const lifted = useMemo(() => new Set(model ? mattersToday(model, warnings, U, feeds).flatMap((m) => m.card.split('|')).filter((n) => n !== 'tiles' && n !== 'days') : []), [model, warnings, U, feeds]);
-  /* a slot comes up when its card, or one of the cards it holds, matters today */
-  const slot = (name, holds = [name]) => `lw-slot lw-o-${name}${holds.some((n) => lifted.has(n)) ? ' is-lifted' : ''}`;
 
   /* back from a forecast goes to the search; from the search, to the previous page */
   const backOut = () => {
@@ -1199,8 +1182,6 @@ export default function LocationForecast() {
   }) : null;
   /* story mode shows the sky alone behind its cards */
   const pageHidden = hidePage || story;
-  const runs = model?.runs || [];
-  const olRuns = model?.outlook?.runs || [];
 
   return (
     <div className="lw-page" data-sky={dark < 0.3 ? 'bright' : dark < 0.55 ? 'mid' : 'dark'}>
@@ -1311,8 +1292,6 @@ export default function LocationForecast() {
             {offline && (
               <div className="lw-offline" role="status"><WifiOff size={15} />No connection. This is the forecast saved {savedWhen(offline.at)}.</div>
             )}
-            {/* slide to any hour: the sky, the hero and the tiles follow */}
-            <TimeTravel model={model} value={travelT} onChange={setTravelT} onSettle={scrollStripTo} />
 
             {warnings.length > 0 && (
               /* lw-warn-card: the top card while there is a warning, the one the rain and snow land on */
@@ -1322,69 +1301,57 @@ export default function LocationForecast() {
               </div>
             )}
 
-            {/* the forecast in words, and what matters most today (TodayCard.jsx) */}
             {/* flood warnings nearby and UKHSA's health alerts, while one is in force */}
             <AlertsMemo outside={feeds} />
-            <TodayMemo model={model} warnings={warnings} onCard={goCard} outside={feeds} />
 
-            {/* The layout (15 Nov 2026, the user's: the radar to the right of the days, the detailed
-                forecast moved up). On a computer: the hours, the precipitation, the detailed forecast and
-                the thunderstorm risk beside the tiles; then the days with the radar to their right; then
-                the snow. On a phone one column, in the order of the lw-o-* classes (location.css). A
-                card that has nothing to show leaves its slot empty, and an empty slot takes no room. */}
+            {/* The page from top to bottom (17 Nov 2026, the user's order): the rain hour by hour and over 12 hours,
+                the hours, the forecast in words, the 7 days, the radar, the detailed forecast, then thunderstorms,
+                snow, the night sky and the two weeks ahead on one card swiped left and right, then the smaller
+                cards. One column; a card with nothing to show takes no room. The cards under the first screen are
+                drawn a moment after it (late, above). */}
             <div className="lw-layout">
-              <div className="lw-col">
-                <div id="lw-card-hourly" className={slot('hourly')}>
-                  <HourlyMemo model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} onHour={setSheetT} sheetT={sheetT} bestFor={bestFor} onBestFor={setBestFor} />
+              <div id="lw-card-precip" className="lw-slot"><PrecipMemo model={model} /></div>
+              <div id="lw-card-hourly" className="lw-slot">
+                <HourlyMemo model={model} T={T} stripRef={stripRef} warnings={warnings} onWarning={showWarning} onHour={setSheetT} sheetT={sheetT} bestFor={bestFor} onBestFor={setBestFor} />
+              </div>
+              {/* the forecast in words, and what matters most today (TodayCard.jsx) */}
+              <TodayMemo model={model} warnings={warnings} onCard={goCard} outside={feeds} />
+              <div id="lw-card-days" className="lw-slot">
+                {late && (late.outlook?.days?.length
+                  ? <OutlookMemo model={late} T={T} selected={openDay} onDay={openOutlookDay} warnings={warnings} onWarning={showWarning} />
+                  : <DaysMemo model={late} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />)}
+              </div>
+              <div id="lw-card-radar" className="lw-slot">
+                <div className="lw-glass lw-card">
+                  <div className="lw-title"><Radar />Rain radar</div>
+                  {late && <RadarMemo lat={late.lat} lon={late.lon} />}
                 </div>
-                <div id="lw-card-precip" className={slot('precip')}>{late && <PrecipMemo model={late} />}</div>
-                <div id="lw-card-indices" className={slot('indices')} style={{ order: 2 }}>{late && <EverydayIndices model={late} />}</div>
-                {/* road ice and fog, snow settling, the night sky, event days: each only when it has
-                    something to say (SituationCards.jsx) */}
-                <div id="lw-card-situations" className={`${slot('situations', ['roads', 'settle', 'nightsky', 'events', 'coast'])} lw-situations`}>
+              </div>
+              <div id="lw-card-detail" className="lw-slot">{late && <ChartsMemo model={late} dayIdx={dayIdx} onDay={pickDay} />}</div>
+              {late && (
+                <SwipeCards label="Thunderstorms, snow, the night sky and the two weeks ahead" ids={['lw-card-thunder', 'lw-card-snow', null, 'lw-card-trend']}>
+                  <ThunderMemo model={late} />
+                  <SnowMemo model={late} />
+                  <NightSkyMemo model={late} />
+                  <TrendMemo lat={late.lat} lon={late.lon} normal={feeds?.normal || null}
+                    fromDay={late.outlook?.days?.[late.outlook.days.length - 1]?.day || late.days[late.days.length - 1]?.day || null} />
+                </SwipeCards>
+              )}
+              {/* the smaller cards: the tiles, then each that has something to say (lightning near here, heavy
+                  rain on its way, road ice and fog, snow settling, event days, the coast, the commute) */}
+              <div className="lw-smalls">
+                <div id="lw-card-tiles" className="lw-slot">{lateTravel && <TilesMemo model={lateTravel} outside={feeds} />}</div>
+                <div id="lw-card-storm" className="lw-slot">{late && <StormMemo model={late} />}</div>
+                <div id="lw-card-situations" className="lw-slot lw-situations">
                   {atCommutePlace && <CommuteMemo data={placesData} onChange={changePlaces} />}
                   {late && <SituationsMemo model={late} />}
                   <CoastMemo outside={feeds} />
                 </div>
-                <div id="lw-card-detail" className={slot('detail')}>{late && <ChartsMemo model={late} dayIdx={dayIdx} onDay={pickDay} />}</div>
-                {/* lightning near here, heavy rain on its way, the AI lightning warning, the storm type and
-                    hail: only when there is something to watch (StormWatch.jsx) */}
-                <div id="lw-card-storm" className={slot('storm', ['storm', 'thunder'])}>{late && <StormMemo model={late} />}</div>
-                <div id="lw-card-thunder" className={slot('thunder')}>{late && <ThunderMemo model={late} />}</div>
               </div>
-              <div className="lw-col">
-                <div id="lw-card-tiles" className={slot('tiles')}>{lateTravel && <TilesMemo model={lateTravel} outside={feeds} />}</div>
-              </div>
-              <div id="lw-card-days" className={slot('days')}>
-                {late && (late.outlook?.days?.length
-                  ? <OutlookMemo model={late} T={T} selected={openDay} onDay={openOutlookDay} warnings={warnings} onWarning={showWarning} />
-                  : <DaysMemo model={late} T={T} dayIdx={dayIdx} onDay={pickDay} warnings={warnings} onWarning={showWarning} />)}
-                {/* the days beyond them, as the GEFS ensemble average leans (TrendCard.jsx, Phase G) */}
-                {late && <TrendMemo lat={late.lat} lon={late.lon} normal={feeds?.normal || null}
-                  fromDay={late.outlook?.days?.[late.outlook.days.length - 1]?.day || late.days[late.days.length - 1]?.day || null} />}
-              </div>
-              <div id="lw-card-radar" className={slot('radar')}>
-                <div className="lw-glass lw-card">
-                  <div className="lw-title"><Radar />Rain radar<span className="lw-title-aside">Met Office 1 km · then UKV</span></div>
-                  {late && <RadarMemo lat={late.lat} lon={late.lon} />}
-                </div>
-              </div>
-              <div id="lw-card-snow" className={slot('snow')}>{late && <SnowMemo model={late} />}</div>
             </div>
 
-            <p className="lw-source">
-              Forecast: Met Office UKV 2 km model from the Met Office&rsquo;s open data on AWS
-              {runs.length ? ` — ${runs.map((r) => `${runName(r.run)} run to T+${r.top}`).join(', then ')}` : ''}.
-              {model.cell ? ` The nearest model grid point is ${model.cell.offset_km} km away.` : ''}
-              <br />Now: the UKV analysed every 15 minutes with station reports, cloud from Meteosat and the airports, and the radar&rsquo;s rain. Radar: Met Office 1 km composite.
-              The next hour: the newest radar scan carried forward by the way the rain has moved over the last half hour.
-              {model.anchor ? ' The first hours are held to what is observed now, fading back to the model over the following hours.' : ''}
-              {' '}Cloud is the sky within 8 km. Chance of rain counts model rain within 10 km.
-              {' '}Every 15 minutes: the radar carried forward for the next hour and a half, then the UKV&rsquo;s hours, its rain shared out by its rates.
-              {olRuns.length ? <><br />The days: {olRuns.map((r) => `${sourceName(r.model)}${r.pair ? ` (UKV ${runName(r.pair.ukv)} + ICON-EU ${runName(r.pair.icon)})` : ` ${runName(r.run)}`}`).join(', then ')}. The MWUK Mix is MyWeatherUK&rsquo;s blend of the two models, the UKV counting a little more over the first two days.</> : ''}
-              {model.frost ? <><br />Snow: <b>MyWeatherUK&rsquo;s MWUK FROST model</b>. Snow chance each hour: MyWeatherUK&rsquo;s snow conditions index from the UKV.</> : ''}
-              {model.nova ? <><br />Thunderstorm risk: <b>MyWeatherUK&rsquo;s own TCM NOVA model</b> (Hyper-Short nowcast, then Main Run), not the Met Office.</> : ''}
-            </p>
+            {/* the sources, by name (17 Nov 2026, the user: "literally just the name of the companies") */}
+            <p className="lw-source">Met Office · DWD · ECMWF · NOAA · EUMETSAT · Blitzortung · Environment Agency · SEPA · DEFRA · UKHSA · Esri · OpenStreetMap</p>
           </>
         )}
       </div>
