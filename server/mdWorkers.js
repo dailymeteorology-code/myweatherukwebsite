@@ -23,9 +23,24 @@ export function createWorkers({ python, cwd, env = {}, keep = { uk: 1, eu: 1 }, 
   let timer = null;
   const live = (w) => !w.gone && !w.leaving;
 
+  /* A tired worker (worker.py: too many jobs, or grown past SOFT_MB) keeps working until a fresh one is ready on
+     its grid, then goes as soon as it has nothing to do; a fresh one is started for it at once (the grid may
+     have one more than max while it starts). Until 17 Nov 2026 a worker past its limit left straight away, and
+     someone's layer that had just taken it waited 34 s for a new worker to start. */
+  function relieve(grid) {
+    const mine = pool.filter((w) => w.grid === grid && live(w));
+    if (!mine.some((w) => w.tired)) return;
+    if (mine.some((w) => !w.tired && w.ready)) for (const w of mine) if (w.tired && !w.task) retire(w);
+    if (!mine.some((w) => !w.tired)) start(grid);           // all tired, none fresh (ready or starting): one on its way
+  }
+  function retire(w) {
+    w.leaving = true;
+    try { w.child.stdin.end(); } catch { /* gone */ }
+  }
+
   function start(grid) {
     const py = python();
-    const w = { grid, child: null, ready: false, task: null, leaving: false, gone: false, jobs: 0, idleSince: Date.now(), err: '' };
+    const w = { grid, child: null, ready: false, task: null, leaving: false, tired: false, gone: false, jobs: 0, idleSince: Date.now(), err: '' };
     const child = spawn(py.cmd, ['-m', 'mdata.worker'], {
       cwd, windowsHide: true,
       env: { ...process.env, ...py.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', MDATA_GRID: grid, ...env },
@@ -47,6 +62,7 @@ export function createWorkers({ python, cwd, env = {}, keep = { uk: 1, eu: 1 }, 
           w.ready = true;
           w.idleSince = Date.now();
           console.log(`[modeldata] ${grid} worker ${child.pid} ready (${m.sec} s to start)`);
+          relieve(grid);                                     // a tired one waiting for it can go
           onChange();
         } else if (w.task && m.id === w.task.id) finish(w, m);
       }
@@ -75,23 +91,28 @@ export function createWorkers({ python, cwd, env = {}, keep = { uk: 1, eu: 1 }, 
     w.idleSince = Date.now();
     clearTimeout(t.timer);
     if (m.leaving) w.leaving = true;
+    else if (m.tired && !w.tired) {
+      w.tired = true;
+      console.log(`[modeldata] ${w.grid} worker ${w.child.pid} is due a rest (${w.jobs} jobs, ${m.mb} MB): a fresh one takes over once ready`);
+    }
+    relieve(w.grid);
     const err = m.err || (m.code ? w.err : '');
-    try { t.onExit(m.code ?? 0, err, { cancelled: !!m.cancelled || !!t.cancelling && !!m.code, sec: m.sec, mb: m.mb }); } catch (e) { console.warn(`[modeldata] after a job: ${e.message}`); }
+    try { t.onExit(m.code ?? 0, err, { cancelled: !!m.cancelled || (!!t.cancelling && !!m.code), sec: m.sec, mb: m.mb }); } catch (e) { console.warn(`[modeldata] after a job: ${e.message}`); }
     onChange();
   }
 
   /* housekeeping: the ones kept ready are there, the extra idle ones are let go */
   function tidy() {
     for (const grid of Object.keys(max)) {
+      relieve(grid);
       const mine = pool.filter((w) => w.grid === grid && live(w));
       if (mine.length < (keep[grid] || 0) && !mine.some((w) => !w.ready)) start(grid);
-      const idle = mine.filter((w) => w.ready && !w.task).sort((a, b) => a.idleSince - b.idleSince);
+      const idle = mine.filter((w) => w.ready && !w.task).sort((a, b) => (b.tired - a.tired) || (a.idleSince - b.idleSince));
       let spare = mine.length - (keep[grid] || 0);
       for (const w of idle) {
         if (spare <= 0) break;
         if (Date.now() - w.idleSince < idleMs) continue;
-        w.leaving = true;
-        try { w.child.stdin.end(); } catch { /* gone */ }
+        retire(w);
         spare--;
       }
     }
@@ -100,8 +121,8 @@ export function createWorkers({ python, cwd, env = {}, keep = { uk: 1, eu: 1 }, 
   return {
     /** start keeping the ready ones, and tidy now and then */
     begin() { tidy(); timer ||= setInterval(tidy, 30e3); timer.unref?.(); },
-    /** a ready worker on this grid with nothing to do, or null */
-    idle(grid) { return pool.find((w) => w.grid === grid && w.ready && !w.task && live(w)) || null; },
+    /** a ready worker on this grid with nothing to do (a fresh one before a tired one), or null */
+    idle(grid) { return pool.filter((w) => w.grid === grid && w.ready && !w.task && live(w)).sort((a, b) => a.tired - b.tired)[0] || null; },
     /** how many there are on this grid (starting ones too), and whether one is starting */
     size(grid) { return pool.filter((w) => w.grid === grid && live(w)).length; },
     starting(grid) { return pool.some((w) => w.grid === grid && !w.ready && live(w)); },
@@ -138,7 +159,7 @@ export function createWorkers({ python, cwd, env = {}, keep = { uk: 1, eu: 1 }, 
       t.timer.unref?.();
     },
     stats() {
-      return pool.map((w) => ({ grid: w.grid, pid: w.child.pid, ready: w.ready, leaving: w.leaving, jobs: w.jobs, task: w.task ? { lane: w.task.lane, for: Math.round((Date.now() - w.task.started) / 1000), cancelling: w.task.cancelling } : null }));
+      return pool.map((w) => ({ grid: w.grid, pid: w.child.pid, ready: w.ready, tired: w.tired, leaving: w.leaving, jobs: w.jobs, task: w.task ? { lane: w.task.lane, for: Math.round((Date.now() - w.task.started) / 1000), cancelling: w.task.cancelling } : null }));
     },
   };
 }

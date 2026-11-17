@@ -15,8 +15,11 @@ The server writes one JSON object a line on stdin:
 and reads the lines on stdout that begin with MARK:
     {"ready": true, "pid": 1234, "grid": "eu", "sec": 41.2}
     {"id": 7, "code": 0, "sec": 12.3}, {"id": 7, "code": 0, "cancelled": true} or {"id": 7, "code": 1, "err": "..."}
-Whatever the jobs print goes to stderr. A worker leaves after MAX_JOBS jobs, or once it holds more than
-MAX_MB of memory, so it cannot creep; the server starts another when it needs one.
+Whatever the jobs print goes to stderr. A worker grows as it caches each model's grid, so it cannot be kept
+for ever. Past MAX_JOBS jobs or SOFT_MB of memory it says it is 'tired': the server starts a fresh worker and
+lets this one go (by closing its stdin) once that one is ready, so the grid is never left without one. Past
+HARD_MB, or many more jobs, it leaves at once. (17 Nov 2026: leaving at 1.1 GB straight away, a worker that
+had just stopped for someone's layer left, and the layer waited 34 s for a new worker to start.)
 """
 from __future__ import annotations
 
@@ -32,7 +35,8 @@ import traceback
 
 MARK = '@@mdata '
 MAX_JOBS = 60
-MAX_MB = 1100                                         # 17 Nov 2026: at 1.8 GB four of them pushed the PC (16 GB) into paging
+SOFT_MB = int(os.environ.get('MDATA_SOFT_MB', '1300'))    # tired: replaced as soon as a fresh worker is ready
+HARD_MB = int(os.environ.get('MDATA_HARD_MB', '2400'))    # gone at once (four at 1.8 GB had the PC paging)
 _OUT = sys.stdout                                     # the server's channel: everything else goes to stderr
 _SAY = threading.Lock()
 
@@ -191,7 +195,8 @@ def main():
         mb = memory_mb()
         if mb is not None:
             out['mb'] = round(mb)
-        out['leaving'] = done >= MAX_JOBS or (mb is not None and mb > MAX_MB)
+        out['tired'] = done >= MAX_JOBS or (mb is not None and mb > SOFT_MB)
+        out['leaving'] = done >= 2 * MAX_JOBS or (mb is not None and mb > HARD_MB)
         say(out)
         if out['leaving']:
             break
