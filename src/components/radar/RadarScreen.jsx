@@ -57,6 +57,25 @@ const KEY_TICKS = [0.1, 0.5, 1, 2, 4, 8, 16, 32];
 const keyRate = (i) => Math.exp(KEY_MIN + ((i + 0.5) / KEY_CELLS) * (KEY_MAX - KEY_MIN));
 const keyPos = (r) => ((Math.log(r) - KEY_MIN) / (KEY_MAX - KEY_MIN)) * 100;
 
+/* the key's rows, made the first time they are wanted (after the app has set its colours) and kept: drawn again
+   with every change of the tab they cost 144 colour look-ups each time */
+let keyRows = null;
+const KEY_ROWS = () => keyRows || (keyRows = (
+  <>
+    {KIND_ORDER.map((k) => (
+      <div key={k} className="rs-key-row">
+        <b>{RADAR_FAMILIES[k].name}</b>
+        <span className="rs-key-bar">
+          {Array.from({ length: KEY_CELLS }, (_, i) => <i key={i} style={{ background: rgb(familyColour(k, keyRate(i))) }} />)}
+        </span>
+      </div>
+    ))}
+    <div className="rs-key-ticks" aria-hidden="true">
+      {KEY_TICKS.map((t) => <span key={t} style={{ left: `${keyPos(t)}%` }}>{t}</span>)}
+    </div>
+  </>
+));
+
 /* what can be on the map, and whether it is to start with */
 const LAYERS = [
   { id: 'radar', name: 'Rain radar', note: 'Met Office radar, then the UKV', icon: CloudRain, on: true },
@@ -496,17 +515,7 @@ export default function RadarScreen() {
           </button>
           {keyOpen && (
             <div className="rs-key-body">
-              {KIND_ORDER.map((k) => (
-                <div key={k} className="rs-key-row">
-                  <b>{RADAR_FAMILIES[k].name}</b>
-                  <span className="rs-key-bar">
-                    {Array.from({ length: KEY_CELLS }, (_, i) => <i key={i} style={{ background: rgb(familyColour(k, keyRate(i))) }} />)}
-                  </span>
-                </div>
-              ))}
-              <div className="rs-key-ticks" aria-hidden="true">
-                {KEY_TICKS.map((t) => <span key={t} style={{ left: `${keyPos(t)}%` }}>{t}</span>)}
-              </div>
+              {KEY_ROWS()}
             </div>
           )}
         </div>

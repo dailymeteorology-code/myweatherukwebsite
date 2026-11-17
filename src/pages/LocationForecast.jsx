@@ -41,6 +41,7 @@ import SkyPreview, { PREVIEW_START, previewSky } from '@/components/location/Sky
 import TodayCard from '@/components/location/TodayCard';
 import SituationCards, { NightSkyCard } from '@/components/location/SituationCards';
 import SwipeCards from '@/components/location/SwipeCards';
+import { useSectionActive } from '@/components/app/sectionActive';
 import StormWatch from '@/components/location/StormWatch';
 import { SaveStar, PlacesStrip, CompareSheet, CommuteCard } from '@/components/location/YourPlaces';
 import { loadPlaces, savePlaces, placeWith, samePlace, localPlaces } from '@/lib/location/places';
@@ -762,6 +763,13 @@ function kmApart(a, b) {
   return 12742 * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+/* Home's sky and its effects on the cards, only while Home is the tab on show (17 Nov 2026, the user: the Radar
+   tab "very laggy"): kept behind another tab, the sky went on drawing every frame. Made again on coming back, in
+   the same frame as the page (the sky's colours are plain layers; its moving parts start a frame later). */
+function WhileShown({ children }) {
+  return useSectionActive() ? children : null;
+}
+
 /* "at 14:20 (3 h ago)", for the forecast shown without a connection */
 function savedWhen(at) {
   if (!at) return 'earlier';
@@ -947,7 +955,9 @@ export default function LocationForecast() {
      after a no to sharing the location, the search shows, as before. */
   /* Quieter than "Use my location": if it fails the search simply shows (no error under it), a place it finds
      outside the UK leaves the search rather than opening that dialog, and a place chosen while it was looking wins. */
+  const locatedAt = useRef(0);                             // when it last looked for you
   const autoLocate = useCallback(() => {
+    locatedAt.current = Date.now();
     /* a location question left unanswered: the search shows after 12 s (the answer, if it comes, still opens it) */
     const wait = setTimeout(() => { if (!chosenRef.current) setLoading(false); }, 12000);
     const done = () => { clearTimeout(wait); setLocating(false); if (!chosenRef.current) setLoading(false); };
@@ -964,10 +974,27 @@ export default function LocationForecast() {
         if (was && kmApart(was, at) < 1.5) return;
         run(at, { auto: true });
       },
-      done,
+      (err) => {
+        /* in the iPhone app a no to the location (asked once by iOS, never again): say where to turn it on, rather
+           than leaving the search with no word why (a browser's own no is left alone) */
+        if (window.__mwukBridge && err?.code === 1) setGeoError('Location is off for MyWeatherUK. To open on the weather where you are, turn it on in Settings › MyWeatherUK › Location.');
+        done();
+      },
       { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 },
     );
   }, [run]);
+  /* Back in the app after ten minutes or more, on the place it found you (not one you chose): it looks again, and
+     moves the page only if you have moved (17 Nov 2026, the user: "it auto loads into that location every time they
+     open the app"; the app keeps the page while it is in the background). */
+  useEffect(() => {
+    const back = () => {
+      if (document.visibilityState !== 'visible' || chosenRef.current || !autoLocated.current) return;
+      if (Date.now() - locatedAt.current < 10 * 60e3) return;
+      autoLocate();
+    };
+    document.addEventListener('visibilitychange', back);
+    return () => document.removeEventListener('visibilitychange', back);
+  }, [autoLocate]);
   const autoLocated = useRef(false);
   useEffect(() => {
     if (autoLocated.current) return;
@@ -1185,6 +1212,7 @@ export default function LocationForecast() {
 
   return (
     <div className="lw-page" data-sky={dark < 0.3 ? 'bright' : dark < 0.55 ? 'mid' : 'dark'}>
+      <WhileShown>
       <SkyBackdrop {...sky} />
       {model && !pageHidden && <CardRain cond={sky.cond} rate={sky.rate} wind={sky.wind} wdir={sky.wdir} />}
       {model && !pageHidden && <CardSnow cond={sky.cond} rate={sky.snow} wind={sky.wind} wdir={sky.wdir} />}
@@ -1194,6 +1222,7 @@ export default function LocationForecast() {
       {/* misted glass in saturated air, and fog drifting over the cards in fog (Phase G) */}
       {model && !pageHidden && <CardMist amount={preview ? (preview.extras?.mist ? 0.85 : 0) : skyExtras.mist} />}
       {model && !pageHidden && <CardFog amount={preview ? (preview.extras?.fog ? 0.9 : 0) : skyExtras.fog} wdir={sky.wdir} />}
+      </WhileShown>
 
       {outside && (
         <div role="dialog" aria-modal="true" aria-labelledby="lw-out" onClick={() => setOutside(null)}

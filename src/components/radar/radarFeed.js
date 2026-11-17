@@ -95,15 +95,19 @@ function build() {
     state: frames.some((f) => f.ready) ? 'ready' : settled ? 'none' : 'loading',
   };
 }
+/* Told at most every 120 ms (17 Nov 2026, the user: the Radar tab "very laggy"): the frames of a first load come in
+   one by one, about forty of them, and the tab was drawn again for each, while the tab bar was still sliding. A
+   change after a quiet spell is told at once. */
+let lastEmit = 0;
 function changed() {
   if (emitPending) return;
   emitPending = true;
-  /* the frames that come in together are told together */
-  Promise.resolve().then(() => {
+  setTimeout(() => {
     emitPending = false;
+    lastEmit = Date.now();
     snap = build();
     subs.forEach((fn) => fn(snap));
-  });
+  }, Math.max(0, 120 - (Date.now() - lastEmit)));
 }
 
 /* fetched six at a time; `first` puts them at the front of the line */

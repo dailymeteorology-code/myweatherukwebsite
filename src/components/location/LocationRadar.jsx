@@ -22,6 +22,7 @@ import {
 } from '@/lib/ukRadar';
 import { familyColour, KIND_ORDER, RADAR_FAMILIES } from '@/lib/modelViewer';
 import { hhmm } from '@/lib/ukvLocation';
+import { useSectionActive } from '@/components/app/sectionActive';
 import './location.css';
 
 const VIEWS = {
@@ -239,12 +240,13 @@ export default function LocationRadar({ lat, lon, scope = 'point', light = false
 
   /* play: a beat per frame, a longer pause on the newest radar and at the end */
   const lastPast = frames.map((f) => f.kind).lastIndexOf('radar');
+  const shown = useSectionActive();                    // resting while another tab of the app is on show
   useEffect(() => {
-    if (!playing || frames.length < 2) return undefined;
+    if (!playing || !shown || frames.length < 2) return undefined;
     const hold = idx === lastPast || idx === frames.length - 1 ? 1500 : 520;
     const t = setTimeout(() => setIdx((i) => (i + 1) % frames.length), hold);
     return () => clearTimeout(t);
-  }, [playing, idx, frames.length, lastPast]);
+  }, [playing, shown, idx, frames.length, lastPast]);
 
   const f = frames[idx];
   return (

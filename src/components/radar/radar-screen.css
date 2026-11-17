@@ -41,9 +41,10 @@
 /* you: a red dot with a white ring and a slow pulse */
 .rs-me { pointer-events: none; }
 .rs-me i { position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 99px; background: #ff3b30; box-shadow: 0 0 0 2.5px #fff, 0 2px 8px rgba(0, 0, 0, 0.45); }
-.rs-me::before { content: ''; position: absolute; inset: -6px; border-radius: 99px; background: rgba(255, 59, 48, 0.28); animation: rs-me 2.4s ease-out infinite; }
-@keyframes rs-me { 0% { transform: scale(0.5); opacity: 0.9; } 100% { transform: scale(1.6); opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .rs-me::before { animation: none; } }
+/* a still halo (17 Nov 2026, the user: the Radar tab "very laggy"): it pulsed for ever, and while anything on the
+   screen moves the iPhone draws every glass blur on it again (the tab bar, the dock, the title, Layers, the key),
+   sixty times a second */
+.rs-me::before { content: ''; position: absolute; inset: -6px; border-radius: 99px; background: rgba(255, 59, 48, 0.22); }
 
 /* pressure lines' values */
 .rs-iso-label span {

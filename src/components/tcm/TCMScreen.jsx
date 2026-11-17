@@ -133,9 +133,10 @@ export default function TCMScreen() {
   }, [engine, round]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* the days on offer, and NOVA's hours in the day on show */
-  const days = engine === 'v3'
+  /* worked out when the model or the run changes, not at every drawing (each day's name is a date-format call) */
+  const days = useMemo(() => (engine === 'v3'
     ? (v3?.days || []).map((d) => ({ key: d.date, label: dayWord(d.date), date: d.date }))
-    : (nova?.days || []).map((d) => ({ key: d.date, label: dayWord(d.date), date: d.date, lead: d.lead_min || [], fields: d.fields || [] }));
+    : (nova?.days || []).map((d) => ({ key: d.date, label: dayWord(d.date), date: d.date, lead: d.lead_min || [], fields: d.fields || [] }))), [engine, v3, nova]);
   const dayI = Math.min(dayIdx, Math.max(0, days.length - 1));
   const day = days[dayI];
   const hours = engine === 'nova' && day ? day.lead.map((lm) => ({ lead: lm, valid: nova.frames.find((x) => x.lead_min === lm)?.valid })).filter((h) => h.valid) : [];

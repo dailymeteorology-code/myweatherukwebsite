@@ -14,6 +14,9 @@ html { touch-action: pan-x pan-y; }
   position: fixed; inset: 0; overflow: hidden; z-index: -1;
   visibility: hidden; pointer-events: none;
 }
+/* nothing moves in a tab that is not on show (17 Nov 2026, the user: the Radar tab "very laggy"): pulsing dots and
+   the like went on animating behind the tab on show */
+.app-section[data-off] *, .app-section[data-off] *::before, .app-section[data-off] *::after { animation-play-state: paused !important; }
 
 /* backwards, not both: a translate left on the page after it lands would make it the frame for everything pinned
    inside it (the old PageWrapper's lesson) */

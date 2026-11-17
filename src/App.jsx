@@ -31,7 +31,7 @@ import Register from '@/pages/Register';
 import ForgotPassword from '@/pages/ForgotPassword';
 import ResetPassword from '@/pages/ResetPassword';
 import { Navigate } from 'react-router-dom';
-import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
+import { memo, useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import '@/components/app/app-screens.css';
 import { SectionActiveContext } from '@/components/app/sectionActive';
 import ScreenBoundary from '@/components/app/ScreenBoundary';
@@ -115,6 +115,28 @@ function SectionScreen({ id }) {
   return Page ? <Page /> : null;
 }
 
+/* One kept section. Memoised (17 Nov 2026, the user: the Radar tab "very laggy"): the app frame draws again on
+   every change of address, and each section used to be drawn again with it, every tab kept behind the one on show
+   (Home's whole forecast, Model Data, TCM...), on every tap of the tab bar and every address Model Data writes.
+   Now a section is drawn again only when it comes on show, goes, or its own address changes. */
+const Section = memo(function Section({ id, loc, on }) {
+  return (
+    /* a hidden section keeps its full size, out of sight (app-screens.css): hidden with display: none, every
+       page that measures itself (Model Data's map, the radar, the charts) read a size of nothing and Model
+       Data drew itself with a negative corner and took the app down */
+    <div className="app-section" data-section={id} data-off={on ? undefined : ''}
+      aria-hidden={on ? undefined : true} {...(on ? {} : { inert: '' })}>
+      <SectionActiveContext.Provider value={on}>
+        <ScreenBoundary>
+          <Routes location={loc}>
+            <Route path="*" element={<SectionScreen id={id} />} />
+          </Routes>
+        </ScreenBoundary>
+      </SectionActiveContext.Provider>
+    </div>
+  );
+});
+
 function AppFrame() {
   const location = useLocation();
   const active = sectionOf(location.pathname);
@@ -158,21 +180,7 @@ function AppFrame() {
 
   return (
     <LayoutWrapper currentPageName={active || location.pathname.slice(1) || 'Home'}>
-      {Object.entries(sections).map(([id, loc]) => (
-        /* a hidden section keeps its full size, out of sight (app-screens.css): hidden with display: none, every
-           page that measures itself (Model Data's map, the radar, the charts) read a size of nothing and Model
-           Data drew itself with a negative corner and took the app down */
-        <div key={id} className="app-section" data-section={id} data-off={id !== active ? '' : undefined}
-          aria-hidden={id !== active ? true : undefined} {...(id !== active ? { inert: '' } : {})}>
-          <SectionActiveContext.Provider value={id === active}>
-            <ScreenBoundary>
-              <Routes location={loc}>
-                <Route path="*" element={<SectionScreen id={id} />} />
-              </Routes>
-            </ScreenBoundary>
-          </SectionActiveContext.Provider>
-        </div>
-      ))}
+      {Object.entries(sections).map(([id, loc]) => <Section key={id} id={id} loc={loc} on={id === active} />)}
       {!active && (
         <div key={location.pathname} className="app-push">
           <ScreenBoundary resetKey={location.pathname}>
