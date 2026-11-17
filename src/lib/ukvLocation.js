@@ -394,7 +394,7 @@ export function shape(resp) {
   nowHour.warmAloft = warmAloft(nowHour.t2, cur.frz);
 
   /* the days, Day and Night: the MWUK Mix, then the Met Office Global (outlookOf), from the UKV's own
-     hours (for the UV), TCM NOVA, TCM FROST and today so far */
+     hours (for the UV), TCM NOVA, MWUK FROST and today so far */
   const novaModel = nova ? { ...nova, hours: nova.times.map((t, k) => ({ t, p: nova.p[k], src: nova.src[k], nb: nova.nb_km[k] })) } : null;
   let outlook = null;
   try { outlook = outlookOf(resp, { hours, nova: novaModel, frost: resp.frost || null, observed }, nowMs); } catch { outlook = null; }
@@ -473,7 +473,7 @@ export function shape(resp) {
     runs: fc.runs, cell: fc.cell, lat, lon, anchor: fc.anchor || null, outlook,
     /* every NOVA hour (not only the UKV's: hourly to the end of the Main Run) */
     nova: novaModel,
-    /* the place's snow from TCM FROST, MyWeatherUK's snow model (server/tcmFrost.js frostPoint) */
+    /* the place's snow from MWUK FROST, MyWeatherUK's snow model (server/tcmFrost.js frostPoint) */
     frost: resp.frost || null,
   };
 }
@@ -612,7 +612,7 @@ export function quartersOf(model, h0, nowMs = Date.now()) {
 /* ── the days: a Day (06:00-18:00) and a Night (18:00-06:00) for each ──────────────────────────────
    From the outlook (server/locationWeather.js outlookAt): the MWUK Mix of the UKV and ICON-EU for
    the first five days, then the Met Office Global as far as it reaches. Each part has its weather, its
-   high or low, rain and its chance, what falls, wind and gusts, the snow from TCM FROST, the
+   high or low, rain and its chance, what falls, wind and gusts, the snow from MWUK FROST, the
    thunderstorm risk from TCM NOVA, and (by day) the UV from the UKV. */
 const londonAt = (day, hour) => {
   const guess = Date.parse(`${day}T${String(hour).padStart(2, '0')}:00:00Z`);
@@ -627,7 +627,7 @@ function skyCond(list) {
   const c = list.reduce((s, h) => s + (h.tcc ?? 50), 0) / Math.max(1, list.length);
   return c < 15 ? 'clear' : c < 38 ? 'mostlyClear' : c < 62 ? 'partly' : c < 82 ? 'mostlyCloudy' : c < 94 ? 'cloudy' : 'overcast';
 }
-/* TCM FROST over a part: the highest chance of snow falling in its periods, and the snow expected to
+/* MWUK FROST over a part: the highest chance of snow falling in its periods, and the snow expected to
    fall in it (the run's running total at its end less at its start) */
 function frostOver(fr, from, to) {
   if (!fr?.steps?.length) return null;

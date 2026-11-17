@@ -29,11 +29,12 @@ import {
   realtimeBasemap, fmtValue, download, makeGif, makeVideo, canMakeVideo, probFrame, loadLive, loadRoads, loadObserved, WX_NAMES, sampleFrame,
   lonLatToGrid, STRIKE_STYLE, GRID, setGrid, staticUrl, pressureLines, pressureCentres, splitFrame, drawPanes, withGrid, viewOnGrid, WARN_COLOURS, diffScaleKey,
   coversMap, SEE_THROUGH, setPalette, scaleSwatch, radarTypeOf, RADAR_FAMILIES,
-  setTone, onWxIcons, probScaleKey, scaleRamp, DISPLAY, INK, ACCENT, familyRate, onSatTiles, SAT_CREDIT, setKeyScale,
+  setTone, onWxIcons, probScaleKey, scaleRamp, DISPLAY, INK, ACCENT, familyRate, onSatTiles, SAT_CREDIT, setKeyScale, setKeyFade,
 } from '@/lib/modelViewer';
 import '@/components/modeldata/strata.css';
 import { useSectionActive } from '@/components/app/sectionActive';
 import LayerBrowser from '@/components/modeldata/LayerBrowser';
+import LayerSheet from '@/components/modeldata/LayerSheet';
 import Timeline from '@/components/modeldata/Timeline';
 import { LAYER_DESC, POPULAR, probFamily, probLine, categoryOf } from '@/lib/modelLayers';
 import { withMorePlaces } from '@/lib/modelPlaces';
@@ -61,7 +62,7 @@ import { SNOW_RISK_LEVELS, SNOW_RISK_NAMES, SNOW_AMOUNT_LEVELS, cmText } from '@
 
 const GROUP_ORDER = ['Precipitation', 'Temperature', 'Wind & pressure', 'Cloud & visibility', 'Convection', 'Snow & ice', 'Sea & waves', 'Air quality', 'Upper air', 'Radiation & surface'];
 const FRAMES = { screen: { label: 'Screen', a: null }, square: { label: '1:1', a: 1 }, wide: { label: '16:9', a: 16 / 9 }, story: { label: '9:16', a: 9 / 16 }, portrait: { label: '4:5', a: 4 / 5 } };
-const SHORT_NAMES = { consensus: 'MWUK', frost: 'TCM FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE', arpege: 'ARPEGE', arome: 'AROME', ecmwf_ensm: 'ECMWF ENS mean', aifs_ensm: 'AIFS ENS mean', replay: 'Storm replays' };
+const SHORT_NAMES = { consensus: 'MWUK', frost: 'MWUK FROST', ukv: 'UKV', mo_global: 'MO Global', ifs: 'ECMWF', aifs: 'AIFS', gfs: 'GFS', gefs_mean: 'GEFS mean', gefs_aer: 'Dust & air', ecmwf_ens: 'ECMWF ENS', aifs_ens: 'AIFS ENS', gefs: 'GEFS', icon: 'ICON-EU', icon_europe: 'ICON-EU Europe', mix: 'MWUK Mix', aigfs: 'AIGFS', gdps: 'GDPS', meps: 'HARMONIE', arpege: 'ARPEGE', arome: 'AROME', ecmwf_ensm: 'ECMWF ENS mean', aifs_ensm: 'AIFS ENS mean', replay: 'Storm replays' };
 /* models whose runs are fixed moments in the past (the Storm replays: each run is a storm, mdata/replays.py):
    never "newer" or "next", and the tools that read today's GFS are not offered */
 const STATIC_RUNS = new Set(['replay']);
@@ -638,7 +639,7 @@ function Sheet({ title, note, onClose, children, tall, clear }) {
             <IconBtn title="Close" onClick={onClose} style={{ width: 32, height: 32 }}><X size={15} /></IconBtn>
           </div>
         </div>
-        <div style={{ overflowY: 'auto', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', padding: '2px 14px 18px' }}>{children}</div>
+        <div style={{ overflowY: 'auto', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', padding: '2px 14px calc(var(--app-tabbar-space, 0px) + 18px)' }}>{children}</div>
       </div>
     </>
   );
@@ -735,7 +736,7 @@ export default function ModelData() {
   const [ovOutlooks, setOvOutlooks] = useState(null);
   const [ovErr, setOvErr] = useState(null);
   const ovOn = isAdmin && ov.on;
-  /* the snow overlay (for everyone): a TCM FROST run's snow risk, or the snow it expects, over any
+  /* the snow overlay (for everyone): a MWUK FROST run's snow risk, or the snow it expects, over any
      layer, for the day on show, the 24 hours to the time on show, or the whole run */
   const [sn, setSn] = useState(() => ({ on: false, run: null, show: 'risk', span: 'day', look: 'smooth', alpha: 0.85, ...(prefs.sn || {}) }));
   const setSnK = (k, v) => setSn((o) => ({ ...o, [k]: v }));
@@ -866,7 +867,10 @@ export default function ModelData() {
   /* a tablet under 1000 px wide: too narrow for the load count and the word Download beside the timeline */
   const tightBar = layout === 'tablet' && vw < 1000;
   const phone = layout === 'phone', narrow = layout !== 'desktop';
-  setKeyScale(phone ? 1.6 : layout === 'tablet' ? 1.2 : 1);    // keys big enough to read on a small screen (downloads match)
+  /* keys: on a phone small and on a soft fade rather than a patch (17 Nov 2026, at the user's request: "much
+     smaller on mobile, with the fade thing, not a box"); a tablet's a little bigger to read (downloads match) */
+  setKeyScale(phone ? 1.35 : layout === 'tablet' ? 1.2 : 1);
+  setKeyFade(phone);
   const [modeOpen, setModeOpen] = useState(false);            // phones: the view menu
   const [shapeOpen, setShapeOpen] = useState(false);          // phones: the frame's shape
   const [exp, setExp] = useState({ open: false, png: 1080, gif: 720, video: 1080, fps: 60, smooth: true, from: 0, to: null, busy: null, job: null, err: null });
@@ -939,7 +943,7 @@ export default function ModelData() {
     const get = () => frostRuns().then((rs) => {
       if (!live) return;
       setSnRuns(rs);
-      setSnErr(rs.length ? null : 'No TCM FROST run on the site yet: the first is on its way.');
+      setSnErr(rs.length ? null : 'No MWUK FROST run on the site yet: the first is on its way.');
     }).catch((e) => live && setSnErr(e.message));
     get();
     const t = setInterval(get, 10 * 60e3);
@@ -993,20 +997,24 @@ export default function ModelData() {
   const colourCache = useRef(new Map());
   const contourCache = useRef(new Map());
   const shellRef = useRef(null);
-  /* the map fills the screen down to the app's tab bar (--app-tabbar-space, components/app/app-tabbar.css: the
-     floating bar's room on phones, the 56 px it always kept on larger screens) */
-  const [shellH, setShellH] = useState('calc(100dvh - var(--app-tabbar-space, 56px))');
+  /* The map fills the screen. On a phone it runs on under the floating tab bar and every control floats over it
+     (17 Nov 2026, at the user's request: the data to the tab bar, no grey band under it); elsewhere it ends at the
+     room the app keeps at the foot (--app-tabbar-space, components/app/app-tabbar.css). Measured while on show:
+     the app keeps this page while another tab is open (App.jsx). */
+  const [shellTop, setShellTop] = useState(0);
+  const shellH = phone ? `calc(100dvh - ${shellTop}px)` : `calc(100dvh - var(--app-tabbar-space, 56px) - ${shellTop}px)`;
   const sidePanel = isObs && obsPanel && (layout === 'desktop' || (layout === 'tablet' && vw >= 1000));   // docked beside the frame
 
   useEffect(() => {
     const measure = () => {
-      const top = shellRef.current?.getBoundingClientRect().top ?? 0;
-      setShellH(`calc(100dvh - var(--app-tabbar-space, 56px) - ${Math.max(0, Math.round(top + window.scrollY))}px)`);
+      const el = shellRef.current;
+      if (!el || el.closest('[data-off]')) return;
+      setShellTop(Math.max(0, Math.round(el.getBoundingClientRect().top + window.scrollY)));
     };
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, []);
+  }, [sectionActive]);
 
   /* the graphic's typefaces, so the canvas, the PNG, the GIF and the video all use them: the motion
      graphics' own Inter and Inter Tight (public/fonts, @font-face in strata.css), loaded before the
@@ -1445,13 +1453,23 @@ export default function ModelData() {
     return () => ro.disconnect();
   }, [layout]);                                             // the bars are different elements per layout
 
+  /* the room the bars take at the top and the foot of the stage, in css px (they float: their own offsets) */
+  const barRoom = () => {
+    const st = stageRef.current, t = topRef.current, b = botRef.current;
+    const H = st?.clientHeight || 0;
+    return { top: t ? t.offsetTop + t.offsetHeight : 0, bottom: b && H ? Math.max(0, H - b.offsetTop) : 0 };
+  };
+  /* a phone's map on screen bleeds to every edge, the bars over it (the graphic's shapes keep their frame) */
+  const bleed = phone && frameKey === 'screen' && !twoWin && !sidePanel;
   const frameRect = useCallback(() => {
     const c = canvasRef.current, st = stageRef.current;
     if (!c || !st) return null;
+    if (bleed) return { x: 0, y: 0, w: c.width, h: c.height };
     const dpr = c.width / Math.max(1, st.clientWidth);
     const m = 12 * dpr;
-    const top = ((topRef.current?.offsetHeight || 0) + 10) * dpr + m;
-    const bot = ((botRef.current?.offsetHeight || 0) + 10) * dpr + m;
+    const room = barRoom();
+    const top = (room.top + 10) * dpr + m;
+    const bot = (room.bottom + 10) * dpr + m;
     const side = sidePanel ? (OBS_PANEL_W + 20) * dpr : 0;           // the observed panel docks on the left
     const safe = { x: m + side, y: top, w: c.width - 2 * m - side, h: Math.max(80, c.height - top - bot) };
     const a = FRAMES[frameKey].a;
@@ -1459,7 +1477,15 @@ export default function ModelData() {
     const w = Math.min(safe.w, safe.h * a), h = w / a;
     return { x: safe.x + (safe.w - w) / 2, y: safe.y + (safe.h - h) / 2, w, h };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frameKey, size, sidePanel]);
+  }, [frameKey, size, sidePanel, bleed]);
+  /* where the bars sit over a bled frame, in canvas px: the words on the map keep clear of them */
+  const bleedInset = useCallback(() => {
+    const c = canvasRef.current, st = stageRef.current;
+    if (!bleed || !c || !st) return null;
+    const dpr = c.width / Math.max(1, st.clientWidth), room = barRoom();
+    return { top: (room.top + 6) * dpr, bottom: (room.bottom + 6) * dpr };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bleed, size]);
 
   /* the two windows in a frame: side by side, or stacked where the frame is tall */
   const splitOf = useCallback((R) => splitFrame(R, cmp.split === 'auto' ? (R.w / R.h >= 0.9 ? 'cols' : 'rows') : cmp.split, Math.min(R.w, R.h) / 1080, cmp.at ?? 0.5), [cmp.split, cmp.at]);
@@ -1472,15 +1498,32 @@ export default function ModelData() {
     return { R, sp, a: cmp.swap ? sp.b : sp.a, b: cmp.swap ? sp.a : sp.b };
   }, [frameRect, twoWin, splitOf, cmp.swap]);
 
+  /* The map keeps to the data (17 Nov 2026, at the user's request: "the boundaries on where the person can go is
+     how far the data extends"): it cannot be dragged off the model's grid, nor zoomed out past the whole of it,
+     and when all of it is in view it sits in the middle. */
+  const clampView = useCallback((v) => {
+    const R = windowRects()?.a;
+    if (!v || !R || !NX || !NY) return v;
+    const s = Math.max(Math.min(R.w / NX, R.h / NY), Math.min(30, v.s));
+    const hw = R.w / (2 * s), hh = R.h / (2 * s);
+    const cx = 2 * hw >= NX ? NX / 2 : Math.max(hw, Math.min(NX - hw, v.cx));
+    const cy = 2 * hh >= NY ? NY / 2 : Math.max(hh, Math.min(NY - hh, v.cy));
+    return cx === v.cx && cy === v.cy && s === v.s ? v : { cx, cy, s };
+  }, [windowRects]);
   /* fit a grid box into the frame; `tight` fills it (a re-framing), otherwise leaves room
-     for the title card and the key */
+     for the title card and the key (on a bled phone map, between the bars) */
   const fit = useCallback((box, tight) => {
     const R = windowRects()?.a;
     if (!R) return;
+    const ins = bleedInset();
+    const inner = ins ? { x: R.x, y: R.y + ins.top, w: R.w, h: Math.max(80, R.h - ins.top - ins.bottom) } : R;
     const [x0, y0, x1, y1] = box;
-    const s = Math.min(R.w / (x1 - x0), (R.h * (tight ? 1 : 0.8)) / (y1 - y0));
-    setView({ cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 - (tight ? 0 : (R.h * 0.02) / s), s });
-  }, [windowRects]);
+    const s = Math.min(inner.w / (x1 - x0), (inner.h * (tight ? 1 : 0.8)) / (y1 - y0));
+    const shift = (inner.y + inner.h / 2) - (R.y + R.h / 2);   // the room's middle below the frame's
+    setView(clampView({ cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 - (tight ? 0 : (inner.h * 0.02) / s) - shift / s, s }));
+  }, [windowRects, bleedInset, clampView]);
+  /* a new size or grid can leave the map off the data: bring it back */
+  useEffect(() => { setView((v) => clampView(v)); }, [size, gridName]); // eslint-disable-line react-hooks/exhaustive-deps
   const linkAt = useRef(link?.at || null);
   useEffect(() => {
     if (view || !size) return;
@@ -1929,7 +1972,10 @@ export default function ModelData() {
     const ctx = c.getContext('2d');
     const full = { x: 0, y: 0, w: c.width, h: c.height };
     const S = twoWin ? windowsFor(frame, R, view, false) : null;
-    const L = S ? null : diffOn && paneDiff ? layersFor(paneDiff, diffRaw(frame)) : layersFor(paneA, frame);
+    let L = S ? null : diffOn && paneDiff ? layersFor(paneDiff, diffRaw(frame)) : layersFor(paneA, frame);
+    const ins = bleedInset();
+    /* a phone's map: no title on the map (the bars say it), and the key above the dock */
+    if (L?.chrome && ins) L = { ...L, chrome: { ...L.chrome, head: false, inset: ins } };
     ctx.clearRect(0, 0, c.width, c.height);
     // the dimmed map around the frame: map, data and coastlines only (the overlays are for the
     // graphic itself, and drawing them twice doubled the cost of every pan)
@@ -1942,24 +1988,28 @@ export default function ModelData() {
         const clip = S.split === 'rows' ? { x: 0, y: i ? cut : 0, w: c.width, h: i ? c.height - cut : cut } : { x: i ? cut : 0, y: 0, w: i ? c.width - cut : cut, h: c.height };
         withGrid(p.grid, () => drawScene(ctx, p.rect, p.view, { ...p.L, ...plain }, { clip, coarse: true, cache: true, u: S.u }));
       });
-    } else drawScene(ctx, R, view, { ...L, ...plain }, { clip: full, coarse: true, cache: true });
-    ctx.save();
-    // beyond the frame: frosted on the light map, dimmed on the dark ones
-    ctx.fillStyle = T.light ? 'rgba(226,234,243,0.74)' : 'rgba(3,6,12,0.62)';
-    ctx.beginPath();
-    ctx.rect(0, 0, c.width, c.height);
-    const r = 18 * (c.width / Math.max(1, stageRef.current.clientWidth));
-    ctx.roundRect ? ctx.roundRect(R.x, R.y, R.w, R.h, r) : ctx.rect(R.x, R.y, R.w, R.h);
-    ctx.fill('evenodd');
-    ctx.restore();
+    } else if (!ins) drawScene(ctx, R, view, { ...L, ...plain }, { clip: full, coarse: true, cache: true });
+    const r = ins ? 0 : 18 * (c.width / Math.max(1, stageRef.current.clientWidth));
+    if (!ins) {
+      ctx.save();
+      // beyond the frame: frosted on the light map, dimmed on the dark ones
+      ctx.fillStyle = T.light ? 'rgba(226,234,243,0.74)' : 'rgba(3,6,12,0.62)';
+      ctx.beginPath();
+      ctx.rect(0, 0, c.width, c.height);
+      ctx.roundRect ? ctx.roundRect(R.x, R.y, R.w, R.h, r) : ctx.rect(R.x, R.y, R.w, R.h);
+      ctx.fill('evenodd');
+      ctx.restore();
+    }
     if (S) drawPanes(ctx, R, S, { round: r, cache: true, interacting });
-    else drawScene(ctx, R, view, { ...L, interacting }, { round: r, cache: true });
+    else drawScene(ctx, R, view, { ...L, interacting }, ins ? { cache: true } : { round: r, cache: true });
     ctx.save();
-    ctx.strokeStyle = T.light ? 'rgba(11,26,49,0.14)' : 'rgba(255,255,255,0.22)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.roundRect ? ctx.roundRect(R.x + 0.5, R.y + 0.5, R.w - 1, R.h - 1, r) : ctx.rect(R.x, R.y, R.w, R.h);
-    ctx.stroke();
+    if (!ins) {
+      ctx.strokeStyle = T.light ? 'rgba(11,26,49,0.14)' : 'rgba(255,255,255,0.22)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(R.x + 0.5, R.y + 0.5, R.w - 1, R.h - 1, r) : ctx.rect(R.x, R.y, R.w, R.h);
+      ctx.stroke();
+    }
     if (pin) {
       const dpr = c.width / Math.max(1, stageRef.current.clientWidth);
       for (const p of S ? S.panes : [{ rect: R, view, grid: gridName }]) {
@@ -1973,7 +2023,7 @@ export default function ModelData() {
       }
     }
     ctx.restore();
-  }, [view, frame, layersFor, paneA, windowsFor, twoWin, diffOn, paneDiff, diffRaw, gridName, frameRect, interacting, pin, T]);
+  }, [view, frame, layersFor, paneA, windowsFor, twoWin, diffOn, paneDiff, diffRaw, gridName, frameRect, bleedInset, interacting, pin, T]);
 
   /* playback */
   useEffect(() => {
@@ -2053,7 +2103,7 @@ export default function ModelData() {
     poke();
     const { px, py, R, gx, gy } = toGrid(clientX, clientY);
     const s = Math.max(0.3, Math.min(30, view.s * k));
-    setView({ s, cx: gx - (px - (R.x + R.w / 2)) / s, cy: gy - (py - (R.y + R.h / 2)) / s });
+    setView(clampView({ s, cx: gx - (px - (R.x + R.w / 2)) / s, cy: gy - (py - (R.y + R.h / 2)) / s }));
   };
   useEffect(() => {
     const c = canvasRef.current;
@@ -2133,12 +2183,12 @@ export default function ModelData() {
       poke();
       const pts = [...pointers.current.values()];
       const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      setView({ ...g.v, s: Math.max(0.3, Math.min(30, g.v.s * (d / g.pinch))) });
+      setView(clampView({ ...g.v, s: Math.max(0.3, Math.min(30, g.v.s * (d / g.pinch))) }));
       return;
     }
     if (g && pointers.current.size === 1 && !g.pinch) {
       poke();
-      setView({ ...g.v, cx: g.v.cx - ((e.clientX - g.x) * dpr) / g.v.s, cy: g.v.cy - ((e.clientY - g.y) * dpr) / g.v.s });
+      setView(clampView({ ...g.v, cx: g.v.cx - ((e.clientX - g.x) * dpr) / g.v.s, cy: g.v.cy - ((e.clientY - g.y) * dpr) / g.v.s }));
       return;
     }
     const at = toGrid(e.clientX, e.clientY);
@@ -2383,8 +2433,9 @@ export default function ModelData() {
   useEffect(() => { setExp((e) => (e.from || e.to != null ? { ...e, from: 0, to: null } : e)); }, [mode, key, liveSrc, obsKey]);
   const sel = { ...T.glass, appearance: 'none', borderRadius: 999, padding: '7px 30px 7px 12px', fontSize: 12.5, fontWeight: 600, fontFamily: FONT, cursor: 'pointer', color: T.ink, background: T.track, boxShadow: T.trackShadow };
   /* loading notices: under the top bar, or (phones and tablets, where that is the title card) above the bottom bar */
-  const noticePos = narrow ? { bottom: (botRef.current?.offsetHeight || 56) + 18 } : { top: (topRef.current?.offsetHeight || 46) + 18 };
-  const topH = (topRef.current?.offsetHeight || 46) + 18, botH = (botRef.current?.offsetHeight || 56) + 18;
+  const room = barRoom();
+  const topH = (room.top || 56) + 8, botH = (room.bottom || 66) + 8;
+  const noticePos = narrow ? { bottom: botH } : { top: topH };
   const validLabel = !frame ? '' : isObs
     ? new Date(frame.head.valid).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
     : new Date(frame.head.valid).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -2637,7 +2688,7 @@ export default function ModelData() {
   const keyChip = { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 800, color: T.ink2 };
   const snControls = (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 8, padding: '0 8px 10px 46px' }}>
-      <select value={sn.run || ''} onChange={(e) => setSnK('run', e.target.value || null)} style={field} aria-label="TCM FROST run">
+      <select value={sn.run || ''} onChange={(e) => setSnK('run', e.target.value || null)} style={field} aria-label="MWUK FROST run">
         <option value="" style={{ color: '#111' }}>Latest run{snRuns?.[0] ? ` · ${frostRunName(snRuns[0])}` : ''}</option>
         {(snRuns || []).map((r) => <option key={r.tag} value={r.tag} style={{ color: '#111' }}>{frostRunName(r)} · {r.members} forecasts</option>)}
       </select>
@@ -2737,7 +2788,7 @@ export default function ModelData() {
       {canContours && <LayerRow icon={<Waves size={14} />} label="Contours" note="lines at set values" on={showContours} onClick={() => setShowContours((x) => !x)} />}
       {canStar && <LayerRow icon={<Star size={14} />} label={isObs ? "Star the day's extreme" : 'Star the highest value'} note={isObs ? 'with where it was' : 'in the part of the map you can see'} on={showStar} onClick={() => setShowStar((x) => !x)} />}
       <div style={{ height: 1, background: T.line, margin: '6px 4px' }} />
-      <LayerRow icon={<Snowflake size={14} />} label="Snow overlay" note="TCM FROST’s snow risk or snow expected, over any layer" on={sn.on} onClick={() => setSnK('on', !sn.on)} />
+      <LayerRow icon={<Snowflake size={14} />} label="Snow overlay" note="MWUK FROST’s snow risk or snow expected, over any layer" on={sn.on} onClick={() => setSnK('on', !sn.on)} />
       {sn.on && snControls}
       {isAdmin && (
         <>
@@ -3583,13 +3634,14 @@ export default function ModelData() {
   );
   const playBtn = (
     <button type="button" className="mdt-play" onClick={() => setPlaying((p) => !p)} title={playing ? 'Pause (space)' : 'Play (space)'} aria-label={playing ? 'Pause' : 'Play'}
-      style={phone ? { width: 42, height: 42 } : undefined}>
+      style={phone ? { width: 38, height: 38 } : undefined}>
       {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" style={{ marginLeft: 2 }} />}
     </button>
   );
   /* how many steps have loaded, in plain sight: a ring that fills and the count (the marks under the
      timeline are the same steps, solid once they have loaded) */
-  const loadMeter = steps.length > 1 && (() => {
+  /* gone once every step has loaded (17 Nov 2026, at the user's request) */
+  const loadMeter = steps.length > 1 && loadedCount < steps.length && (() => {
     const done = loadedCount >= steps.length, pct = loadedCount / steps.length;
     return (
       <span className={`mdt-load${done ? ' is-done' : ''}`} role="status" aria-live="polite"
@@ -3610,6 +3662,13 @@ export default function ModelData() {
       <span>{subLabel}{(phone || tightBar) && loadMeter}</span>
     </span>
   );
+  /* a tool in the phone's column: an icon in a finger-sized square, its name for screen readers and on a long press */
+  const sideTool = (icon, label, on, onClick, badge) => (
+    <button key={label} type="button" onClick={onClick} aria-pressed={!!on} aria-label={label} title={label} className={`md-ptool${on ? ' is-on' : ''}`}>
+      {icon}
+      {badge ? <span className="md-ptool-badge">{badge}</span> : null}
+    </button>
+  );
   /* a labelled tool on the phone's bottom bar: an icon over a word, a finger's width each */
   const tool = (icon, label, on, onClick, badge) => (
     <button key={label} onClick={onClick} aria-pressed={!!on} style={{ border: 'none', cursor: 'pointer', fontFamily: FONT, flex: 1, minWidth: 0, height: 50, borderRadius: 16,
@@ -3622,7 +3681,8 @@ export default function ModelData() {
 
   return (
     <ThemeCtx.Provider value={T}>
-    <div ref={shellRef} className="md-strata" style={{ ...T.vars, height: shellH, position: 'relative', overflow: 'hidden', fontFamily: FONT, color: T.ink,
+    <div ref={shellRef} className={`md-strata${phone ? ' is-phone' : ''}`} style={{ ...T.vars, height: shellH, marginBottom: phone ? 'calc(-1 * var(--app-tabbar-space, 0px))' : undefined,
+      position: 'relative', overflow: 'hidden', fontFamily: FONT, color: T.ink,
       background: T.light ? 'radial-gradient(120% 80% at 50% 0%, #e9f0f7 0%, #c9d8e7 60%, #b3c7dc 100%)' : 'radial-gradient(120% 80% at 50% 0%, #142238 0%, #070c16 60%, #04070d 100%)' }}>
       <div ref={stageRef} style={{ position: 'absolute', inset: 0 }}>
         <canvas ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
@@ -3631,7 +3691,8 @@ export default function ModelData() {
       </div>
 
       {/* top bar */}
-      <div ref={topRef} style={{ position: 'absolute', top: 10, left: 10, right: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', pointerEvents: 'none' }}>
+      <div ref={topRef} style={{ position: 'absolute', top: phone ? 'calc(env(safe-area-inset-top, 0px) + 8px)' : 10, left: phone ? 8 : 10, right: phone ? 8 : 10,
+        display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', pointerEvents: 'none' }}>
         {layout === 'desktop' ? (
           <>
             <div className="md-noscroll" style={{ ...T.capsule, padding: 5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', overflowX: 'auto', minWidth: 0, maxWidth: '100%', pointerEvents: 'auto' }}>
@@ -3658,7 +3719,7 @@ export default function ModelData() {
             {!isLong && <div style={{ ...T.capsule, padding: 7, display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto', flexShrink: 0 }}>{compareBtn}{layersBtn}</div>}
           </>
         ) : (
-          <div style={{ ...T.capsule, padding: phone ? 6 : 5, display: 'flex', alignItems: 'center', gap: phone ? 8 : 6, pointerEvents: 'auto', flex: 1, minWidth: 0 }}>
+          <div style={{ ...T.capsule, padding: phone ? 4 : 5, display: 'flex', alignItems: 'center', gap: phone ? 6 : 6, pointerEvents: 'auto', flex: 1, minWidth: 0 }}>
             {phone ? modeBtn : modeSeg}
             {!isLong && dataChip}
             {!phone && !isLong && compareBtn}
@@ -3809,7 +3870,7 @@ export default function ModelData() {
       <div aria-live="polite" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}>{caption}</div>
 
       {/* Long range: the polar vortex and the MJO, over the map */}
-      {isLong && <LongRange t={T} phone={phone} onMap={showVortex} style={{ position: 'absolute', left: 10, right: 10, top: topH, bottom: phone ? 16 : 10, zIndex: 5 }} />}
+      {isLong && <LongRange t={T} phone={phone} onMap={showVortex} style={{ position: 'absolute', left: 10, right: 10, top: topH, bottom: phone ? 'calc(var(--app-tabbar-space, 0px) + 10px)' : 10, zIndex: 5 }} />}
 
       {/* desktop: the export card above the timeline */}
       {layout === 'desktop' && exp.open && card('Download', null, () => setExp((e) => ({ ...e, open: false })), exportBody, { right: 10, bottom: botH, width: 'min(380px, calc(100% - 20px))' })}
@@ -3855,34 +3916,32 @@ export default function ModelData() {
             : <button type="button" className="md-act" aria-pressed={exp.open} title="Download a picture (PNG), a GIF or a video" onClick={() => openPanel('export')}><Download size={16} />Download</button>}
         </div>
       ) : (
-        <div ref={botRef} className="md-phone-bar" style={{ ...T.glass, position: 'absolute', left: 10, right: 10, bottom: 16, borderRadius: 26, padding: '10px 12px 6px', display: 'grid', gap: 6 }}>
-          {/* the time on show, with a step back and a step on either side of it */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <IconBtn title="Back a day" onClick={() => stepDay(-1)} style={{ width: 34, height: 34 }}><ChevronsLeft size={17} /></IconBtn>
-            <IconBtn title="Previous step" onClick={stepBack} style={{ width: 40, height: 40 }}><ChevronLeft size={19} /></IconBtn>
-            <div className="md-phone-time" style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center' }}>{timeLabel}</div>
-            <IconBtn title="Next step" onClick={stepFwd} style={{ width: 40, height: 40 }}><ChevronRight size={19} /></IconBtn>
-            <IconBtn title="On a day" onClick={() => stepDay(1)} style={{ width: 34, height: 34 }}><ChevronsRight size={17} /></IconBtn>
+        <>
+          {/* the tools, a slim column of glass down the right (17 Nov 2026, at the user's request: smaller controls,
+              more map); the frame's shape is in Download */}
+          <div className="md-ptools" style={{ ...T.capsule, position: 'absolute', right: 8, top: topH, zIndex: 3 }}>
+            {sideTool(<Layers size={18} />, 'Map', mapOpen, () => openPanel('layers'), layerCount)}
+            {sideTool(<Columns2 size={18} />, 'Compare', cmpOpen || cmp.on, () => openPanel('compare'))}
+            {sideTool(<MapIcon size={18} />, 'Regions', regionsOpen, () => openPanel('regions'))}
+            {isObs && sideTool(<Star size={18} />, 'The day', obsPanel, () => openPanel('summary'))}
+            {sideTool(<Share2 size={18} />, 'Share', shareOpen, () => openPanel('share'))}
+            {sideTool(<Download size={18} />, 'Download', exp.open, () => openPanel('export'), frameKey === 'screen' ? null : FRAMES[frameKey].label)}
           </div>
-          {/* play, and the whole width to drag along the timeline */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {playBtn}
-            <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>{slider}</div>
+          {/* the time: play, the time on show with a step either way, and the timeline under them */}
+          <div ref={botRef} className="md-phone-bar md-dock" style={{ ...T.glass, position: 'absolute', left: 8, right: 8, bottom: 'calc(var(--app-tabbar-space, 0px) + 8px)', borderRadius: 22, padding: '6px 8px 4px 6px', display: 'grid', gap: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {playBtn}
+              <div className="md-dock-time" style={{ flex: 1, minWidth: 0 }}>{timeLabel}</div>
+              <IconBtn title="Previous step" onClick={stepBack} style={{ width: 34, height: 34 }}><ChevronLeft size={18} /></IconBtn>
+              <IconBtn title="Next step" onClick={stepFwd} style={{ width: 34, height: 34 }}><ChevronRight size={18} /></IconBtn>
+            </div>
+            <div style={{ display: 'flex', minWidth: 0, padding: '0 2px' }}>{slider}</div>
+            {/* Simple mode: the map in words, two lines at most */}
+            {simple && caption && !isLong && (
+              <div style={{ fontSize: 12, lineHeight: 1.35, color: T.ink3, textAlign: 'center', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', padding: '0 4px 4px' }}>{caption}</div>
+            )}
           </div>
-          {/* Simple mode: the map in words, two lines at most */}
-          {simple && caption && !isLong && (
-            <div style={{ fontSize: 12, lineHeight: 1.35, color: T.ink3, textAlign: 'center', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', padding: '0 4px' }}>{caption}</div>
-          )}
-          <div style={{ display: 'flex', gap: 4, borderTop: `1px solid ${T.line}`, paddingTop: 6, marginTop: 2 }}>
-            {tool(<Layers size={19} />, 'Map', mapOpen, () => openPanel('layers'), layerCount)}
-            {tool(<Ratio size={19} />, frameKey === 'screen' ? 'Shape' : FRAMES[frameKey].label, shapeOpen, () => openPanel('shape'))}
-            {tool(<Columns2 size={19} />, 'Compare', cmpOpen || cmp.on, () => openPanel('compare'))}
-            {tool(<MapIcon size={19} />, 'Regions', regionsOpen, () => openPanel('regions'))}
-            {isObs && tool(<Star size={19} />, 'Day', obsPanel, () => openPanel('summary'))}
-            {!isLong && tool(<Share2 size={19} />, 'Share', shareOpen, () => openPanel('share'))}
-            {tool(<Download size={19} />, 'Download', exp.open, () => openPanel('export'))}
-          </div>
-        </div>
+        </>
       )}
 
       {/* phone: everything else as sheets from the bottom */}
@@ -3923,10 +3982,13 @@ export default function ModelData() {
         </Sheet>
       )}
       {phone && varOpen && cat && (
-        <>
-          <div onClick={closePanels} style={{ position: 'absolute', inset: 0, zIndex: 44, background: 'rgba(2,6,14,0.4)' }} />
-          {browser({ left: 0, right: 0, bottom: 0, height: '88%', zIndex: 45 }, modelRunRow)}
-        </>
+        <LayerSheet items={shownItems} popular={isProb || timeSteps || simple ? [] : POPULAR} selected={isObs ? obsKey : isLive ? liveKey : isProb ? presetKey : varKey}
+          modelAbout={model && MODEL_ABOUT[model.id] ? { name: SHORT_NAMES[model.id] || model.label, text: `${MODEL_ABOUT[model.id]}${nr ? ` ${nr.long}` : ''}` } : null}
+          favs={favLayers} onFav={(k) => updFavs((fv) => toggleLayer(fv, `${mode}:${k}`))}
+          onPick={pickVar} onClose={closePanels} query={q} setQuery={setQ} note={pickerNote} extra={modelRunRow} light={T.light}
+          title={isObs ? 'Observed' : isLive ? 'Live' : isProb ? 'Chances' : 'Layers'}
+          subtitle={!model ? '' : isProb ? `${model.label} · ${model.members} members` : timeSteps ? chipSub
+            : `${SHORT_NAMES[model.id] || model.label} · ${MODEL_INFO[model.id]?.[1] || ''} · ${browserItems.length} layers`} />
       )}
       {phone && mapOpen && (
         <Sheet title="Map" onClose={closePanels} clear>{mapBody}</Sheet>

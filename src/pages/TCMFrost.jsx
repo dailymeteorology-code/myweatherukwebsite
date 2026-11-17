@@ -1,4 +1,4 @@
-/* TCM FROST — MyWeatherUK's own snow model, on a page of its own (Forecast menu).
+/* MWUK FROST — MyWeatherUK's own snow model, on a page of its own (Forecast menu).
 
    Every six hours the model blends every forecast of eight models and their ensembles, each brought
    down to 2 km over the UK and Ireland's hills (tools/tcm-frost), into the chance of snow, a
@@ -85,7 +85,7 @@ function runDays(run) {
 async function pointAt(lat, lon, tag) {
   const r = await fetch(`/api/frost/point?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}${tag ? `&run=${tag}` : ''}`);
   if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`TCM FROST: ${r.status}`);
+  if (!r.ok) throw new Error(`MWUK FROST: ${r.status}`);
   return r.json();
 }
 
@@ -147,7 +147,7 @@ function FrostMap({ run, layer, lead, region, pin, onPick }) {
   return (
     <div ref={wrap} className="fr-map" style={{ height: h || 420 }}>
       <canvas ref={cv} style={{ width: w, height: h }} onPointerMove={move} onPointerLeave={() => setHover(null)}
-        onClick={(e) => { const p = at(e); if (p.gx >= 0 && p.gy >= 0) onPick(p); }} aria-label={`Map of ${L.label.toLowerCase()} from TCM FROST. Click anywhere for that spot's ten days.`} role="img" />
+        onClick={(e) => { const p = at(e); if (p.gx >= 0 && p.gy >= 0) onPick(p); }} aria-label={`Map of ${L.label.toLowerCase()} from MWUK FROST. Click anywhere for that spot's ten days.`} role="img" />
       {(!ground || !field) && !err && <div className="fr-map-wait"><Loader2 size={18} className="fr-spin" /> {run ? 'Drawing the map…' : 'Loading the runs…'}</div>}
       {err && <div className="fr-map-wait">The map could not load ({err}).</div>}
       {hover && hover.v !== undefined && (
@@ -226,7 +226,7 @@ function PointCard({ pick, point, loading, error, onClose }) {
       </header>
       {loading && <p className="fr-note"><Loader2 size={14} className="fr-spin" /> Loading the ten days…</p>}
       {error && <p className="fr-note">{error}</p>}
-      {!loading && !error && !point && <p className="fr-note">TCM FROST covers the land of the UK and Ireland: pick a spot on land.</p>}
+      {!loading && !error && !point && <p className="fr-note">MWUK FROST covers the land of the UK and Ireland: pick a spot on land.</p>}
       {point && (
         <>
           <p className="fr-lead">{wlv ? `A ${wlv.name.toLowerCase()} risk of snow ${onDay(worst.date, today)}: a ${pct(worst.p1)} chance of 1 cm or more${worst.cm >= 0.2 ? `, ${cmText(worst.cm)} expected` : ''}.`
@@ -351,12 +351,12 @@ export default function TCMFrost() {
       <div className="fr-wrap">
         <header className="fr-hero">
           <Link to="/" className="fr-back"><ChevronLeft size={16} /> Home</Link>
-          <p className="fr-eyebrow"><Snowflake size={12} /> TCM FROST</p>
+          <p className="fr-eyebrow"><Snowflake size={12} /> MWUK FROST</p>
           <h1 className="fr-title">Snow for the next ten days</h1>
           <p className="fr-sub">MyWeatherUK’s own snow model: every forecast from eight weather models and their ensembles, each brought down to 2 km over the UK and Ireland’s hills, blended into the chance of snow, the snow risk and the amount expected to fall. Updated every six hours.</p>
           {run && (
             <div className="fr-meta">
-              <select className="fr-select" value={tag} onChange={(e) => { setTag(e.target.value); setLi(null); }} aria-label="TCM FROST run">
+              <select className="fr-select" value={tag} onChange={(e) => { setTag(e.target.value); setLi(null); }} aria-label="MWUK FROST run">
                 <option value="">Latest run · {runName(runs[0])}</option>
                 {runs.map((r) => <option key={r.tag} value={r.tag}>Run {runName(r)}</option>)}
               </select>
@@ -367,8 +367,8 @@ export default function TCMFrost() {
           )}
         </header>
 
-        {err && !runs && <div className="fr-card fr-glass fr-note">TCM FROST could not be loaded ({err}).</div>}
-        {runs && !runs.length && <div className="fr-card fr-glass fr-note">The first TCM FROST run is on its way: the model runs every six hours.</div>}
+        {err && !runs && <div className="fr-card fr-glass fr-note">MWUK FROST could not be loaded ({err}).</div>}
+        {runs && !runs.length && <div className="fr-card fr-glass fr-note">The first MWUK FROST run is on its way: the model runs every six hours.</div>}
 
         <section id="fr-map" className="fr-card fr-glass fr-mapcard">
           <div className="fr-tools">
@@ -448,7 +448,7 @@ export default function TCMFrost() {
         </section>
 
         <section className="fr-card fr-glass fr-how">
-          <header className="fr-card-head"><div><p className="fr-eyebrow">How TCM FROST works</p><h2>Every forecast, brought down to the hills</h2></div></header>
+          <header className="fr-card-head"><div><p className="fr-eyebrow">How MWUK FROST works</p><h2>Every forecast, brought down to the hills</h2></div></header>
           <div className="fr-how-grid">
             <div>
               <h3>The forecasts</h3>
@@ -464,10 +464,10 @@ export default function TCMFrost() {
             </div>
             <div>
               <h3>Honestly</h3>
-              <p>TCM FROST is new and not yet checked against snow that fell: its chances are the forecasts’ own. Amounts are fresh snow falling, not the depth lying, which melting and drifting change.</p>
+              <p>MWUK FROST is new and not yet checked against snow that fell: its chances are the forecasts’ own. Amounts are fresh snow falling, not the depth lying, which melting and drifting change.</p>
             </div>
           </div>
-          <p className="fr-note">The same runs are on <Link to="/ModelData">Model Data</Link> (pick TCM FROST, or lay its snow over any model with the Snow overlay) and in each place’s <Link to="/LocationWeather">Location Weather</Link>.</p>
+          <p className="fr-note">The same runs are on <Link to="/ModelData">Model Data</Link> (pick MWUK FROST, or lay its snow over any model with the Snow overlay) and in each place’s <Link to="/LocationWeather">Location Weather</Link>.</p>
         </section>
       </div>
     </div>

@@ -12,7 +12,7 @@ export const MODEL_ABOUT = {
   gfs: 'The Global Forecast System from NOAA in the USA. It covers the whole world at 0.25°, four times a day, hourly for five days and then every three hours to 16 days.',
   gefs_mean: 'The average of NOAA’s ensemble (GEFS): the same model run 31 times from slightly different starts. Smoother than any one run, it shows the most likely pattern to 16 days.',
   gefs_aer: 'NOAA’s GEFS with dust, smoke and other particles in the air: where Saharan dust or wildfire smoke is heading.',
-  frost: 'TCM FROST, MyWeatherUK’s own snow model: the chance of snow and how much could settle, on the UKV’s 2 km map.',
+  frost: 'MWUK FROST, MyWeatherUK’s own snow model: the chance of snow and how much could settle, on the UKV’s 2 km map.',
   icon: 'DWD’s ICON-EU from Germany, in 6.5 km squares, shown on the UK’s 2 km map. Hourly to three days, then every three hours to five.',
   icon_europe: 'The same DWD ICON-EU over the whole of Europe, North Africa and the eastern Atlantic.',
   mix: 'The MWUK Mix: MyWeatherUK’s blend of the Met Office UKV and DWD ICON-EU, leaning on the UKV at first. Steadier than either model on its own.',

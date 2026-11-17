@@ -78,13 +78,15 @@
   padding: 3px 6px; border-radius: 99px; background: #0a84ff; color: #fff;
 }
 
-/* the header */
+/* the header: the title written on the map, the filters and the archive beside it in glass */
 .wm-top {
-  position: absolute; z-index: 10; top: calc(10px + env(safe-area-inset-top, 0px)); left: 10px; right: 10px;
-  padding: 10px 10px 10px 14px; border-radius: 22px; display: flex; flex-direction: column; gap: 9px;
+  position: absolute; z-index: 10; top: calc(12px + env(safe-area-inset-top, 0px)); left: 16px; right: 12px;
+  display: flex; flex-direction: column; gap: 9px; pointer-events: none;
 }
-@media (min-width: 768px) { .wm-top { right: auto; width: min(560px, calc(100% - 20px)); top: 12px; left: 12px; } }
+.wm-top > * { pointer-events: auto; }
+@media (min-width: 768px) { .wm-top { right: auto; width: min(560px, calc(100% - 24px)); top: 14px; left: 18px; } }
 .wm-top-row { display: flex; align-items: center; gap: 10px; }
+.wm-h1 { flex: 1; min-width: 0; }
 .wm-title { flex: 1; min-width: 0; line-height: 1.15; }
 .wm-title b { display: block; font-size: 1.32rem; font-weight: 750; letter-spacing: -0.025em; }
 .wm-title span { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 3px; font-size: 0.8rem; color: var(--wm-ink2); }
@@ -143,12 +145,13 @@
 .wm-chip svg { width: 14px; height: 14px; }
 .wm-chip[aria-pressed='true'] { color: var(--wm-ink1); background: var(--wm-chip-strong); border-color: var(--wm-ink3); }
 
-/* the day strip: one slim capsule above the tab bar */
+/* the day strip: one slim capsule of Liquid Glass, just above the tab bar */
 .wm-days {
   position: absolute; z-index: 10; left: 50%; transform: translateX(-50%);
-  bottom: calc(var(--wm-tabbar) + 10px);
-  display: flex; gap: 0; padding: 3px; border-radius: 99px; max-width: calc(100% - 20px);
+  bottom: calc(var(--wm-tabbar) - 4px);
+  display: flex; gap: 0; padding: 4px; border-radius: 99px; max-width: calc(100% - 20px);
 }
+@media (min-width: 768px) { .wm-days { bottom: 14px; } }
 .wm-day {
   position: relative; flex: none; height: 32px; padding: 0 9px; border-radius: 99px; border: 0; cursor: pointer;
   display: inline-flex; align-items: center; gap: 4px;
@@ -156,12 +159,14 @@
   background: transparent; color: var(--wm-ink2); transition: background 0.15s, color 0.15s;
 }
 .wm-day-dot { width: 6px; height: 6px; border-radius: 99px; flex: none; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.25); }
-.wm-day.is-on { background: var(--wm-fill-strong); color: var(--wm-ink1); box-shadow: 0 3px 10px -5px rgba(0, 0, 0, 0.5), inset 0 1px 0 var(--wm-hi); }
+.wm-day { color: inherit; opacity: 0.78; }
+.wm-day.is-on { opacity: 1; background: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.1)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42), inset 0 0 0 0.5px rgba(255, 255, 255, 0.22), 0 3px 10px rgba(0, 0, 0, 0.18); }
+.wm.is-light .wm-day.is-on { background: linear-gradient(180deg, #fff, rgba(234, 239, 247, 0.9)); box-shadow: inset 0 1px 0 #fff, inset 0 0 0 0.5px rgba(15, 23, 42, 0.08), 0 3px 10px rgba(15, 23, 42, 0.12); }
 @media (max-width: 360px) { .wm-day { padding: 0 7px; font-size: 0.72rem; } }
 
 /* a day with nothing on it: the map greyed out and still, the news in the middle */
 .wm-veil {
-  position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 130px 22px calc(var(--wm-tabbar) + 60px);
+  position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 90px 22px calc(var(--wm-tabbar) + 50px);
   background: rgba(70, 72, 78, 0.38);
   -webkit-backdrop-filter: grayscale(1) blur(1.5px); backdrop-filter: grayscale(1) blur(1.5px);
   animation: wm-fade 0.25s ease both;
@@ -248,16 +253,23 @@
 
 /* the time line: from and until, two dots in the warning's colour joined by a plain line */
 .ws-valid { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
-.ws-v-grid { display: grid; grid-template-columns: 12px minmax(0, 1fr); column-gap: 10px; }
-.ws-v-track { display: flex; flex-direction: column; align-items: center; padding: 6px 0; }
-.ws-v-track i { width: 12px; height: 12px; border-radius: 99px; background: var(--ws-sev); flex: none; }
-.ws-v-track span { flex: 1; width: 3px; min-height: 22px; background: var(--ws-sev); }
-.ws-v-texts { display: flex; flex-direction: column; justify-content: space-between; gap: 4px; min-width: 0; }
-.ws-v-when { display: flex; align-items: baseline; gap: 6px; height: 24px; line-height: 24px; white-space: nowrap; min-width: 0; }
-.ws-v-when small { width: 34px; flex: none; font-size: 0.6rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; color: var(--wm-ink3); }
-.ws-v-when b { font-size: 1.12rem; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.ws-v-when span { font-size: 0.8rem; color: var(--wm-ink2); overflow: hidden; text-overflow: ellipsis; }
-.ws-v-dur { padding-left: 40px; font-style: normal; font-size: 0.72rem; font-weight: 650; color: var(--wm-ink3); }
+/* each step a row: its pin (a dot, and the line on to the next dot) beside its words; the dot sits level with the
+   time, and the date has a line of its own, in full */
+.ws-v-step { display: grid; grid-template-columns: 12px minmax(0, 1fr); column-gap: 10px; }
+.ws-v-pin { position: relative; }
+.ws-v-pin i { position: absolute; z-index: 1; left: 0; top: 7px; width: 12px; height: 12px; border-radius: 99px; background: var(--ws-sev); }
+.ws-v-step.is-from .ws-v-pin::after, .ws-v-step.is-mid .ws-v-pin::after, .ws-v-step.is-to .ws-v-pin::after {
+  content: ''; position: absolute; left: 4.5px; width: 3px; background: var(--ws-sev);
+}
+.ws-v-step.is-from .ws-v-pin::after { top: 13px; bottom: 0; }
+.ws-v-step.is-mid .ws-v-pin::after { top: 0; bottom: 0; }
+.ws-v-step.is-to .ws-v-pin::after { top: 0; height: 13px; }
+.ws-v-step.is-mid { min-height: 20px; }
+.ws-v-when { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; min-width: 0; }
+.ws-v-when small { font-size: 0.6rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; color: var(--wm-ink3); }
+.ws-v-when b { font-size: 1.12rem; font-weight: 750; line-height: 26px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ws-v-when span { flex-basis: 100%; font-size: 0.78rem; line-height: 1.3; color: var(--wm-ink2); }
+.ws-v-dur { align-self: center; padding: 3px 0; font-style: normal; font-size: 0.72rem; font-weight: 650; color: var(--wm-ink3); }
 .ws-v-status { margin: 10px 0 0; font-size: 0.8rem; font-weight: 700; color: var(--wm-ink1); }
 .ws-v-zone { margin: 2px 0 0; font-size: 0.68rem; color: var(--wm-ink3); }
 

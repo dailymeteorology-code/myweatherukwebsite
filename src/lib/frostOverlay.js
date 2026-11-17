@@ -1,4 +1,4 @@
-/* TCM FROST over any Model Data layer: a run's snow risk, and the snow it expects to fall, drawn as
+/* MWUK FROST over any Model Data layer: a run's snow risk, and the snow it expects to fall, drawn as
    outlook areas like the thunderstorm overlay's (Severe hatched), for the London day on show, the
    24 hours to the time on show, or the whole run.
 
@@ -19,11 +19,11 @@ const londonMidnight = (day) => {
 };
 const nextDay = (day) => new Date(Date.parse(`${day}T12:00:00Z`) + 864e5).toISOString().slice(0, 10);
 
-/** The TCM FROST runs on the site (the last 48 hours), newest first:
+/** The MWUK FROST runs on the site (the last 48 hours), newest first:
     [{ tag, run, created, leads, days, members, sources, engine }]. */
 export async function frostRuns() {
   const r = await fetch('/api/frost/runs', { cache: 'no-cache' });
-  if (!r.ok) throw new Error(`TCM FROST: ${r.status}`);
+  if (!r.ok) throw new Error(`MWUK FROST: ${r.status}`);
   return (await r.json()).runs || [];
 }
 /** "06Z Fri 13 Nov" */

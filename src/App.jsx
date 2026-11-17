@@ -153,7 +153,7 @@ function AppFrame() {
             <Route path="/TCM" element={<Navigate to="/Lightning" replace />} />
             <Route path="/WeatherCriteria" element={<Navigate to="/" replace />} />
             <Route path="/News" element={<News />} />
-            {/* TCM FROST, MyWeatherUK's snow model (13 Nov 2026) */}
+            {/* MWUK FROST, MyWeatherUK's snow model (13 Nov 2026) */}
             <Route path="/TCMFrost" element={<TCMFrost />} />
             <Route path="/WeatherPatterns" element={<WeatherPatterns />} />
             <Route path="/TCMArchive" element={<TCMArchive />} />

@@ -28,6 +28,7 @@ import { saveWarningImage } from '@/components/warnings/warningImage';
 import { useLogo } from '@/components/MobileHeaderLogo';
 import { useSectionActive } from '@/components/app/sectionActive';
 import './warnings-screen.css';
+import '@/components/app/liquid-glass.css';
 
 const RANK = { Red: 3, Amber: 2, Yellow: 1 };
 const SEV_ORDER = ['Red', 'Amber', 'Yellow'];
@@ -202,7 +203,9 @@ export default function WarningsMapScreen({ warnings = [], loading = false, chec
     const map = mapRef.current;
     if (!map) return;
     ['dragging', 'touchZoom', 'doubleClickZoom', 'scrollWheelZoom', 'boxZoom', 'keyboard'].forEach((h) => { if (map[h]) (empty ? map[h].disable() : map[h].enable()); });
-  }, [empty]);
+    /* and shows the whole of the UK, however it had been moved */
+    if (empty) { fitRef.current = { ...fitRef.current, target: UK, side: false }; movedRef.current = false; requestAnimationFrame(() => frame(true)); }
+  }, [empty]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── the warnings drawn ────────────────────────────────────────────────── */
   useEffect(() => {
@@ -320,11 +323,8 @@ export default function WarningsMapScreen({ warnings = [], loading = false, chec
   }, [selectedKey]);
 
   const toggle = (list, set, v) => set(list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
-  const extraFilters = sevFilter.length + typeFilter.length;
-  const status = loading ? 'Reading the Met Office warnings…'
-    : counts.inforce ? `${counts.inforce} in force${counts.upcoming ? ` · ${counts.upcoming} upcoming` : ''}`
-      : counts.upcoming ? `None in force · ${counts.upcoming} upcoming` : 'No warnings in force';
-  const checked = checkedAt ? new Date(checkedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : null;
+  /* how many filters are narrowing the map (In force or Upcoming off counts as one each) */
+  const extraFilters = sevFilter.length + typeFilter.length + (showInForce ? 0 : 1) + (showUpcoming ? 0 : 1);
 
   return (
     /* touches stay on the map: the app's pull-to-refresh would read a drag down the map as a reload */
@@ -352,29 +352,17 @@ export default function WarningsMapScreen({ warnings = [], loading = false, chec
         </div>
       )}
 
-      {/* the header: the status, the archive, In force and Upcoming, and the other filters */}
-      <div ref={topRef} className="wm-top wm-glass">
+      {/* the header (17 Nov 2026, at the user's request): "Warnings" written on the map, and the filters and the
+          archive beside it as two buttons of Liquid Glass; it goes while a warning's sheet is open */}
+      <div ref={topRef} className="wm-top">
         <div className="wm-top-row">
-          <div className="wm-title">
-            <b>Warnings</b>
-            <span>
-              {status}
-              {checked && <em className="wm-live" title={`The Met Office's warnings are checked every minute. Last read ${checked}.`}><i />Live · {checked}</em>}
-            </span>
-          </div>
-          <button type="button" className="wm-btn" onClick={() => setArchiveOpen(true)} title="Every past warning">
+          <h1 className="lq-title wm-h1">Warnings</h1>
+          <button type="button" className={`lq lq-btn is-round${filtersOpen ? ' is-on' : ''}`} aria-expanded={filtersOpen}
+            aria-label={extraFilters ? `Filters, ${extraFilters} on` : 'Filters'} onClick={() => setFiltersOpen((v) => !v)}>
+            <SlidersHorizontal />{extraFilters > 0 && <span className="lq-badge">{extraFilters}</span>}
+          </button>
+          <button type="button" className="lq lq-btn" onClick={() => setArchiveOpen(true)} title="Every past warning">
             <History /><span>Archive</span>
-          </button>
-        </div>
-        <div className="wm-switches" role="group" aria-label="Which warnings to show">
-          <button type="button" className={`wm-switch${showInForce ? ' is-on' : ''}`} aria-pressed={showInForce} onClick={() => setShowInForce((v) => !v)}>
-            <i className="is-inforce" />In force<em>{counts.inforce}</em>
-          </button>
-          <button type="button" className={`wm-switch${showUpcoming ? ' is-on' : ''}`} aria-pressed={showUpcoming} onClick={() => setShowUpcoming((v) => !v)}>
-            <i className="is-upcoming" />Upcoming<em>{counts.upcoming}</em>
-          </button>
-          <button type="button" className={`wm-switch is-more${filtersOpen || extraFilters ? ' is-on' : ''}`} aria-expanded={filtersOpen} aria-label={extraFilters ? `Filters, ${extraFilters} on` : 'Filters'} onClick={() => setFiltersOpen((v) => !v)}>
-            <SlidersHorizontal />{extraFilters ? `Filters · ${extraFilters}` : 'Filters'}
           </button>
         </div>
         {banner}
@@ -382,6 +370,16 @@ export default function WarningsMapScreen({ warnings = [], loading = false, chec
 
       {filtersOpen && (
         <div className="wm-pop wm-glass is-strong" style={{ top: (topRef.current?.offsetTop || 0) + (topRef.current?.offsetHeight || 0) + 8 }}>
+          {/* in force and upcoming, both on to start with */}
+          <div className="wm-pop-row">
+            <span className="wm-label">Show</span>
+            <button type="button" className={`wm-switch${showInForce ? ' is-on' : ''}`} aria-pressed={showInForce} onClick={() => setShowInForce((v) => !v)}>
+              <i className="is-inforce" />In force<em>{counts.inforce}</em>
+            </button>
+            <button type="button" className={`wm-switch${showUpcoming ? ' is-on' : ''}`} aria-pressed={showUpcoming} onClick={() => setShowUpcoming((v) => !v)}>
+              <i className="is-upcoming" />Upcoming<em>{counts.upcoming}</em>
+            </button>
+          </div>
           <div className="wm-pop-row">
             <span className="wm-label">Severity</span>
             {SEV_ORDER.map((s) => (
@@ -400,12 +398,12 @@ export default function WarningsMapScreen({ warnings = [], loading = false, chec
             <button type="button" className="wm-chip" aria-pressed={namesOn} onClick={() => setNamesOn((v) => !v)}><Tag />Warning names</button>
             <button type="button" className="wm-chip" aria-pressed={labelsOn} onClick={() => setLabelsOn((v) => !v)}><MapPin />Places</button>
           </div>
-          {extraFilters > 0 && <button type="button" className="wm-btn" style={{ alignSelf: 'flex-start' }} onClick={() => { setSevFilter([]); setTypeFilter([]); }}>Clear filters</button>}
+          {extraFilters > 0 && <button type="button" className="wm-btn" style={{ alignSelf: 'flex-start' }} onClick={() => { setSevFilter([]); setTypeFilter([]); setShowInForce(true); setShowUpcoming(true); }}>Clear filters</button>}
         </div>
       )}
 
       {/* a week of days in one slim capsule, a dot in the colour of each day's worst warning */}
-      <div ref={daysRef} className="wm-days wm-glass" role="tablist" aria-label="Day">
+      <div ref={daysRef} className="wm-days lq" role="tablist" aria-label="Day">
         {days.map((d, i) => {
           const peak = dayPeak[i];
           return (

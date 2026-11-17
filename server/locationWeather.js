@@ -1052,9 +1052,12 @@ export function mountLocationWeather(app, { lightning = null } = {}) {
       file = path.join(FRAMES, 'ukv', String(req.query.run), type ? 'ptype' : 'precip_rate', `${req.query.h}.bin`);
     } else return res.status(400).end();
     const uk = req.query.scope === 'uk';
+    /* km=1: the radar at its own 1 km over the whole of the UK (the app's Radar tab, 17 Nov 2026: "significantly
+       better quality"); the home page keeps the lighter 2 km */
+    const km = req.query.km === '1' ? 1 : UK_VIEW.km;
     const f = await frameAtAsync(file);
     const body = uk
-      ? cropFrame(f, UK_VIEW.lat, UK_VIEW.lon, UK_VIEW.halfKm, Math.max(1, Math.round((UK_VIEW.km * 1000) / (f?.dx || 2000))))
+      ? cropFrame(f, UK_VIEW.lat, UK_VIEW.lon, UK_VIEW.halfKm, Math.max(1, Math.round((km * 1000) / (f?.dx || 2000))))
       : cropFrame(f, lat, lon);
     if (!body) return res.status(404).end();
     res.set({ 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip', 'Cache-Control': 'public, max-age=86400, immutable' });

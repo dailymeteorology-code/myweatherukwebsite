@@ -1,0 +1,99 @@
+/* Model Data's layer picker on a phone (components/modeldata/LayerSheet.jsx, 17 Nov 2026): an iOS sheet with grouped
+   lists. It takes the page's own colours (--md-*, set on .md-strata by ModelData.jsx), so it is light or dark with
+   the map. The sheet runs to the foot of the screen and the tab bar floats over its list, as in an iOS app. */
+.ls-scrim { position: absolute; inset: 0; z-index: 44; background: rgba(2, 6, 14, 0.42); animation: ls-fade 0.2s ease both; }
+.ls {
+  --ls-group: rgba(255, 255, 255, 0.06);
+  --ls-sep: rgba(255, 255, 255, 0.09);
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 45; height: 90%;
+  display: flex; flex-direction: column; overflow: hidden;
+  border-radius: 24px 24px 0 0; background: var(--md-solid, #0e1624); color: var(--md-ink, #f5f8fc);
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.35);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif;
+  animation: ls-up 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ls.is-light { --ls-group: #ffffff; --ls-sep: rgba(60, 60, 67, 0.16); box-shadow: 0 -10px 40px rgba(15, 23, 42, 0.16); }
+@keyframes ls-up { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes ls-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ls, .ls-scrim { animation: none; } }
+
+/* the top: the handle, the title, the model and run, the search, the categories (all of it drags the sheet) */
+.ls-top { flex: none; padding: 0 16px 8px; touch-action: none; cursor: grab; }
+.ls-grab { display: flex; justify-content: center; padding: 7px 0 4px; }
+.ls-grab i { width: 38px; height: 5px; border-radius: 99px; background: var(--md-faint, rgba(255, 255, 255, 0.3)); }
+.ls-head { display: flex; align-items: flex-start; gap: 10px; padding-top: 4px; }
+.ls-title { flex: 1; min-width: 0; }
+.ls-title b { display: block; font-size: 1.6rem; font-weight: 760; letter-spacing: -0.03em; line-height: 1.1; }
+.ls-title span { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 0.82rem; color: var(--md-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ls-about, .ls-close {
+  border: 0; cursor: pointer; display: grid; place-items: center; flex: none; padding: 0;
+  color: var(--md-muted); background: var(--md-track, rgba(255, 255, 255, 0.08));
+}
+.ls-about { width: 22px; height: 22px; border-radius: 99px; }
+.ls-about svg { width: 14px; height: 14px; }
+.ls-about.is-on { color: var(--md-on-ink); background: var(--md-on); }
+.ls-close { width: 32px; height: 32px; border-radius: 99px; margin-top: 2px; }
+.ls-close svg { width: 17px; height: 17px; }
+.ls-model { margin: 10px 0 0; padding: 10px 12px; border-radius: 14px; font-size: 0.84rem; line-height: 1.45; color: var(--md-sub); background: var(--md-track); }
+.ls-model b { color: var(--md-ink); }
+.ls-extra { margin-top: 12px; }
+/* the model and the run side by side */
+.ls-extra .mdb-fields { display: flex; gap: 8px; padding: 0; min-width: 0; }
+.ls-extra .mdb-fields .md-field { flex: 1 1 0; min-width: 0; }
+.ls-extra .mdb-fields .md-field-size { overflow: hidden; text-overflow: ellipsis; }
+.ls-search {
+  display: flex; align-items: center; gap: 8px; height: 40px; margin-top: 12px; padding: 0 12px; border-radius: 12px; cursor: text;
+  background: var(--md-track, rgba(255, 255, 255, 0.08));
+}
+.ls-search > svg { width: 17px; height: 17px; color: var(--md-faint); flex: none; }
+.ls-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--md-ink); font: 500 16px -apple-system, BlinkMacSystemFont, Inter, sans-serif; }
+.ls-search input::placeholder { color: var(--md-faint); }
+.ls-search button { width: 20px; height: 20px; border: 0; padding: 0; border-radius: 99px; display: grid; place-items: center; cursor: pointer; color: var(--md-solid); background: var(--md-faint); }
+.ls-search button svg { width: 12px; height: 12px; }
+.ls-chips { display: flex; gap: 6px; margin: 12px -16px 0; padding: 0 16px 2px; overflow-x: auto; scrollbar-width: none; touch-action: pan-x; }
+.ls-chips::-webkit-scrollbar { display: none; }
+.ls-chip {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px 0 6px; border-radius: 99px; border: 0; cursor: pointer;
+  font: 650 0.82rem -apple-system, BlinkMacSystemFont, Inter, sans-serif; white-space: nowrap;
+  color: var(--md-muted); background: var(--md-track, rgba(255, 255, 255, 0.08));
+}
+.ls-chip img { width: 22px; height: 22px; border-radius: 99px; background: linear-gradient(180deg, #2f5b9c, #17345f); padding: 1px; }
+.ls-chip.is-on { color: var(--md-on-ink); background: var(--md-on); }
+
+/* the list: grouped, as iOS Settings */
+.ls-list {
+  flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  padding: 6px 16px calc(var(--app-tabbar-space, 0px) + 24px); border-top: 1px solid var(--ls-sep);
+}
+.ls-sec { padding-top: 14px; }
+.ls-sec h3 {
+  display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 7px; padding: 0 16px;
+  font-size: 0.76rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--md-muted);
+}
+.ls-sec h3 em { font-style: normal; font-size: 0.74rem; color: var(--md-faint); font-variant-numeric: tabular-nums; }
+.ls-group { border-radius: 14px; overflow: hidden; background: var(--ls-group); }
+.ls-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.ls-row:not(.is-last)::after { content: ''; position: absolute; left: 62px; right: 0; bottom: 0; height: 1px; background: var(--ls-sep); }
+.ls-pick {
+  all: unset; box-sizing: border-box; cursor: pointer; min-width: 0; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 10px 4px 10px 14px; -webkit-tap-highlight-color: transparent;
+}
+.ls-pick:active { background: var(--md-hover); }
+.ls-pick:focus-visible { outline: 2px solid var(--md-accent); outline-offset: -2px; }
+.ls-ramp { width: 34px; height: 34px; border-radius: 9px; background: var(--md-track); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); transform: rotate(0deg); }
+.ls-text { min-width: 0; display: grid; gap: 2px; }
+.ls-name { display: flex; align-items: baseline; gap: 6px; font-size: 1rem; font-weight: 560; letter-spacing: -0.015em; color: var(--md-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ls-name em { flex: none; font-style: normal; font-size: 0.72rem; font-weight: 650; color: var(--md-muted); }
+.ls-desc { font-size: 0.78rem; color: var(--md-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ls-tick { width: 20px; height: 20px; color: var(--md-accent, #0a84ff); stroke-width: 2.6; }
+.ls-row.is-on .ls-name { font-weight: 700; color: var(--md-accent, #0a84ff); }
+.ls-acts { display: flex; align-items: center; gap: 2px; padding-right: 8px; }
+.ls-act { width: 32px; height: 32px; border: 0; padding: 0; border-radius: 99px; display: grid; place-items: center; cursor: pointer; color: var(--md-faint); background: transparent; }
+.ls-act svg { width: 17px; height: 17px; }
+.ls-act.is-on { color: var(--md-accent, #0a84ff); }
+.ls-fav.is-on { color: #f5a623; }
+.ls-fav.is-on svg { fill: #f5a623; }
+.ls-info { grid-column: 1 / -1; margin: -4px 14px 12px 60px; font-size: 0.84rem; line-height: 1.45; color: var(--md-sub); }
+.ls-empty { padding: 40px 12px; text-align: center; font-size: 0.92rem; color: var(--md-muted); }
+.ls-note { margin: 18px 16px 0; font-size: 0.76rem; line-height: 1.5; color: var(--md-faint); }

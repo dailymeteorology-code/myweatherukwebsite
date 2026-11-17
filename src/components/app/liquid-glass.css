@@ -1,0 +1,74 @@
+/* Apple's Liquid Glass for what floats over the app's maps (17 Nov 2026, at the user's request: "liquid glass, the
+   apple one"): the tab bar's own recipe (components/app/app-tabbar.css), a capsule of clear glass lit along its rim.
+   Dark by default; light with .is-light on it or on any element round it. */
+/* (no position here: whatever wears it keeps its own; the rim needs it positioned, as every use is) */
+.lq {
+  isolation: isolate;
+  color: rgba(244, 247, 252, 0.96);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0.08) 100%),
+    rgba(22, 27, 38, 0.44);
+  -webkit-backdrop-filter: blur(22px) saturate(1.9) brightness(1.08);
+  backdrop-filter: blur(22px) saturate(1.9) brightness(1.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.30), inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 28px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+/* the rim: brighter where the light catches it (top left), fading round the far side */
+.lq::before {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none; z-index: -1;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.1) 34%, rgba(255, 255, 255, 0.02) 62%, rgba(255, 255, 255, 0.28));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+}
+.is-light .lq, .lq.is-light {
+  color: rgba(17, 24, 39, 0.92);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.46) 52%, rgba(255, 255, 255, 0.58) 100%),
+    rgba(246, 248, 252, 0.30);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 rgba(255, 255, 255, 0.40),
+    0 10px 26px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.08);
+}
+.is-light .lq::before, .lq.is-light::before {
+  background: linear-gradient(135deg, #fff, rgba(255, 255, 255, 0.35) 40%, rgba(15, 23, 42, 0.06) 70%, rgba(255, 255, 255, 0.7));
+}
+/* glass without a backdrop blur would be a near-invisible wash: an opaque fill instead */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .lq { background: rgba(24, 29, 40, 0.96); }
+  .is-light .lq, .lq.is-light { background: rgba(250, 251, 253, 0.97); }
+}
+
+/* a glass button: a capsule with an icon and a word, or a circle with an icon */
+.lq-btn {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: none;
+  height: 44px; padding: 0 17px; border: 0; border-radius: 999px; cursor: pointer;
+  font: 650 0.92rem/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif; letter-spacing: -0.01em; white-space: nowrap;
+  -webkit-tap-highlight-color: transparent; transition: transform 0.18s cubic-bezier(0.3, 1.5, 0.45, 1);
+}
+.lq-btn:active { transform: scale(0.94); }
+.lq-btn svg { width: 19px; height: 19px; flex: none; }
+.lq-btn.is-round { width: 44px; padding: 0; }
+.lq-btn.is-on { color: #fff; }
+.lq-btn.is-on::after { content: ''; position: absolute; inset: 3px; border-radius: inherit; z-index: -1; background: rgba(10, 132, 255, 0.82); }
+.lq-btn:focus-visible { outline: 2px solid #0a84ff; outline-offset: 2px; }
+.lq-badge {
+  position: absolute; top: -3px; right: -3px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 99px;
+  font: 760 0.68rem/18px -apple-system, BlinkMacSystemFont, Inter, sans-serif; text-align: center; color: #fff; background: #0a84ff;
+}
+
+/* a title written straight on the map, no card behind it */
+.lq-title {
+  margin: 0; font: 800 2.15rem/1.05 -apple-system, BlinkMacSystemFont, 'SF Pro Display', Inter, system-ui, sans-serif; letter-spacing: -0.035em;
+  color: #fff; text-shadow: 0 2px 16px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+.lq-sub { margin: 3px 0 0; font: 600 0.82rem/1.3 -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; color: rgba(255, 255, 255, 0.82); text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6); }
+.is-light .lq-title { color: #0b1220; text-shadow: 0 1px 14px rgba(255, 255, 255, 0.9), 0 0 2px rgba(255, 255, 255, 0.8); }
+.is-light .lq-sub { color: rgba(15, 23, 42, 0.75); text-shadow: 0 1px 8px rgba(255, 255, 255, 0.9); }
+
+/* a switch, as iOS's */
+.lq-switch { position: relative; width: 51px; height: 31px; flex: none; border-radius: 99px; border: 0; padding: 0; cursor: pointer; background: rgba(120, 120, 128, 0.36); transition: background 0.2s; }
+.lq-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 99px; background: #fff; box-shadow: 0 3px 8px rgba(0, 0, 0, 0.18), 0 1px 1px rgba(0, 0, 0, 0.12); transition: transform 0.22s cubic-bezier(0.3, 1.3, 0.5, 1); }
+.lq-switch[aria-checked='true'] { background: #34c759; }
+.lq-switch[aria-checked='true']::after { transform: translateX(20px); }
+@media (prefers-reduced-motion: reduce) { .lq-btn, .lq-switch, .lq-switch::after { transition: none; } }

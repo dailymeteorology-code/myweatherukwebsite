@@ -1,5 +1,5 @@
 /**
- * TCM FROST on the site: MyWeatherUK's snow model (tools/tcm-frost), which runs on GitHub's servers
+ * MWUK FROST on the site: MyWeatherUK's snow model (tools/tcm-frost), which runs on GitHub's servers
  * every six hours and publishes each run as a Release asset (tcm-frost). This mirrors the runs of
  * the last 48 h onto D:, and serves them:
  *
@@ -181,7 +181,7 @@ export async function frostPoint(lat, lon, tag = null) {
   return { run: run.run, tag: run.tag, created: run.created, members: run.members, engine: run.engine, steps, days: dayList };
 }
 
-/* ── the TCM FROST page's ground: every 2 km cell's height (the snow model's own DEM of the UK and
+/* ── the MWUK FROST page's ground: every 2 km cell's height (the snow model's own DEM of the UK and
    Ireland, tools/tcm-frost/static) and whether it is land anywhere (Model Data's land mask), read
    once and kept, gzip: [u32 head length][head JSON {nx, ny}][int16 heights][uint8 land] ── */
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -239,9 +239,9 @@ export function mountTcmFrost(app) {
     try {
       const p = await frostPoint(lat, lon, tag);
       res.set('Cache-Control', 'no-cache');
-      return p ? res.json(p) : res.status(404).json({ error: 'no TCM FROST forecast here yet' });
+      return p ? res.json(p) : res.status(404).json({ error: 'no MWUK FROST forecast here yet' });
     } catch (e) {
-      return res.status(503).json({ error: `TCM FROST: ${e.message}` });
+      return res.status(503).json({ error: `MWUK FROST: ${e.message}` });
     }
   });
 }

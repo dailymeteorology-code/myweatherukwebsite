@@ -410,7 +410,7 @@ const SCALES = {
   cloud700: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
   cloud500: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
   cloud300: { stops: CLOUD, floor: 5, ticks: [10, 25, 50, 75, 100] },
-  /* TCM FROST, MyWeatherUK's snow model (lib/frostKey): its four risk levels, the chance of snow
+  /* MWUK FROST, MyWeatherUK's snow model (lib/frostKey): its four risk levels, the chance of snow
      falling in each period, and the snow expected to fall, since the run began and in 24 hours */
   snow_risk: { stops: SNOW_RISK_LEVELS.map((l, i) => [l.level, l.colour, [150, 190, 215, 235][i]]), floor: 1, discrete: true,
     keySteps: [1, 2, 3, 4], ticks: [1, 2, 3, 4], keyLabel: (v) => SNOW_RISK_NAMES[Math.round(v)] },
@@ -545,6 +545,10 @@ export function setTone(t) { TONE = t === 'light' ? 'light' : 'dark'; }
    where at the graphic's own size their words would be ~5 px (its downloads match what it shows) */
 let KEY_SCALE = 1;
 export function setKeyScale(k) { KEY_SCALE = Math.max(1, Math.min(2, Number(k) || 1)); }
+/* the keys on a soft fade up from the foot of the map instead of each on its own patch (17 Nov 2026, at the
+   user's request, on phones: "the fade thing, not a box around it") */
+let KEY_FADE = false;
+export function setKeyFade(on) { KEY_FADE = !!on; }
 export const toneOf = () => TONE;
 /* what a cached colour table was made with: the colours chosen and the map's tone */
 const palId = () => `${PALETTE}|${TONE}`;
@@ -786,7 +790,7 @@ function colourTable(frame, varKey) {
   const sc = scaleFor(varKey), t = frame.table, out = new Uint8Array(lutSize * 4);
   /* a coded layer's class is its own byte, never a value between two: the graphics card reads byte q
      at entry round(q x 2047/254), which sits a hair below q, and blending there drew every class
-     (snow conditions, TCM FROST's snow risk, the weather type) as the class below it */
+     (snow conditions, MWUK FROST's snow risk, the weather type) as the class below it */
   const exact = CODES.has(varKey) && !TYPED.has(varKey);
   for (let i = 0; i < lutSize; i++) {
     const b = (i / (lutSize - 1)) * 254, k = Math.min(253, Math.floor(b));
@@ -1571,7 +1575,7 @@ export function drawScene(ctx, rect, view, L, opts = {}) {
   if (G?.frame || A?.frame || K?.areas?.length || Wn?.areas?.length || L.strikes?.length || labels || P || L.cities || T || Hl?.rings?.length) {
     layer('over', [G?.frame, G?.varKey, G?.unit, A?.frame, K?.areas, K?.alpha, Wn?.areas, Wn?.alpha, Wn?.look, Wn?.labels, L.strikes, L.strikesDaily, L.strikeStyle, labels, Hl?.rings,
       P?.lines, P?.list, P?.symbols, P?.centres, L.cities, Wx?.frame, Wx?.utcMs, T?.frame, T?.unit, T?.floor,
-      T?.at?.gx, T?.at?.gy, T?.at?.v, T?.at?.place, !!L.chrome, L.chrome?.sub ? 1 : 0, (L.chrome?.extras || []).length, L.chrome?.brand, L.chrome?.time, L.style, KEY_SCALE], (c) => {
+      T?.at?.gx, T?.at?.gy, T?.at?.v, T?.at?.place, !!L.chrome, L.chrome?.sub ? 1 : 0, (L.chrome?.extras || []).length, L.chrome?.brand, L.chrome?.time, L.chrome?.head, L.chrome?.inset?.top, L.chrome?.inset?.bottom, L.style, KEY_SCALE, KEY_FADE], (c) => {
       if (G?.frame) drawValueGrid(c, G, X, Y, ...box, s, u, st);
       if (A?.frame) drawArrows(c, A, X, Y, ...box, s, u, st);
       if (K?.areas?.length) drawRisk(c, K, X, Y, u);
@@ -2456,6 +2460,7 @@ function inkText(ctx, t, x, y, fill, halo, hw) {
 }
 /* a feathered clearing behind small type on the map: blurred light (or dark) air, no edge */
 function clearing(ctx, x, y, w, h, u, th) {
+  if (KEY_FADE) return;
   ctx.save();
   if (FILTER_OK && !glassCheap) ctx.filter = `blur(${(14 * u).toFixed(1)}px)`;
   ctx.fillStyle = th.clearing;
@@ -2468,7 +2473,8 @@ function clearing(ctx, x, y, w, h, u, th) {
 function headLayout(R, u, C) {
   const M = 40 * u;
   const brand = C.brand !== false, clock = C.time !== false;
-  let y = R.y + M;
+  if (C.head === false) return { M, brandBase: null, clockBase: null, headBase: null, subBase: null, bottom: R.y + (C.inset?.top || 0) };
+  let y = R.y + M + (C.inset?.top || 0);
   const brandBase = brand ? (y += 22 * u) : null;
   const clockBase = clock ? (y += (brand ? 46 : 22) * u) : null;
   const headBase = (y += (brand || clock ? 58 : 44) * u);
@@ -2486,7 +2492,7 @@ function keyHeight(K, u) {
   return (sc.keySteps || sc.ticks || []).length > 1 ? 64 * u : 30 * u;
 }
 
-/* a key of named classes (the snow conditions index, TCM FROST's snow risk, the weather type): a swatch
+/* a key of named classes (the snow conditions index, MWUK FROST's snow risk, the weather type): a swatch
    and its name for every class, in rows that wrap, so every name shows (on one shared bar each class had
    66 units, and most of the names were dropped to stop them overlapping) */
 const KEY_W = 620;
@@ -2552,8 +2558,9 @@ function drawCatKey(ctx, R, u, K, foot, M, th) {
 export function chromeFoot(u, C) {
   if (!C) return 0;
   const uk = u * KEY_SCALE;                                 // the keys' own unit (bigger on phones)
-  if (C.warnList) return 160 * uk;
-  return 40 * u + [C, ...(C.extras || [])].reduce((n, K) => n + keyHeight(K, uk) + 16 * uk, 0);
+  const inset = C.inset?.bottom || 0;                       // the app's floating bar below them
+  if (C.warnList) return 160 * uk + inset;
+  return 40 * u + inset + [C, ...(C.extras || [])].reduce((n, K) => n + keyHeight(K, uk) + 16 * uk, 0);
 }
 
 /* the model badge: white for the model and run, the accent for the lead time; returns its left edge */
@@ -2614,13 +2621,15 @@ function drawChrome(ctx, R, u, C, st) {
   spacing(ctx, 0);
 
   // ── the air behind the words ──
-  const airTo = H.bottom + 60 * u;
-  const g = ctx.createLinearGradient(0, R.y, 0, airTo);
-  g.addColorStop(0, `rgba(${th.air},0.9)`);
-  g.addColorStop(0.55, `rgba(${th.air},0.6)`);
-  g.addColorStop(1, `rgba(${th.air},0)`);
-  ctx.fillStyle = g;
-  ctx.fillRect(R.x, R.y, R.w, airTo - R.y);
+  if (C.head !== false) {
+    const airTo = H.bottom + 60 * u;
+    const g = ctx.createLinearGradient(0, R.y, 0, airTo);
+    g.addColorStop(0, `rgba(${th.air},0.9)`);
+    g.addColorStop(0.55, `rgba(${th.air},0.6)`);
+    g.addColorStop(1, `rgba(${th.air},0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(R.x, R.y, R.w, airTo - R.y);
+  }
 
   // ── brand line: logo · MyWeather UK, the badge on the right ──
   let brandRight = R.x + M;
@@ -2644,7 +2653,7 @@ function drawChrome(ctx, R, u, C, st) {
   }
   /* the badge on the brand line, or on the clock line when the brand leaves no room, or none */
   let clockRoom = R.x + R.w - M;
-  if (C.badge && (C.badge[0] || C.badge[1])) {
+  if (C.head !== false && C.badge && (C.badge[0] || C.badge[1])) {
     const bw = badgeWidth(ctx, u, C.badge);
     if (H.brandBase != null && R.x + R.w - M - bw >= brandRight + 18 * u) drawBadge(ctx, R.x + R.w - M, H.brandBase - 9 * u, u, C.badge, th);
     else if (H.clockBase != null) clockRoom = drawBadge(ctx, R.x + R.w - M, H.clockBase - 8 * u, u, C.badge, th) - 16 * u;
@@ -2675,6 +2684,7 @@ function drawChrome(ctx, R, u, C, st) {
   }
 
   // ── headline: the layer, as large as fits on one line ──
+  if (H.headBase != null) {
   let hs = 50 * u;
   ctx.font = `650 ${hs}px ${DISPLAY}`;
   spacing(ctx, -0.022 * hs);
@@ -2691,6 +2701,7 @@ function drawChrome(ctx, R, u, C, st) {
     ctx.font = `500 ${20 * u}px ${FONT}`;
     ctx.fillStyle = th.muted;
     ctx.fillText(fitText(ctx, C.sub, W), R.x + M, H.subBase);
+  }
   }
 
   // ── a word in the middle of a window with nothing to show yet, or nothing for this time ──
@@ -2710,13 +2721,25 @@ function drawChrome(ctx, R, u, C, st) {
   }
 
   // ── the keys (or a warnings window's list), low on the left; the source low on the right ──
-  let keysTop = R.y + R.h - M, keysRight = R.x + M;
+  const footY = R.y + R.h - M - (C.inset?.bottom || 0);       // above the app's floating bar, if any
+  let keysTop = footY, keysRight = R.x + M;
   const uk = u * KEY_SCALE;                                 // the keys' own unit (bigger on phones)
+  if (KEY_FADE) {
+    /* one soft fade up from the foot behind all the keys, edge to edge, no box */
+    const keysH = C.warnList ? 160 * uk : [C, ...(C.extras || [])].reduce((n, K) => n + keyHeight(K, uk) + 16 * uk, 0);
+    const top = footY - keysH - 36 * u;
+    const g2 = ctx.createLinearGradient(0, top, 0, R.y + R.h);
+    g2.addColorStop(0, `rgba(${th.air},0)`);
+    g2.addColorStop(0.4, `rgba(${th.air},0.5)`);
+    g2.addColorStop(1, `rgba(${th.air},0.82)`);
+    ctx.fillStyle = g2;
+    ctx.fillRect(R.x, top, R.w, R.y + R.h - top);
+  }
   if (C.warnList) {
     const r = drawWarnKey(ctx, R, uk, C, M, th);
     keysTop = r.top; keysRight = r.right;
   } else {
-    let foot = R.y + R.h - M;
+    let foot = footY;
     for (const K of [C, ...(C.extras || [])]) {
       const k = drawKey(ctx, R, uk, K, foot, M, th);
       foot -= k.h + 16 * uk;
@@ -2729,7 +2752,7 @@ function drawChrome(ctx, R, u, C, st) {
     ctx.font = `600 ${14 * u}px ${FONT}`;
     const sw = ctx.measureText(source).width;
     const x = R.x + R.w - M - sw;
-    const y = x > keysRight + 20 * u ? R.y + R.h - M : keysTop - 14 * u;
+    const y = x > keysRight + 20 * u ? footY : keysTop - 14 * u;
     inkText(ctx, fitText(ctx, source, R.w - 2 * M), Math.max(R.x + M, x), y, th.muted, th.halo, 4 * u);
   }
   ctx.restore();
@@ -2740,7 +2763,7 @@ function drawWarnKey(ctx, R, u, C, M, th) {
   const list = C.warnList, shown = list.slice(0, list.length > 5 ? 4 : 5), more = list.length - shown.length;
   const rowH = 26 * u, rows = Math.max(1, shown.length) + (more ? 1 : 0);
   const w = Math.min(R.w - 2 * M, 560 * u), h = 30 * u + rows * rowH;
-  const x = R.x + M, top = R.y + R.h - M - h;
+  const x = R.x + M, top = R.y + R.h - M - (C.inset?.bottom || 0) - h;
   clearing(ctx, x - 14 * u, top - 12 * u, w + 28 * u, h + 22 * u, u, th);
   ctx.font = `650 ${18 * u}px ${FONT}`;
   inkText(ctx, C.variable || 'Met Office warnings', x, top + 16 * u, th.ink, th.halo, 4 * u);

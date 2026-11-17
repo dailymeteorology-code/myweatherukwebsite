@@ -1,6 +1,6 @@
-/* The TCM FROST page's map, a renderer of its own: the UK and Ireland's ground from the snow
+/* The MWUK FROST page's map, a renderer of its own: the UK and Ireland's ground from the snow
    model's own 2 km heights, shaded from the north-west so the hills stand out, the rest of the land
-   and the sea plain and dark; the snow on top in TCM FROST's colours (lib/frostKey), one pixel a
+   and the sea plain and dark; the snow on top in MWUK FROST's colours (lib/frostKey), one pixel a
    cell smoothed as it is scaled up; then the coast, the borders, the towns and a pin.
 
    Everything is on Model Data's 'uk' grid (Lambert equal-area, 2 km cells counted from the grid's
@@ -44,7 +44,7 @@ export function colourOf(layer, v) {
 /* ── data ── */
 export async function fetchRuns() {
   const r = await fetch('/api/frost/runs', { cache: 'no-cache' });
-  if (!r.ok) throw new Error(`TCM FROST: ${r.status}`);
+  if (!r.ok) throw new Error(`MWUK FROST: ${r.status}`);
   return (await r.json()).runs || [];
 }
 const FRAMES = new Map();

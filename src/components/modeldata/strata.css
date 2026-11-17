@@ -136,8 +136,9 @@
 .mdt-time .mdt-load { display: inline-flex; gap: 4px; padding: 0 0 0 7px; vertical-align: -2px; }
 .mdt-time .mdt-load svg { width: 12px; height: 12px; }
 .mdt-time .mdt-load b { font-size: 11.5px; }
-.mdt-head { position: absolute; top: 20px; width: 15px; height: 15px; margin-left: -7.5px; border-radius: 99px; background: #fff;
-  box-shadow: 0 0 0 3px var(--md-accent), 0 2px 8px rgba(11, 26, 49, 0.35); pointer-events: none; transition: left 0.12s ease; }
+/* the dot: smaller (17 Nov 2026, at the user's request), still centred on the track */
+.mdt-head { position: absolute; top: 22px; width: 11px; height: 11px; margin-left: -5.5px; border-radius: 99px; background: #fff;
+  box-shadow: 0 0 0 2.5px var(--md-accent), 0 1px 5px rgba(11, 26, 49, 0.35); pointer-events: none; transition: left 0.12s ease; }
 .mdt.is-drag .mdt-head { transition: none; }
 .mdt-tip { position: absolute; bottom: 52px; transform: translateX(-50%); padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 650; white-space: nowrap;
   color: var(--md-on-ink); background: var(--md-on); pointer-events: none; box-shadow: 0 6px 16px rgba(11, 26, 49, 0.25); font-variant-numeric: tabular-nums; }
@@ -289,3 +290,16 @@
 .mdd-hint { font-size: 12px; font-weight: 600; color: var(--md-muted); }
 .mdd.is-phone .mdd-btn { width: 40px; height: 40px; padding: 0; justify-content: center; }
 .mdd.is-phone .mdd-swatch { width: 28px; height: 28px; }
+
+/* phones (17 Nov 2026, at the user's request: more map, smaller controls): the tools in a slim column of glass
+   down the right, and a small dock for the time above the tab bar */
+.md-ptools { display: flex; flex-direction: column; gap: 2px; padding: 4px; pointer-events: auto; }
+.md-ptool { position: relative; width: 40px; height: 40px; border: 0; border-radius: 999px; display: grid; place-items: center; cursor: pointer; padding: 0;
+  color: var(--md-sub); background: transparent; -webkit-tap-highlight-color: transparent; }
+.md-ptool:active { background: var(--md-hover); }
+.md-ptool.is-on { color: var(--md-on-ink); background: var(--md-on); }
+.md-ptool-badge { position: absolute; top: 1px; right: 0; min-width: 15px; height: 15px; padding: 0 4px; box-sizing: border-box; border-radius: 99px;
+  font-size: 9.5px; line-height: 15px; font-weight: 760; text-align: center; color: #fff; background: var(--md-accent); white-space: nowrap; }
+.md-dock-time .mdt-time { text-align: left; padding: 0 4px; min-width: 0; }
+.md-dock-time .mdt-time b { font-size: 15px; }
+.md-dock-time .mdt-time > span { font-size: 11px; }

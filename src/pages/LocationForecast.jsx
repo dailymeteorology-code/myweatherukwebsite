@@ -455,10 +455,10 @@ function warningHours(w, day) {
 const onDay = (w, day) => w.startMs && w.endMs && ukDay(w.startMs) <= day && ukDay(w.endMs - 1) >= day;
 
 /* ── the days, overhauled (15 Nov 2026): the MWUK Mix of the UKV and ICON-EU, then the Met Office
-   Global as far as it reaches, each day a Day (06:00-18:00) and a Night (18:00-06:00), with TCM FROST's
+   Global as far as it reaches, each day a Day (06:00-18:00) and a Night (18:00-06:00), with MWUK FROST's
    snow and TCM NOVA's thunderstorm risk (ukvLocation.js outlookOf) ── */
 const pctText = (p) => (p == null ? '—' : p < 1 ? '<1%' : `${Math.round(p)}%`);
-/* what falls in a part, as the model has it (snow and sleet as the water they melt to; TCM FROST's line
+/* what falls in a part, as the model has it (snow and sleet as the water they melt to; MWUK FROST's line
    gives the snow itself) */
 function amountText(p, U) {
   if (!(p.rain >= 0.2)) return 'Dry';
@@ -491,7 +491,7 @@ function PartPanel({ p, isDay, T, U }) {
       <ul className="lw-part-facts">
         <li><Umbrella size={13} /><span><b>{pctText(p.pRain)}</b> chance{p.rain >= 0.2 ? ` · ${amountText(p, U)}` : ''}</span></li>
         {fr && (fr.chance >= 5 || fr.cm >= 0.2) && (
-          <li className="is-frost"><Snowflake size={13} /><span>Snow <b>{pctText(fr.chance)}</b>{fr.cm >= 0.2 ? ` · ${cmText(fr.cm)}` : ''} <em>TCM FROST</em></span></li>
+          <li className="is-frost"><Snowflake size={13} /><span>Snow <b>{pctText(fr.chance)}</b>{fr.cm >= 0.2 ? ` · ${cmText(fr.cm)}` : ''} <em>MWUK FROST</em></span></li>
         )}
         {ts && (
           <li><Zap size={13} style={{ color: ts.colour }} /><span><b style={{ color: ts.colour }}>{ts.word}</b> thunderstorm risk · {pctText(p.thunder.p)} <em>TCM NOVA</em></span></li>
@@ -545,7 +545,7 @@ function OutlookCard({ model, T, selected, onDay: pick, warnings, onWarning }) {
                 {dp && np ? <WxIcon cond={np.cond} day={false} windy={np.windy} size={24} /> : null}
               </span>
               <span className="lw-day-flags">
-                {snowy && <Snowflake size={13} strokeWidth={2.6} style={{ color: frostLv?.colour || '#e6f2ff' }} aria-label={`TCM FROST: ${frostLv ? `${frostLv.name} snow risk` : `${d.frost.p0}% chance of snow`}`} />}
+                {snowy && <Snowflake size={13} strokeWidth={2.6} style={{ color: frostLv?.colour || '#e6f2ff' }} aria-label={`MWUK FROST: ${frostLv ? `${frostLv.name} snow risk` : `${d.frost.p0}% chance of snow`}`} />}
                 {ts && ts.key !== 'TSTM' && <Zap size={13} strokeWidth={2.6} fill="currentColor" style={{ color: ts.colour }} aria-label={`${ts.word} thunderstorm risk`} />}
               </span>
               <span className="lw-day-lo">{lo == null ? '' : `${Math.round(T(lo))}°`}</span>
@@ -572,8 +572,8 @@ function OutlookCard({ model, T, selected, onDay: pick, warnings, onWarning }) {
                     );
                   })}
                   {frostLv && (
-                    <span className="lw-day-fact" style={{ boxShadow: `inset 0 0 0 1.5px ${frostLv.colour}` }} title="TCM FROST, MyWeatherUK's snow model">
-                      <Snowflake size={13} />{frostLv.name} snow risk · {cmText(d.frost.cm)} · TCM FROST
+                    <span className="lw-day-fact" style={{ boxShadow: `inset 0 0 0 1.5px ${frostLv.colour}` }} title="MWUK FROST, MyWeatherUK's snow model">
+                      <Snowflake size={13} />{frostLv.name} snow risk · {cmText(d.frost.cm)} · MWUK FROST
                     </span>
                   )}
                   {d.sun.rise && <span className="lw-day-fact"><Sunrise size={13} />{hhmm(d.sun.rise)}</span>}
@@ -589,7 +589,7 @@ function OutlookCard({ model, T, selected, onDay: pick, warnings, onWarning }) {
       <p className="lw-outlook-note">
         Tap a day for its day and night. Days {sources.includes('mo_global') ? 'to the fifth or so ' : ''}from the <b>MWUK Mix</b>, MyWeatherUK&rsquo;s
         blend of the Met Office UKV and DWD ICON-EU{sources.includes('mo_global') ? <>, then the <b>Met Office Global</b></> : ''}.
-        Snow from <b>TCM FROST</b>, thunderstorms from <b>TCM NOVA</b>.
+        Snow from <b>MWUK FROST</b>, thunderstorms from <b>TCM NOVA</b>.
       </p>
     </div>
   );
@@ -1341,7 +1341,7 @@ export default function LocationForecast() {
               {' '}Cloud is the sky within 8 km. Chance of rain counts model rain within 10 km.
               {' '}Every 15 minutes: the radar carried forward for the next hour and a half, then the UKV&rsquo;s hours, its rain shared out by its rates.
               {olRuns.length ? <><br />The days: {olRuns.map((r) => `${sourceName(r.model)}${r.pair ? ` (UKV ${runName(r.pair.ukv)} + ICON-EU ${runName(r.pair.icon)})` : ` ${runName(r.run)}`}`).join(', then ')}. The MWUK Mix is MyWeatherUK&rsquo;s blend of the two models, the UKV counting a little more over the first two days.</> : ''}
-              {model.frost ? <><br />Snow: <b>MyWeatherUK&rsquo;s TCM FROST model</b>. Snow chance each hour: MyWeatherUK&rsquo;s snow conditions index from the UKV.</> : ''}
+              {model.frost ? <><br />Snow: <b>MyWeatherUK&rsquo;s MWUK FROST model</b>. Snow chance each hour: MyWeatherUK&rsquo;s snow conditions index from the UKV.</> : ''}
               {model.nova ? <><br />Thunderstorm risk: <b>MyWeatherUK&rsquo;s own TCM NOVA model</b> (Hyper-Short nowcast, then Main Run), not the Met Office.</> : ''}
             </p>
           </>

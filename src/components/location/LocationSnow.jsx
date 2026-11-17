@@ -1,4 +1,4 @@
-/* The snow risk at the place for the next ten days, from MyWeatherUK's own snow model, TCM FROST
+/* The snow risk at the place for the next ten days, from MyWeatherUK's own snow model, MWUK FROST
    (server/tcmFrost.js): every forecast of eight models and their ensembles brought down to 2 km and
    blended, run every six hours.
 
@@ -86,13 +86,13 @@ export default function LocationSnow({ model }) {
     <div className="lw-glass lw-card lw-snow">
       <div className="lw-title">
         <Snowflake />Snow risk
-        <span className="lw-frost-badge" title="MyWeatherUK's own snow model"><Snowflake size={11} strokeWidth={2.6} />TCM FROST</span>
+        <span className="lw-frost-badge" title="MyWeatherUK's own snow model"><Snowflake size={11} strokeWidth={2.6} />MWUK FROST</span>
       </div>
       <p className="lw-summary lw-psum">{head}</p>
       {signal && (
         <>
           <div className="lw-pchart lw-schart" onPointerMove={pick} onPointerDown={pick} onPointerLeave={() => setHover(null)}
-            role="img" aria-label={`The chance of snow falling here in each period for the next ten days, from TCM FROST. ${head}`}>
+            role="img" aria-label={`The chance of snow falling here in each period for the next ten days, from MWUK FROST. ${head}`}>
             {[25, 50, 75].filter((v) => v < top).map((v) => (
               <React.Fragment key={v}>
                 <i className="lw-pguide" style={{ bottom: `${(v / top) * 100}%` }} />
@@ -147,7 +147,7 @@ export default function LocationSnow({ model }) {
       <p className="lw-nova-note lw-frost-note">
         <Snowflake size={12} strokeWidth={2.6} />
         <span>
-          Snow risk comes from <b>MyWeatherUK&rsquo;s own TCM FROST model</b>: {fr.members ? `${fr.members} forecasts` : 'every forecast'} from the Met Office UKV and Global,
+          Snow risk comes from <b>MyWeatherUK&rsquo;s own MWUK FROST model</b>: {fr.members ? `${fr.members} forecasts` : 'every forecast'} from the Met Office UKV and Global,
           ECMWF&rsquo;s IFS and AIFS, NOAA&rsquo;s GFS and the ECMWF and NOAA ensembles, each brought down to 2 km over the hills and blended
           (run {runHour(fr.run)}). Amounts are fresh snow falling, not the depth lying.
         </span>

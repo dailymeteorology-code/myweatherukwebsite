@@ -15,7 +15,6 @@ const D = (v) => (v instanceof Date ? v : new Date(v));
 const hm = (d) => D(d).toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
 const dayShort = (d) => D(d).toLocaleDateString('en-GB', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short' });
 const dayLong = (d) => D(d).toLocaleDateString('en-GB', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long' });
-const dayTiny = (d) => D(d).toLocaleDateString('en-GB', { timeZone: TZ, weekday: 'short', day: 'numeric' });   // Tue 17
 const asDate = (v) => { const d = v ? new Date(v) : null; return d && !Number.isNaN(d.getTime()) ? d : null; };
 
 /* "15 h", "1 day 6 h" */
@@ -71,13 +70,17 @@ function ValidLine({ from, to, now, hex }) {
     : phase === 'inforce' ? `In force · ends in ${untilText(to - now)}` : 'Ended';
   return (
     <div className="ws-valid" style={{ '--ws-sev': hex }}>
-      <div className="ws-v-grid">
-        <div className="ws-v-track" aria-hidden="true"><i /><span /><i /></div>
-        <div className="ws-v-texts">
-          <div className="ws-v-when"><small>From</small><b>{hm(from)}</b><span>{dayTiny(from)}</span></div>
-          <em className="ws-v-dur">{spanText(to - from)}</em>
-          <div className="ws-v-when"><small>Until</small><b>{hm(to)}</b><span>{dayTiny(to)}</span></div>
-        </div>
+      <div className="ws-v-step is-from">
+        <span className="ws-v-pin" aria-hidden="true"><i /></span>
+        <div className="ws-v-when"><small>From</small><b>{hm(from)}</b><span>{dayLong(from)}</span></div>
+      </div>
+      <div className="ws-v-step is-mid">
+        <span className="ws-v-pin" aria-hidden="true" />
+        <em className="ws-v-dur">{spanText(to - from)}</em>
+      </div>
+      <div className="ws-v-step is-to">
+        <span className="ws-v-pin" aria-hidden="true"><i /></span>
+        <div className="ws-v-when"><small>Until</small><b>{hm(to)}</b><span>{dayLong(to)}</span></div>
       </div>
       <p className="ws-v-status">{status}</p>
       <p className="ws-v-zone">Times in {ukZone(from)}</p>

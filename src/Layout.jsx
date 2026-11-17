@@ -18,10 +18,11 @@ function LayoutContent({ children, currentPageName }) {
   // AdminSettings runs its own tabbed chrome, so the site nav stays off it.
   const showSiteNav = !location.pathname.startsWith('/AdminSettings');
   /* The iOS-app redesign (17 Nov 2026): the pages built as an app's screens (the home page, the Hub, Warnings,
-     More) carry their own large titles, so the phone's website bar stays off them, as an app has none. */
+     Radar, Model Data, More) carry their own titles and bars, so the phone's website bar ("MyWeather" and the logo)
+     stays off them, as an app has none; its room goes to the screen. */
   const path = location.pathname;
   const isHome = path === '/' || path === '/Home';
-  const appScreen = isHome || ['/LocationWeather', '/Hub', '/Warnings', '/Radar', '/More'].includes(path);
+  const appScreen = isHome || ['/LocationWeather', '/Hub', '/Warnings', '/Radar', '/ModelData', '/More'].includes(path);
 
   useEffect(() => {
     (async () => {
