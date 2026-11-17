@@ -34,6 +34,7 @@ import { Navigate } from 'react-router-dom';
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import '@/components/app/app-screens.css';
 import { SectionActiveContext } from '@/components/app/sectionActive';
+import ScreenBoundary from '@/components/app/ScreenBoundary';
 import { motion, AnimatePresence } from 'framer-motion';
 import { base44 } from '@/api/base44Client';
 
@@ -129,14 +130,17 @@ function AppFrame() {
         <div key={id} className="app-section" data-section={id} data-off={id !== active ? '' : undefined}
           aria-hidden={id !== active ? true : undefined} {...(id !== active ? { inert: '' } : {})}>
           <SectionActiveContext.Provider value={id === active}>
-            <Routes location={loc}>
-              <Route path="*" element={<SectionScreen id={id} />} />
-            </Routes>
+            <ScreenBoundary>
+              <Routes location={loc}>
+                <Route path="*" element={<SectionScreen id={id} />} />
+              </Routes>
+            </ScreenBoundary>
           </SectionActiveContext.Provider>
         </div>
       ))}
       {!active && (
         <div key={location.pathname} className="app-push">
+          <ScreenBoundary resetKey={location.pathname}>
           <Routes>
             {Object.entries(Pages).filter(([path]) => !IN_SECTIONS.has(path)).map(([path, Page]) => (
               <Route key={path} path={`/${path}`} element={<Page />} />
@@ -168,6 +172,7 @@ function AppFrame() {
             <Route path="/NewsletterSignup" element={<NewsletterSignup />} />
             <Route path="*" element={<PageNotFound />} />
           </Routes>
+          </ScreenBoundary>
         </div>
       )}
     </LayoutWrapper>
@@ -394,31 +399,13 @@ const AuthenticatedApp = () => {
 
   const isRestrictedUser = accessGranted && siteSettings?.site_disabled && (!isAuthenticated || user?.role !== 'admin');
 
-  /* The site's version, numbers only: 5.##.### (version.json, bumped with every save of the site:
-     scripts/version.mjs, listed in VERSIONS.md). Admin Settings' old free-text tag ("self-hosted", "V5.00")
-     no longer stands in for it. */
-  const versionLabel = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '';
 
   return (
     <div>
       {isRestrictedUser && <RestrictedSiteOverlay settings={siteSettings} />}
 
-      {/* The site version, bottom left, on every page.
-          It lives HERE rather than in Layout for two reasons: LiveStream
-          bypasses Layout entirely, and PageWrapper applies a transform while
-          pages animate — which makes a position:fixed child cling to the
-          moving page instead of the viewport. Out here it just stays in the
-          corner. It clears the mobile tab bar, sits below it in the stack, and
-          never takes the pointer. */}
-      {versionLabel && (
-        <div
-          className="hidden md:block fixed left-4 z-40 bottom-4
-                     text-[11px] leading-none tracking-wide pointer-events-none select-none"
-          style={{ color: 'var(--text-muted)', opacity: 0.7 }}
-        >
-          {versionLabel}
-        </div>
-      )}
+      {/* The site's version (5.##.###, version.json) is at the foot of More, and nowhere else (17 Nov 2026, at
+          the user's request); it used to float in the bottom-left corner of every page. */}
       <Routes>
         {/* Live streaming renders outside the app frame: no Layout chrome, nothing around it. */}
         <Route path="/LiveStream" element={<LiveStream />} />

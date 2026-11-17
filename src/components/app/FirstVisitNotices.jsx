@@ -1,19 +1,14 @@
-/* What a visitor is shown first: announcements and app updates (once a session), then the cookie question.
-   Moved unchanged from pages/Home.jsx (17 Nov 2026, the iOS-app redesign), so they open on the new home page
-   (Location Weather, at "/"); the Layout mounts this on the home page only, as the old home page did. */
+/* What a visitor is shown first: announcements and app updates (once a session). Moved unchanged from
+   pages/Home.jsx (17 Nov 2026, the iOS-app redesign), so they open on the new home page (Location Weather, at
+   "/"); the Layout mounts this on the home page only, as the old home page did. The cookie question that
+   followed them is gone (17 Nov 2026, at the user's request); it only stored the answer, which nothing read. */
 import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import CombinedBannerStack from '@/components/CombinedBannerStack';
-import CookieConsent from '@/components/CookieConsent';
-
-const cookieConsentPending = () => {
-  try { return !localStorage.getItem('cookie_consent'); } catch { return false; }
-};
 
 export default function FirstVisitNotices() {
   const [showBanners, setShowBanners] = useState(false);
-  const [cookieConsentReady, setCookieConsentReady] = useState(false);
 
   /* No initialData: with it the queries reported "loaded" at once, empty, before anything had been fetched. */
   const { data: announcements = [], isSuccess: announcementsLoaded } = useQuery({
@@ -27,8 +22,7 @@ export default function FirstVisitNotices() {
     retry: 1, retryDelay: 2000,
   });
 
-  /* The banner stack opens once a session, when both lists have loaded, and the cookie notice waits until it
-     is dismissed. With nothing to show, the notice comes straight away. */
+  /* The banner stack opens once a session, when both lists have loaded. */
   const decided = useRef(false);
   useEffect(() => {
     if (decided.current || !announcementsLoaded || !updatesLoaded) return;
@@ -41,23 +35,17 @@ export default function FirstVisitNotices() {
     if (anything && !shown) {
       setShowBanners(true);
       try { sessionStorage.setItem('bannersShown', 'true'); } catch { /* storage blocked */ }
-    } else if (cookieConsentPending()) {
-      setCookieConsentReady(true);
     }
   }, [announcementsLoaded, updatesLoaded, announcements, appUpdates]);
 
   return (
     <>
-      <CookieConsent triggerShow={cookieConsentReady} />
       {showBanners && (
         <CombinedBannerStack
           announcements={announcements}
           updates={appUpdates}
           currentPage="Home"
-          onAllDismissed={() => {
-            setShowBanners(false);
-            if (cookieConsentPending()) setCookieConsentReady(true);
-          }} />
+          onAllDismissed={() => setShowBanners(false)} />
       )}
     </>
   );

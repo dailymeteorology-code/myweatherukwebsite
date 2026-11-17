@@ -40,6 +40,27 @@ export function nextSlot(d = new Date()) {
   return n;
 }
 
+/* ── the minute watch (17 Nov 2026: "make it so the warnings now update every minute") ──────────
+ * The keyed NSWWS API is still called on the ten-minute slot, because its daily allowance is the
+ * limit. Between slots, the Met Office's public RSS of UK warnings, which is republished whenever a
+ * warning is issued, changed, cancelled or ends, is checked every minute with a conditional request
+ * (a 304 when nothing changed, so it costs the Met Office next to nothing), and a change brings the
+ * full refresh forward (server/index.js). Returns true when the RSS changed since the last check. */
+let rssSeen = null;       // { etag, modified, body } at the last check
+export async function warningsFeedChanged() {
+  const headers = { 'User-Agent': UA, Accept: 'application/rss+xml, application/xml' };
+  if (rssSeen?.etag) headers['If-None-Match'] = rssSeen.etag;
+  else if (rssSeen?.modified) headers['If-Modified-Since'] = rssSeen.modified;
+  const res = await fetch(RSS_URL, { headers, redirect: 'follow', signal: AbortSignal.timeout(15_000) });
+  if (res.status === 304) return false;
+  if (!res.ok) throw new Error(`warnings RSS -> ${res.status}`);
+  const body = await res.text();
+  const first = rssSeen === null;
+  const changed = !first && body !== rssSeen.body;
+  rssSeen = { etag: res.headers.get('etag'), modified: res.headers.get('last-modified'), body };
+  return changed;
+}
+
 const ACCESSIBLE_URL =
   'https://www.metoffice.gov.uk/weather/warnings-and-advice/accessible-uk-warnings';
 const RSS_URL = 'https://www.metoffice.gov.uk/public/data/PWSCache/WarningsRSS/Region/UK';
@@ -424,6 +445,7 @@ export default async function getMetOfficeWarnings(db) {
   let fresh = null;
   let source = 'none';
   let issuedAt = null;
+  let changed = true;       // false only when the API said its set is the one we already have
 
   /* The official NSWWS API first — it is the authoritative feed, gives exact
    * valid-from/to times, proper region lists and the Met Office's own issue
@@ -435,6 +457,7 @@ export default async function getMetOfficeWarnings(db) {
       const result = await fetchNswwsWarnings();
       fresh = result.warnings;
       issuedAt = result.issuedAt;
+      changed = result.changed !== false;
       source = 'nswws-api';
     } catch (err) {
       console.warn('[getMetOfficeWarnings] NSWWS API failed:', err.message);
@@ -504,7 +527,7 @@ export default async function getMetOfficeWarnings(db) {
     `[getMetOfficeWarnings] ${fresh.length} in force (+${historical.length} recent) via ${source}`
     + (archived ? ` — ${archived} archived` : '')
   );
-  return { ok: true, source, count: fresh.length, archived, record: saved };
+  return { ok: true, source, count: fresh.length, archived, record: saved, changed };
 }
 
 export { parseAccessiblePage, parseRss, parsePeriod, regionsFrom, typeFrom, severityFrom };

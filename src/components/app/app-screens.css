@@ -16,10 +16,3 @@
   to { opacity: 1; translate: 0 0; }
 }
 @media (prefers-reduced-motion: reduce) { .app-push { animation: none; } }
-
-/* Radar, the Radar tab (pages/Radar.jsx): the radar fills the screen down to the tab bar */
-.app-radar { display: flex; flex-direction: column; }
-.app-radar-body { flex: 1; min-height: 0; padding: 12px max(12px, env(safe-area-inset-right, 0px)) 10px max(12px, env(safe-area-inset-left, 0px)); }
-.app-radar-body .lw-radar.is-fill { height: 100%; display: flex; flex-direction: column; border-radius: 22px; }
-.app-radar-body .lw-radar.is-fill .lw-radar-box { flex: 1; min-height: 0; }
-.app-radar-body .lw-radar.is-fill .lw-radar-map { height: 100% !important; }

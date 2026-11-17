@@ -15,7 +15,6 @@ import CountdownDisplay from '@/components/CountdownDisplay';
 import LocationRadar from '@/components/location/LocationRadar';
 import CityConditions from '@/components/home/CityConditions';
 import { ConditionChips, ThunderstormRisks } from '@/components/graphics/GraphicMeta';
-import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { useTheme } from '@/components/ThemeContext';
 import { injectThemeStyles, SectionHeader, Section, Pane, quietBtn } from '@/components/hub/glass';
 import { useWarnings } from '@/hooks/useWarnings';
@@ -74,8 +73,6 @@ export default function Home() {
     catch(() => setIsOwner(false));
   }, []);
 
-  const { isPulling, isRefreshing, pullProgress, onTouchStart, onTouchMove, onTouchEnd } =
-  usePullToRefresh(loadWarningsFromDB);
 
   // ── Remote queries ──
   const { data: settings } = useQuery({
@@ -124,11 +121,7 @@ export default function Home() {
   // ────────────────────────────────────────────────────────────────────────────
 
   return (
-    <div
-      className="lg-page min-h-screen scroll-smooth relative"
-      onTouchStart={onTouchStart}
-      onTouchMove={onTouchMove}
-      onTouchEnd={onTouchEnd}>
+    <div className="lg-page min-h-screen scroll-smooth relative">
 
       {/* ── The ground ──────────────────────────────────────────────────────────
           Three slow orbs behind everything. Glass needs something to refract:
@@ -145,38 +138,7 @@ export default function Home() {
           than only this one. It used to be a fixed circle floating over the
           bottom-right corner, on top of whatever happened to be under it. */}
 
-      {/* Pull to refresh */}
-      <AnimatePresence>
-        {(isPulling || isRefreshing) && (
-          <motion.div
-            key="ptr"
-            initial={{ y: -48, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -48, opacity: 0 }}
-            transition={{ type: 'spring', damping: 22, stiffness: 280 }}
-            className="lg-pane"
-            style={{
-              position: 'fixed', top: 'calc(12px + env(safe-area-inset-top, 0px))',
-              left: '50%', transform: 'translateX(-50%)',
-              zIndex: 9000, pointerEvents: 'none',
-              display: 'flex', alignItems: 'center', gap: 9,
-              padding: '8px 15px', borderRadius: 99,
-            }}>
-            <motion.svg
-              width="15" height="15" viewBox="0 0 16 16" style={{ flexShrink: 0 }}
-              animate={isRefreshing ? { rotate: 360 } : { rotate: pullProgress * 300 }}
-              transition={isRefreshing ? { duration: 0.9, repeat: Infinity, ease: 'linear' } : { duration: 0 }}>
-              <circle cx="8" cy="8" r="6" fill="none" stroke="var(--glass-hairline)" strokeWidth="2" />
-              <motion.circle
-                cx="8" cy="8" r="6" fill="none" stroke="var(--sky)" strokeWidth="2" strokeLinecap="round"
-                strokeDasharray="37.7"
-                strokeDashoffset={isRefreshing ? 0 : 37.7 * (1 - pullProgress)}
-                style={{ transformOrigin: '8px 8px', transform: 'rotate(-90deg)' }} />
-            </motion.svg>
-            <span style={{ fontSize: 12, fontWeight: 650, color: 'var(--ink-2)' }}>
-              {isRefreshing ? 'Refreshing…' : pullProgress >= 1 ? 'Release to refresh' : 'Pull to refresh'}
-            </span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* (Pull to refresh was here until 17 Nov 2026: the app has none, at the user's request.) */}
 
       <main style={{ position: 'relative', zIndex: 1, paddingBottom: 'clamp(40px, 8vw, 88px)' }}>
 

@@ -31,7 +31,7 @@ import { mountPublicFlows } from './publicFlows.js';
 import { invokeLLM, sendEmail } from './integrations.js';
 import { loadEdgeFunctions, runEdgeFunction } from './denoAdapter.js';
 import { createBackup, listBackups, formatBytes } from './backup.js';
-import getMetOfficeWarnings, { slotStart, nextSlot } from './functions/getMetOfficeWarnings.js';
+import getMetOfficeWarnings, { slotStart, nextSlot, warningsFeedChanged } from './functions/getMetOfficeWarnings.js';
 import getMetOfficeLocationWeather from './functions/getMetOfficeLocationWeather.js';
 import worldWarnings, { worldWarningDetail } from './worldWarnings.js';
 import radarPhase from './radarPhase.js';
@@ -648,11 +648,12 @@ app.listen(PORT, () => {
   // and retried on the next tick rather than taking the server down.
   const refresh = () =>
     getMetOfficeWarnings(db)
-      .then(() => {
+      .then((result) => {
         const rec = db.list('CachedWarnings')[0];
         if (rec) broadcast('CachedWarnings', 'update', rec);
+        return result;
       })
-      .catch((err) => console.warn('[server] warnings refresh failed:', err.message));
+      .catch((err) => { console.warn('[server] warnings refresh failed:', err.message); return null; });
 
   /* Warnings refresh on the clock, on a fixed slot — never because a visitor
    * loaded the page. Two consequences worth keeping: every visitor sees the
@@ -684,6 +685,29 @@ app.listen(PORT, () => {
     };
     scheduleNext();
     console.log(`[warnings] next refresh at ${nextSlot(new Date()).toLocaleTimeString('en-GB')}`);
+
+    /* Every minute between the slots (17 Nov 2026, "make it so the warnings now update every minute"): the
+       Met Office's public warnings RSS is asked whether anything changed (a 304 when not), and a change
+       brings the refresh forward. The keyed API can lag the RSS by a little, so after a change it is asked
+       again each minute (one cheap call: the snapshot is only fetched when it is new) until it has the
+       new set, for up to four minutes. */
+    let chase = 0;
+    let watching = false;
+    const watch = async () => {
+      if (watching) return;
+      watching = true;
+      try {
+        try { if (await warningsFeedChanged()) chase = 4; } catch { /* the slot refresh still runs */ }
+        if (chase > 0) {
+          chase -= 1;
+          const result = await refresh();
+          if (result?.changed) chase = 0;
+          console.log(`[warnings] the Met Office changed its warnings: refreshed (${result?.changed ? 'new set' : 'not in the API yet'})`);
+        }
+      } finally { watching = false; }
+    };
+    setInterval(watch, 60_000).unref?.();
+    watch();
   }
 
   /* Backups. One on boot, then on a timer — a backup you have to remember to

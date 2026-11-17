@@ -77,7 +77,10 @@ export function classifyManualWarnings(warnings, now) {
  * warning taking over from the Met Office's of the same type. Used by the Hub (its status line) and the
  * Warnings tab (everything). Moved from pages/Home.jsx unchanged, 17 Nov 2026.
  */
-export function useWarnings() {
+/* `poll` (ms): read the warnings again on that beat while the page is in view, quietly (the Warnings tab: every
+   minute, 17 Nov 2026). The server checks the Met Office every minute and pushes a change as it lands; the
+   re-read covers a phone that dropped that push while it slept. */
+export function useWarnings({ poll = 0, active = true } = {}) {
   const queryClient = useQueryClient();
   const [warnings, setWarnings] = useState([]);
   const [upcomingWarnings, setUpcomingWarnings] = useState([]);
@@ -94,8 +97,9 @@ export function useWarnings() {
     return () => clearInterval(id);
   }, []);
 
-  const loadWarningsFromDB = useCallback(async (retries = 2) => {
-    setLoadingWarnings(true);
+  const [checkedAt, setCheckedAt] = useState(null);   // when this page last read the warnings
+  const loadWarningsFromDB = useCallback(async (retries = 2, { quiet = false } = {}) => {
+    if (!quiet) setLoadingWarnings(true);
     try {
       const records = await base44.entities.CachedWarnings.list();
       const record = records?.[0];
@@ -105,18 +109,29 @@ export function useWarnings() {
         setWarnings(active); setUpcomingWarnings(upcoming); setAllWarnings(all);
         setLastUpdated(record.fetched_at ? new Date(record.fetched_at) : null);
         setWarningsSource(record.source || null);
+        setCheckedAt(new Date());
       } else {
         setWarnings([]); setUpcomingWarnings([]); setAllWarnings([]);
       }
       setNextUpdate(getNextRefreshTime(record));
       return !!record;
     } catch (error) {
-      if (retries > 0) setTimeout(() => loadWarningsFromDB(retries - 1), 1500);
-      else { console.error('Error loading warnings:', error); setWarnings([]); setUpcomingWarnings([]); }
+      if (retries > 0) setTimeout(() => loadWarningsFromDB(retries - 1, { quiet }), 1500);
+      else if (!quiet) { console.error('Error loading warnings:', error); setWarnings([]); setUpcomingWarnings([]); }
     } finally {
-      setLoadingWarnings(false);
+      if (!quiet) setLoadingWarnings(false);
     }
   }, []);
+
+  /* the quiet re-read on a beat, and as soon as the page comes back into view */
+  useEffect(() => {
+    if (!poll || !active) return undefined;
+    const again = () => { if (!document.hidden) loadWarningsFromDB(0, { quiet: true }); };
+    const id = setInterval(again, poll);
+    document.addEventListener('visibilitychange', again);
+    again();
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', again); };
+  }, [poll, active, loadWarningsFromDB]);
 
   const fetchWarnings = useCallback(async (retries = 2) => {
     setRefreshing(true); setLoadingWarnings(true);
@@ -153,6 +168,7 @@ export function useWarnings() {
           setLastUpdated(event.data?.fetched_at ? new Date(event.data.fetched_at) : new Date());
           setWarningsSource(event.data?.source || null);
           setNextUpdate(getNextRefreshTime(event.data));
+          setCheckedAt(new Date());
         } catch (err) { console.error('Warning update error:', err); }
       }
     });
@@ -195,16 +211,16 @@ export function useWarnings() {
   const statusDot = SEV_DOT[worstActive] || (mergedUpcoming.length ? '#38bdf8' : '#34d399');
   const statusText = mergedActive.length
     ? `${mergedActive.length} warning${mergedActive.length === 1 ? '' : 's'} in force`
-      + (mergedUpcoming.length ? ` Â· ${mergedUpcoming.length} upcoming` : '')
+      + (mergedUpcoming.length ? ` · ${mergedUpcoming.length} upcoming` : '')
     : mergedUpcoming.length
-      ? `No warnings in force Â· ${mergedUpcoming.length} upcoming`
+      ? `No warnings in force · ${mergedUpcoming.length} upcoming`
       : 'No weather warnings in force';
   /* a red "Wild Fire" manual warning is called out as a nationwide government alert */
   const redWildfire = mergedActive.some(
     (w) => (w.type || '').toLowerCase() === 'wild fire' && (w.severity || '').toLowerCase() === 'red');
 
   return {
-    mergedActive, mergedUpcoming, mergedAll, loadingWarnings, refreshing, lastUpdated, nextUpdate, warningsSource,
+    mergedActive, mergedUpcoming, mergedAll, loadingWarnings, refreshing, lastUpdated, nextUpdate, warningsSource, checkedAt,
     loadWarningsFromDB, fetchWarnings, deleteManualWarning, worstActive, statusDot, statusText, redWildfire, now,
   };
 }

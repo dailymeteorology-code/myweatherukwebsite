@@ -4,7 +4,6 @@ import AppTabBar from '@/components/app/AppTabBar';
 import FirstVisitNotices from '@/components/app/FirstVisitNotices';
 import SiteNav from '@/components/nav/SiteNav';
 import MobileHeader from '@/components/MobileHeader';
-import GlobalPullToRefresh from '@/components/GlobalPullToRefresh';
 import { useTheme } from '@/components/ThemeContext';
 
 
@@ -42,7 +41,7 @@ function LayoutContent({ children, currentPageName }) {
       style={{ paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)' }}>
       {!appScreen && <MobileHeader />}
       {showSiteNav && <SiteNav userRole={userRole} isAuthenticated={isAuthenticated} />}
-      <GlobalPullToRefresh>
+      {/* No pull to refresh (17 Nov 2026, at the user's request): GlobalPullToRefresh wrapped the pages here. */}
         {/* Room for BottomTabBar, which is `md:hidden fixed` — so on desktop
             there is no bar to clear and this padding was 56px of dead space
             below the footer on every page. It was an INLINE style, which beats
@@ -53,7 +52,6 @@ function LayoutContent({ children, currentPageName }) {
         <div className="pb-[var(--app-tabbar-space)] md:pb-0">
           {children}
         </div>
-      </GlobalPullToRefresh>
       <AppTabBar />
       {isHome && <FirstVisitNotices />}
     </div>

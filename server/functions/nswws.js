@@ -111,6 +111,13 @@ export function featureToWarning(feature) {
     warningId: p.warningId || null,
     warningVersion: p.warningVersion ?? null,
     issuedDate: p.issuedDate || null,
+    // 17 Nov 2026: when the Met Office last changed the warning, and its own words for what changed
+    // ("Update to trim southern and eastern extent of warning area..."), so the app can show at a
+    // glance which warnings have been updated. issuedDate is the first issue; modifiedDate the latest.
+    modifiedDate: p.modifiedDate || null,
+    updateDescription: String(p.warningUpdateDescription || '').trim() || null,
+    status: p.warningStatus || null,
+    whatShouldIDo: String(p.whatShouldIDo || '').trim() || null,
     geometry: feature?.geometry || null,
     // The maps draw `polygons` (a list of GeoJSON Polygon/MultiPolygon). The NSWWS
     // feature geometry IS the official warning area, so hand it over as that.
@@ -122,6 +129,10 @@ export function featureToWarning(feature) {
  * Fetch the current warnings. Returns { warnings, issuedAt, snapshotUrl }, or
  * throws — the caller decides whether to fall back to the page scraper.
  */
+/* The last snapshot read. Its address changes whenever the warnings change, so while the feed still
+   points at the same one there is nothing new to fetch: one call (the feed) instead of two. */
+let lastSnapshot = { url: null, warnings: null };
+
 export default async function fetchNswwsWarnings() {
   if (!hasNswwsKey()) throw new Error('MET_OFFICE_NSWWS_KEY is not set');
 
@@ -138,6 +149,10 @@ export default async function fetchNswwsWarnings() {
   // The Met Office's own issue time, not our poll time.
   const issuedAt = /<updated>([^<]+)<\/updated>/i.exec(feed)?.[1] || null;
 
+  if (snapshotUrl === lastSnapshot.url && lastSnapshot.warnings) {
+    return { warnings: lastSnapshot.warnings, issuedAt, snapshotUrl, changed: false };
+  }
+
   const body = await get(snapshotUrl, 'application/geo+json, application/json');
   let collection;
   try {
@@ -147,9 +162,12 @@ export default async function fetchNswwsWarnings() {
   }
 
   const features = Array.isArray(collection?.features) ? collection.features : [];
+  const warnings = features.map(featureToWarning);
+  lastSnapshot = { url: snapshotUrl, warnings };
   return {
-    warnings: features.map(featureToWarning),
+    warnings,
     issuedAt,
     snapshotUrl,
+    changed: true,
   };
 }
