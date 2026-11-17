@@ -1,6 +1,7 @@
 // TCM Outlooks, V3 view (formerly pages/WeatherPatterns.jsx; that route is now the Weather Patterns page)
 
 import React, { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } from 'react';
+import { useSectionActive } from '@/components/app/sectionActive';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, AlertTriangle, Clock, ShieldAlert, CloudLightning,
   ChevronDown, Wind, Zap, CloudRain, Activity,
@@ -4336,12 +4337,15 @@ function RunSelector({ region, value, onChange, isAdmin }) {
     setLoadingRuns(false);
   }, [region]);
 
-  // Load on mount + when region changes; poll every 60 s for new admin runs
+  // Load on mount + when region changes; look again every 5 min while the page is on show (17 Nov 2026: it read the
+  // whole ~15 MB run list every minute, even from a hidden tab)
+  const sectionActive = useSectionActive();
   useEffect(() => {
+    if (!sectionActive) return undefined;
     refresh();
-    const id = setInterval(refresh, 60_000);
+    const id = setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 5 * 60_000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refresh, sectionActive]);
 
   // Group by date for display
   const grouped = useMemo(() => {

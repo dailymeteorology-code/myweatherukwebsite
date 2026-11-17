@@ -391,7 +391,9 @@ export default function RadarScreen() {
   const isoFor = (fr) => {
     if (!fr) return null;
     if (fr.kind === 'radar') {
-      const at = mslNow?.get(fr.valid);
+      /* the analysis at that time, else the nearest within 45 minutes (the newest scan is in before its analysis) */
+      let at = mslNow?.get(fr.valid);
+      if (!at && mslNow) { let best = 45 * 6e4 + 1; for (const [ms, iso] of mslNow) { const d = Math.abs(ms - fr.valid); if (d < best) { best = d; at = iso; } } }
       return at ? { key: `now/${at}`, load: () => loadLive('now_mslp', at, 'bin') } : null;
     }
     if (!fcMsl || !ukvRun?.runMs) return null;
@@ -546,7 +548,8 @@ export default function RadarScreen() {
         </div>
       )}
 
-      {/* the time, small and simple: play, which kind of data it is in a word and a colour, the time, the slider */}
+      {/* the time, as little as it can be (17 Nov 2026, at the user's request): play, the time and how long ago (or
+          ahead, and which UKV run) on the left, and the slider, green for the radar and blue for the forecast */}
       <div className="rs-dock lq">
         <div className="rs-now">
           <button type="button" className="rs-play" onClick={() => setPlaying((p) => !p)} disabled={n < 2} aria-label={playing ? 'Pause' : 'Play'}>
@@ -554,15 +557,11 @@ export default function RadarScreen() {
           </button>
           {f ? (
             <>
-              <span className={`rs-badge ${isLive ? 'is-live' : 'is-fc'}`}>{isLive ? 'Radar' : 'UKV'}</span>
-              <b className="rs-time">{hhmm(f.valid)}</b>
-              <small className="rs-rel">{relative(f.valid, now)}{!isLive && runText ? ` · ${runText}` : ''}</small>
+              <b className={`rs-time ${isLive ? 'is-live' : 'is-fc'}`}>{hhmm(f.valid)}</b>
+              <small className="rs-rel">{relative(f.valid, now)}{!isLive && runText ? ` · UKV ${runText.replace(' run', '')}` : ''}</small>
             </>
           ) : (
             <span className="rs-loading">{state === 'none' ? 'No radar to show' : <><Loader2 className="animate-spin" />Loading…</>}</span>
-          )}
-          {lastPast >= 0 && idx !== lastPast && (
-            <button type="button" className="rs-tonow" onClick={() => { setPlaying(false); setIdx(lastPast); }}>Now</button>
           )}
         </div>
         <div ref={track} className="rs-track" role="slider" tabIndex={0} aria-label="Time"

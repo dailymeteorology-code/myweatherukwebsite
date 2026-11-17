@@ -85,6 +85,22 @@ jobs:
           [ "${{ github.event_name }}" = "push" ] && J=none
           [ "$J" = "train" ] && J=none
           python3 tools/tcm-nova/route_ci.py "$J"
+      # TCM V3's twice-daily run, started from here when it is due and missing: GitHub drops V3's own schedule
+      # (tcm-v3.yml) as it drops these, and this job runs far more often (17 Nov 2026)
+      - name: TCM V3, when its run is due and not published
+        if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          H=$((10#$(TZ=Europe/London date +%H))); D=$(TZ=Europe/London date +%Y-%m-%d)
+          if [ $H -ge 15 ]; then DUE="$D 15:00"; elif [ $H -ge 3 ]; then DUE="$D 03:00"; else DUE="$(TZ=Europe/London date -d yesterday +%Y-%m-%d) 15:00"; fi
+          DUE_UTC=$(TZ=Europe/London date -d "$DUE" -u +%Y-%m-%dT%H:%M:%SZ)
+          LAST=$(gh release view tcm-v3 --repo "${{ github.repository }}" --json assets -q '.assets[] | select(.name=="payload.json.gz") | .updatedAt' 2>/dev/null || true)
+          BUSY=$(gh run list --repo "${{ github.repository }}" --workflow tcm-v3.yml --limit 5 --json status -q '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo 0)
+          echo "TCM V3: due $DUE_UTC, last published $LAST, runs under way $BUSY"
+          if { [ -z "$LAST" ] || [[ "$LAST" < "$DUE_UTC" ]]; } && [ "${BUSY:-0}" = "0" ]; then
+            gh workflow run tcm-v3.yml --repo "${{ github.repository }}" && echo "started TCM V3"
+          fi
       - id: t
         run: |
           TS="${{ inputs.train_start }}"; TE="${{ inputs.train_end }}"; TN="${{ inputs.train_every }}"; T=false

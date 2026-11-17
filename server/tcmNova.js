@@ -305,9 +305,9 @@ function londonDayBounds(day) {
   return [start, end - off(end)];
 }
 
-export function mountTcmNova(app, { schedule = process.env.NOVA_SCHEDULE !== 'off', adminOnly = true } = {}) {
-  /* TCM NOVA is not public yet: every NOVA data route needs an admin session. The
-     lightning feed stays open because TCM V3 (public) draws the same overlay. */
+export function mountTcmNova(app, { schedule = process.env.NOVA_SCHEDULE !== 'off', adminOnly = process.env.NOVA_ADMIN_ONLY === 'true' } = {}) {
+  /* TCM NOVA is open to everyone (17 Nov 2026, at the user's request: "unlock the TCM NOVA page for all users").
+     NOVA_ADMIN_ONLY=true in .env locks its data routes to admins again; the lightning feed is open either way. */
   if (adminOnly) {
     app.use('/api/nova', (req, res, next) => (req.path.startsWith('/lightning') ? next() : requireAdmin(req, res, next)));
   }

@@ -35,6 +35,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import '@/components/app/app-screens.css';
 import { SectionActiveContext } from '@/components/app/sectionActive';
 import ScreenBoundary from '@/components/app/ScreenBoundary';
+import TCMScreen from '@/components/tcm/TCMScreen';
 import { motion, AnimatePresence } from 'framer-motion';
 import { base44 } from '@/api/base44Client';
 
@@ -79,18 +80,36 @@ function LandingSection() {
   return <Page />;
 }
 
+/* the TCM tab: on a phone the app's own screen (components/tcm/TCMScreen.jsx, 17 Nov 2026); computers and tablets
+   keep the full TCM V3 and NOVA pages */
+const PHONE_Q = '(max-width: 767.98px)';
+function usePhone() {
+  const [phone, setPhone] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(PHONE_Q).matches);
+  useEffect(() => {
+    const mq = window.matchMedia?.(PHONE_Q);
+    if (!mq) return undefined;
+    const on = () => setPhone(mq.matches);
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  }, []);
+  return phone;
+}
+function TCMSection() {
+  const phone = usePhone();
+  if (phone) return <TCMScreen />;
+  return (
+    <Routes>
+      <Route path="/TCMNova" element={<TCMOutlooks forceEngine="nova" />} />
+      <Route path="/TCMV5" element={<TCMOutlooks forceEngine="nova" />} />
+      <Route path="*" element={<TCMOutlooks />} />
+    </Routes>
+  );
+}
+
 function SectionScreen({ id }) {
   if (id === 'home') return <LandingSection />;
   if (id === 'model') return <ModelData />;
-  if (id === 'tcm') {
-    return (
-      <Routes>
-        <Route path="/TCMNova" element={<TCMOutlooks forceEngine="nova" />} />
-        <Route path="/TCMV5" element={<TCMOutlooks forceEngine="nova" />} />
-        <Route path="*" element={<TCMOutlooks />} />
-      </Routes>
-    );
-  }
+  if (id === 'tcm') return <TCMSection />;
   const Page = Pages[{ warnings: 'Warnings', radar: 'Radar', more: 'More' }[id]];
   return Page ? <Page /> : null;
 }

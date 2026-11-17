@@ -12,7 +12,6 @@ import {
 import { useNavigate } from 'react-router-dom';
 import TCMOutlooksV3 from './TCMOutlooksV3';
 import TCMNova from './TCMNova';
-import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
 
 /* ── palette ─────────────────────────────────────────────────────────────── */
 const C = {
@@ -70,11 +69,9 @@ function Tag({ tone = 'neutral', children, title }) {
    not labelled as though it were. */
 function EngineSwitcher({ engine, setEngine }) {
   const [open, setOpen] = useState(false);
-  const [admin, setAdmin] = useState(false);
-  useEffect(() => { isCurrentUserAdmin().then((a) => setAdmin(!!a)).catch(() => {}); }, []);
   const row = (id, name, blurb, tone, tag) => {
     const on = engine === id;
-    const locked = id === 'nova' && !admin;
+    const locked = false;                                  // NOVA is open to everyone (17 Nov 2026)
     return (
       <button key={id} type="button" disabled={locked} title={locked ? 'TCM NOVA — coming soon' : undefined}
         onClick={() => { if (!locked) { setEngine(id); setOpen(false); } }}
@@ -126,7 +123,7 @@ function EngineSwitcher({ engine, setEngine }) {
             fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase',
             color: C.faint, margin: '2px 4px 8px', fontFamily: MONO,
           }}>Engine version</div>
-          {row('nova', admin ? 'TCM NOVA' : '🔒 TCM NOVA', admin ? 'The thunderstorm model: 2 km Main Run and 1.5 km Hyper-Short. (Admin preview)' : 'Coming soon.', 'warn', admin ? 'admin' : 'soon')}
+          {row('nova', 'TCM NOVA', 'The thunderstorm model: 2 km Main Run and 1.5 km Hyper-Short.', 'info', 'new')}
           {row('v3', 'TCM V3', 'The risk-area map. Drawn outlooks over the whole country.', 'neutral', 'live')}
         </div>
       )}

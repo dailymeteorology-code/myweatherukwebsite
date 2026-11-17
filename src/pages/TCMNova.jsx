@@ -16,9 +16,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import NovaGlobe from '@/components/tcm/NovaGlobe';
-import { isCurrentUserAdmin } from '@/lib/tcmFetchPolicy';
-import { Lock as LockIcon } from 'lucide-react';
+/* (the globe, components/tcm/NovaGlobe.jsx, is gone from here: NOVA is UK only for some time, 17 Nov 2026) */
 
 /* NOVA's data API is admin-only; send the session token with every request. */
 const authHeaders = () => {
@@ -623,44 +621,11 @@ function Legend({ layerKey, layer = LAYERS[layerKey] }) {
 }
 
 /* ── page ────────────────────────────────────────────────────────────────── */
-export default function TCMNova({ engineSwitcher = null, onUseV3 = null }) {
-  /* NOVA is admin-only until launch: everyone else sees a locked "coming soon". */
-  const [admin, setAdmin] = useState(null);
-  useEffect(() => { isCurrentUserAdmin().then((a) => setAdmin(!!a)).catch(() => setAdmin(false)); }, []);
-  if (admin === null) return <div style={{ minHeight: '60vh', display: 'grid', placeItems: 'center', color: '#64748b' }}>Loading…</div>;
-  if (!admin) return <NovaComingSoon onUseV3={onUseV3} />;
-  return <NovaForAdmin engineSwitcher={engineSwitcher} />;
-}
-
-function NovaComingSoon({ onUseV3 }) {
-  return (
-    <div style={{ minHeight: 'calc(100vh - 60px)', display: 'grid', placeItems: 'center', padding: 24,
-      background: 'radial-gradient(ellipse at 50% 35%, #0b1f3a 0%, #030712 70%)', color: '#e2e8f0', textAlign: 'center' }}>
-      <div style={{ maxWidth: 460 }}>
-        <div style={{ width: 64, height: 64, borderRadius: 18, margin: '0 auto 16px', display: 'grid', placeItems: 'center',
-          background: 'rgba(148,163,184,0.12)', border: '1px solid rgba(148,163,184,0.3)' }}>
-          <LockIcon style={{ width: 28, height: 28, color: '#94a3b8' }} />
-        </div>
-        <div style={{ fontSize: '0.7rem', letterSpacing: '0.2em', color: '#7dd3fc', fontWeight: 800 }}>TCM NOVA</div>
-        <h1 style={{ margin: '8px 0', fontSize: '2rem', fontWeight: 900, color: '#fff' }}>Coming soon</h1>
-        <p style={{ color: '#94a3b8', lineHeight: 1.6 }}>
-          TCM NOVA, MyWeatherUK's next-generation thunderstorm model, is in final testing and isn't open to the public yet.
-          The TCM V3 outlook is available in the meantime.
-        </p>
-        {onUseV3 && (
-          <button type="button" onClick={onUseV3} style={{ marginTop: 10, padding: '10px 18px', borderRadius: 99, border: 'none', cursor: 'pointer',
-            fontWeight: 800, background: 'linear-gradient(135deg,#0ea5e9,#6366f1)', color: '#fff' }}>Open TCM V3</button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function NovaForAdmin({ engineSwitcher }) {
-  /* Every visit starts on the globe; the model opens once a region is picked. */
-  const [region, setRegion] = useState(null);
-  if (!region) return <NovaGlobe onSelect={setRegion} />;
-  return <NovaModel engineSwitcher={engineSwitcher} region={region} onChangeRegion={() => setRegion(null)} />;
+/* NOVA is open to everyone (17 Nov 2026, at the user's request), straight onto the UK: the globe that came first
+   is gone, as NOVA covers only the UK and Ireland for some time. */
+const UK_REGION = { name: 'UK & Ireland' };
+export default function TCMNova({ engineSwitcher = null }) {
+  return <NovaModel engineSwitcher={engineSwitcher} region={UK_REGION} onChangeRegion={null} />;
 }
 
 function NovaModel({ engineSwitcher, region, onChangeRegion }) {
@@ -830,7 +795,7 @@ function NovaModel({ engineSwitcher, region, onChangeRegion }) {
           </select>
           <Link to={`/TCMArchive?product=${product}`} style={{ ...pill(T.soft, T.mid), textDecoration: 'none' }} title="Runs over a day old are kept in the TCM Archive">Older runs</Link>
           <button type="button" onClick={reload} style={{ ...pill(T.soft, T.mid), cursor: 'pointer' }} title="Check for new runs"><RefreshCw style={{ width: 13, height: 13 }} /></button>
-          <button type="button" onClick={onChangeRegion} style={{ ...pill(T.soft, T.text), cursor: 'pointer' }} title="Pick another region on the globe">🌍 {region.name}</button>
+          <span style={{ ...pill(T.soft, T.text) }}>{region.name}</span>
           {engineSwitcher}
         </div>
       </div>

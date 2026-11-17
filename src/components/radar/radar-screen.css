@@ -126,6 +126,7 @@
 .rs-play svg { width: 13px; height: 13px; fill: currentColor; }
 .rs-play:disabled { opacity: 0.4; }
 .rs-time { font-size: 1.12rem; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.rs-time.is-fc { color: var(--rs-fc); }
 .rs-rel { flex: 1; min-width: 0; font-size: 0.74rem; opacity: 0.72; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rs-badge { flex: none; padding: 2px 8px; border-radius: 99px; font-size: 0.64rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
 .rs-badge.is-live { color: #04210d; background: var(--rs-live); }

@@ -22,7 +22,7 @@ function LayoutContent({ children, currentPageName }) {
      stays off them, as an app has none; its room goes to the screen. */
   const path = location.pathname;
   const isHome = path === '/' || path === '/Home';
-  const appScreen = isHome || ['/LocationWeather', '/Hub', '/Warnings', '/Radar', '/ModelData', '/More'].includes(path);
+  const appScreen = isHome || ['/LocationWeather', '/Hub', '/Warnings', '/Radar', '/ModelData', '/TCMOutlooks', '/TCMNova', '/TCMV5', '/More'].includes(path);
 
   useEffect(() => {
     (async () => {
