@@ -25,6 +25,7 @@ import { fileURLToPath } from 'url';
 import { resolveEnsPython } from './pastFuture/index.js';
 import { FROST_RUNS } from './tcmFrost.js';
 import { mountModelExtras } from './modelExtras.js';
+import { createWorkers } from './mdWorkers.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TOOL = path.resolve(HERE, '..', 'tools', 'modeldata');
@@ -64,36 +65,68 @@ export const gridOf = (model) => (model === 'ukv' || model === 'frost' || model 
 const GRIDS = new Set(['uk', 'eu']);
 const RUN_RE = /^\d{8}T\d{4}Z$/;
 const VAR_RE = /^[a-z0-9_]{2,20}$/;
-const MAX_USER_JOBS = 3;               // what someone is waiting for
-const MAX_PREFETCH_JOBS = 1;           // background warming, never in the way
+const MAX_USER_JOBS = 4;               // what someone is waiting for
+/* background warming: two at a time since the workers (17 Nov 2026). With one, and none at all while anyone
+   waited, it never caught up: at 18:00 that day ECMWF's 00Z run had 0 of its 81 layers made, GFS's 12Z 3 of 102 */
+const MAX_PREFETCH_JOBS = 2;
 /* downloads in flight per job: someone waiting gets the line; the warming and the Location page's
    catching up leave room for them (15 Nov 2026: three Location jobs and the warming, 16 downloads
    each, shared the 6 MB/s wireless link with the layer someone had asked for, and its first frame
    took 40-55 s) */
 const THREADS = (p) => (p === true ? '4' : p === 'point' ? '6' : '16');
-/* while anyone waits for a layer, the background jobs pause before each download (mdata/job.py
-   wait_turn), so the one being waited for has the whole connection; this file says so */
+/* while someone waits for a layer's first frames, the background jobs pause before each download (mdata/job.py
+   wait_turn), so the one being waited for has the whole connection; this file says so. Only for a layer's first
+   BUSY_MS since 17 Nov 2026: someone's layer kept the warming paused for as long as it took, and on a busy day
+   that was most of the day. */
 const BUSY_FILE = path.join(DATA, '.user-busy');
+const BUSY_MS = 20000;
 let busyNow = null;
+let busyTimer = null;
 function markBusy() {
-  const busy = queue.some((q) => !q.prefetch) || [...running.values()].some((r) => !r.prefetch);
+  const now = Date.now();
+  const fresh = [...running.values()].filter((r) => !r.prefetch && now - r.started < BUSY_MS);
+  const busy = queue.some((q) => !q.prefetch) || fresh.length > 0;
+  clearTimeout(busyTimer);
+  if (fresh.length) busyTimer = setTimeout(markBusy, BUSY_MS - (now - Math.max(...fresh.map((r) => r.started))) + 100);
   if (busy === busyNow) return;
   busyNow = busy;
   (busy ? fs.promises.writeFile(BUSY_FILE, String(Date.now())) : fs.promises.rm(BUSY_FILE, { force: true })).catch(() => {});
 }
-const MAX_POINT_JOBS = 3;              // the Location page's UKV frames: their own lane, not behind the warming,
-                                        // three at a time so a new run is ready in minutes, not an hour
+const MAX_POINT_JOBS = 2;              // the Location page's UKV frames: their own lane, not behind the warming,
+                                        // so a new run is ready in minutes, not an hour
+
+/* The Python that makes the frames, kept running (server/mdWorkers.js, tools/modeldata/mdata/worker.py; 17 Nov
+   2026, the user: "the data loading needs to take sub 10 seconds max"). A job used to be a Python of its own,
+   and on this PC each spent ~50 s starting before its first frame. One worker a grid is kept ready; up to three
+   while there is work. The warming and the Location page's catching up use at most BG_WORKERS a grid, so
+   someone opening a layer finds a worker free, or has one handed over within a step or two. */
+const workers = createWorkers({
+  python: resolveEnsPython, cwd: TOOL,
+  /* MWUK's wide-grid members are asked for through this server (mdata/consensus.py _subjob), not made by a
+     Python of their own */
+  env: { MDATA_SERVER: `http://127.0.0.1:${Number(process.env.API_PORT || 8787)}` },
+  keep: { uk: 1, eu: 1 }, max: { uk: 3, eu: 3 },
+  onChange: () => pump(),
+});
+const BG_WORKERS = 2;
+/* The layers someone is looking at: the page asks how a layer is coming on every second or so until it has it
+   all (ModelData.jsx), so a layer nobody has asked about for WATCH_MS is no longer anyone's to wait for. Its job
+   gives way like the warming's. */
+const watched = new Map();             // key -> when its status was last asked for
+const WATCH_MS = 15000;
+const isWatched = (key) => Date.now() - (watched.get(key) || 0) < WATCH_MS;
 const LIMIT = (p) => (p === 'point' ? MAX_POINT_JOBS : p ? MAX_PREFETCH_JOBS : MAX_USER_JOBS);
 
-const running = new Map();            // key -> { child, prefetch }
-const queue = [];                     // [{key, args, prefetch, rank, seq}]
+const running = new Map();            // key -> { worker, prefetch, killed, started }
+const queue = [];                     // [{key, args, prefetch, rank, seq, at}]
 let seq = 0;
 /* the order jobs start in, within a lane: someone waiting first, then the Location page's, then the
-   warming, newest run first, the much-used layers before the rest, and Met Office Global (whole-globe
+   warming, newest run first, the much-used layers before the popular ones before the rest (MWUK's own
+   models, made from the others' layers, with the popular ones), and Met Office Global (whole-globe
    files, ~7 MB a field a step) after the other models */
 function rankOf(model, run, v, prefetch) {
   const lane = prefetch === true ? 2 : prefetch === 'point' ? 1 : 0;
-  const tier = PREFETCH.includes(v) ? 0 : 1;
+  const tier = OWN_WARM[model] ? 1 : PREFETCH.includes(v) ? 0 : POPULAR.includes(v) ? 1 : 2;
   const heavy = model === 'mo_global' ? 1 : 0;
   return [lane, tier, heavy, -tagMs(run)];
 }
@@ -163,26 +196,87 @@ async function hotLoad(dir) {
   }
 }
 
+/* a job on a worker (server/mdWorkers.js): its frames are forgotten from memory (they may be made anew), and
+   when it ends, the much-used layers are read into memory; one stopped for someone else's layer goes back in
+   the queue as it was (frames kept), unless it is there already */
+function startJob(job, w) {
+  const [jm, jr, jv] = job.key.split('/');
+  hotForget(frameDir(jm, jr, jv));
+  const entry = { worker: w, prefetch: job.prefetch, killed: false, started: Date.now() };
+  running.set(job.key, entry);
+  workers.run(w, {
+    module: ENS_MODELS.has(jm) ? 'mdata.ens' : 'mdata.job', argv: job.args, lane: job.prefetch ? 'background' : 'user',
+    env: { MDATA_THREADS: THREADS(job.prefetch) },
+  }, (code, err, info) => {
+    if (running.get(job.key) === entry) running.delete(job.key);          // not the job started again in its place
+    if (entry.killed || info.cancelled) {
+      if (!queue.some((q) => q.key === job.key)) {
+        queue.push({ ...job, prefetch: entry.prefetch, rank: rankOf(jm, jr, jv, entry.prefetch), seq: seq++, at: Date.now() });
+      }
+    } else if (code) console.warn(`[modeldata] job ${job.key} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
+    else if (PREFETCH.includes(jv)) hotLoad(frameDir(jm, jr, jv)).catch(() => {});   // much-used: into memory now
+    pump();
+  });
+}
+
+/* someone waits for a worker on this grid and none is free: the least wanted job there stops between steps and
+   goes back in the queue (the warming's first, then the Location page's catching up, then a layer nobody is
+   looking at any more), or failing that another worker starts (~50 s, so a stop goes first) */
+function makeRoom(grid) {
+  const keyOf = new Map([...running.entries()].map(([k, e]) => [e.worker, k]));
+  const rank = (w) => {
+    const k = keyOf.get(w);
+    const e = k && running.get(k);
+    if (!e || e.killed) return 9;
+    return e.prefetch === true ? 1 : e.prefetch === 'point' ? 2 : !isWatched(k) ? 3 : 9;
+  };
+  const busy = workers.busy(grid).filter((w) => !w.task.cancelling);
+  if (busy.length < workers.busy(grid).length) return;                     // one is on its way out already
+  const victim = busy.map((w) => [rank(w), w]).filter(([r]) => r < 9).sort((a, b) => a[0] - b[0])[0]?.[1];
+  if (victim) {
+    const e = running.get(keyOf.get(victim));
+    if (e.prefetch === false) e.prefetch = true;                           // nobody's layer now: back as the warming's
+    e.killed = true;
+    workers.cancel(victim);
+    return;
+  }
+  workers.grow(grid);
+}
+
 function pump() {
   const count = (p) => [...running.values()].filter((r) => r.prefetch === p).length;
+  /* someone's layer nobody is looking at any more (they moved on before it was made): it waits like the warming */
+  const now = Date.now();
+  for (const q of queue) {
+    if (!q.prefetch && !isWatched(q.key) && now - (q.at || 0) > WATCH_MS) {
+      q.prefetch = true;
+      q.rank = rankOf(...q.key.split('/'), true);
+    }
+  }
+  for (const [k, e] of running) if (e.prefetch === false && !isWatched(k) && now - e.started > WATCH_MS) e.prefetch = true;
   queue.sort(before);
-  /* no new background job starts while someone is waiting for a layer */
-  const waiting = queue.some((q) => !q.prefetch && !running.has(q.key)) || [...running.values()].some((r) => !r.prefetch);
+  /* no new background job starts on a grid where someone is waiting for a worker */
+  const waiting = new Set(queue.filter((q) => !q.prefetch && !running.has(q.key)).map((q) => gridOf(q.key.split('/')[0])));
   for (let i = 0; i < queue.length;) {
     const job = queue[i];
-    if (running.has(job.key)) { queue.splice(i, 1); continue; }
-    if (count(job.prefetch) >= LIMIT(job.prefetch) || (job.prefetch && waiting)) { i++; continue; }
+    const r = running.get(job.key);
+    if (r) {
+      if (r.killed) { i++; continue; }                                     // stopping, to be made again as this one
+      queue.splice(i, 1);
+      continue;
+    }
+    const grid = gridOf(job.key.split('/')[0]);
+    if (count(job.prefetch) >= LIMIT(job.prefetch) || (job.prefetch && waiting.has(grid))) { i++; continue; }
+    let w = workers.idle(grid);
+    if (w && job.prefetch && workers.busy(grid).filter((x) => x.task.lane === 'background').length >= BG_WORKERS) w = null;
+    if (!w) {
+      if (!job.prefetch) makeRoom(grid);
+      else workers.grow(grid, BG_WORKERS);
+      i++;
+      continue;
+    }
     queue.splice(i, 1);
-    const entry = { child: null, prefetch: job.prefetch, killed: false };
-    const [jm, jr, jv] = job.key.split('/');
-    hotForget(frameDir(jm, jr, jv));                                       // its frames may be made anew
-    entry.child = python([ENS_MODELS.has(job.args[0]) ? 'mdata.ens' : 'mdata.job', ...job.args], (code, err) => {
-      if (running.get(job.key) === entry) running.delete(job.key);          // not the job started again in its place
-      if (code && !entry.killed) console.warn(`[modeldata] job ${job.key} failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
-      if (!code && PREFETCH.includes(jv)) hotLoad(frameDir(jm, jr, jv)).catch(() => {});   // much-used: into memory now
-      pump();
-    }, { MDATA_GRID: gridOf(job.args[0]), MDATA_THREADS: THREADS(job.prefetch), MDATA_LANE: job.prefetch ? 'background' : 'user' }, !job.prefetch);
-    running.set(job.key, entry);
+    startJob(job, w);
   }
   markBusy();
 }
@@ -193,13 +287,15 @@ function ensureJob(model, run, v, prefetch = false, first = null, known = undefi
   const key = `${model}/${run}/${v}`;
   const r = running.get(key);
   if (r) {
-    /* someone now waits for what the background is making: it is started again as theirs (the
-       frames it has made are kept; its downloads would otherwise give way to its own waiting) */
+    /* someone now waits for what the background is making: it stops between steps and starts again as
+       theirs, from the step on screen (the frames it has made are kept; in the background it went step by
+       step from the first, below everything else) */
     if (!prefetch && r.prefetch && !r.killed) {
       r.killed = true;
-      try { r.child.kill(); } catch { /* gone already */ }
-      running.delete(key);
-      queue.push({ key, args: [model, runIso(run), v, ...(first != null ? [String(first)] : [])], prefetch: false, rank: rankOf(model, run, v, false), seq: seq++ });
+      workers.cancel(r.worker);
+      if (!queue.some((q) => q.key === key)) {
+        queue.push({ key, args: [model, runIso(run), v, ...(first != null ? [String(first)] : [])], prefetch: false, rank: rankOf(model, run, v, false), seq: seq++, at: Date.now() });
+      }
       pump();
     }
     return;
@@ -209,6 +305,7 @@ function ensureJob(model, run, v, prefetch = false, first = null, known = undefi
     if (!prefetch && queued.prefetch) {                 // someone is now waiting for it
       queued.prefetch = false;
       queued.rank = rankOf(model, run, v, false);
+      queued.at = Date.now();
       if (first != null) queued.args = [model, runIso(run), v, String(first)];
       pump();
     } else if (prefetch === 'point' && queued.prefetch === true) {
@@ -220,7 +317,7 @@ function ensureJob(model, run, v, prefetch = false, first = null, known = undefi
   }
   const st = known !== undefined ? known : readJson(path.join(frameDir(model, run, v), 'status.json'));
   if (st?.state === 'complete' && !grown(model, run, st)) return;
-  queue.push({ key, args: [model, runIso(run), v, ...(first != null ? [String(first)] : [])], prefetch, rank: rankOf(model, run, v, prefetch), seq: seq++ });
+  queue.push({ key, args: [model, runIso(run), v, ...(first != null ? [String(first)] : [])], prefetch, rank: rankOf(model, run, v, prefetch), seq: seq++, at: Date.now() });
   pump();
 }
 
@@ -276,6 +373,12 @@ export function defaultRun(m) {
    (catalog.complete), so a layer is there before anyone asks. A new default run takes over the
    queue; one that is no longer the default is dropped from it. */
 const PREFETCH = ['precip_rate', 'precip_total', 't2', 'gust10', 'mslp', 'refc', 'cape_mu'];
+/* next, for every model (the ones warmed with PREFETCH only too): the layers most opened after those (the jobs of
+   16-17 Nov 2026, the Location page's own aside) */
+const POPULAR = ['ptype', 'wind10', 't850', 'tcc', 'snow_acc', 'wx', 'td2'];
+/* MWUK's own models are made from the other models' layers, so once those are warmed theirs cost no downloads:
+   these few of each, after the members' much-used ones (17 Nov 2026; before, none were ever warmed) */
+const OWN_WARM = { consensus: ['precip_rate', 't2', 'mslp', 'gust10'], mix: ['precip_rate', 't2', 'mslp', 'gust10'] };
 
 /* Two lanes, each one job at a time: 'fast' (radar, lightning, the current-conditions analysis)
    and 'sat' (satellite imagery). Satellite catch-up after the PC has slept is long, and in one job
@@ -418,13 +521,15 @@ function refreshCatalog() {
       noteArrivals(cat);
       const warm = [];
       for (const m of cat?.models || []) {
-        if (MIRRORED.has(m.id) || NO_WARM.has(m.id)) continue;
+        if (MIRRORED.has(m.id) || (NO_WARM.has(m.id) && !OWN_WARM[m.id])) continue;
         const r = m.runs?.length ? defaultRun(m) : null;
         if (!r) continue;
         const tag = r.run.replace(/[-:]/g, '').replace(/\+0000$/, 'Z').slice(0, 13) + 'Z';
-        const first = (WARM_ONLY[m.id] || PREFETCH).filter((x) => m.variables?.includes(x));
-        const rest = r.complete && !WARM_FIRST_ONLY.has(m.id) && !WARM_ONLY[m.id] ? (m.variables || []).filter((x) => !first.includes(x)) : [];
-        for (const v of [...first, ...rest]) warm.push([m.id, tag, v]);
+        const only = OWN_WARM[m.id] || WARM_ONLY[m.id];
+        const first = (only || PREFETCH).filter((x) => m.variables?.includes(x));
+        const popular = only ? [] : POPULAR.filter((x) => m.variables?.includes(x) && !first.includes(x));
+        const rest = r.complete && !WARM_FIRST_ONLY.has(m.id) && !only ? (m.variables || []).filter((x) => !first.includes(x) && !popular.includes(x)) : [];
+        for (const v of [...first, ...popular, ...rest]) warm.push([m.id, tag, v]);
       }
       for (const m of (cat?.models || []).filter((x) => STATIC_RUNS.has(x.id))) {
         for (const r of m.runs || []) for (const v of REPLAY_WARM.filter((x) => m.variables?.includes(x))) warm.push([m.id, runTag(r.run), v]);
@@ -540,26 +645,37 @@ export function mountModelData(app) {
   if (!fs.existsSync(path.join(DATA, 'static', 'eu', 'sat_day.jpg'))) {
     python(['mdata.static'], (c, e) => c && console.warn(`[modeldata] wide static build failed: ${e.slice(-300)}`), { MDATA_GRID: 'eu' });
   }
-  refreshCatalog();
-  setInterval(refreshCatalog, 3 * 60 * 1000).unref();      // new runs and new steps within ~3 min of reaching AWS
-  refreshLive('fast');
-  setInterval(() => refreshLive('fast'), 60 * 1000).unref();       // radar, lightning, right now: within a minute of reaching AWS
-  refreshLive('sat');
-  setInterval(() => refreshLive('sat'), 3 * 60 * 1000).unref();    // satellite imagery
+  workers.begin();                                 // one Python a grid kept ready for the layers (server/mdWorkers.js)
+  /* what the workers are doing: for checking the loading (17 Nov 2026) */
+  app.get('/api/modeldata/workers', (req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.json({ workers: workers.stats(), running: [...running.entries()].map(([k, e]) => ({ key: k, lane: e.prefetch, for: Math.round((Date.now() - e.started) / 1000), stopping: e.killed })),
+      queued: queue.length, waiting: queue.filter((q) => !q.prefetch).map((q) => q.key) });
+  });
+  /* MODELDATA_TEST=1: a copy of this module run beside the site on a copy of its data, to test the layers' jobs
+     (17 Nov 2026): none of the site's own upkeep (catalogue, warming, live layers, long range) */
+  if (process.env.MODELDATA_TEST !== '1') {
+    refreshCatalog();
+    setInterval(refreshCatalog, 3 * 60 * 1000).unref();      // new runs and new steps within ~3 min of reaching AWS
+    refreshLive('fast');
+    setInterval(() => refreshLive('fast'), 60 * 1000).unref();       // radar, lightning, right now: within a minute of reaching AWS
+    refreshLive('sat');
+    setInterval(() => refreshLive('sat'), 3 * 60 * 1000).unref();    // satellite imagery
 
-  /* Long range (15 Nov 2026): the stratospheric polar vortex and the MJO (mdata/longrange.py), made
-     again every 6 hours; what does not change (past days, a GEFS run already read) is kept, not fetched */
-  let longBusy = false;
-  const refreshLong = () => {
-    if (longBusy) return;
-    longBusy = true;
-    python(['mdata.longrange'], (code, err) => {
-      longBusy = false;
-      if (code) console.warn(`[modeldata] long range failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
-    }, { MDATA_GRID: 'eu', MDATA_LANE: 'background' });
-  };
-  setTimeout(refreshLong, 90 * 1000).unref();
-  setInterval(refreshLong, 6 * 3600 * 1000).unref();
+    /* Long range (15 Nov 2026): the stratospheric polar vortex and the MJO (mdata/longrange.py), made
+       again every 6 hours; what does not change (past days, a GEFS run already read) is kept, not fetched */
+    let longBusy = false;
+    const refreshLong = () => {
+      if (longBusy) return;
+      longBusy = true;
+      python(['mdata.longrange'], (code, err) => {
+        longBusy = false;
+        if (code) console.warn(`[modeldata] long range failed: ${err.split('\n').filter(Boolean).slice(-1)[0] || code}`);
+      }, { MDATA_GRID: 'eu', MDATA_LANE: 'background' });
+    };
+    setTimeout(refreshLong, 90 * 1000).unref();
+    setInterval(refreshLong, 6 * 3600 * 1000).unref();
+  }
   /* each model's next run and when it usually lands (the countdown beside the run) */
   /* a shared view: its picture and address in, its link out */
   app.post('/api/modeldata/share', async (req, res) => {
@@ -656,7 +772,13 @@ export function mountModelData(app) {
     const st = await readJsonAsync(path.join(frameDir(model, run, v), 'status.json'));
     const key = `${model}/${run}/${v}`;
     const first = /^\d{1,3}$/.test(String(req.query.first || '')) ? Number(req.query.first) : null;
-    if (!st || (!running.has(key) && (st.state !== 'complete' || grown(model, run, st)))) ensureJob(model, run, v, false, first, st);
+    /* bg=1: MWUK's member layers asked for by its own background job (mdata/consensus.py _subjob), made as the
+       warming's; otherwise someone is looking at this layer now */
+    const bg = req.query.bg === '1';
+    if (!bg) watched.set(key, Date.now());
+    const r = running.get(key);
+    /* not being made and not finished; or being made in the background while someone now waits for it */
+    if (!st || (r ? !bg && r.prefetch && !r.killed : st.state !== 'complete' || grown(model, run, st))) ensureJob(model, run, v, bg, first, st);
     else if (first != null && st.state !== 'complete' && ENS_MODELS.has(model)) {
       /* a running ensemble job builds around where the viewer is now */
       fs.promises.writeFile(path.join(frameDir(model, run, v), 'focus.json'), JSON.stringify({ step: first })).catch(() => {});

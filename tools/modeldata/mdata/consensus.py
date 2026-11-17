@@ -135,7 +135,30 @@ def catalog_entry(models, save=True):
 
 
 def _subjob(mid, run_s, var, first):
-    """A wide-grid member's layer, made by a process of its own on that grid."""
+    """A wide-grid member's layer. Asked of the site's server when this runs in one of its workers (MDATA_SERVER:
+    server/mdWorkers.js, 17 Nov 2026), which makes it on a worker of that grid, and waited for; otherwise made
+    by a process of its own on that grid, as before (each spent ~50 s starting up on this PC)."""
+    srv = os.environ.get('MDATA_SERVER')
+    if srv:
+        import urllib.request
+        from .job import CANCEL
+        tag = f'{run_s[0:4]}{run_s[5:7]}{run_s[8:10]}T{run_s[11:13]}{run_s[14:16]}Z'
+        bg = '&bg=1' if os.environ.get('MDATA_LANE') == 'background' else ''   # the warming's: made as the warming's
+        url = f'{srv}/api/modeldata/frames/{mid}/{tag}/{var}/status?first={max(0, int(first or 0))}{bg}'
+        t0 = moved = time.time()
+        done = -1
+        while time.time() - t0 < 1800 and time.time() - moved < 300 and not CANCEL.is_set():   # given up after 5 min with no new frame
+            try:
+                with urllib.request.urlopen(url, timeout=20) as r:
+                    st = json.loads(r.read())
+                if st.get('state') == 'complete' and not st.get('queued'):
+                    return
+                if len(st.get('done') or []) > done:
+                    done, moved = len(st.get('done') or []), time.time()
+            except Exception:
+                pass
+            time.sleep(2)
+        return
     env = dict(os.environ, MDATA_GRID=grid_of(mid), MDATA_THREADS='6')
     args = [sys.executable, '-m', 'mdata.job', mid, run_s, var] + ([str(int(first))] if first is not None else [])
     subprocess.run(args, cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1800, check=False)

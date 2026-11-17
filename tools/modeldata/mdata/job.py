@@ -23,8 +23,39 @@ from .common import FRAMES, write_frame, write_json, DATA
 from .models import ACCUM, ALIASES, BUCKET_CHAIN, DIFFERENCED, MODELS, RATE_DIFF, SNOW_CHAIN, STEP_VARS, VARIABLES, _utc
 
 
-LANE = os.environ.get('MDATA_LANE', 'user')
+LANE = os.environ.get('MDATA_LANE', 'user')          # mdata/worker.py sets it for each job it is given
 BUSY = DATA / '.user-busy'
+# A job run by a worker that stays running (mdata/worker.py, 17 Nov 2026) can be asked to stop between steps,
+# when someone needs the worker for the layer they are looking at; the frames made so far are kept, and the
+# job carries on from them when it is asked for again.
+CANCEL = __import__('threading').Event()
+
+
+class Cancelled(Exception):
+    """The worker was asked for someone else's layer: this job stops before its next step."""
+
+
+class _Pool(cf.ThreadPoolExecutor):
+    """A job's downloads, many in flight. Asked to stop, it does not wait for the ones under way: their results
+    are never used (a step is saved only by the job itself), and they finish on their own a moment later."""
+
+    def __exit__(self, *exc):
+        self.shutdown(wait=not CANCEL.is_set(), cancel_futures=True)
+        return False
+
+
+def _in_order(ex, fn, items):
+    """ex.map(fn, items), looking every half second whether the job has been asked to stop: a step's download
+    can take several seconds, and someone may be waiting for this worker (17 Nov 2026: a stop took 15 s)."""
+    futures = [ex.submit(fn, x) for x in items]
+    for f in futures:
+        while True:
+            try:
+                yield f.result(timeout=0.5)
+                break
+            except cf.TimeoutError:
+                if CANCEL.is_set():
+                    raise Cancelled('asked to stop') from None
 
 
 def wait_turn():
@@ -33,7 +64,7 @@ def wait_turn():
     if LANE == 'user':
         return
     t0 = time.time()
-    while time.time() - t0 < 120 and BUSY.exists():
+    while time.time() - t0 < 120 and BUSY.exists() and not CANCEL.is_set():
         time.sleep(0.5)
 
 
@@ -323,9 +354,13 @@ def main(model, run_s, var, first=None, threads=None):
         M.prepare(run, var, first)
 
     def fetch(h):
+        if CANCEL.is_set():                        # asked to stop: the steps not yet begun are left for next time
+            return h, CANCEL
         if not need_all and (d / f'{h}.bin').exists():
             return h, 'have'
         wait_turn()
+        if CANCEL.is_set():                        # asked to stop while it waited its turn
+            return h, CANCEL
         try:
             return h, M.field(run, h, var, prev[h])
         except Exception as e:
@@ -364,8 +399,10 @@ def main(model, run_s, var, first=None, threads=None):
     # the step on screen first, on its own, with the whole connection to itself: started together
     # with the rest, its download shared the link with fifteen others and the page waited 40 s
     head = [fetch(order[0])] if first is not None and not need_all and order else []
-    with cf.ThreadPoolExecutor(threads) as ex:     # downloads are latency-bound: many in flight
-        for h, a in __import__('itertools').chain(head, ex.map(fetch, order[len(head):])):
+    with _Pool(threads) as ex:                     # downloads are latency-bound: many in flight
+        for h, a in __import__('itertools').chain(head, _in_order(ex, fetch, order[len(head):])):
+            if a is CANCEL or CANCEL.is_set():     # status.json stays 'running': asked for again, it resumes
+                raise Cancelled(f'{model} {run:%d %HZ} {var}')
             vt = run + timedelta(hours=h)
             meta = {'model': model, 'run': run.isoformat(), 'var': var, 'step': h, 'valid': vt.isoformat()}
             if isinstance(a, str):
