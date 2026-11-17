@@ -1,13 +1,16 @@
-# TCM V3 on GitHub's servers from AWS open data (never Open-Meteo), twice a day at
-# 03:00 and 15:00 UK time, so it runs with the PC off. Publishes to the `tcm-v3` release:
+# TCM V3 on GitHub's servers from AWS open data (never Open-Meteo), twice a day for
+# 03:00 and 15:00 UK time (checked every 20 minutes, see below), so it runs with the PC off. Publishes to the `tcm-v3` release:
 #   payload.json.gz   the full V3 run (served by the site at /api/tcm-v3/latest)
 #   db-rows.json.gz   the RiskGridCache rows V3's own saveTCMRunToDB writes (synced into the site DB)
 name: TCM V3
 
 on:
   schedule:
-    - cron: '5 2,14 * * *'      # 03:05 / 15:05 UK during BST
-    - cron: '5 3,15 * * *'      # 03:05 / 15:05 UK during GMT
+    # Every 20 minutes, and the gate below starts a run only when the newest due one (03:00 or 15:00 UK
+    # time) has not been published yet. GitHub delays and drops scheduled triggers: on 17 Nov 2026 the
+    # 03:05 run started at 11:41 UTC and the 15:05 one had not started by 17:15, so the site showed
+    # nothing new for most of the day. As with TCM NOVA (nova.yml), a missed trigger is caught by the next.
+    - cron: '*/20 * * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -28,14 +31,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - name: Only at 03:00 / 15:00 UK time
+      - name: Only when a run is due (03:00 / 15:00 UK time) and not yet published
         id: gate
         run: |
-          OFF=$(TZ=Europe/London date +%z); S="${{ github.event.schedule }}"; GO=0
-          [ "${{ github.event_name }}" = "workflow_dispatch" ] && GO=1
-          [ "$S" = "5 2,14 * * *" ] && [ "$OFF" = "+0100" ] && GO=1
-          [ "$S" = "5 3,15 * * *" ] && [ "$OFF" = "+0000" ] && GO=1
-          echo "schedule='$S' uk-offset=$OFF go=$GO"; echo "go=$GO" >> "$GITHUB_OUTPUT"
+          GO=0
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then GO=1; else
+            H=$((10#$(TZ=Europe/London date +%H))); D=$(TZ=Europe/London date +%Y-%m-%d)
+            if [ $H -ge 15 ]; then DUE="$D 15:00"; elif [ $H -ge 3 ]; then DUE="$D 03:00"; else DUE="$(TZ=Europe/London date -d yesterday +%Y-%m-%d) 15:00"; fi
+            DUE_UTC=$(TZ=Europe/London date -d "$DUE" -u +%Y-%m-%dT%H:%M:%SZ)
+            LAST=$(gh release view tcm-v3 --repo "${{ github.repository }}" --json assets -q '.assets[] | select(.name=="payload.json.gz") | .updatedAt' 2>/dev/null || true)
+            if [ -z "$LAST" ] || [[ "$LAST" < "$DUE_UTC" ]]; then GO=1; fi
+            echo "due=$DUE_UTC last-published=$LAST"
+          fi
+          echo "go=$GO"; echo "go=$GO" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == '1'
       - uses: actions/setup-python@v5
