@@ -32,7 +32,7 @@ import traceback
 
 MARK = '@@mdata '
 MAX_JOBS = 60
-MAX_MB = 1800
+MAX_MB = 1100                                         # 17 Nov 2026: at 1.8 GB four of them pushed the PC (16 GB) into paging
 _OUT = sys.stdout                                     # the server's channel: everything else goes to stderr
 _SAY = threading.Lock()
 

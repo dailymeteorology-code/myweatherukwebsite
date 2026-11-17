@@ -78,6 +78,7 @@ function load() {
 }
 
 let writeTimer = null;
+let logTimer = null;                   // persistLogs(): the page views' own, slower save
 
 /** Block the thread briefly — only used between rename retries below. */
 function sleepSync(ms) {
@@ -89,9 +90,13 @@ const RENAME_ATTEMPTS = 5;
 const LOCKED = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 function persist() {
+  if (logTimer) { clearTimeout(logTimer); logTimer = null; }   // this save carries the page views too
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   const tmp = `${DB_PATH}.tmp`;
-  const json = JSON.stringify(cache, null, 2);
+  // Compact, not pretty-printed (17 Nov 2026): indented, the file was 49 MB for 15 MB of data, and every save
+  // (several a minute: each page view, each warnings refresh) held the whole site up while it was written:
+  // Model Data's layers, everyone's pages. OneDrive then uploaded all 49 MB again.
+  const json = JSON.stringify(cache);
   fs.writeFileSync(tmp, json);
 
   // Write-then-rename, so a crash mid-write can't truncate the live file.
@@ -135,6 +140,22 @@ function persistSoon() {
     persist();
   }, 200);
   writeTimer.unref?.();
+}
+
+/**
+ * Page views (17 Nov 2026): saved at most every LOG_SAVE_MS, or with the next
+ * real save. Each save writes the whole file, and one 200 ms after every page
+ * view kept the site standing still for a second or more each time someone
+ * moved between pages. A breadcrumb lost to a crash in between does not matter.
+ */
+const LOG_SAVE_MS = 30000;
+function persistLogs() {
+  if (logTimer || writeTimer) return;
+  logTimer = setTimeout(() => {
+    logTimer = null;
+    persist();
+  }, LOG_SAVE_MS);
+  logTimer.unref?.();
 }
 
 const nowIso = () => new Date().toISOString();
@@ -331,7 +352,7 @@ export const db = {
     const data = load();
     data._logs.push(entry);
     if (data._logs.length > 1000) data._logs.splice(0, data._logs.length - 1000);
-    persistSoon();
+    persistLogs();
     return entry;
   },
 

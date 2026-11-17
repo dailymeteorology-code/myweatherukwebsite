@@ -97,18 +97,20 @@ const MAX_POINT_JOBS = 2;              // the Location page's UKV frames: their 
 
 /* The Python that makes the frames, kept running (server/mdWorkers.js, tools/modeldata/mdata/worker.py; 17 Nov
    2026, the user: "the data loading needs to take sub 10 seconds max"). A job used to be a Python of its own,
-   and on this PC each spent ~50 s starting before its first frame. One worker a grid is kept ready; up to three
+   and on this PC each spent ~50 s starting before its first frame. One worker a grid is kept ready; up to two
    while there is work. The warming and the Location page's catching up use at most BG_WORKERS a grid, so
-   someone opening a layer finds a worker free, or has one handed over within a step or two. */
+   someone opening a layer finds a worker free, or has one handed over within a step or two. Two a grid, one
+   of them for the background, since the first evening live: four held ~1 GB each, and with the browser and
+   the rest the PC (16 GB) had 26 GB in use, paged a thousand times a second and stood still for 5-20 s. */
 const workers = createWorkers({
   python: resolveEnsPython, cwd: TOOL,
   /* MWUK's wide-grid members are asked for through this server (mdata/consensus.py _subjob), not made by a
      Python of their own */
   env: { MDATA_SERVER: `http://127.0.0.1:${Number(process.env.API_PORT || 8787)}` },
-  keep: { uk: 1, eu: 1 }, max: { uk: 3, eu: 3 },
+  keep: { uk: 1, eu: 1 }, max: { uk: 2, eu: 2 },
   onChange: () => pump(),
 });
-const BG_WORKERS = 2;
+const BG_WORKERS = 1;
 /* The layers someone is looking at: the page asks how a layer is coming on every second or so until it has it
    all (ModelData.jsx), so a layer nobody has asked about for WATCH_MS is no longer anyone's to wait for. Its job
    gives way like the warming's. */
@@ -166,9 +168,10 @@ const readJsonAsync = async (f) => { try { return JSON.parse(await fs.promises.r
    drive took 0.3-1 s a frame: a run's 77 frames came in 30-90 s the first time anyone opened them, and
    in about a second once in memory. Every frame sent is kept, and the much-used layers (PREFETCH) are
    read in the moment a job finishes them, while Windows still has them in its file cache, so the first
-   person to open one gets it from memory too. Up to 900 MB, least recently used out first; a layer's
-   frames are forgotten whenever a job starts making it again. */
-const HOT_MAX = 900e6;
+   person to open one gets it from memory too. Up to HOT_MAX, least recently used out first; a layer's
+   frames are forgotten whenever a job starts making it again. 900 MB until 17 Nov 2026, when the PC (16 GB,
+   26 GB in use) was paging so hard that frames "in memory" came back from the page file. */
+const HOT_MAX = 400e6;
 const hot = new Map();                                // frame file -> its bytes, least recently used first
 let hotBytes = 0;
 function hotGet(f) {
