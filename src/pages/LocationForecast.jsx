@@ -770,7 +770,11 @@ export default function LocationForecast() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   /* a link naming a place starts loading at once, rather than flashing the search page first */
-  const [loading, setLoading] = useState(() => { const q = new URLSearchParams(routerLocation.search); return q.has('location') || q.has('lat') || !!appStartPlace(routerLocation.search); });
+  const [loading, setLoading] = useState(() => {
+    const q = new URLSearchParams(routerLocation.search);
+    /* …and with no place named, the home page is finding you (below), so it waits rather than showing the search */
+    return q.has('location') || q.has('lat') || !!appStartPlace(routerLocation.search) || (typeof navigator !== 'undefined' && !!navigator.geolocation);
+  });
   const [error, setError] = useState(null);
   const [resp, setResp] = useState(null);
   const [place, setPlace] = useState(null);
@@ -824,6 +828,8 @@ export default function LocationForecast() {
   useEffect(() => { isCurrentUserAdmin().then((a) => setIsAdmin(!!a)).catch(() => {}); }, []);
   const userRef = useRef(null);
   const abortRef = useRef(null);
+  /* a place has been chosen (searched, opened, linked): the home page's own locate then stays out of the way */
+  const chosenRef = useRef(false);
   const stripRef = useRef(null);
 
   useEffect(() => {
@@ -839,10 +845,12 @@ export default function LocationForecast() {
   }, []);
 
   /* one search at a time: a newer one aborts the older */
-  const run = useCallback(async (p, { quiet = false } = {}) => {
+  /* auto: the home page's own locate (below): a place outside the UK leaves the search, no dialog */
+  const run = useCallback(async (p, { quiet = false, auto = false } = {}) => {
     const name = (p?.name || '').trim();
     const hasCoords = Number.isFinite(p?.lat) && Number.isFinite(p?.lon);
     if (!name && !hasCoords) return;
+    if (!auto) chosenRef.current = true;
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
@@ -858,7 +866,7 @@ export default function LocationForecast() {
     try {
       const body = await fetchLocation({ lat: p.lat, lon: p.lon, name }, ac.signal);
       if (ac.signal.aborted) return;
-      if (body.code === 'OUTSIDE_UK') { if (!quiet) setOutside({ query: name || body.resolvedName, country: body.resolvedCountry }); return; }
+      if (body.code === 'OUTSIDE_UK') { if (!quiet && !auto) setOutside({ query: name || body.resolvedName, country: body.resolvedCountry }); return; }
       setResp(body);
       setOffline(null);
       setPlace({ name: body.location.name, lat: body.location.lat, lon: body.location.lon, region: p.region || '' });
@@ -928,6 +936,25 @@ export default function LocationForecast() {
      search up a location if they did not allow location"): opened with no place named, it finds where you are, as
      the iPhone's Weather app does. A link naming a place, or the installed app's start place, still comes first;
      after a no to sharing the location, the search shows, as before. */
+  /* Quieter than "Use my location": if it fails the search simply shows (no error under it), a place it finds
+     outside the UK leaves the search rather than opening that dialog, and a place chosen while it was looking wins. */
+  const autoLocate = useCallback(() => {
+    /* a location question left unanswered: the search shows after 12 s (the answer, if it comes, still opens it) */
+    const wait = setTimeout(() => { if (!chosenRef.current) setLoading(false); }, 12000);
+    const done = () => { clearTimeout(wait); setLocating(false); if (!chosenRef.current) setLoading(false); };
+    if (!navigator.geolocation) { done(); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        clearTimeout(wait);
+        setLocating(false);
+        if (chosenRef.current) return;
+        run({ lat: pos.coords.latitude, lon: pos.coords.longitude }, { auto: true });
+      },
+      done,
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 },
+    );
+  }, [run]);
   const autoLocated = useRef(false);
   useEffect(() => {
     if (autoLocated.current) return;
@@ -935,9 +962,11 @@ export default function LocationForecast() {
     if (q.has('lat') || q.has('location') || appStartPlace(routerLocation.search)) return;
     autoLocated.current = true;
     const perms = typeof navigator !== 'undefined' ? navigator.permissions : null;
-    if (!perms?.query) { useMyLocation(); return; }
-    perms.query({ name: 'geolocation' }).then((st) => { if (st.state !== 'denied') useMyLocation(); }, () => useMyLocation());
-  }, [routerLocation.search, useMyLocation]);
+    if (!perms?.query) { autoLocate(); return; }
+    perms.query({ name: 'geolocation' }).then(
+      (st) => { if (st.state !== 'denied') autoLocate(); else if (!chosenRef.current) setLoading(false); },
+      () => autoLocate());
+  }, [routerLocation.search, autoLocate]);
 
   /* a link opens a place: ?lat=&lon=&name= exactly (the "copy a link" menu item), or ?location=Name */
   useEffect(() => {
@@ -1204,7 +1233,7 @@ export default function LocationForecast() {
         {!model && !loading && <CommuteCard data={placesData} onChange={changePlaces} />}
 
         {loading && !model && (
-          <div className="lw-loading"><div className="lw-spinner" /><span>Reading the forecast…</span></div>
+          <div className="lw-loading"><div className="lw-spinner" /><span>{locating ? 'Finding where you are…' : 'Reading the forecast…'}</span></div>
         )}
 
         {!model && !loading && (

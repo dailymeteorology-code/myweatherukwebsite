@@ -1,7 +1,8 @@
 /* MyWeatherUK's service worker (Location Weather "Add to your home screen", 16 Nov 2026).
 
    Deliberately small: it answers two kinds of request and leaves every other one to the network.
-     • Opening the Location Weather page (/LocationWeather...): the network first, as without a worker;
+     • Opening the Location Weather page (/LocationWeather..., and since 17 Nov 2026 "/" and /Home, where it is
+       the home page): the network first, as without a worker;
        with no network, the copy of the page saved last time, so the installed app still opens offline
        (the page then shows the forecast it saved for the place, with its age).
      • The site's built scripts and styles (/assets/*.js, *.css): their names change with every build,
@@ -44,7 +45,7 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
-  if (req.mode === 'navigate' && /^\/locationweather\/?$/i.test(url.pathname)) event.respondWith(page(req));
+  if (req.mode === 'navigate' && /^\/(?:locationweather|home)?\/?$/i.test(url.pathname)) event.respondWith(page(req));
   else if (isAsset(url.pathname)) event.respondWith(asset(req));
 });
 
