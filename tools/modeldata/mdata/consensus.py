@@ -12,16 +12,36 @@ each member gives its newest whole run of that hour or before that reaches two d
 model takes part with its last run. Who takes part is fixed the first time the run is listed
 (DATA/consensus.json), so its frames never mix two sets of models.
 
-Steps. Every three hours to T+120, then every six to T+240, while at least four members reach that
+Tails (17 Nov 2026, the user: "if you can extend the range of the model, please do"). Some members' runs
+end early at some hours: the ECMWF IFS's 06 and 18 UTC runs at six days (its 00 and 12 UTC runs at
+fifteen), the Met Office Global's 06 and 18 UTC runs at two and a half (its 00 and 12 UTC runs at
+seven), most UKV runs at T+54 (its 03 and 15 UTC runs at T+120). After the IFS dropped out only AIFS,
+GFS and AIGFS were left past GDPS's ten days, and the runs stopped there. A member whose run ends early
+now carries on with its newest longer run no more than 12 hours older (_tails), for the valid times its
+main run does not reach only, so it counts once at every step. MWUK reaches T+360 with four members.
+A run listed before tails were kept uses them only past the last step it had (`tfrom`), so the frames
+already made keep their members.
+
+Steps. Every three hours to T+120, then every six to T+360, while at least four members reach that
 far; a member with no step at that valid time is drawn between its two nearest steps.
 
 Layers, on the UKV's 2 km grid (the global models drawn up onto it smoothly):
-  * precip_rate, t2, mslp, wind10, gust10, tcc, t850, z500: the median of the members that give it;
+  * precip_rate, t2, mslp, wind10, gust10, tcc, t850, z500 and (17 Nov 2026, the user: "any more
+    variables you can add to the MWUK model") every layer most members give: the dew point, the ground
+    and sea temperature, wind chill, temperature at 925, 700 and 500 hPa, humidity at 850 and 700 hPa,
+    the 850 hPa height, the 1000-500 hPa thickness, wind at 925, 850, 700, 500, 300 and 250 hPa, vertical
+    motion at 700 hPa, vorticity at 500 hPa, low, medium and high cloud, visibility, sunshine (downward
+    solar radiation), CAPE and precipitable water: the median of the members that give it (MEDIAN);
+  * precip_total, snow_total: the median of each member's total since this run's own time (TOTALS:
+    a member's run can start up to 12 hours earlier); snow_acc is snow_total in cm at 10:1;
   * wdir10: the direction of the members' mean wind;
   * rain_agree: the share of the members giving rain there (0.2 mm/h or more);
   * t2_spread, mslp_spread: how far apart the members are (their standard deviation);
   * ptype: the precipitation rate's median (precip_rate) in the kind the members give where it falls
     (16 Nov 2026, at the user's request: ConsensusModel._ptype).
+The layers made from those (mdata/recipes.py: wet-bulb, humidity, humidex, cloud base, frost risk,
+the 850 hPa dew point and wet-bulb potential temperature, lapse rates, Total Totals, K-index, 6 and 24
+hour totals...) come by themselves, as for every model (models.py add_recipes).
 A member's layers that are not made yet are made first: those on this grid here, those on the wide
 grid each in a process of its own (a process works on one grid, mdata/common.py).
 """
@@ -46,8 +66,13 @@ except ImportError:
     _cubic_kernel = None
 
 MEMBERS = ('ukv', 'icon', 'mo_global', 'ifs', 'aifs', 'gfs', 'aigfs', 'gdps', 'arpege')
-MEDIAN = ['precip_rate', 't2', 'mslp', 'wind10', 'gust10', 'tcc', 't850', 'z500']
-VARS = MEDIAN + ['ptype', 'wdir10', 'rain_agree', 't2_spread', 'mslp_spread']
+MEDIAN = ['precip_rate', 't2', 'mslp', 'wind10', 'gust10', 'tcc', 't850', 'z500',
+          # 17 Nov 2026: every layer five or more of the nine give (the recipes made from them come by themselves)
+          'td2', 'tskin', 'windchill', 't925', 't700', 't500', 'rh850', 'rh700', 'z850', 'thick',
+          'wind925', 'wind850', 'wind700', 'wind500', 'wind300', 'wind250', 'w700', 'vort500',
+          'lcc', 'mcc', 'hcc', 'vis', 'sw_down', 'cape_mu', 'pw']
+TOTALS = ['precip_total', 'snow_total']                # running totals: each member's since this run's own time
+VARS = MEDIAN + TOTALS + ['snow_acc', 'ptype', 'wdir10', 'rain_agree', 't2_spread', 'mslp_spread']
 SRC_OF = {'rain_agree': ['precip_rate'], 't2_spread': ['t2'], 'mslp_spread': ['mslp'], 'wdir10': ['wind10', 'wdir10'],
           'ptype': ['ptype']}          # the eight members with a type (not AIGFS); its rate is precip_rate's, all nine
 RAIN = 0.2                     # mm/h: a member gives rain there
@@ -91,12 +116,41 @@ def _choose(models, R):
     return out
 
 
-def _steps(R, chosen):
-    """The leads a run has: those at least MIN_MEMBERS members reach."""
+def _reaches(t, st, vt):
+    """Does a run made at t with these steps reach the valid time vt?"""
+    return bool(st) and st[0] <= (vt - t).total_seconds() / 3600 <= st[-1]
+
+
+def _tails(models, R, main):
+    """Each member's longer run, where its main run ends early (the module's Tails): its newest whole run
+    older than the main one, no more than 12 hours older than R, reaching at least half a day further."""
+    by = {m['id']: m for m in models}
+    out = {}
+    for mid, (t0, st0) in main.items():
+        end0 = t0 + timedelta(hours=max(st0))
+        best = None
+        for r in by.get(mid, {}).get('runs', []):
+            t = _utc(r['run'])
+            if t >= t0 or R - t > timedelta(hours=12) or not r.get('complete') or not r.get('steps'):
+                continue
+            if t + timedelta(hours=max(r['steps'])) - end0 < timedelta(hours=12):
+                continue
+            if best is None or t > best[0]:
+                best = (t, r['steps'])
+        if best:
+            out[mid] = best
+    return out
+
+
+def _steps(R, chosen, tails=None, tfrom=-1):
+    """The leads a run has: those at least MIN_MEMBERS members reach, a member by its main run or, past the
+    lead tfrom, by its tail run where the main one does not reach (once either way)."""
+    tails = tails or {}
     out = []
     for h in LEADS:
         vt = R + timedelta(hours=h)
-        n = sum(1 for t, st in chosen.values() if st and st[0] <= (vt - t).total_seconds() / 3600 <= st[-1])
+        n = sum(1 for m, (t, st) in chosen.items()
+                if _reaches(t, st, vt) or (h > tfrom and m in tails and _reaches(*tails[m], vt)))
         if n >= MIN_MEMBERS:
             out.append(h)
     return out
@@ -120,12 +174,25 @@ def catalog_entry(models, save=True):
             chosen = _choose(models, R)
             if len(chosen) < 6 or sum(1 for t, _ in chosen.values() if t == R) < 3:
                 continue
+            tails = _tails(models, R, chosen)
             state[key] = {'members': {m: t.isoformat() for m, (t, _) in chosen.items()},
-                          'msteps': {m: st for m, (_, st) in chosen.items()}, 'listed': now.isoformat()}
+                          'msteps': {m: st for m, (_, st) in chosen.items()},
+                          'tails': {m: t.isoformat() for m, (t, _) in tails.items()},
+                          'tsteps': {m: st for m, (_, st) in tails.items()}, 'tfrom': -1, 'listed': now.isoformat()}
         s = state[key]
-        steps = _steps(R, {m: (_utc(t), s['msteps'][m]) for m, t in s['members'].items()})
+        main = {m: (_utc(t), s['msteps'][m]) for m, t in s['members'].items()}
+        if 'tails' not in s:
+            # listed before tails were kept: its tails only past the last step it had, so the frames already
+            # made keep their members (17 Nov 2026)
+            old = _steps(R, main)
+            tails = _tails(models, R, main)
+            s.update({'tails': {m: t.isoformat() for m, (t, _) in tails.items()},
+                      'tsteps': {m: st for m, (_, st) in tails.items()}, 'tfrom': max(old) if old else -1})
+        tails = {m: (_utc(t), s['tsteps'][m]) for m, t in s['tails'].items()}
+        steps = _steps(R, main, tails, s['tfrom'])
         if steps:
-            runs.append({'run': key, 'steps': steps, 'complete': True, 'members': s['members']})
+            runs.append({'run': key, 'steps': steps, 'complete': True, 'members': s['members'],
+                         'tails': s['tails'], 'tfrom': s['tfrom']})
     if save:
         write_json(STATE, {k: v for k, v in state.items() if now - _utc(k) <= timedelta(hours=48)})
     if not runs:
@@ -199,11 +266,34 @@ class ConsensusModel:
     def schedule(self, run):
         return self.steps(run)
 
-    def members(self, run, var):
-        """(model, its run) of each member that gives this layer's sources."""
+    def members(self, run, var, h=None):
+        """(model, its run) of each member that gives this layer's sources: the main runs first, then the
+        tails (the module's Tails), those only past the run's tfrom when a lead h is given. A member can be
+        here twice: the callers take its first that has a value (_first)."""
         from .models import MODELS
         srcs = SRC_OF.get(var, [var])
-        return [(m, _utc(t)) for m, t in self.entry(run)['members'].items() if all(s in MODELS[m].variables for s in srcs)]
+        e = self.entry(run)
+        gives = lambda m: all(s in MODELS[m].variables for s in srcs)             # noqa: E731
+        out = [(m, _utc(t)) for m, t in e['members'].items() if gives(m)]
+        if h is None or h > e.get('tfrom', -1):
+            out += [(m, _utc(t)) for m, t in (e.get('tails') or {}).items() if gives(m)]
+        return out
+
+    @staticmethod
+    def _first(mems, get):
+        """Each member's value from its first entry that has one (its main run, else its tail): get(mid, mrun)
+        raising for a run that does not reach, or a frame not there."""
+        seen, out = set(), []
+        for mid, mrun in mems:
+            if mid in seen:
+                continue
+            try:
+                v = get(mid, mrun)
+            except Exception:
+                continue
+            seen.add(mid)
+            out.append(v)
+        return out
 
     def prepare(self, run, var, first=None):
         """Start making the members' layers this needs that are not made yet, each from the step on screen.
@@ -211,8 +301,17 @@ class ConsensusModel:
         from .job import main as make_frames
         if var == 'ptype':                                 # its rate is the precip_rate layer's: those members too
             self.prepare(run, 'precip_rate', first)
+        e = self.entry(run)
+        tails = {m: _utc(t) for m, t in (e.get('tails') or {}).items()}
         jobs = []
         for mid, mrun in self.members(run, var):
+            if tails.get(mid) == mrun:
+                # a tail is wanted only past its main run's end: made from there (that step, on its own run)
+                main = _utc(e['members'][mid])
+                past = (main - mrun).total_seconds() / 3600 + max(self._mstep_list(mid, main))
+                first_here = max(past, (int(first) if first is not None else 0) + (run - mrun).total_seconds() / 3600)
+            else:
+                first_here = None if first is None else int(first) + int((run - mrun).total_seconds() // 3600)
             for v in SRC_OF.get(var, [var]):
                 st = frames_root(grid_of(mid)) / mid / f'{mrun:%Y%m%dT%H%MZ}' / v / 'status.json'
                 try:                                       # complete, and not made before its run grew (16 Nov 2026: the
@@ -221,8 +320,7 @@ class ConsensusModel:
                 except Exception:
                     done = False
                 if not done:
-                    f = None if first is None else int(first) + int((run - mrun).total_seconds() // 3600)
-                    jobs.append((mid, mrun.isoformat(), v, f))
+                    jobs.append((mid, mrun.isoformat(), v, None if first_here is None else int(first_here)))
         with _LOCK:
             for mid, mrun_s, v, f in jobs:
                 key = (mid, mrun_s, v)
@@ -382,12 +480,8 @@ class ConsensusModel:
         code = np.ones(rate.shape, np.int32)
         if idx.size:
             vt = run + timedelta(hours=h)
-            got = []
-            for mid, mrun in self.members(run, 'ptype'):
-                try:
-                    got.append(self._kinds(mid, mrun, (vt - mrun).total_seconds() / 3600, idx))
-                except Exception:
-                    continue
+            got = self._first(self.members(run, 'ptype', h),
+                              lambda mid, mrun: self._kinds(mid, mrun, (vt - mrun).total_seconds() / 3600, idx))
             if len(got) < MIN_TYPED:
                 raise KeyError(f'MWUK: {len(got)} members with a type at T+{h}')
             with _COMBINE:
@@ -415,38 +509,40 @@ class ConsensusModel:
         if var == 'ptype':
             return self._ptype(run, h, prev_h)
         vt = run + timedelta(hours=h)
-        mems = self.members(run, var)
+        mems = self.members(run, var, h)
         lead = lambda mrun: (vt - mrun).total_seconds() / 3600     # noqa: E731
         if var == 'wdir10':
-            us, vs = [], []
-            for mid, mrun in mems:
-                try:
-                    s = self._member(mid, mrun, 'wind10', lead(mrun))
-                    if grid_of(mid) == GRID:
-                        dr = np.radians(self._member(mid, mrun, 'wdir10', lead(mrun)))
-                        u, v = -s * np.sin(dr), -s * np.cos(dr)
-                    else:                                  # a wide-grid member: its components drawn up, not its angle
-                        d = frames_root(grid_of(mid)) / mid / f'{mrun:%Y%m%dT%H%MZ}'
-                        st = self._mstep_list(mid, mrun)
-                        near = min(st, key=lambda x: abs(x - lead(mrun)))
-                        sw, dw = self._read(d / 'wind10' / f'{near}.bin'), np.radians(self._read(d / 'wdir10' / f'{near}.bin'))
-                        u, v = self._up(-sw * np.sin(dw)), self._up(-sw * np.cos(dw))
-                    us.append(u)
-                    vs.append(v)
-                except Exception:
-                    continue
+            def wind(mid, mrun):
+                s = self._member(mid, mrun, 'wind10', lead(mrun))
+                if grid_of(mid) == GRID:
+                    dr = np.radians(self._member(mid, mrun, 'wdir10', lead(mrun)))
+                    return -s * np.sin(dr), -s * np.cos(dr)
+                # a wide-grid member: its components drawn up, not its angle
+                d = frames_root(grid_of(mid)) / mid / f'{mrun:%Y%m%dT%H%MZ}'
+                st = self._mstep_list(mid, mrun)
+                near = min(st, key=lambda x: abs(x - lead(mrun)))
+                sw, dw = self._read(d / 'wind10' / f'{near}.bin'), np.radians(self._read(d / 'wdir10' / f'{near}.bin'))
+                return self._up(-sw * np.sin(dw)), self._up(-sw * np.cos(dw))
+            uv = self._first(mems, wind)
+            us, vs = [u for u, _ in uv], [v for _, v in uv]
             if len(us) < MIN_NOW:
                 raise KeyError(f'MWUK: {len(us)} members at T+{h}')
             with np.errstate(all='ignore'):
                 uu, vv = np.nanmean(us, 0), np.nanmean(vs, 0)
             return np.mod(np.degrees(np.arctan2(-uu, -vv)), 360.0).astype(np.float32)
         src = SRC_OF.get(var, [var])[0]
-        stack = []
-        for mid, mrun in mems:
-            try:
-                stack.append(self._member(mid, mrun, src, lead(mrun)))
-            except Exception:
-                continue
+        if var in TOTALS:
+            # a running total: each member's since this run's own time (its run can start up to 12 hours earlier)
+            def get(mid, mrun):
+                a = self._member(mid, mrun, src, lead(mrun))
+                since = (run - mrun).total_seconds() / 3600
+                if since > 1e-6:
+                    a = a - self._member(mid, mrun, src, since)
+                return np.maximum(a, 0)
+        else:
+            def get(mid, mrun):
+                return self._member(mid, mrun, src, lead(mrun))
+        stack = self._first(mems, get)
         if len(stack) < MIN_NOW:
             raise KeyError(f'MWUK: {len(stack)} members at T+{h}')
         with _COMBINE:
