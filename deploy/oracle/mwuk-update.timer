@@ -1,0 +1,11 @@
+# Checks GitHub for a newer site every 10 minutes (deploy/oracle/update.sh does nothing when there is none).
+[Unit]
+Description=MyWeatherUK: check GitHub for updates
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

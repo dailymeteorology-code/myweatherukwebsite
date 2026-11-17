@@ -1,0 +1,28 @@
+# MyWeatherUK on the Oracle server (deploy/oracle). Caddy fetches and renews the HTTPS certificates by itself once
+# myweatheruk.com points at this server; until then it keeps retrying, and the site can be checked on the plain
+# address below. setup.sh fills in __IP__.
+
+myweatheruk.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8787 {
+		# server/entityAccess.js clientIp believes these from a proxy on this machine: a visitor must not be
+		# able to set them (Caddy sends X-Forwarded-For itself, with the visitor's real address)
+		header_up -CF-Connecting-IP
+		header_up -True-Client-IP
+		header_up -X-Real-IP
+	}
+}
+
+www.myweatheruk.com {
+	redir https://myweatheruk.com{uri} permanent
+}
+
+# the server's own address, plain http: for checking the site before myweatheruk.com is switched over
+http://__IP__ {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8787 {
+		header_up -CF-Connecting-IP
+		header_up -True-Client-IP
+		header_up -X-Real-IP
+	}
+}

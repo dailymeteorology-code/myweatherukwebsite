@@ -1,0 +1,11 @@
+# Brings the site up to date with GitHub (deploy/oracle/update.sh), when mwuk-update.timer says so.
+[Unit]
+Description=MyWeatherUK: update from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /srv/mwuk/app/deploy/oracle/update.sh
+TimeoutStartSec=40min
+Nice=10

@@ -1,0 +1,22 @@
+# The site (deploy/oracle): started at boot and again whenever it stops. It starts its own Python workers
+# (server/mdWorkers.js), which stop with it.
+[Unit]
+Description=MyWeatherUK site
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=mwuk
+Group=mwuk
+WorkingDirectory=/srv/mwuk/app
+EnvironmentFile=/srv/mwuk/mwuk.env
+EnvironmentFile=-/srv/mwuk/mwuk.local.env
+ExecStart=/usr/local/bin/node --env-file-if-exists=.env server/index.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

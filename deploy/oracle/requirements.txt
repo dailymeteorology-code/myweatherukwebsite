@@ -1,0 +1,13 @@
+# The Python packages the site's server runs (tools/modeldata, tools/tcm-nova, tools/img, server/aiw,
+# server/patterns, server/pastFuture), at the versions it ran on the PC on 17 Nov 2026 (Python 3.11.15).
+# Each has Linux Arm64 wheels; ecCodes also has the system library (libeccodes-dev) as a fallback.
+numpy==2.4.6
+scipy==1.17.1
+numba==0.68.0
+pyproj==3.7.2
+eccodes==2.48.0
+h5py==3.16.0
+netCDF4==1.7.5
+pillow==12.3.0
+matplotlib==3.11.1
+tifffile==2026.3.3
